@@ -181,8 +181,8 @@ function parseAIResponse(
 
   const summary = content.substring(0, 500); // First 500 chars as summary
 
-  const findings = []; // Parse findings from AI response
-  const recommendations = []; // Parse recommendations
+  const findings: any[] = []; // Parse findings from AI response
+  const recommendations: string[] = []; // Parse recommendations
 
   // Simple pattern matching (you'd want to improve this)
   for (const line of lines) {
