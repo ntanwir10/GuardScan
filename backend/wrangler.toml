@@ -1,0 +1,16 @@
+name = "ai-code-review-api"
+main = "src/index.ts"
+compatibility_date = "2024-01-01"
+
+# Environment variables (set these via wrangler secret)
+# SUPABASE_URL
+# SUPABASE_KEY
+# STRIPE_SECRET_KEY
+# STRIPE_WEBHOOK_SECRET
+
+[vars]
+ENVIRONMENT = "production"
+
+[[kv_namespaces]]
+binding = "CACHE"
+id = "your-kv-namespace-id"
