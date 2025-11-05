@@ -6,6 +6,7 @@ import { initCommand } from './commands/init';
 import { runCommand } from './commands/run';
 import { securityCommand } from './commands/security';
 import { testCommand } from './commands/test';
+import { sbomCommand } from './commands/sbom';
 import { configCommand } from './commands/config';
 import { statusCommand } from './commands/status';
 import { resetCommand } from './commands/reset';
@@ -34,6 +35,7 @@ program
   .command('security')
   .description('Run security vulnerability scan')
   .option('-f, --files <patterns...>', 'Specific files or patterns to scan')
+  .option('--licenses', 'Include license compliance scanning')
   .action(securityCommand);
 
 program
@@ -45,6 +47,13 @@ program
   .option('--lint', 'Run linters only')
   .option('--all', 'Run all quality checks')
   .action(testCommand);
+
+program
+  .command('sbom')
+  .description('Generate Software Bill of Materials (SBOM)')
+  .option('-o, --output <path>', 'Output file path')
+  .option('-f, --format <format>', 'SBOM format (spdx or cyclonedx)', 'spdx')
+  .action(sbomCommand);
 
 program
   .command('config')
