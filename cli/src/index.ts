@@ -24,13 +24,14 @@ program
 
 program
   .command('init')
-  .description('Initialize AI Code Review (generates client_id)')
+  .description('Initialize AI Code Review (optional - generates client_id for telemetry)')
   .action(initCommand);
 
 program
   .command('run')
-  .description('Perform code review using selected AI model')
+  .description('Code review (FREE tier without API key, AI-enhanced with configuration)')
   .option('-f, --files <patterns...>', 'Specific files or patterns to review')
+  .option('--with-ai', 'Use AI enhancement (requires API key)', true)
   .option('--no-cloud', 'Skip cloud credit validation')
   .action(runCommand);
 
@@ -95,8 +96,8 @@ program
 
 program
   .command('config')
-  .description('Configure AI provider and settings')
-  .option('-p, --provider <provider>', 'Set AI provider')
+  .description('Configure AI provider and settings (optional - unlocks PAID tier features)')
+  .option('-p, --provider <provider>', 'Set AI provider (openai, anthropic, google, ollama)')
   .option('-k, --key <key>', 'Set API key')
   .option('--show', 'Show current configuration')
   .action(configCommand);
