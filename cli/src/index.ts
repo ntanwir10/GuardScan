@@ -5,6 +5,7 @@ import chalk from 'chalk';
 import { initCommand } from './commands/init';
 import { runCommand } from './commands/run';
 import { securityCommand } from './commands/security';
+import { testCommand } from './commands/test';
 import { configCommand } from './commands/config';
 import { statusCommand } from './commands/status';
 import { resetCommand } from './commands/reset';
@@ -34,6 +35,16 @@ program
   .description('Run security vulnerability scan')
   .option('-f, --files <patterns...>', 'Specific files or patterns to scan')
   .action(securityCommand);
+
+program
+  .command('test')
+  .description('Run tests and code quality analysis')
+  .option('--coverage', 'Include code coverage analysis')
+  .option('--metrics', 'Analyze code metrics only')
+  .option('--smells', 'Detect code smells only')
+  .option('--lint', 'Run linters only')
+  .option('--all', 'Run all quality checks')
+  .action(testCommand);
 
 program
   .command('config')
