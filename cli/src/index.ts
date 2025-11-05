@@ -7,6 +7,7 @@ import { runCommand } from './commands/run';
 import { securityCommand } from './commands/security';
 import { testCommand } from './commands/test';
 import { sbomCommand } from './commands/sbom';
+import { perfCommand } from './commands/perf';
 import { configCommand } from './commands/config';
 import { statusCommand } from './commands/status';
 import { resetCommand } from './commands/reset';
@@ -54,6 +55,19 @@ program
   .option('-o, --output <path>', 'Output file path')
   .option('-f, --format <format>', 'SBOM format (spdx or cyclonedx)', 'spdx')
   .action(sbomCommand);
+
+program
+  .command('perf')
+  .description('Run performance testing')
+  .option('--load', 'Run load test (default)')
+  .option('--stress', 'Run stress test (increasing load)')
+  .option('--web <url>', 'Run Lighthouse audit on URL')
+  .option('--baseline', 'Save results as baseline')
+  .option('--compare', 'Compare with baseline')
+  .option('--duration <duration>', 'Test duration (e.g., 30s, 1m)', '30s')
+  .option('--vus <number>', 'Virtual users', '10')
+  .option('--url <url>', 'Target URL for load/stress test')
+  .action(perfCommand);
 
 program
   .command('config')
