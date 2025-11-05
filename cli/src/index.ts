@@ -5,6 +5,11 @@ import chalk from 'chalk';
 import { initCommand } from './commands/init';
 import { runCommand } from './commands/run';
 import { securityCommand } from './commands/security';
+import { testCommand } from './commands/test';
+import { sbomCommand } from './commands/sbom';
+import { perfCommand } from './commands/perf';
+import { mutationCommand } from './commands/mutation';
+import { rulesCommand } from './commands/rules';
 import { configCommand } from './commands/config';
 import { statusCommand } from './commands/status';
 import { resetCommand } from './commands/reset';
@@ -33,7 +38,60 @@ program
   .command('security')
   .description('Run security vulnerability scan')
   .option('-f, --files <patterns...>', 'Specific files or patterns to scan')
+  .option('--licenses', 'Include license compliance scanning')
   .action(securityCommand);
+
+program
+  .command('test')
+  .description('Run tests and code quality analysis')
+  .option('--coverage', 'Include code coverage analysis')
+  .option('--metrics', 'Analyze code metrics only')
+  .option('--smells', 'Detect code smells only')
+  .option('--lint', 'Run linters only')
+  .option('--all', 'Run all quality checks')
+  .action(testCommand);
+
+program
+  .command('sbom')
+  .description('Generate Software Bill of Materials (SBOM)')
+  .option('-o, --output <path>', 'Output file path')
+  .option('-f, --format <format>', 'SBOM format (spdx or cyclonedx)', 'spdx')
+  .action(sbomCommand);
+
+program
+  .command('perf')
+  .description('Run performance testing')
+  .option('--load', 'Run load test (default)')
+  .option('--stress', 'Run stress test (increasing load)')
+  .option('--web <url>', 'Run Lighthouse audit on URL')
+  .option('--baseline', 'Save results as baseline')
+  .option('--compare', 'Compare with baseline')
+  .option('--duration <duration>', 'Test duration (e.g., 30s, 1m)', '30s')
+  .option('--vus <number>', 'Virtual users', '10')
+  .option('--url <url>', 'Target URL for load/stress test')
+  .action(perfCommand);
+
+program
+  .command('mutation')
+  .description('Run mutation testing to assess test quality')
+  .option('--framework <framework>', 'Mutation framework (stryker, mutmut, pitest, auto)', 'auto')
+  .option('--threshold <number>', 'Minimum mutation score (0-100)', '80')
+  .option('--files <files>', 'Comma-separated list of files to mutate')
+  .option('--test-command <command>', 'Custom test command')
+  .option('--timeout <ms>', 'Timeout per test in milliseconds', '5000')
+  .action(mutationCommand);
+
+program
+  .command('rules')
+  .description('Run custom rule engine with YAML-based rules')
+  .option('--list', 'List all available rules')
+  .option('--run', 'Run rules (default)', true)
+  .option('--fix', 'Apply auto-fixes to violations')
+  .option('--rule-ids <ids>', 'Comma-separated list of rule IDs to run')
+  .option('--files <files>', 'Comma-separated list of files to scan')
+  .option('--custom-rules <dir>', 'Directory containing custom YAML rules')
+  .option('--export <rule:path>', 'Export a rule to file (format: ruleId:outputPath)')
+  .action(rulesCommand);
 
 program
   .command('config')

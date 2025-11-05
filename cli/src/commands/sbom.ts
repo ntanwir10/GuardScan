@@ -1,0 +1,91 @@
+import chalk from 'chalk';
+import ora from 'ora';
+import { licenseScanner } from '../core/license-scanner';
+import { repositoryManager } from '../core/repository';
+import * as fs from 'fs';
+import * as path from 'path';
+
+interface SBOMOptions {
+  output?: string;
+  format?: 'spdx' | 'cyclonedx';
+}
+
+export async function sbomCommand(options: SBOMOptions): Promise<void> {
+  console.log(chalk.cyan.bold('\n📋 SBOM Generation\n'));
+
+  try {
+    const repoPath = process.cwd();
+    const repoInfo = repositoryManager.getRepoInfo();
+
+    console.log(chalk.gray(`Repository: ${repoInfo.name}`));
+    console.log(chalk.gray(`Format: ${options.format || 'spdx'}\n`));
+
+    const spinner = ora('Scanning dependencies...').start();
+
+    // Scan licenses
+    const licenseReport = await licenseScanner.scan(repoPath, 'proprietary');
+
+    spinner.succeed(`Found ${licenseReport.totalDependencies} dependencies`);
+
+    // Generate SBOM
+    const sbom = licenseScanner.generateSBOM(
+      licenseReport.findings,
+      options.format || 'spdx',
+      repoInfo.name
+    );
+
+    // Display summary
+    console.log(chalk.white.bold('\n📊 SBOM Summary:\n'));
+    console.log(chalk.gray(`  Total Packages: ${sbom.packages.length}`));
+    console.log(chalk.gray(`  Format: ${sbom.format.toUpperCase()}`));
+    console.log(chalk.gray(`  Version: ${sbom.version}`));
+    console.log(chalk.gray(`  Timestamp: ${sbom.timestamp}`));
+
+    // License breakdown
+    console.log(chalk.white.bold('\n📜 License Breakdown:\n'));
+    console.log(chalk.green(`  ✓ Permissive: ${licenseReport.categorySummary.permissive}`));
+    console.log(chalk.yellow(`  ⚠ Weak Copyleft: ${licenseReport.categorySummary['weak-copyleft']}`));
+    console.log(chalk.red(`  ⚠ Strong Copyleft: ${licenseReport.categorySummary['strong-copyleft']}`));
+    console.log(chalk.gray(`  ℹ Unknown: ${licenseReport.categorySummary.unknown}`));
+
+    // Risk summary
+    if (licenseReport.riskSummary.critical > 0 || licenseReport.riskSummary.high > 0) {
+      console.log(chalk.white.bold('\n⚠️  Risk Summary:\n'));
+      if (licenseReport.riskSummary.critical > 0) {
+        console.log(chalk.red(`  🔴 Critical: ${licenseReport.riskSummary.critical}`));
+      }
+      if (licenseReport.riskSummary.high > 0) {
+        console.log(chalk.red(`  🟠 High: ${licenseReport.riskSummary.high}`));
+      }
+      if (licenseReport.riskSummary.medium > 0) {
+        console.log(chalk.yellow(`  🟡 Medium: ${licenseReport.riskSummary.medium}`));
+      }
+    }
+
+    // Compatibility issues
+    if (licenseReport.compatibilityIssues.length > 0) {
+      console.log(chalk.white.bold('\n⚠️  Compatibility Issues:\n'));
+      licenseReport.compatibilityIssues.slice(0, 5).forEach(issue => {
+        console.log(chalk.red(`  • ${issue.conflict}`));
+        console.log(chalk.gray(`    ${issue.package1} (${issue.license1}) ↔ ${issue.package2} (${issue.license2})`));
+        console.log(chalk.gray(`    Recommendation: ${issue.recommendation}\n`));
+      });
+
+      if (licenseReport.compatibilityIssues.length > 5) {
+        console.log(chalk.gray(`  ... and ${licenseReport.compatibilityIssues.length - 5} more issues\n`));
+      }
+    }
+
+    // Save SBOM
+    const outputPath = options.output || path.join(repoPath, `sbom-${sbom.format}.json`);
+
+    fs.writeFileSync(outputPath, JSON.stringify(sbom, null, 2));
+
+    console.log(chalk.green(`\n✓ SBOM saved: ${outputPath}`));
+    console.log();
+
+  } catch (error) {
+    console.error(chalk.red('\n✗ SBOM generation failed:'), error);
+    process.exit(1);
+  }
+}
