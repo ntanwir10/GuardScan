@@ -9,6 +9,7 @@ import { testCommand } from './commands/test';
 import { sbomCommand } from './commands/sbom';
 import { perfCommand } from './commands/perf';
 import { mutationCommand } from './commands/mutation';
+import { rulesCommand } from './commands/rules';
 import { configCommand } from './commands/config';
 import { statusCommand } from './commands/status';
 import { resetCommand } from './commands/reset';
@@ -79,6 +80,18 @@ program
   .option('--test-command <command>', 'Custom test command')
   .option('--timeout <ms>', 'Timeout per test in milliseconds', '5000')
   .action(mutationCommand);
+
+program
+  .command('rules')
+  .description('Run custom rule engine with YAML-based rules')
+  .option('--list', 'List all available rules')
+  .option('--run', 'Run rules (default)', true)
+  .option('--fix', 'Apply auto-fixes to violations')
+  .option('--rule-ids <ids>', 'Comma-separated list of rule IDs to run')
+  .option('--files <files>', 'Comma-separated list of files to scan')
+  .option('--custom-rules <dir>', 'Directory containing custom YAML rules')
+  .option('--export <rule:path>', 'Export a rule to file (format: ruleId:outputPath)')
+  .action(rulesCommand);
 
 program
   .command('config')
