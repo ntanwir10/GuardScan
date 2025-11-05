@@ -12,11 +12,13 @@ import { iacScanner } from '../core/iac-scanner';
 import { owaspScanner } from '../core/owasp-scanner';
 import { apiScanner } from '../core/api-scanner';
 import { complianceChecker } from '../core/compliance-checker';
+import { licenseScanner } from '../core/license-scanner';
 import * as fs from 'fs';
 import * as path from 'path';
 
 interface SecurityOptions {
   files?: string[];
+  licenses?: boolean;
 }
 
 export async function securityCommand(options: SecurityOptions): Promise<void> {
@@ -205,6 +207,37 @@ async function runSecurityChecks(files: any[]): Promise<Finding[]> {
     }
   } catch {
     // Compliance checking failed
+  }
+
+  // 9. License compliance scanning
+  try {
+    const licenseReport = await licenseScanner.scan(repoPath, 'proprietary');
+
+    // Add license findings
+    for (const licenseFinding of licenseReport.findings) {
+      if (licenseFinding.risk === 'critical' || licenseFinding.risk === 'high') {
+        findings.push({
+          severity: licenseFinding.risk,
+          category: `License Compliance: ${licenseFinding.category}`,
+          file: 'dependencies',
+          description: `${licenseFinding.package}@${licenseFinding.version}: ${licenseFinding.license}`,
+          suggestion: `Review license compatibility - ${licenseFinding.description}`,
+        });
+      }
+    }
+
+    // Add compatibility issues
+    for (const issue of licenseReport.compatibilityIssues) {
+      findings.push({
+        severity: issue.severity,
+        category: 'License Compatibility',
+        file: 'dependencies',
+        description: issue.conflict,
+        suggestion: issue.recommendation,
+      });
+    }
+  } catch {
+    // License scanning failed
   }
 
   return findings;
