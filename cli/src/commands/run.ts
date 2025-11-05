@@ -196,15 +196,49 @@ async function runStaticAnalysis(repoInfo: any, locResult: any, filePatterns?: s
     // Dependency vulnerabilities
     try {
       const depResults = await dependencyScanner.scan(repoPath);
-      findings.push(...depResults);
-      securityCount += depResults.length;
+      for (const result of depResults) {
+        for (const vuln of result.vulnerabilities) {
+          findings.push({
+            severity: vuln.severity,
+            category: `Dependency Vulnerability (${result.ecosystem})`,
+            file: 'package.json',
+            description: `${vuln.package}@${vuln.version}: ${vuln.title}`,
+            suggestion: vuln.recommendation,
+          });
+          securityCount++;
+        }
+      }
     } catch (e) { /* Scanner not available */ }
 
     // Secrets detection
     try {
-      const secrets = await secretsDetector.scan(repoPath);
-      findings.push(...secrets);
-      securityCount += secrets.length;
+      const filePaths = locResult.fileBreakdown.map((f: any) => f.path);
+      const secretFindings = await secretsDetector.detectInFiles(filePaths);
+      for (const secret of secretFindings) {
+        findings.push({
+          severity: secret.severity,
+          category: `Secret Detection: ${secret.type}`,
+          file: secret.file,
+          line: secret.line,
+          description: `Potential secret detected (entropy: ${secret.entropy.toFixed(2)})`,
+          suggestion: secret.recommendation,
+        });
+        securityCount++;
+      }
+
+      // Also scan git history
+      const gitSecrets = await secretsDetector.scanGitHistory(repoPath);
+      for (const secret of gitSecrets) {
+        findings.push({
+          severity: secret.severity,
+          category: `Secret in Git History: ${secret.type}`,
+          file: secret.file,
+          line: secret.line,
+          description: `Secret found in git history (entropy: ${secret.entropy.toFixed(2)})`,
+          suggestion: secret.recommendation,
+        });
+        securityCount++;
+      }
     } catch (e) { /* Scanner not available */ }
 
     // OWASP Top 10
@@ -230,32 +264,66 @@ async function runStaticAnalysis(repoInfo: any, locResult: any, filePatterns?: s
 
     // API security
     try {
-      const apiResults = await apiScanner.scan(repoPath);
-      findings.push(...apiResults);
-      securityCount += apiResults.length;
+      const apiFindings = await apiScanner.scan(repoPath);
+      for (const finding of apiFindings) {
+        findings.push({
+          severity: finding.severity,
+          category: `${finding.category} API: ${finding.type}`,
+          file: finding.file,
+          line: finding.line,
+          description: finding.description,
+          suggestion: finding.recommendation,
+        });
+        securityCount++;
+      }
     } catch (e) { /* Scanner not available */ }
 
     // Compliance
     try {
-      const complianceResults = await complianceChecker.scan(repoPath);
-      findings.push(...complianceResults);
-      securityCount += complianceResults.length;
+      const complianceReports = await complianceChecker.check(repoPath);
+      for (const report of complianceReports) {
+        for (const violation of report.violations) {
+          findings.push({
+            severity: violation.severity,
+            category: `${violation.standard} Compliance: ${violation.type}`,
+            file: violation.file,
+            line: violation.line,
+            description: violation.description,
+            suggestion: violation.recommendation,
+          });
+          securityCount++;
+        }
+      }
     } catch (e) { /* Scanner not available */ }
 
     // License compliance
     try {
-      const licenseResults = await licenseScanner.scan(repoPath, 'proprietary');
-      for (const license of licenseResults.findings) {
-        if (license.risk === 'critical' || license.risk === 'high') {
+      const licenseReport = await licenseScanner.scan(repoPath, 'proprietary');
+
+      // Add license findings
+      for (const licenseFinding of licenseReport.findings) {
+        if (licenseFinding.risk === 'critical' || licenseFinding.risk === 'high') {
           findings.push({
-            severity: license.risk,
-            category: `License: ${license.category}`,
+            severity: licenseFinding.risk,
+            category: `License Compliance: ${licenseFinding.category}`,
             file: 'dependencies',
-            description: `${license.package}@${license.version}: ${license.license}`,
-            suggestion: license.description,
+            description: `${licenseFinding.package}@${licenseFinding.version}: ${licenseFinding.license}`,
+            suggestion: `Review license compatibility - ${licenseFinding.description}`,
           });
           securityCount++;
         }
+      }
+
+      // Add compatibility issues
+      for (const issue of licenseReport.compatibilityIssues) {
+        findings.push({
+          severity: issue.severity,
+          category: 'License Compatibility',
+          file: 'dependencies',
+          description: issue.conflict,
+          suggestion: issue.recommendation,
+        });
+        securityCount++;
       }
     } catch (e) { /* Scanner not available */ }
 
@@ -269,24 +337,24 @@ async function runStaticAnalysis(repoInfo: any, locResult: any, filePatterns?: s
   try {
     // Code metrics
     try {
-      const metrics = await codeMetricsAnalyzer.analyze(repoPath);
-      for (const file of metrics.files) {
-        if (file.cyclomaticComplexity > 15) {
+      const metricsResults = await codeMetricsAnalyzer.analyze(repoPath);
+      for (const fileMetrics of metricsResults) {
+        if (fileMetrics.metrics.cyclomaticComplexity > 15) {
           findings.push({
             severity: 'medium' as const,
             category: 'Code Complexity',
-            file: file.path,
-            description: `High cyclomatic complexity: ${file.cyclomaticComplexity}`,
+            file: fileMetrics.file,
+            description: `High cyclomatic complexity: ${fileMetrics.metrics.cyclomaticComplexity}`,
             suggestion: 'Consider refactoring to reduce complexity',
           });
           qualityCount++;
         }
-        if (file.maintainabilityIndex < 65) {
+        if (fileMetrics.metrics.maintainabilityIndex < 65) {
           findings.push({
             severity: 'low' as const,
             category: 'Maintainability',
-            file: file.path,
-            description: `Low maintainability index: ${file.maintainabilityIndex.toFixed(1)}`,
+            file: fileMetrics.file,
+            description: `Low maintainability index: ${fileMetrics.metrics.maintainabilityIndex.toFixed(1)}`,
             suggestion: 'Improve code readability and reduce complexity',
           });
           qualityCount++;
@@ -296,9 +364,18 @@ async function runStaticAnalysis(repoInfo: any, locResult: any, filePatterns?: s
 
     // Code smells
     try {
-      const smells = await codeSmellDetector.scan(repoPath);
-      findings.push(...smells);
-      qualityCount += smells.length;
+      const smellResults = await codeSmellDetector.detect(repoPath);
+      for (const smell of smellResults) {
+        findings.push({
+          severity: smell.severity,
+          category: `Code Smell: ${smell.type}`,
+          file: smell.file,
+          line: smell.line,
+          description: smell.description,
+          suggestion: smell.recommendation,
+        });
+        qualityCount++;
+      }
     } catch (e) { /* Scanner not available */ }
 
     qualitySpinner.succeed(`Code quality analysis complete - ${qualityCount} issues found`);
@@ -315,16 +392,16 @@ Found ${findings.length} total issues:
 
 This analysis includes:
 ✅ Dependency vulnerability scanning
-✅ Secrets detection
+✅ Secrets detection (files + git history)
 ✅ OWASP Top 10 security checks
 ✅ Docker & IaC security
 ✅ API security analysis
-✅ Compliance checking
+✅ Compliance checking (HIPAA, PCI-DSS, GDPR, SOC2)
 ✅ License compliance
 ✅ Code complexity analysis
 ✅ Code smell detection
 
-💡 For AI-powered insights and context-aware analysis, configure an AI provider with "ai-review config"`;
+💡 Upgrade to Pro for AI-powered insights and context-aware analysis`;
 
   const recommendations: string[] = [];
 
@@ -347,7 +424,7 @@ This analysis includes:
       repoInfo,
       locStats: locResult,
       provider: 'static-analysis',
-      model: 'FREE tier (19 scanners)',
+      model: 'FREE tier (9 security scanners + quality analysis)',
       durationMs: 0, // Will be set by caller
     },
   };

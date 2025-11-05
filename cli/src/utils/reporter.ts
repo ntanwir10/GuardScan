@@ -3,6 +3,7 @@ import * as path from 'path';
 import { marked } from 'marked';
 import { LOCResult } from '../core/loc-counter';
 import { RepositoryInfo } from '../core/repository';
+import { chartGenerator, SeveritySummary, ComplexityData } from './chart-generator';
 
 export interface ReviewResult {
   summary: string;
@@ -109,11 +110,73 @@ export class Reporter {
   }
 
   /**
-   * Generate HTML report from markdown
+   * Generate HTML report from markdown with charts
    */
-  async generateHTML(result: ReviewResult): Promise<string> {
+  async generateHTML(result: ReviewResult, outputDir?: string): Promise<string> {
     const markdown = this.generateMarkdown(result);
     const htmlContent = await marked(markdown);
+
+    // Create images directory if generating charts
+    const reportsDir = outputDir || path.join(process.cwd(), '.ai-review', 'reports');
+    const imagesDir = path.join(reportsDir, 'images');
+
+    if (!fs.existsSync(imagesDir)) {
+      fs.mkdirSync(imagesDir, { recursive: true });
+    }
+
+    // Generate charts
+    const chartImages: { [key: string]: string } = {};
+
+    try {
+      // Calculate severity summary
+      const severitySummary = this.calculateSeveritySummary(result.findings);
+
+      // Only generate chart if there are findings
+      if (result.findings.length > 0) {
+        const severityChart = await chartGenerator.generateSeverityChart(severitySummary);
+        const severityChartPath = path.join(imagesDir, 'severity-distribution.png');
+        fs.writeFileSync(severityChartPath, severityChart);
+        chartImages.severity = 'images/severity-distribution.png';
+      }
+
+      // Generate category distribution chart if there are findings
+      if (result.findings.length > 0) {
+        const categoryData = this.calculateCategoryDistribution(result.findings);
+        if (Object.keys(categoryData).length > 0) {
+          const categoryChart = await chartGenerator.generateCategoryChart(categoryData);
+          const categoryChartPath = path.join(imagesDir, 'category-distribution.png');
+          fs.writeFileSync(categoryChartPath, categoryChart);
+          chartImages.category = 'images/category-distribution.png';
+        }
+      }
+    } catch (error) {
+      // Chart generation failed, continue without charts
+      console.error('Failed to generate charts:', error);
+    }
+
+    // Generate visual summary section
+    let visualsSection = '';
+    if (Object.keys(chartImages).length > 0) {
+      visualsSection = `
+      <section class="visuals">
+        <h2>📊 Visual Analysis</h2>
+        <div class="charts-grid">
+          ${chartImages.severity ? `
+          <div class="chart-container">
+            <h3>Severity Distribution</h3>
+            <img src="${chartImages.severity}" alt="Severity Distribution" class="chart-image" />
+          </div>
+          ` : ''}
+          ${chartImages.category ? `
+          <div class="chart-container">
+            <h3>Issues by Category</h3>
+            <img src="${chartImages.category}" alt="Category Distribution" class="chart-image" />
+          </div>
+          ` : ''}
+        </div>
+      </section>
+      `;
+    }
 
     const html = `
 <!DOCTYPE html>
@@ -121,12 +184,12 @@ export class Reporter {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>AI Code Review Report</title>
+  <title>Code Review Report</title>
   <style>
     body {
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
       line-height: 1.6;
-      max-width: 1200px;
+      max-width: 1400px;
       margin: 0 auto;
       padding: 20px;
       background-color: #f5f5f5;
@@ -138,7 +201,7 @@ export class Reporter {
       box-shadow: 0 2px 4px rgba(0,0,0,0.1);
     }
     h1 { color: #2c3e50; border-bottom: 3px solid #3498db; padding-bottom: 10px; }
-    h2 { color: #34495e; margin-top: 30px; }
+    h2 { color: #34495e; margin-top: 30px; border-bottom: 2px solid #ecf0f1; padding-bottom: 8px; }
     h3 { color: #7f8c8d; }
     code { background: #ecf0f1; padding: 2px 6px; border-radius: 3px; font-family: 'Courier New', monospace; }
     pre { background: #2c3e50; color: #ecf0f1; padding: 15px; border-radius: 5px; overflow-x: auto; }
@@ -149,11 +212,64 @@ export class Reporter {
     .info { color: #95a5a6; }
     ul { padding-left: 20px; }
     li { margin: 5px 0; }
+    .visuals { margin-top: 40px; }
+    .charts-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(500px, 1fr));
+      gap: 30px;
+      margin-top: 20px;
+    }
+    .chart-container {
+      background: #f8f9fa;
+      padding: 20px;
+      border-radius: 8px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    }
+    .chart-image {
+      width: 100%;
+      height: auto;
+      border-radius: 4px;
+    }
+    .upgrade-notice {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      padding: 20px 30px;
+      border-radius: 8px;
+      margin-top: 40px;
+      text-align: center;
+    }
+    .upgrade-notice h3 {
+      margin-top: 0;
+      color: white;
+    }
+    .upgrade-notice p {
+      margin: 10px 0;
+      opacity: 0.95;
+    }
+    .upgrade-notice a {
+      color: #ffd700;
+      text-decoration: none;
+      font-weight: bold;
+    }
   </style>
 </head>
 <body>
   <div class="container">
     ${htmlContent}
+    ${visualsSection}
+    ${result.metadata.provider === 'static-analysis' ? `
+    <div class="upgrade-notice">
+      <h3>💡 Want More Insights?</h3>
+      <p>Upgrade to Pro for:</p>
+      <ul style="list-style: none; padding: 0;">
+        <li>🤖 AI-powered code analysis</li>
+        <li>🎯 Context-aware understanding</li>
+        <li>📋 PRD alignment checking</li>
+        <li>📊 Interactive dashboards</li>
+      </ul>
+      <p style="margin-top: 15px;">Configure with <code style="background: rgba(255,255,255,0.2); padding: 4px 8px; border-radius: 4px;">ai-review config</code></p>
+    </div>
+    ` : ''}
   </div>
 </body>
 </html>
@@ -206,6 +322,33 @@ export class Reporter {
       info: '⚪',
     };
     return icons[severity];
+  }
+
+  /**
+   * Calculate severity summary for charts
+   */
+  private calculateSeveritySummary(findings: Finding[]): SeveritySummary {
+    return {
+      critical: findings.filter(f => f.severity === 'critical').length,
+      high: findings.filter(f => f.severity === 'high').length,
+      medium: findings.filter(f => f.severity === 'medium').length,
+      low: findings.filter(f => f.severity === 'low').length,
+      info: findings.filter(f => f.severity === 'info').length,
+    };
+  }
+
+  /**
+   * Calculate category distribution for charts
+   */
+  private calculateCategoryDistribution(findings: Finding[]): { [key: string]: number } {
+    const distribution: { [key: string]: number } = {};
+
+    for (const finding of findings) {
+      const category = finding.category;
+      distribution[category] = (distribution[category] || 0) + 1;
+    }
+
+    return distribution;
   }
 }
 
