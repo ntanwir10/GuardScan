@@ -8,6 +8,7 @@ import { securityCommand } from './commands/security';
 import { testCommand } from './commands/test';
 import { sbomCommand } from './commands/sbom';
 import { perfCommand } from './commands/perf';
+import { mutationCommand } from './commands/mutation';
 import { configCommand } from './commands/config';
 import { statusCommand } from './commands/status';
 import { resetCommand } from './commands/reset';
@@ -68,6 +69,16 @@ program
   .option('--vus <number>', 'Virtual users', '10')
   .option('--url <url>', 'Target URL for load/stress test')
   .action(perfCommand);
+
+program
+  .command('mutation')
+  .description('Run mutation testing to assess test quality')
+  .option('--framework <framework>', 'Mutation framework (stryker, mutmut, pitest, auto)', 'auto')
+  .option('--threshold <number>', 'Minimum mutation score (0-100)', '80')
+  .option('--files <files>', 'Comma-separated list of files to mutate')
+  .option('--test-command <command>', 'Custom test command')
+  .option('--timeout <ms>', 'Timeout per test in milliseconds', '5000')
+  .action(mutationCommand);
 
 program
   .command('config')
