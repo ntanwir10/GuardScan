@@ -1,9 +1,15 @@
 import chalk from 'chalk';
 import { configManager } from '../core/config';
 import { repositoryManager } from '../core/repository';
+import { displayWelcomeBanner } from '../utils/ascii-art';
 
 export async function initCommand(): Promise<void> {
-  console.log(chalk.cyan.bold('\n🚀 Initializing GuardScan\n'));
+  // Display welcome banner for first-time users
+  if (!configManager.exists()) {
+    displayWelcomeBanner();
+  } else {
+    console.log(chalk.cyan.bold('\n🚀 Initializing GuardScan\n'));
+  }
 
   try {
     // Check if already initialized

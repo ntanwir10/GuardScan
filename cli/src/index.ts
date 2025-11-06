@@ -14,6 +14,7 @@ import { configCommand } from './commands/config';
 import { statusCommand } from './commands/status';
 import { resetCommand } from './commands/reset';
 import { checkForUpdates } from './utils/version';
+import { displayLogo } from './utils/ascii-art';
 
 const program = new Command();
 
@@ -112,6 +113,12 @@ program
   .description('Clear local context and cache')
   .option('--all', 'Reset all configuration including client_id')
   .action(resetCommand);
+
+// Display logo when showing help or version
+const args = process.argv.slice(2);
+if (args.length === 0 || args.includes('--help') || args.includes('-h') || args.includes('--version') || args.includes('-V')) {
+  displayLogo('Privacy-First AI Code Review & Security Scanning');
+}
 
 // Check for updates on startup (non-blocking)
 checkForUpdates().catch(() => {
