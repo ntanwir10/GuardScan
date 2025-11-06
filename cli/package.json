@@ -1,10 +1,10 @@
 {
-  "name": "ai-code-review",
+  "name": "guardscan",
   "version": "0.1.0",
-  "description": "Privacy-first AI Code Review CLI",
+  "description": "GuardScan - Privacy-first AI Code Review CLI with comprehensive security scanning",
   "main": "dist/index.js",
   "bin": {
-    "ai-review": "dist/index.js"
+    "guardscan": "dist/index.js"
   },
   "scripts": {
     "build": "tsc",
@@ -13,6 +13,7 @@
     "test": "jest"
   },
   "keywords": [
+    "guardscan",
     "code-review",
     "ai",
     "cli",

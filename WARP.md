@@ -4,7 +4,7 @@ This file provides guidance to WARP (warp.dev) when working with code in this re
 
 ## Project Overview
 
-**AI Code Review** is a privacy-first CLI tool that provides automated code review and security scanning using AI, with an optional cloud sync and billing layer. The system is split into two parts:
+**GuardScan** is a privacy-first CLI tool that provides automated code review and security scanning using AI, with an optional cloud sync and billing layer. The system is split into two parts:
 - **CLI** (TypeScript/Node.js) - Runs locally, performs all code analysis
 - **Backend** (Cloudflare Workers) - Serverless API for credit validation and telemetry
 
@@ -28,10 +28,10 @@ npm run dev
 npm link
 
 # Test the CLI
-ai-review init
-ai-review config
-ai-review status
-ai-review run --help
+guardscan init
+guardscan config
+guardscan status
+guardscan run --help
 ```
 
 ### Backend Development
@@ -59,22 +59,22 @@ The CLI can be tested locally after linking:
 
 ```bash
 # Initialize (generates client_id)
-ai-review init
+guardscan init
 
 # Configure AI provider
-ai-review config
+guardscan config
 
 # Run code review
-ai-review run
+guardscan run
 
 # Run security scan
-ai-review security
+guardscan security
 
 # Check status
-ai-review status
+guardscan status
 
 # Reset cache
-ai-review reset
+guardscan reset
 ```
 
 ## Architecture Overview
@@ -102,7 +102,7 @@ ai-review reset
 2. SHA-256 hash of .git metadata (config + HEAD)
 3. UUID fallback for non-git repos
 
-**Client Identity**: RFC4122 UUID v4 generated at `ai-review init`
+**Client Identity**: RFC4122 UUID v4 generated at `guardscan init`
 
 ### AI Provider System
 
@@ -152,7 +152,7 @@ Custom lightweight router in `/backend/src/router.ts`:
 
 ### Configuration Management
 
-**Location**: `~/.ai-review/config.yml` (managed by `/cli/src/core/config.ts`)
+**Location**: `~/.guardscan/config.yml` (managed by `/cli/src/core/config.ts`)
 
 **Structure**:
 ```yaml
@@ -166,7 +166,7 @@ createdAt: <iso-timestamp>
 lastUsed: <iso-timestamp>
 ```
 
-Cache directory: `~/.ai-review/cache/`
+Cache directory: `~/.guardscan/cache/`
 
 ### LOC Counter
 
@@ -218,7 +218,7 @@ All database interactions use Supabase client with service role key.
 1. Install dependencies: `cd cli && npm install`
 2. Build: `npm run build`
 3. Link globally: `npm link`
-4. Config stored at: `~/.ai-review/config.yml`
+4. Config stored at: `~/.guardscan/config.yml`
 
 ### Backend Setup
 

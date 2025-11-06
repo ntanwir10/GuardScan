@@ -304,8 +304,8 @@ license:
 
 1. `license-scanner.ts` implementation
 2. Integration with `security` command
-3. CLI option: `ai-review security --licenses`
-4. SBOM export: `ai-review sbom --output sbom.json`
+3. CLI option: `guardscan security --licenses`
+4. SBOM export: `guardscan sbom --output sbom.json`
 5. Documentation in README
 
 ---
@@ -409,7 +409,7 @@ export default function () {
 ```yaml
 performance:
   enabled: true
-  baselineFile: .ai-review/performance-baseline.json
+  baselineFile: .guardscan/performance-baseline.json
   endpoints:
     - url: http://localhost:3000/api/health
       method: GET
@@ -453,7 +453,7 @@ performance:
 #### Deliverables
 
 1. `performance-tester.ts` implementation
-2. New command: `ai-review perf`
+2. New command: `guardscan perf`
 3. Options: `--load`, `--stress`, `--baseline`
 4. Integration with CI/CD
 5. Documentation and examples
@@ -654,7 +654,7 @@ Mutation testing is SLOW:
 
 1. `mutation-tester.ts` implementation
 2. Integration with `test` command
-3. Option: `ai-review test --mutation`
+3. Option: `guardscan test --mutation`
 4. HTML report generation
 5. CI/CD integration guide
 6. Documentation with examples
@@ -808,7 +808,7 @@ interface RuleCondition {
 
 **Rule Directory Structure**:
 ```
-.ai-review/
+.guardscan/
 ├── rules/
 │   ├── security/
 │   │   ├── no-eval.yaml
@@ -828,7 +828,7 @@ interface RuleCondition {
 ```yaml
 ruleEngine:
   enabled: true
-  rulesDir: .ai-review/rules
+  rulesDir: .guardscan/rules
   mode: hybrid  # regex | ast | semgrep | hybrid
 
   presets:
@@ -836,7 +836,7 @@ ruleEngine:
     - quality-recommended
 
   customRules:
-    - path: .ai-review/rules/custom/**/*.yaml
+    - path: .guardscan/rules/custom/**/*.yaml
 
   excludeRules:
     - no-console  # Disable specific rule
@@ -879,7 +879,7 @@ const RULE_PRESETS = {
 
 **Rule Execution Flow**:
 ```
-1. Load rules from .ai-review/rules/
+1. Load rules from .guardscan/rules/
 2. Validate rule syntax
 3. Categorize rules by type (regex/AST/semgrep)
 4. Find applicable files based on language filters
@@ -891,7 +891,7 @@ const RULE_PRESETS = {
 
 **Example Custom Rule**:
 ```yaml
-# .ai-review/rules/custom/api-version-required.yaml
+# .guardscan/rules/custom/api-version-required.yaml
 rules:
   - id: api-version-required
     message: "API routes must include version prefix (/api/v1/...)"
@@ -946,9 +946,9 @@ rules:
 
 1. `rule-engine.ts` implementation
 2. Built-in rule library (20+ rules)
-3. Command: `ai-review rules list`
-4. Command: `ai-review rules validate`
-5. Option: `ai-review security --rules custom`
+3. Command: `guardscan rules list`
+4. Command: `guardscan rules validate`
+5. Option: `guardscan security --rules custom`
 6. Rule authoring guide
 7. 10+ example custom rules
 
@@ -1058,17 +1058,17 @@ rules:
 2. **Feature Testing**:
    ```bash
    # License compliance
-   ai-review security --licenses
+   guardscan security --licenses
 
    # Performance testing
-   ai-review perf --load
+   guardscan perf --load
 
    # Mutation testing
-   ai-review test --mutation
+   guardscan test --mutation
 
    # Custom rules
-   ai-review rules list
-   ai-review security --rules custom
+   guardscan rules list
+   guardscan security --rules custom
    ```
 
 3. **Integration Testing**:

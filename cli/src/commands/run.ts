@@ -20,7 +20,7 @@ interface RunOptions {
 export async function runCommand(options: RunOptions): Promise<void> {
   const startTime = Date.now();
 
-  console.log(chalk.cyan.bold('\n🔍 AI Code Review\n'));
+  console.log(chalk.cyan.bold('\n🔍 GuardScan Code Review\n'));
 
   try {
     // Load config
@@ -133,7 +133,7 @@ Provide constructive feedback with specific suggestions for improvement.`,
       // STATIC ANALYSIS (FREE TIER)
       if (!aiAvailable) {
         console.log(chalk.yellow('⚠ AI provider not configured - running comprehensive static analysis\n'));
-        console.log(chalk.gray('  Tip: Configure AI with "ai-review config" for enhanced insights\n'));
+        console.log(chalk.gray('  Tip: Configure AI with "guardscan config" for enhanced insights\n'));
       } else {
         console.log(chalk.cyan('🔍 Running comprehensive static analysis (FREE tier)\n'));
       }

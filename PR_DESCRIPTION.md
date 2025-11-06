@@ -1,8 +1,8 @@
-# Pull Request: AI Code Review CLI MVP
+# Pull Request: GuardScan CLI MVP
 
 ## Summary
 
-Complete implementation of privacy-first AI Code Review CLI tool with optional cloud sync and billing.
+Complete implementation of privacy-first GuardScan CLI tool with optional cloud sync and billing.
 
 ## Branch Information
 
@@ -17,12 +17,12 @@ Complete implementation of privacy-first AI Code Review CLI tool with optional c
 ### 🎯 CLI Application (`/cli`)
 
 **Commands:**
-- `ai-review init` - Initialize client with UUID
-- `ai-review config` - Configure AI provider settings
-- `ai-review run` - Execute AI-powered code review
-- `ai-review security` - Run security vulnerability scan
-- `ai-review status` - Check credits and configuration
-- `ai-review reset` - Clear cache and configuration
+- `guardscan init` - Initialize client with UUID
+- `guardscan config` - Configure AI provider settings
+- `guardscan run` - Execute AI-powered code review
+- `guardscan security` - Run security vulnerability scan
+- `guardscan status` - Check credits and configuration
+- `guardscan reset` - Clear cache and configuration
 
 **Core Features:**
 - ✅ Client identity management (UUID-based, stored locally)
@@ -171,9 +171,9 @@ cd cli
 npm install
 npm run build
 npm link
-ai-review --help
-ai-review init
-ai-review config
+guardscan --help
+guardscan init
+guardscan config
 ```
 
 ### Backend Testing
