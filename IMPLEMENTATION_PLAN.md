@@ -2,7 +2,7 @@
 
 ## Executive Summary
 
-This plan outlines the complete implementation of security and testing features to transform the AI Code Review CLI from a 10% MVP to a comprehensive security and testing tool comparable to enterprise solutions like Snyk, SonarQube, and Semgrep.
+This plan outlines the complete implementation of security and testing features to transform the GuardScan CLI from a 10% MVP to a comprehensive security and testing tool comparable to enterprise solutions like Snyk, SonarQube, and Semgrep.
 
 ---
 
@@ -210,7 +210,7 @@ program
 ```
 
 **Acceptance Criteria:**
-- Command appears in `ai-review --help`
+- Command appears in `guardscan --help`
 - All options properly documented
 - Command executes without errors
 
@@ -530,4 +530,4 @@ The implementation follows these principles:
 - ✅ **Graceful Degradation**: Missing tools don't crash the CLI
 - ✅ **Extensible Design**: Easy to add new scanners
 
-The AI Code Review CLI is now positioned as a **comprehensive security and testing tool** that rivals enterprise solutions while maintaining its privacy-first architecture.
+The GuardScan CLI is now positioned as a **comprehensive security and testing tool** that rivals enterprise solutions while maintaining its privacy-first architecture.

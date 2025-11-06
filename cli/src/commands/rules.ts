@@ -83,7 +83,7 @@ export async function rulesCommand(options: RulesOptions): Promise<void> {
       }
 
       // Save results
-      const resultsPath = path.join(repoPath, '.ai-review', 'rules-results.json');
+      const resultsPath = path.join(repoPath, '.guardscan', 'rules-results.json');
       const dir = path.dirname(resultsPath);
 
       if (!fs.existsSync(dir)) {

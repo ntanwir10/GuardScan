@@ -196,10 +196,10 @@ program
 ### 5. Test Offline Functionality
 
 **Test Cases:**
-1. Run `ai-review run` without any AI configuration → should work
-2. Run `ai-review run` with invalid API key → should fall back to FREE tier
-3. Run `ai-review security` → should work offline
-4. Run `ai-review test` → should work offline
+1. Run `guardscan run` without any AI configuration → should work
+2. Run `guardscan run` with invalid API key → should fall back to FREE tier
+3. Run `guardscan security` → should work offline
+4. Run `guardscan test` → should work offline
 5. Check telemetry is NOT sent if `telemetryEnabled: false`
 
 ---
@@ -208,7 +208,7 @@ program
 
 ### Before (AI-Required):
 ```
-ai-review run
+guardscan run
   ↓
   Check AI provider → FAIL if not configured ❌
   ↓
@@ -217,7 +217,7 @@ ai-review run
 
 ### After (AI-Optional):
 ```
-ai-review run
+guardscan run
   ↓
   Check AI provider
   ↓
@@ -325,11 +325,11 @@ src/commands/run.ts(294,46): Property 'scan' does not exist on type 'CodeSmellDe
 ## Testing Checklist
 
 - [ ] `npm run build` succeeds
-- [ ] `ai-review run` works without AI configured
-- [ ] `ai-review run` falls back to FREE tier on credit failure
-- [ ] `ai-review run --with-ai` requires AI configuration
-- [ ] `ai-review security` still works as before
-- [ ] `ai-review test` still works as before
+- [ ] `guardscan run` works without AI configured
+- [ ] `guardscan run` falls back to FREE tier on credit failure
+- [ ] `guardscan run --with-ai` requires AI configuration
+- [ ] `guardscan security` still works as before
+- [ ] `guardscan test` still works as before
 - [ ] Charts are generated in HTML reports
 - [ ] Telemetry respects `telemetryEnabled` flag
 - [ ] No network calls in offline mode

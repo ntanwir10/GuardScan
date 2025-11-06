@@ -63,7 +63,7 @@ function directConfig(options: ConfigOptions): void {
 }
 
 async function interactiveConfig(): Promise<void> {
-  console.log(chalk.cyan.bold('\n⚙️  Configure AI Code Review\n'));
+  console.log(chalk.cyan.bold('\n⚙️  Configure GuardScan\n'));
 
   const config = configManager.load();
   const availableProviders = ProviderFactory.getAvailableProviders();

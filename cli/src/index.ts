@@ -18,13 +18,13 @@ import { checkForUpdates } from './utils/version';
 const program = new Command();
 
 program
-  .name('ai-review')
-  .description('Privacy-first AI Code Review CLI')
+  .name('guardscan')
+  .description('GuardScan - Privacy-first AI Code Review CLI with comprehensive security scanning')
   .version('0.1.0');
 
 program
   .command('init')
-  .description('Initialize AI Code Review (optional - generates client_id for telemetry)')
+  .description('Initialize GuardScan (optional - generates client_id for telemetry)')
   .action(initCommand);
 
 program

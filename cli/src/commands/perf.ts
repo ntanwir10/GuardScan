@@ -104,7 +104,7 @@ export async function perfCommand(options: PerfOptions): Promise<void> {
     }
 
     // Save detailed results
-    const resultsPath = path.join(repoPath, '.ai-review', 'performance-results.json');
+    const resultsPath = path.join(repoPath, '.guardscan', 'performance-results.json');
     const dir = path.dirname(resultsPath);
 
     if (!fs.existsSync(dir)) {

@@ -1,4 +1,4 @@
-# 🚀 Shipping Checklist for AI Code Review CLI MVP
+# 🚀 Shipping Checklist for GuardScan CLI MVP
 
 ## ✅ Current Status
 - [x] CLI code complete and builds successfully
@@ -16,17 +16,17 @@
 cd cli
 npm install
 npm run build
-npm link                    # Makes 'ai-review' command available globally
+npm link                    # Makes 'guardscan' command available globally
 
 # Test commands
-ai-review --help
-ai-review init
-ai-review config
-ai-review status
+guardscan --help
+guardscan init
+guardscan config
+guardscan status
 ```
 
 ### What to Test:
-- [ ] `init` creates config in `~/.ai-review/`
+- [ ] `init` creates config in `~/.guardscan/`
 - [ ] `config` prompts work and save settings
 - [ ] `status` shows configuration correctly
 - [ ] Check no runtime errors
@@ -160,9 +160,9 @@ curl https://your-worker-url.workers.dev/health
 export API_BASE_URL=https://your-worker-url.workers.dev
 
 # Test
-ai-review init
-ai-review config         # Configure with OpenAI/Claude API key
-ai-review status        # Should show credits (or error if no credits)
+guardscan init
+guardscan config         # Configure with OpenAI/Claude API key
+guardscan status        # Should show credits (or error if no credits)
 ```
 
 **Checklist:**
@@ -191,7 +191,7 @@ npm pack                # Creates .tgz file for testing
 
 # Test the package
 npm install -g ./ai-code-review-0.1.0.tgz
-ai-review --help
+guardscan --help
 ```
 
 ### 3. Publish
@@ -203,7 +203,7 @@ npm publish            # Publish to npm registry
 ### 4. Verify
 ```bash
 npm install -g ai-code-review
-ai-review --version
+guardscan --version
 ```
 
 **Checklist:**

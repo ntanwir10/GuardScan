@@ -6,7 +6,7 @@ import { isOnline } from '../utils/network';
 import ora from 'ora';
 
 export async function statusCommand(): Promise<void> {
-  console.log(chalk.cyan.bold('\n📊 AI Code Review Status\n'));
+  console.log(chalk.cyan.bold('\n📊 GuardScan Status\n'));
 
   try {
     // Load config
