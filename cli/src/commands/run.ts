@@ -8,6 +8,7 @@ import { reporter, ReviewResult } from '../utils/reporter';
 import { telemetryManager } from '../core/telemetry';
 import { apiClient } from '../utils/api-client';
 import { isOnline } from '../utils/network';
+import { displaySimpleBanner } from '../utils/ascii-art';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -20,7 +21,7 @@ interface RunOptions {
 export async function runCommand(options: RunOptions): Promise<void> {
   const startTime = Date.now();
 
-  console.log(chalk.cyan.bold('\n🔍 GuardScan Code Review\n'));
+  displaySimpleBanner('run');
 
   try {
     // Load config

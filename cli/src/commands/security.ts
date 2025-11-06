@@ -13,6 +13,7 @@ import { owaspScanner } from '../core/owasp-scanner';
 import { apiScanner } from '../core/api-scanner';
 import { complianceChecker } from '../core/compliance-checker';
 import { licenseScanner } from '../core/license-scanner';
+import { displaySimpleBanner } from '../utils/ascii-art';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -24,7 +25,7 @@ interface SecurityOptions {
 export async function securityCommand(options: SecurityOptions): Promise<void> {
   const startTime = Date.now();
 
-  console.log(chalk.cyan.bold('\n🔒 Security Scan\n'));
+  displaySimpleBanner('security');
 
   try {
     // Load config
