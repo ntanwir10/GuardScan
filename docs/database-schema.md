@@ -1,6 +1,6 @@
 # Database Schema
 
-This document describes the Supabase/PostgreSQL database schema for AI Code Review.
+This document describes the Supabase/PostgreSQL database schema for GuardScan.
 
 ## Tables
 

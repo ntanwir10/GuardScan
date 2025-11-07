@@ -63,7 +63,8 @@ function directConfig(options: ConfigOptions): void {
 }
 
 async function interactiveConfig(): Promise<void> {
-  console.log(chalk.cyan.bold('\n⚙️  Configure AI Code Review\n'));
+  const { displaySimpleBanner } = await import('../utils/ascii-art');
+  displaySimpleBanner('config');
 
   const config = configManager.load();
   const availableProviders = ProviderFactory.getAvailableProviders();

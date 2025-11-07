@@ -1,8 +1,8 @@
-# AI Code Review CLI - Project Summary
+# GuardScan CLI - Project Summary
 
 ## Overview
 
-**AI Code Review** is a privacy-first, developer-friendly CLI tool that provides automated code review and security scanning using AI, with an optional cloud sync and billing layer.
+**GuardScan** is a privacy-first, developer-friendly CLI tool that provides automated code review and security scanning using AI, with an optional cloud sync and billing layer.
 
 Built as a complete MVP with:
 - ✅ Fully functional CLI (TypeScript/Node.js)
@@ -30,12 +30,12 @@ Built as a complete MVP with:
 - Offline detection and graceful fallback
 
 **Commands:**
-- `ai-review init` - Initialize client_id
-- `ai-review config` - Configure AI provider
-- `ai-review run` - Execute code review
-- `ai-review security` - Run security scan
-- `ai-review status` - View credits and info
-- `ai-review reset` - Clear cache/config
+- `guardscan init` - Initialize client_id
+- `guardscan config` - Configure AI provider
+- `guardscan run` - Execute code review
+- `guardscan security` - Run security scan
+- `guardscan status` - View credits and info
+- `guardscan reset` - Clear cache/config
 
 ### Backend (Cloudflare Workers)
 
@@ -326,10 +326,10 @@ npm run build
 npm link
 
 # Test commands
-ai-review init
-ai-review config
-ai-review status
-ai-review run --help
+guardscan init
+guardscan config
+guardscan status
+guardscan run --help
 ```
 
 ### Backend Testing
@@ -409,7 +409,7 @@ MIT License - See [LICENSE](./LICENSE)
 ## Support
 
 - **Issues:** GitHub Issues
-- **Email:** support@ai-review.dev
+- **Email:** support@guardscan.dev
 - **Discord:** discord.gg/ai-code-review (if created)
 - **Twitter:** @aicodereview (if created)
 

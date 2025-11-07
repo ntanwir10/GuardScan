@@ -120,7 +120,7 @@ export class PerformanceTester {
       throughput: 10,  // 10 req/s
     },
     regressionThreshold: 0.2,  // 20%
-    baselineFile: '.ai-review/performance-baseline.json',
+    baselineFile: '.guardscan/performance-baseline.json',
   };
 
   /**
