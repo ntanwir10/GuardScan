@@ -1,8 +1,8 @@
-# Getting Started with AI Code Review
+# Getting Started with GuardScan
 
-## What is AI Code Review?
+## What is GuardScan?
 
-AI Code Review is a privacy-first CLI tool that uses AI to automatically review your code for:
+GuardScan is a privacy-first CLI tool that uses AI to automatically review your code for:
 - Code quality issues
 - Potential bugs
 - Security vulnerabilities
@@ -41,15 +41,15 @@ npm link
 
 ```bash
 cd your-project
-ai-review init
+guardscan init
 ```
 
-This generates a unique `client_id` stored locally in `~/.ai-review/config.yml`.
+This generates a unique `client_id` stored locally in `~/.guardscan/config.yml`.
 
 ### 2. Configure AI Provider
 
 ```bash
-ai-review config
+guardscan config
 ```
 
 Choose your AI provider and enter API key:
@@ -61,7 +61,7 @@ Choose your AI provider and enter API key:
 ### 3. Run Your First Review
 
 ```bash
-ai-review run
+guardscan run
 ```
 
 This will:
@@ -73,7 +73,7 @@ This will:
 ### 4. Check Your Status
 
 ```bash
-ai-review status
+guardscan status
 ```
 
 View your configuration, repository info, and remaining credits.
@@ -89,10 +89,10 @@ View your configuration, repository info, and remaining credits.
 ollama pull codellama
 ```
 
-3. Configure AI Code Review:
+3. Configure GuardScan:
 
 ```bash
-ai-review config
+guardscan config
 # Select "ollama" as provider
 # Default endpoint: http://localhost:11434
 ```
@@ -100,7 +100,7 @@ ai-review config
 4. Run offline:
 
 ```bash
-ai-review run --no-cloud
+guardscan run --no-cloud
 ```
 
 ### With LM Studio
@@ -110,7 +110,7 @@ ai-review run --no-cloud
 3. Configure:
 
 ```bash
-ai-review config
+guardscan config
 # Select "lmstudio" as provider
 # Default endpoint: http://localhost:1234
 ```
@@ -120,7 +120,7 @@ ai-review config
 Run a free security scan:
 
 ```bash
-ai-review security
+guardscan security
 ```
 
 This performs SAST-like scanning for:
@@ -137,10 +137,10 @@ Target specific files or patterns:
 
 ```bash
 # Review specific files
-ai-review run -f src/main.ts src/utils/*.ts
+guardscan run -f src/main.ts src/utils/*.ts
 
 # Security scan on specific directory
-ai-review security -f src/auth/**/*.js
+guardscan security -f src/auth/**/*.js
 ```
 
 ## Understanding Reports
@@ -175,10 +175,10 @@ Actionable suggestions for improving your codebase.
 ```bash
 # Review changes in current branch
 git checkout feature/my-feature
-ai-review run
+guardscan run
 
 # Review and generate HTML report
-ai-review run > review.md
+guardscan run > review.md
 # Open review.md in browser
 ```
 
@@ -187,7 +187,7 @@ ai-review run > review.md
 ```bash
 # Add to .git/hooks/pre-commit
 #!/bin/bash
-ai-review security --no-cloud
+guardscan security --no-cloud
 if [ $? -ne 0 ]; then
   echo "Security issues found! Review before committing."
   exit 1
@@ -198,17 +198,17 @@ fi
 
 ```yaml
 # GitHub Actions example
-- name: Run AI Code Review
+- name: Run GuardScan
   run: |
     npm install -g ai-code-review
-    ai-review init
-    ai-review config --provider openai --key ${{ secrets.OPENAI_API_KEY }}
-    ai-review run --no-cloud
+    guardscan init
+    guardscan config --provider openai --key ${{ secrets.OPENAI_API_KEY }}
+    guardscan run --no-cloud
 ```
 
 ## Configuration Options
 
-Edit `~/.ai-review/config.yml`:
+Edit `~/.guardscan/config.yml`:
 
 ```yaml
 clientId: your-uuid
@@ -242,7 +242,7 @@ Only anonymized metadata:
 ### Disabling Telemetry
 
 ```bash
-ai-review config
+guardscan config
 # Select "No" for telemetry
 ```
 
@@ -256,7 +256,7 @@ telemetryEnabled: false
 
 If you run out of free credits:
 
-1. Visit: https://ai-review.dev/pricing
+1. Visit: https://guardscan.dev/pricing
 2. Select LOC package
 3. Complete Stripe checkout
 4. Credits added automatically to your `client_id`
@@ -271,11 +271,11 @@ If you run out of free credits:
 
 ### "Configuration not found"
 
-Run `ai-review init` first.
+Run `guardscan init` first.
 
 ### "AI provider not configured"
 
-Run `ai-review config` and set up your provider.
+Run `guardscan config` and set up your provider.
 
 ### "Insufficient credits"
 
@@ -300,7 +300,7 @@ Most providers have rate limits. Wait a minute and try again, or upgrade your pr
 
 ```bash
 export API_BASE_URL=https://your-custom-api.com
-ai-review run
+guardscan run
 ```
 
 ### Multiple Profiles
@@ -308,8 +308,8 @@ ai-review run
 You can maintain different configs by using environment variables:
 
 ```bash
-export AI_REVIEW_CONFIG_DIR=~/.ai-review-work
-ai-review init
+export AI_REVIEW_CONFIG_DIR=~/.guardscan-work
+guardscan init
 ```
 
 ### Batch Processing
@@ -318,16 +318,16 @@ ai-review init
 #!/bin/bash
 for repo in ~/projects/*; do
   cd $repo
-  ai-review run -f "src/**/*.ts"
+  guardscan run -f "src/**/*.ts"
 done
 ```
 
 ## Getting Help
 
-- Documentation: https://docs.ai-review.dev
+- Documentation: https://docs.guardscan.dev
 - Issues: https://github.com/yourusername/ai-code-review/issues
 - Discord: https://discord.gg/ai-code-review
-- Email: support@ai-review.dev
+- Email: support@guardscan.dev
 
 ## Next Steps
 

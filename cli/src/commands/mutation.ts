@@ -82,7 +82,7 @@ export async function mutationCommand(options: MutationOptions): Promise<void> {
     }
 
     // Save detailed results
-    const resultsPath = path.join(repoPath, '.ai-review', 'mutation-results.json');
+    const resultsPath = path.join(repoPath, '.guardscan', 'mutation-results.json');
     const dir = path.dirname(resultsPath);
 
     if (!fs.existsSync(dir)) {

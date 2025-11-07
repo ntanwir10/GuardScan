@@ -79,7 +79,7 @@ export interface RuleResult {
 
 export class RuleEngine {
   private rules: Map<string, Rule> = new Map();
-  private readonly RULES_DIR = '.ai-review/rules';
+  private readonly RULES_DIR = '.guardscan/rules';
   private readonly BUILTIN_RULES_DIR = path.join(__dirname, '../../rules');
 
   constructor() {

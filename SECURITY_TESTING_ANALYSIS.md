@@ -1,4 +1,4 @@
-# Security & Testing Analysis - AI Code Review CLI
+# Security & Testing Analysis - GuardScan CLI
 
 **Current Status:** Early MVP - Basic Pattern Matching Only
 **Goal:** Complete Enterprise-Grade Security & Testing Tool

@@ -14,23 +14,25 @@ import { configCommand } from './commands/config';
 import { statusCommand } from './commands/status';
 import { resetCommand } from './commands/reset';
 import { checkForUpdates } from './utils/version';
+import { displayLogo } from './utils/ascii-art';
 
 const program = new Command();
 
 program
-  .name('ai-review')
-  .description('Privacy-first AI Code Review CLI')
+  .name('guardscan')
+  .description('GuardScan - Privacy-first AI Code Review CLI with comprehensive security scanning')
   .version('0.1.0');
 
 program
   .command('init')
-  .description('Initialize AI Code Review (generates client_id)')
+  .description('Initialize GuardScan (optional - generates client_id for telemetry)')
   .action(initCommand);
 
 program
   .command('run')
-  .description('Perform code review using selected AI model')
+  .description('Code review (FREE tier without API key, AI-enhanced with configuration)')
   .option('-f, --files <patterns...>', 'Specific files or patterns to review')
+  .option('--with-ai', 'Use AI enhancement (requires API key)', true)
   .option('--no-cloud', 'Skip cloud credit validation')
   .action(runCommand);
 
@@ -95,8 +97,8 @@ program
 
 program
   .command('config')
-  .description('Configure AI provider and settings')
-  .option('-p, --provider <provider>', 'Set AI provider')
+  .description('Configure AI provider and settings (optional - unlocks PAID tier features)')
+  .option('-p, --provider <provider>', 'Set AI provider (openai, anthropic, google, ollama)')
   .option('-k, --key <key>', 'Set API key')
   .option('--show', 'Show current configuration')
   .action(configCommand);
@@ -111,6 +113,12 @@ program
   .description('Clear local context and cache')
   .option('--all', 'Reset all configuration including client_id')
   .action(resetCommand);
+
+// Display logo when showing help or version
+const args = process.argv.slice(2);
+if (args.length === 0 || args.includes('--help') || args.includes('-h') || args.includes('--version') || args.includes('-V')) {
+  displayLogo('Privacy-First AI Code Review & Security Scanning');
+}
 
 // Check for updates on startup (non-blocking)
 checkForUpdates().catch(() => {
