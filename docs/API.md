@@ -1,11 +1,11 @@
 # API Documentation
 
-Backend API documentation for AI Code Review.
+Backend API documentation for GuardScan.
 
 ## Base URL
 
 ```
-Production: https://api.ai-review.dev
+Production: https://api.guardscan.dev
 Development: http://localhost:8787
 ```
 
@@ -209,7 +209,7 @@ const event = stripe.webhooks.constructEvent(
 ```typescript
 import { APIClient } from 'ai-code-review';
 
-const client = new APIClient('https://api.ai-review.dev');
+const client = new APIClient('https://api.guardscan.dev');
 
 // Validate credits
 const validation = await client.validate({
@@ -234,7 +234,7 @@ await client.sendTelemetry({
 **Validate Credits:**
 
 ```bash
-curl -X POST https://api.ai-review.dev/api/validate \
+curl -X POST https://api.guardscan.dev/api/validate \
   -H "Content-Type: application/json" \
   -d '{
     "clientId": "uuid",
@@ -246,13 +246,13 @@ curl -X POST https://api.ai-review.dev/api/validate \
 **Get Credits:**
 
 ```bash
-curl https://api.ai-review.dev/api/credits/uuid
+curl https://api.guardscan.dev/api/credits/uuid
 ```
 
 **Submit Telemetry:**
 
 ```bash
-curl -X POST https://api.ai-review.dev/api/telemetry \
+curl -X POST https://api.guardscan.dev/api/telemetry \
   -H "Content-Type: application/json" \
   -d '{
     "clientId": "uuid",
@@ -271,10 +271,10 @@ curl -X POST https://api.ai-review.dev/api/telemetry \
 
 ## Status Monitoring
 
-Monitor API status at: https://status.ai-review.dev (if implemented)
+Monitor API status at: https://status.guardscan.dev (if implemented)
 
 ## Support
 
 For API issues or questions:
 - GitHub Issues: https://github.com/yourusername/ai-code-review/issues
-- Email: api-support@ai-review.dev
+- Email: api-support@guardscan.dev
