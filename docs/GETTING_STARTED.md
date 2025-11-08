@@ -28,7 +28,7 @@ npm install -g ai-code-review
 ### From Source
 
 ```bash
-git clone https://github.com/yourusername/ai-code-review.git
+git clone https://github.com/ntanwir10/ai-code-review.git
 cd ai-code-review/cli
 npm install
 npm run build
@@ -325,7 +325,7 @@ done
 ## Getting Help
 
 - Documentation: https://docs.guardscan.dev
-- Issues: https://github.com/yourusername/ai-code-review/issues
+- Issues: https://github.com/ntanwir10/ai-code-review/issues
 - Discord: https://discord.gg/ai-code-review
 - Email: support@guardscan.dev
 

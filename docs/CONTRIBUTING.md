@@ -15,7 +15,7 @@ Thank you for your interest in contributing! This document provides guidelines f
 1. **Clone the repository**
 
 ```bash
-git clone https://github.com/yourusername/ai-code-review.git
+git clone https://github.com/ntanwir10/ai-code-review.git
 cd ai-code-review
 ```
 
