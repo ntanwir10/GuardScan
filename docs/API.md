@@ -276,5 +276,5 @@ Monitor API status at: https://status.guardscan.dev (if implemented)
 ## Support
 
 For API issues or questions:
-- GitHub Issues: https://github.com/yourusername/ai-code-review/issues
+- GitHub Issues: https://github.com/ntanwir10/ai-code-review/issues
 - Email: api-support@guardscan.dev
