@@ -22,7 +22,7 @@
 1. Create a Stripe account
 2. Get your API keys from the Dashboard
 3. Create a webhook endpoint:
-   - URL: `https://your-worker.workers.dev/api/stripe-webhook`
+   - URL: `https://api.guardscancli.com/api/stripe-webhook` (or your workers.dev URL)
    - Events: `checkout.session.completed`, `invoice.payment_failed`
 4. Note your webhook secret
 
@@ -67,7 +67,7 @@ npm install
 npm run deploy
 ```
 
-Your API will be available at: `https://ai-code-review-api.your-subdomain.workers.dev`
+Your API will be available at: `https://guardscan-api.your-subdomain.workers.dev`
 
 ## 4. CLI Configuration
 
@@ -76,13 +76,13 @@ Your API will be available at: `https://ai-code-review-api.your-subdomain.worker
 Users should set the API endpoint via environment variable or config:
 
 ```bash
-export API_BASE_URL=https://ai-code-review-api.your-subdomain.workers.dev
+export API_BASE_URL=https://api.guardscancli.com
 ```
 
-Or in `~/.ai-review/config.yml`:
+Or in `~/.guardscan/config.yml`:
 
 ```yaml
-apiEndpoint: https://ai-code-review-api.your-subdomain.workers.dev
+apiEndpoint: https://api.guardscancli.com
 ```
 
 ### Publish to NPM

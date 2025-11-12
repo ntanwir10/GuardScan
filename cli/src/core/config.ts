@@ -23,8 +23,8 @@ export class ConfigManager {
   private cacheDir: string;
 
   constructor() {
-    // Store config in ~/.ai-review
-    this.configDir = path.join(os.homedir(), '.ai-review');
+    // Store config in ~/.guardscan
+    this.configDir = path.join(os.homedir(), '.guardscan');
     this.configPath = path.join(this.configDir, 'config.yml');
     this.cacheDir = path.join(this.configDir, 'cache');
   }
@@ -63,7 +63,7 @@ export class ConfigManager {
    */
   load(): Config {
     if (!fs.existsSync(this.configPath)) {
-      throw new Error('Configuration not found. Run "ai-review init" first.');
+      throw new Error('Configuration not found. Run "guardscan init" first.');
     }
 
     const content = fs.readFileSync(this.configPath, 'utf-8');
