@@ -15,8 +15,8 @@ Thank you for your interest in contributing! This document provides guidelines f
 1. **Clone the repository**
 
 ```bash
-git clone https://github.com/ntanwir10/ai-code-review.git
-cd ai-code-review
+git clone https://github.com/ntanwir10/GuardScan.git
+cd GuardScan
 ```
 
 2. **Install dependencies**
@@ -60,7 +60,7 @@ guardscan --help
 ## Project Structure
 
 ```
-ai-code-review/
+GuardScan/
 ├── cli/                  # CLI application
 │   ├── src/
 │   │   ├── commands/    # CLI commands
