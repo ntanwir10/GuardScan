@@ -79,7 +79,7 @@ Users should set the API endpoint via environment variable or config:
 export API_BASE_URL=https://ai-code-review-api.your-subdomain.workers.dev
 ```
 
-Or in `~/.ai-review/config.yml`:
+Or in `~/.guardscan/config.yml`:
 
 ```yaml
 apiEndpoint: https://ai-code-review-api.your-subdomain.workers.dev

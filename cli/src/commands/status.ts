@@ -3,10 +3,11 @@ import { configManager } from '../core/config';
 import { repositoryManager } from '../core/repository';
 import { apiClient } from '../utils/api-client';
 import { isOnline } from '../utils/network';
+import { displaySimpleBanner } from '../utils/ascii-art';
 import ora from 'ora';
 
 export async function statusCommand(): Promise<void> {
-  console.log(chalk.cyan.bold('\n📊 AI Code Review Status\n'));
+  displaySimpleBanner('status');
 
   try {
     // Load config
