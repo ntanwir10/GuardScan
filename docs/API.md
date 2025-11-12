@@ -5,7 +5,7 @@ Backend API documentation for GuardScan.
 ## Base URL
 
 ```
-Production: https://api.guardscan.dev
+Production: https://api.guardscancli.com
 Development: http://localhost:8787
 ```
 
@@ -207,9 +207,9 @@ const event = stripe.webhooks.constructEvent(
 ### JavaScript/TypeScript
 
 ```typescript
-import { APIClient } from 'ai-code-review';
+import { APIClient } from 'guardscan';
 
-const client = new APIClient('https://api.guardscan.dev');
+const client = new APIClient('https://api.guardscancli.com');
 
 // Validate credits
 const validation = await client.validate({
@@ -234,7 +234,7 @@ await client.sendTelemetry({
 **Validate Credits:**
 
 ```bash
-curl -X POST https://api.guardscan.dev/api/validate \
+curl -X POST https://api.guardscancli.com/api/validate \
   -H "Content-Type: application/json" \
   -d '{
     "clientId": "uuid",
@@ -246,13 +246,13 @@ curl -X POST https://api.guardscan.dev/api/validate \
 **Get Credits:**
 
 ```bash
-curl https://api.guardscan.dev/api/credits/uuid
+curl https://api.guardscancli.com/api/credits/uuid
 ```
 
 **Submit Telemetry:**
 
 ```bash
-curl -X POST https://api.guardscan.dev/api/telemetry \
+curl -X POST https://api.guardscancli.com/api/telemetry \
   -H "Content-Type: application/json" \
   -d '{
     "clientId": "uuid",
@@ -271,10 +271,10 @@ curl -X POST https://api.guardscan.dev/api/telemetry \
 
 ## Status Monitoring
 
-Monitor API status at: https://status.guardscan.dev (if implemented)
+Monitor API status at: https://status.guardscancli.com (if implemented)
 
 ## Support
 
 For API issues or questions:
-- GitHub Issues: https://github.com/ntanwir10/ai-code-review/issues
-- Email: api-support@guardscan.dev
+- GitHub Issues: https://github.com/ntanwir10/GuardScan/issues
+- Email: api-support@guardscancli.com
