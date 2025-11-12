@@ -1,4 +1,4 @@
-name = "ai-code-review-api"
+name = "guardscan-api"
 main = "src/index.ts"
 compatibility_date = "2024-01-01"
 
