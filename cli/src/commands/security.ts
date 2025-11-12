@@ -5,17 +5,27 @@ import { repositoryManager } from '../core/repository';
 import { locCounter } from '../core/loc-counter';
 import { reporter, ReviewResult, Finding } from '../utils/reporter';
 import { telemetryManager } from '../core/telemetry';
+import { dependencyScanner } from '../core/dependency-scanner';
+import { secretsDetector } from '../core/secrets-detector';
+import { dockerfileScanner } from '../core/dockerfile-scanner';
+import { iacScanner } from '../core/iac-scanner';
+import { owaspScanner } from '../core/owasp-scanner';
+import { apiScanner } from '../core/api-scanner';
+import { complianceChecker } from '../core/compliance-checker';
+import { licenseScanner } from '../core/license-scanner';
+import { displaySimpleBanner } from '../utils/ascii-art';
 import * as fs from 'fs';
 import * as path from 'path';
 
 interface SecurityOptions {
   files?: string[];
+  licenses?: boolean;
 }
 
 export async function securityCommand(options: SecurityOptions): Promise<void> {
   const startTime = Date.now();
 
-  console.log(chalk.cyan.bold('\n🔒 Security Scan\n'));
+  displaySimpleBanner('security');
 
   try {
     // Load config
@@ -78,7 +88,9 @@ export async function securityCommand(options: SecurityOptions): Promise<void> {
  */
 async function runSecurityChecks(files: any[]): Promise<Finding[]> {
   const findings: Finding[] = [];
+  const repoPath = process.cwd();
 
+  // 1. Basic pattern-based scanning (existing)
   for (const file of files) {
     try {
       const content = fs.readFileSync(file.path, 'utf-8');
@@ -87,6 +99,146 @@ async function runSecurityChecks(files: any[]): Promise<Finding[]> {
     } catch {
       // Skip files that can't be read
     }
+  }
+
+  // 2. Dependency vulnerability scanning
+  try {
+    const depResults = await dependencyScanner.scan(repoPath);
+    for (const result of depResults) {
+      for (const vuln of result.vulnerabilities) {
+        findings.push({
+          severity: vuln.severity,
+          category: `Dependency Vulnerability (${result.ecosystem})`,
+          file: 'package.json', // or requirements.txt, etc.
+          description: `${vuln.package}@${vuln.version}: ${vuln.title}`,
+          suggestion: vuln.recommendation,
+        });
+      }
+    }
+  } catch {
+    // Dependency scanning failed (tools not available)
+  }
+
+  // 3. Advanced secrets detection
+  try {
+    const filePaths = files.map(f => f.path);
+    const secretFindings = await secretsDetector.detectInFiles(filePaths);
+    for (const secret of secretFindings) {
+      findings.push({
+        severity: secret.severity,
+        category: `Secret Detection: ${secret.type}`,
+        file: secret.file,
+        line: secret.line,
+        description: `Potential secret detected (entropy: ${secret.entropy.toFixed(2)})`,
+        suggestion: secret.recommendation,
+      });
+    }
+
+    // Also scan git history
+    const gitSecrets = await secretsDetector.scanGitHistory(repoPath);
+    for (const secret of gitSecrets) {
+      findings.push({
+        severity: secret.severity,
+        category: `Secret in Git History: ${secret.type}`,
+        file: secret.file,
+        line: secret.line,
+        description: `Secret found in git history (entropy: ${secret.entropy.toFixed(2)})`,
+        suggestion: secret.recommendation,
+      });
+    }
+  } catch {
+    // Secret scanning failed
+  }
+
+  // 4. Dockerfile security scanning
+  try {
+    const dockerFindings = await dockerfileScanner.scan(repoPath);
+    findings.push(...dockerFindings);
+  } catch {
+    // Dockerfile scanning failed
+  }
+
+  // 5. Infrastructure-as-Code security scanning
+  try {
+    const iacFindings = await iacScanner.scan(repoPath);
+    findings.push(...iacFindings);
+  } catch {
+    // IaC scanning failed
+  }
+
+  // 6. OWASP Top 10 scanning
+  try {
+    const owaspFindings = await owaspScanner.scan(repoPath);
+    findings.push(...owaspFindings);
+  } catch {
+    // OWASP scanning failed
+  }
+
+  // 7. API security scanning
+  try {
+    const apiFindings = await apiScanner.scan(repoPath);
+    for (const finding of apiFindings) {
+      findings.push({
+        severity: finding.severity,
+        category: `${finding.category} API: ${finding.type}`,
+        file: finding.file,
+        line: finding.line,
+        description: finding.description,
+        suggestion: finding.recommendation,
+      });
+    }
+  } catch {
+    // API scanning failed
+  }
+
+  // 8. Compliance checking
+  try {
+    const complianceReports = await complianceChecker.check(repoPath);
+    for (const report of complianceReports) {
+      for (const violation of report.violations) {
+        findings.push({
+          severity: violation.severity,
+          category: `${violation.standard} Compliance: ${violation.type}`,
+          file: violation.file,
+          line: violation.line,
+          description: violation.description,
+          suggestion: violation.recommendation,
+        });
+      }
+    }
+  } catch {
+    // Compliance checking failed
+  }
+
+  // 9. License compliance scanning
+  try {
+    const licenseReport = await licenseScanner.scan(repoPath, 'proprietary');
+
+    // Add license findings
+    for (const licenseFinding of licenseReport.findings) {
+      if (licenseFinding.risk === 'critical' || licenseFinding.risk === 'high') {
+        findings.push({
+          severity: licenseFinding.risk,
+          category: `License Compliance: ${licenseFinding.category}`,
+          file: 'dependencies',
+          description: `${licenseFinding.package}@${licenseFinding.version}: ${licenseFinding.license}`,
+          suggestion: `Review license compatibility - ${licenseFinding.description}`,
+        });
+      }
+    }
+
+    // Add compatibility issues
+    for (const issue of licenseReport.compatibilityIssues) {
+      findings.push({
+        severity: issue.severity,
+        category: 'License Compatibility',
+        file: 'dependencies',
+        description: issue.conflict,
+        suggestion: issue.recommendation,
+      });
+    }
+  } catch {
+    // License scanning failed
   }
 
   return findings;

@@ -17,7 +17,7 @@ export class ClaudeProvider extends AIProvider {
     const systemMessages = messages.filter(m => m.role === 'system');
     const conversationMessages = messages.filter(m => m.role !== 'system');
 
-    const response = await this.client.messages.create({
+    const response = await (this.client as any).messages.create({
       model: options?.model || this.defaultModel,
       max_tokens: options?.maxTokens || 4000,
       temperature: options?.temperature || 0.7,

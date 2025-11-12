@@ -1,10 +1,10 @@
 {
-  "name": "ai-code-review",
+  "name": "guardscan",
   "version": "0.1.0",
-  "description": "Privacy-first AI Code Review CLI",
+  "description": "GuardScan - Privacy-first AI Code Review CLI with comprehensive security scanning",
   "main": "dist/index.js",
   "bin": {
-    "ai-review": "dist/index.js"
+    "guardscan": "dist/index.js"
   },
   "scripts": {
     "build": "tsc",
@@ -13,6 +13,7 @@
     "test": "jest"
   },
   "keywords": [
+    "guardscan",
     "code-review",
     "ai",
     "cli",
@@ -34,13 +35,16 @@
     "fast-glob": "^3.3.2",
     "ignore": "^5.3.0",
     "marked": "^11.0.0",
-    "js-yaml": "^4.1.0"
+    "js-yaml": "^4.1.0",
+    "chart.js": "^4.5.1",
+    "chartjs-node-canvas": "^5.0.0"
   },
   "devDependencies": {
     "@types/node": "^20.10.5",
     "@types/inquirer": "^8.2.10",
     "@types/uuid": "^9.0.7",
     "@types/js-yaml": "^4.0.9",
+    "@types/chart.js": "^2.9.41",
     "typescript": "^5.3.3",
     "jest": "^29.7.0",
     "@types/jest": "^29.5.11"
