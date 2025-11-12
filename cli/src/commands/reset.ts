@@ -1,13 +1,14 @@
 import chalk from 'chalk';
 import inquirer from 'inquirer';
 import { configManager } from '../core/config';
+import { displaySimpleBanner } from '../utils/ascii-art';
 
 interface ResetOptions {
   all?: boolean;
 }
 
 export async function resetCommand(options: ResetOptions): Promise<void> {
-  console.log(chalk.cyan.bold('\n🔄 Reset AI Code Review\n'));
+  displaySimpleBanner('reset');
 
   try {
     if (options.all) {
@@ -29,7 +30,7 @@ export async function resetCommand(options: ResetOptions): Promise<void> {
       configManager.reset(true);
       console.log(chalk.green('✓ Full reset completed'));
       console.log(chalk.gray('  All configuration and cache deleted'));
-      console.log(chalk.gray('  Run "ai-review init" to start fresh\n'));
+      console.log(chalk.gray('  Run "guardscan init" to start fresh\n'));
     } else {
       // Partial reset (cache only)
       configManager.reset(false);

@@ -36,7 +36,7 @@ export class APIClient {
   private baseUrl: string;
 
   constructor(baseUrl?: string) {
-    this.baseUrl = baseUrl || process.env.API_BASE_URL || 'https://api.ai-review.dev';
+    this.baseUrl = baseUrl || process.env.API_BASE_URL || 'https://api.guardscancli.com';
     this.client = axios.create({
       baseURL: this.baseUrl,
       timeout: 10000,

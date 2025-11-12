@@ -1,4 +1,4 @@
-# Contributing to AI Code Review
+# Contributing to GuardScan
 
 Thank you for your interest in contributing! This document provides guidelines for contributing to the project.
 
@@ -15,8 +15,8 @@ Thank you for your interest in contributing! This document provides guidelines f
 1. **Clone the repository**
 
 ```bash
-git clone https://github.com/yourusername/ai-code-review.git
-cd ai-code-review
+git clone https://github.com/ntanwir10/GuardScan.git
+cd GuardScan
 ```
 
 2. **Install dependencies**
@@ -51,16 +51,16 @@ cp .env.example .env
 # CLI
 cd cli
 npm run build
-npm link  # Makes ai-review command available globally
+npm link  # Makes guardscan command available globally
 
 # Test
-ai-review --help
+guardscan --help
 ```
 
 ## Project Structure
 
 ```
-ai-code-review/
+GuardScan/
 ├── cli/                  # CLI application
 │   ├── src/
 │   │   ├── commands/    # CLI commands
@@ -112,9 +112,9 @@ git checkout -b fix/your-bug-fix
 npm run build
 
 # Test locally
-ai-review init
-ai-review config
-ai-review run
+guardscan init
+guardscan config
+guardscan run
 ```
 
 ### 4. Commit Your Changes
@@ -213,7 +213,7 @@ npm run lint
 
 - Open an issue for bugs or feature requests
 - Join our Discord community (link)
-- Email: support@ai-review.dev
+- Email: support@guardscan.dev
 
 ## Code of Conduct
 

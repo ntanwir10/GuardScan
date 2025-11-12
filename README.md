@@ -1,6 +1,6 @@
-# 🧠 AI Code Review CLI
+# 🛡️ GuardScan
 
-Privacy-first, developer-friendly AI Code Review CLI with optional cloud sync and billing.
+Privacy-first, developer-friendly GuardScan CLI with comprehensive security scanning and optional cloud sync.
 
 ## Core Principles
 
@@ -23,32 +23,32 @@ Privacy-first, developer-friendly AI Code Review CLI with optional cloud sync an
 
 ```bash
 # Install
-npm install -g ai-code-review
+npm install -g guardscan
 
 # Initialize (generates client_id)
-ai-review init
+guardscan init
 
 # Configure AI provider
-ai-review config
+guardscan config
 
 # Run code review
-ai-review run
+guardscan run
 
 # Run security scan
-ai-review security
+guardscan security
 
 # Check status
-ai-review status
+guardscan status
 ```
 
 ## Commands
 
-- `ai-review init` - Initialize CLI and generate client_id
-- `ai-review run` - Perform code review using selected AI model
-- `ai-review security` - Run vulnerability scan
-- `ai-review config` - Set model provider, keys, preferences
-- `ai-review reset` - Clear local context and cache
-- `ai-review status` - Show current credits, provider, and repo info
+- `guardscan init` - Initialize CLI and generate client_id
+- `guardscan run` - Perform code review using selected AI model
+- `guardscan security` - Run vulnerability scan
+- `guardscan config` - Set model provider, keys, preferences
+- `guardscan reset` - Clear local context and cache
+- `guardscan status` - Show current credits, provider, and repo info
 
 ## Pricing
 
@@ -96,7 +96,7 @@ cd cli && npm run build
 
 # Run locally
 npm link
-ai-review --help
+guardscan --help
 ```
 
 ## License
@@ -105,4 +105,4 @@ MIT
 
 ## Support
 
-Report issues at: https://github.com/yourusername/ai-code-review/issues
+Report issues at: https://github.com/ntanwir10/GuardScan/issues

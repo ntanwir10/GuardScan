@@ -1,9 +1,15 @@
 import chalk from 'chalk';
 import { configManager } from '../core/config';
 import { repositoryManager } from '../core/repository';
+import { displayWelcomeBanner } from '../utils/ascii-art';
 
 export async function initCommand(): Promise<void> {
-  console.log(chalk.cyan.bold('\n🚀 Initializing AI Code Review\n'));
+  // Display welcome banner for first-time users
+  if (!configManager.exists()) {
+    displayWelcomeBanner();
+  } else {
+    console.log(chalk.cyan.bold('\n🚀 Initializing GuardScan\n'));
+  }
 
   try {
     // Check if already initialized
@@ -12,7 +18,7 @@ export async function initCommand(): Promise<void> {
       console.log(chalk.yellow('Already initialized!'));
       console.log(chalk.gray(`Client ID: ${config.clientId}`));
       console.log(chalk.gray(`Provider: ${config.provider}`));
-      console.log(chalk.gray('\nRun "ai-review config" to modify settings\n'));
+      console.log(chalk.gray('\nRun "guardscan config" to modify settings\n'));
       return;
     }
 
@@ -38,9 +44,9 @@ export async function initCommand(): Promise<void> {
     }
 
     console.log(chalk.cyan('\n📝 Next Steps:'));
-    console.log(chalk.white('  1. Configure AI provider: ') + chalk.cyan('ai-review config'));
-    console.log(chalk.white('  2. Run code review: ') + chalk.cyan('ai-review run'));
-    console.log(chalk.white('  3. Check status: ') + chalk.cyan('ai-review status'));
+    console.log(chalk.white('  1. Configure AI provider: ') + chalk.cyan('guardscan config'));
+    console.log(chalk.white('  2. Run code review: ') + chalk.cyan('guardscan run'));
+    console.log(chalk.white('  3. Check status: ') + chalk.cyan('guardscan status'));
 
     console.log(chalk.gray('\nℹ Privacy Notice:'));
     console.log(chalk.gray('  - Your client_id is stored locally only'));
