@@ -22,14 +22,14 @@ GuardScan is a privacy-first CLI tool that uses AI to automatically review your 
 ### Via NPM (Recommended)
 
 ```bash
-npm install -g ai-code-review
+npm install -g guardscan
 ```
 
 ### From Source
 
 ```bash
-git clone https://github.com/ntanwir10/ai-code-review.git
-cd ai-code-review/cli
+git clone https://github.com/ntanwir10/GuardScan.git
+cd GuardScan/cli
 npm install
 npm run build
 npm link
@@ -200,7 +200,7 @@ fi
 # GitHub Actions example
 - name: Run GuardScan
   run: |
-    npm install -g ai-code-review
+    npm install -g guardscan
     guardscan init
     guardscan config --provider openai --key ${{ secrets.OPENAI_API_KEY }}
     guardscan run --no-cloud
@@ -256,7 +256,7 @@ telemetryEnabled: false
 
 If you run out of free credits:
 
-1. Visit: https://guardscan.dev/pricing
+1. Visit: https://guardscancli.com/pricing
 2. Select LOC package
 3. Complete Stripe checkout
 4. Credits added automatically to your `client_id`
@@ -324,10 +324,10 @@ done
 
 ## Getting Help
 
-- Documentation: https://docs.guardscan.dev
-- Issues: https://github.com/ntanwir10/ai-code-review/issues
-- Discord: https://discord.gg/ai-code-review
-- Email: support@guardscan.dev
+- Documentation: https://docs.guardscancli.com
+- Issues: https://github.com/ntanwir10/GuardScan/issues
+- Discord: https://discord.gg/guardscan
+- Email: support@guardscancli.com
 
 ## Next Steps
 
