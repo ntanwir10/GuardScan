@@ -68,7 +68,13 @@ async function interactiveConfig(): Promise<void> {
   const config = configManager.load();
   const availableProviders = ProviderFactory.getAvailableProviders();
 
-  const answers = await inquirer.prompt([
+  const answers: {
+    provider: AIProvider;
+    apiKey?: string;
+    apiEndpoint?: string;
+    telemetry: boolean;
+    offlineMode: boolean;
+  } = await inquirer.prompt([
     {
       type: 'list',
       name: 'provider',
@@ -83,15 +89,15 @@ async function interactiveConfig(): Promise<void> {
       type: 'input',
       name: 'apiKey',
       message: 'Enter API key (leave empty to use environment variable):',
-      when: (answers) => !['ollama', 'lmstudio'].includes(answers.provider),
+      when: (ans: any) => !['ollama', 'lmstudio'].includes(ans.provider),
       default: config.apiKey,
     },
     {
       type: 'input',
       name: 'apiEndpoint',
       message: 'Enter API endpoint:',
-      when: (answers) => ['ollama', 'lmstudio'].includes(answers.provider),
-      default: answers.provider === 'ollama' ? 'http://localhost:11434' : 'http://localhost:1234',
+      when: (ans: any) => ['ollama', 'lmstudio'].includes(ans.provider),
+      default: (ans: any) => ans.provider === 'ollama' ? 'http://localhost:11434' : 'http://localhost:1234',
     },
     {
       type: 'confirm',
