@@ -4,9 +4,12 @@
   "description": "Cloudflare Workers backend for GuardScan",
   "main": "src/index.ts",
   "scripts": {
+    "build": "tsc",
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
-    "tail": "wrangler tail"
+    "tail": "wrangler tail",
+    "setup-secrets": "./scripts/setup-secrets.sh",
+    "verify": "./scripts/verify-setup.sh"
   },
   "keywords": [],
   "author": "",
