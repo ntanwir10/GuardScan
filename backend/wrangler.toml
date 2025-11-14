@@ -1,4 +1,5 @@
 # Cloudflare Workers Configuration for GuardScan Backend
+# Documentation: https://developers.cloudflare.com/workers/wrangler/configuration/
 
 name = "guardscan-backend"
 main = "src/index.ts"
@@ -6,24 +7,33 @@ compatibility_date = "2024-11-13"
 workers_dev = true
 
 # Account details (set via wrangler CLI or environment variables)
+# Get your account_id from: https://dash.cloudflare.com/
 # account_id = "your-account-id"
 
 [build]
-command = "npm install && npm run build"
+command = "npm install && npx tsc"
 
 [build.upload]
 format = "service-worker"
 
 # Environment variables (non-sensitive)
 [vars]
-ENVIRONMENT = "production"
+ENVIRONMENT = "development"
+API_VERSION = "v1"
+MAX_REQUEST_SIZE_MB = 10
 
-# Secrets (set via: wrangler secret put SECRET_NAME)
-# Required secrets:
-# - SUPABASE_URL
-# - SUPABASE_KEY
-# - STRIPE_SECRET_KEY
-# - STRIPE_WEBHOOK_SECRET
+# Secrets (NEVER commit these - set via: wrangler secret put SECRET_NAME)
+# Required secrets for production:
+# - SUPABASE_URL          (from Supabase dashboard → Settings → API)
+# - SUPABASE_KEY          (service_role key from Supabase)
+# - STRIPE_SECRET_KEY     (from Stripe dashboard → Developers → API keys)
+# - STRIPE_WEBHOOK_SECRET (from Stripe dashboard → Webhooks)
+#
+# Setup commands:
+#   wrangler secret put SUPABASE_URL
+#   wrangler secret put SUPABASE_KEY
+#   wrangler secret put STRIPE_SECRET_KEY
+#   wrangler secret put STRIPE_WEBHOOK_SECRET
 
 # KV Namespace for caching
 # [[kv_namespaces]]
@@ -34,14 +44,16 @@ ENVIRONMENT = "production"
 # Staging environment
 [env.staging]
 name = "guardscan-backend-staging"
-route = { pattern = "api-staging.guardscancli.com/*", zone_name = "guardscancli.com" }
-vars = { ENVIRONMENT = "staging" }
+# Uncomment and configure when you have a custom domain:
+# route = { pattern = "api-staging.guardscan.com/*", zone_name = "guardscan.com" }
+vars = { ENVIRONMENT = "staging", API_VERSION = "v1" }
 
 # Production environment
 [env.production]
 name = "guardscan-backend-production"
-route = { pattern = "api.guardscancli.com/*", zone_name = "guardscancli.com" }
-vars = { ENVIRONMENT = "production" }
+# Uncomment and configure when you have a custom domain:
+# route = { pattern = "api.guardscan.com/*", zone_name = "guardscan.com" }
+vars = { ENVIRONMENT = "production", API_VERSION = "v1", MAX_REQUEST_SIZE_MB = 10 }
 
 # Routes (if using custom domains)
 # routes = [
