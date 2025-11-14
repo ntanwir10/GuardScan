@@ -111,7 +111,7 @@ export async function testCommand(options: TestOptions): Promise<void> {
       },
     };
 
-    const reportPath = reporter.saveReport(reviewResult, 'markdown');
+    const reportPath = reporter.saveReport(reviewResult, 'markdown', undefined, 'quality');
     console.log(chalk.green(`✓ Report saved: ${reportPath}`));
 
     // Record telemetry

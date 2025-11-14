@@ -281,9 +281,17 @@ export class Reporter {
   /**
    * Save report to file
    */
-  saveReport(result: ReviewResult, format: 'markdown' | 'html' = 'markdown', outputPath?: string): string {
+  saveReport(
+    result: ReviewResult,
+    format: 'markdown' | 'html' = 'markdown',
+    outputPath?: string,
+    reportType?: string
+  ): string {
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-    const defaultFilename = `code-review-${timestamp}.${format === 'markdown' ? 'md' : 'html'}`;
+
+    // Generate command-specific filename
+    const reportPrefix = this.getReportPrefix(reportType);
+    const defaultFilename = `${reportPrefix}-${timestamp}.${format === 'markdown' ? 'md' : 'html'}`;
     const filepath = outputPath || path.join(process.cwd(), defaultFilename);
 
     let content: string;
@@ -295,6 +303,22 @@ export class Reporter {
 
     fs.writeFileSync(filepath, content, 'utf-8');
     return filepath;
+  }
+
+  /**
+   * Get report filename prefix based on report type
+   */
+  private getReportPrefix(reportType?: string): string {
+    const prefixes: Record<string, string> = {
+      'ai-review': 'guardscan-ai-review',
+      'comprehensive': 'guardscan-comprehensive',
+      'security': 'guardscan-security',
+      'quality': 'guardscan-quality',
+      'mutation': 'guardscan-mutation',
+      'rules': 'guardscan-rules',
+    };
+
+    return prefixes[reportType || 'default'] || 'guardscan-code-review';
   }
 
   /**
