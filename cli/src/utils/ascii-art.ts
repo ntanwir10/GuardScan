@@ -3,18 +3,13 @@ import chalk from 'chalk';
 /**
  * GuardScan ASCII Art Logo
  */
-export const GUARDSCAN_LOGO = `  ___    _____ _    _   ___  ___  ___    ___  ___   ___   _  _      ___  _    ___
- / __|  / __| | |  | | / _ \\| _ \\|   \\  / __|/ __| / _ \\ | \\| |    / __|| |  |_ _|
-| (_ | | (_ | | |__| || |_| | _ /| |) | \\__ \\ (__| |_| || .  |   | (__ | |__ | |
- \\___/  \\___| |____|_| \\__/_|_| \\_|___/  |___/\\___|\\__/_|_|\\_|    \\___||____|___|`;
+export const GUARDSCAN_LOGO = `🛡️  GUARD SCAN - CLI`;
 
 /**
  * GuardScan Shield ASCII Art (Alternative)
  */
-export const GUARDSCAN_SHIELD = `  ___    GUARD SCAN - CLI
- / __|   Privacy-First Security
-| (_ |
- \\___/`;
+export const GUARDSCAN_SHIELD = `🛡️  GUARD SCAN - CLI
+   Privacy-First Security`;
 
 /**
  * Display GuardScan logo with optional tagline
