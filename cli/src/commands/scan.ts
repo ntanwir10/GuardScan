@@ -409,7 +409,7 @@ async function runSBOMGeneration(repoPath: string): Promise<any> {
 async function runAIReview(results: ScanResults, options: ScanOptions): Promise<void> {
   try {
     const configManager = new ConfigManager();
-    const config = configManager.load();
+    const config = configManager.loadOrInit();
 
     if (config.provider === 'none') {
       console.log(chalk.gray('\n💡 AI code review skipped (no AI provider configured)'));
