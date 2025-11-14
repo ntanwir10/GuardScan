@@ -15,7 +15,7 @@ export interface Config {
   lastUsed: string;
 }
 
-export type AIProvider = 'openai' | 'claude' | 'gemini' | 'ollama' | 'lmstudio' | 'openrouter';
+export type AIProvider = 'openai' | 'claude' | 'gemini' | 'ollama' | 'lmstudio' | 'openrouter' | 'none';
 
 export class ConfigManager {
   private configDir: string;
