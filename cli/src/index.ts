@@ -4,6 +4,7 @@ import { Command } from 'commander';
 import chalk from 'chalk';
 import { initCommand } from './commands/init';
 import { runCommand } from './commands/run';
+import { scanCommand } from './commands/scan';
 import { securityCommand } from './commands/security';
 import { testCommand } from './commands/test';
 import { sbomCommand } from './commands/sbom';
@@ -35,6 +36,18 @@ program
   .option('--with-ai', 'Use AI enhancement (requires API key)', true)
   .option('--no-cloud', 'Skip cloud credit validation')
   .action(runCommand);
+
+program
+  .command('scan')
+  .description('Comprehensive scan - runs all security and quality checks in parallel')
+  .option('--skip-tests', 'Skip test execution and quality analysis')
+  .option('--skip-perf', 'Skip performance testing')
+  .option('--skip-mutation', 'Skip mutation testing')
+  .option('--skip-ai', 'Skip AI code review')
+  .option('--coverage', 'Include code coverage analysis')
+  .option('--licenses', 'Include license compliance scanning')
+  .option('--no-cloud', 'Skip cloud credit validation')
+  .action(scanCommand);
 
 program
   .command('security')
