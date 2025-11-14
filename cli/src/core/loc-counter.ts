@@ -108,12 +108,15 @@ export class LOCCounter {
     const globPatterns = patterns || defaultPatterns;
     const files = await fastGlob(globPatterns, {
       cwd: process.cwd(),
-      absolute: false,
+      absolute: true, // Get absolute paths first
       ignore: ['node_modules/**', '.git/**', 'dist/**', 'build/**'],
     });
 
-    // Filter using ignore patterns
-    return files.filter(file => !this.ignoreMatcher.ignores(file));
+    // Convert to relative paths and filter using ignore patterns
+    const cwd = process.cwd();
+    return files
+      .map(file => path.relative(cwd, file))
+      .filter(file => !this.ignoreMatcher.ignores(file));
   }
 
   /**

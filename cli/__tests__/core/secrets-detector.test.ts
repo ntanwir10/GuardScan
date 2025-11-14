@@ -63,12 +63,12 @@ describe('SecretsDetector', () => {
 
     it('should mask detected secrets', async () => {
       const testFile = path.join(testDir, 'test.env');
-      fs.writeFileSync(testFile, 'API_KEY=sk_test_1234567890abcdefghijklmnop');
+      fs.writeFileSync(testFile, 'AWS_ACCESS_KEY_ID=AKIA1234567890123456');
 
       const findings = await detector.detectInFiles([testFile]);
 
       expect(findings.length).toBeGreaterThan(0);
-      expect(findings[0].secret).not.toContain('1234567890');
+      expect(findings[0].secret).not.toContain('AKIA1234567890123456');
       expect(findings[0].secret).toContain('***');
     });
 
@@ -157,7 +157,7 @@ AWS_ACCESS_KEY=AKIAIOSFODNN7EXAMPLE
       const content = `
 AWS_ACCESS_KEY=AKIAIOSFODNN7EXAMPLE
 GITHUB_TOKEN=ghp_1234567890abcdefghijklmnopqrstuvwxyz
-STRIPE_KEY=sk_test_1234567890abcdefghijklmnop
+GOOGLE_API_KEY=AIzaSyD1234567890abcdefghijklmnopqrstuvw
       `.trim();
       fs.writeFileSync(testFile, content);
 
