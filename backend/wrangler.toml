@@ -1,16 +1,57 @@
-name = "guardscan-api"
+# Cloudflare Workers Configuration for GuardScan Backend
+
+name = "guardscan-backend"
 main = "src/index.ts"
-compatibility_date = "2024-01-01"
+compatibility_date = "2024-11-13"
+workers_dev = true
 
-# Environment variables (set these via wrangler secret)
-# SUPABASE_URL
-# SUPABASE_KEY
-# STRIPE_SECRET_KEY
-# STRIPE_WEBHOOK_SECRET
+# Account details (set via wrangler CLI or environment variables)
+# account_id = "your-account-id"
 
+[build]
+command = "npm install && npm run build"
+
+[build.upload]
+format = "service-worker"
+
+# Environment variables (non-sensitive)
 [vars]
 ENVIRONMENT = "production"
 
-[[kv_namespaces]]
-binding = "CACHE"
-id = "your-kv-namespace-id"
+# Secrets (set via: wrangler secret put SECRET_NAME)
+# Required secrets:
+# - SUPABASE_URL
+# - SUPABASE_KEY
+# - STRIPE_SECRET_KEY
+# - STRIPE_WEBHOOK_SECRET
+
+# KV Namespace for caching
+# [[kv_namespaces]]
+# binding = "CACHE"
+# id = "your-kv-namespace-id"
+# preview_id = "your-preview-kv-namespace-id"
+
+# Staging environment
+[env.staging]
+name = "guardscan-backend-staging"
+route = { pattern = "api-staging.guardscancli.com/*", zone_name = "guardscancli.com" }
+vars = { ENVIRONMENT = "staging" }
+
+# Production environment
+[env.production]
+name = "guardscan-backend-production"
+route = { pattern = "api.guardscancli.com/*", zone_name = "guardscancli.com" }
+vars = { ENVIRONMENT = "production" }
+
+# Routes (if using custom domains)
+# routes = [
+#   { pattern = "api.guardscancli.com/*", zone_name = "guardscancli.com" }
+# ]
+
+# Limits and configuration
+[limits]
+cpu_ms = 50
+
+# Triggers (for scheduled tasks if needed)
+# [triggers]
+# crons = ["0 0 * * *"]  # Daily at midnight
