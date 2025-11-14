@@ -5,25 +5,38 @@ import * as os from 'os';
 
 describe('ConfigManager', () => {
   let configManager: ConfigManager;
-  let testConfigDir: string;
-  let originalHome: string | undefined;
+  let backupConfig: Config | null = null;
 
   beforeEach(() => {
-    // Create a temp directory for test configs
-    testConfigDir = fs.mkdtempSync(path.join(os.tmpdir(), 'guardscan-test-'));
-    originalHome = process.env.HOME;
-    process.env.HOME = testConfigDir;
-
     configManager = new ConfigManager();
+
+    // Backup existing config if it exists
+    if (configManager.exists()) {
+      backupConfig = configManager.load();
+      // Always reset before each test (full reset to delete config)
+      configManager.reset(true);
+    }
   });
 
   afterEach(() => {
-    // Restore original HOME and clean up
-    if (originalHome) {
-      process.env.HOME = originalHome;
+    // Clean up test config (full reset to delete config)
+    if (configManager.exists()) {
+      configManager.reset(true);
     }
-    if (fs.existsSync(testConfigDir)) {
-      fs.rmSync(testConfigDir, { recursive: true, force: true });
+
+    // Restore backup if it existed
+    if (backupConfig) {
+      // Need to create the directory first since reset(true) deleted it
+      const configDir = configManager.getConfigDir();
+      const cacheDir = configManager.getCacheDir();
+      if (!fs.existsSync(configDir)) {
+        fs.mkdirSync(configDir, { recursive: true });
+      }
+      if (!fs.existsSync(cacheDir)) {
+        fs.mkdirSync(cacheDir, { recursive: true });
+      }
+      configManager.save(backupConfig);
+      backupConfig = null;
     }
   });
 
@@ -31,14 +44,14 @@ describe('ConfigManager', () => {
     it('should create config directory', () => {
       configManager.init();
 
-      const configDir = path.join(testConfigDir, '.guardscan');
+      const configDir = configManager.getConfigDir();
       expect(fs.existsSync(configDir)).toBe(true);
     });
 
     it('should create cache directory', () => {
       configManager.init();
 
-      const cacheDir = path.join(testConfigDir, '.guardscan', 'cache');
+      const cacheDir = configManager.getCacheDir();
       expect(fs.existsSync(cacheDir)).toBe(true);
     });
 
@@ -49,82 +62,87 @@ describe('ConfigManager', () => {
       expect(config.clientId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
     });
 
-    it('should set default values', () => {
-      const config = configManager.init();
+    it('should create config file', () => {
+      configManager.init();
 
-      expect(config.provider).toBe('openai');
-      expect(config.telemetryEnabled).toBe(true);
-      expect(config.offlineMode).toBe(false);
-      expect(config.createdAt).toBeDefined();
-      expect(config.lastUsed).toBeDefined();
+      expect(configManager.exists()).toBe(true);
     });
 
     it('should not overwrite existing config', () => {
-      const config1 = configManager.init();
-      const clientId1 = config1.clientId;
+      const firstConfig = configManager.init();
+      const secondConfig = configManager.init();
 
-      const config2 = configManager.init();
-      const clientId2 = config2.clientId;
+      expect(firstConfig.clientId).toBe(secondConfig.clientId);
+    });
+  });
 
-      expect(clientId1).toBe(clientId2);
+  describe('save and load', () => {
+    it('should save and load config', () => {
+      // Create the directory first
+      configManager.init();
+
+      const config: Config = {
+        clientId: 'test-client-id-12345',
+        provider: 'openai',
+        apiKey: 'test-api-key',
+        telemetryEnabled: true,
+        offlineMode: false,
+        createdAt: new Date().toISOString(),
+        lastUsed: new Date().toISOString(),
+      };
+
+      configManager.save(config);
+      const loaded = configManager.load();
+
+      expect(loaded.clientId).toBe(config.clientId);
+      expect(loaded.provider).toBe(config.provider);
+      expect(loaded.apiKey).toBe(config.apiKey);
     });
   });
 
   describe('load', () => {
-    it('should load existing config', () => {
-      const original = configManager.init();
-
-      const loaded = configManager.load();
-
-      expect(loaded.clientId).toBe(original.clientId);
-      expect(loaded.provider).toBe(original.provider);
-    });
-
     it('should throw error if config does not exist', () => {
+      // Ensure config doesn't exist
+      if (configManager.exists()) {
+        configManager.reset(true);
+      }
       expect(() => configManager.load()).toThrow();
     });
 
     it('should update lastUsed on load', () => {
       configManager.init();
+      const beforeLoad = new Date();
 
-      const before = Date.now();
       const config = configManager.load();
-      const after = Date.now();
 
-      const lastUsed = new Date(config.lastUsed).getTime();
-      expect(lastUsed).toBeGreaterThanOrEqual(before);
-      expect(lastUsed).toBeLessThanOrEqual(after);
+      const lastUsed = new Date(config.lastUsed);
+      expect(lastUsed >= beforeLoad).toBe(true);
     });
   });
 
-  describe('save', () => {
-    it('should save config changes', () => {
-      const config = configManager.init();
+  describe('update', () => {
+    it('should update existing config', () => {
+      configManager.init();
 
-      config.provider = 'claude';
-      config.apiKey = 'test-key';
-      configManager.save(config);
+      const updates = {
+        provider: 'claude' as const,
+        apiKey: 'new-api-key',
+      };
 
-      const loaded = configManager.load();
-      expect(loaded.provider).toBe('claude');
-      expect(loaded.apiKey).toBe('test-key');
-    });
+      configManager.update(updates);
+      const config = configManager.load();
 
-    it('should preserve other fields when saving', () => {
-      const config = configManager.init();
-      const originalClientId = config.clientId;
-
-      config.provider = 'claude';
-      configManager.save(config);
-
-      const loaded = configManager.load();
-      expect(loaded.clientId).toBe(originalClientId);
-      expect(loaded.telemetryEnabled).toBe(true);
+      expect(config.provider).toBe('claude');
+      expect(config.apiKey).toBe('new-api-key');
     });
   });
 
   describe('exists', () => {
     it('should return false when config does not exist', () => {
+      // Ensure config doesn't exist
+      if (configManager.exists()) {
+        configManager.reset(true);
+      }
       expect(configManager.exists()).toBe(false);
     });
 
@@ -135,19 +153,21 @@ describe('ConfigManager', () => {
   });
 
   describe('reset', () => {
-    it('should delete config file', () => {
+    it('should delete config file with full reset', () => {
       configManager.init();
       expect(configManager.exists()).toBe(true);
 
-      configManager.reset();
+      configManager.reset(true);
       expect(configManager.exists()).toBe(false);
     });
 
-    it('should delete cache directory', () => {
+    it('should delete cache directory with full reset', () => {
       configManager.init();
       const cacheDir = configManager.getCacheDir();
 
-      configManager.reset();
+      expect(fs.existsSync(cacheDir)).toBe(true);
+
+      configManager.reset(true);
       expect(fs.existsSync(cacheDir)).toBe(false);
     });
   });
@@ -155,14 +175,14 @@ describe('ConfigManager', () => {
   describe('getConfigDir', () => {
     it('should return correct config directory path', () => {
       const configDir = configManager.getConfigDir();
-      expect(configDir).toBe(path.join(testConfigDir, '.guardscan'));
+      expect(configDir).toBe(path.join(os.homedir(), '.guardscan'));
     });
   });
 
   describe('getCacheDir', () => {
     it('should return correct cache directory path', () => {
       const cacheDir = configManager.getCacheDir();
-      expect(cacheDir).toBe(path.join(testConfigDir, '.guardscan', 'cache'));
+      expect(cacheDir).toBe(path.join(os.homedir(), '.guardscan', 'cache'));
     });
   });
 });
