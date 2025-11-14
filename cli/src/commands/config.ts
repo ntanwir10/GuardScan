@@ -32,7 +32,7 @@ export async function configCommand(options: ConfigOptions): Promise<void> {
 }
 
 function showConfig(): void {
-  const config = configManager.load();
+  const config = configManager.loadOrInit();
 
   console.log(chalk.cyan.bold('\n📋 Current Configuration\n'));
 
@@ -68,7 +68,7 @@ function getModeFromProvider(provider: string): 'cloud' | 'local' | 'static' {
 }
 
 function directConfig(options: ConfigOptions): void {
-  const config = configManager.load();
+  const config = configManager.loadOrInit();
 
   if (options.provider) {
     config.provider = options.provider;
@@ -88,7 +88,7 @@ async function interactiveConfig(): Promise<void> {
   const { displaySimpleBanner } = await import('../utils/ascii-art');
   displaySimpleBanner('config');
 
-  const config = configManager.load();
+  const config = configManager.loadOrInit();
   const currentMode = getModeFromProvider(config.provider);
 
   // Show current mode

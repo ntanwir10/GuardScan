@@ -11,7 +11,7 @@ export async function statusCommand(): Promise<void> {
 
   try {
     // Load config
-    const config = configManager.load();
+    const config = configManager.loadOrInit();
 
     // Get repository info
     let repoInfo;
