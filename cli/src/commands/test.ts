@@ -7,6 +7,7 @@ import { linterIntegration } from '../core/linter-integration';
 import { reporter, ReviewResult } from '../utils/reporter';
 import { telemetryManager } from '../core/telemetry';
 import { repositoryManager } from '../core/repository';
+import { createProgressBar } from '../utils/progress';
 
 interface TestOptions {
   coverage?: boolean;
@@ -25,6 +26,16 @@ export async function testCommand(options: TestOptions): Promise<void> {
     const repoInfo = repositoryManager.getRepoInfo();
     console.log(chalk.gray(`Repository: ${repoInfo.name}\n`));
 
+    // Calculate total steps for progress tracking
+    let totalSteps = 1; // Report generation
+    if (options.all || !options.metrics && !options.smells && !options.lint) totalSteps++;
+    if (options.all || options.metrics) totalSteps++;
+    if (options.all || options.smells) totalSteps++;
+    if (options.all || options.lint) totalSteps++;
+
+    const progressBar = createProgressBar(totalSteps, 'Quality Analysis');
+    let completedSteps = 0;
+
     const results: any = {
       tests: null,
       metrics: null,
@@ -34,62 +45,70 @@ export async function testCommand(options: TestOptions): Promise<void> {
 
     // Run tests
     if (options.all || !options.metrics && !options.smells && !options.lint) {
-      const testSpinner = ora('Running tests...').start();
+      progressBar.update(completedSteps, { status: 'Running tests...' });
       try {
         results.tests = await testRunner.runTests(process.cwd(), options.coverage || false);
+        completedSteps++;
         if (results.tests.length > 0) {
-          testSpinner.succeed(`Tests completed (${results.tests.length} framework(s))`);
+          progressBar.update(completedSteps, { status: `Tests: ${results.tests.length} framework(s)` });
           displayTestResults(results.tests);
         } else {
-          testSpinner.info('No test frameworks detected');
+          progressBar.update(completedSteps, { status: 'No test frameworks detected' });
         }
       } catch (error) {
-        testSpinner.fail('Test execution failed');
+        completedSteps++;
+        progressBar.update(completedSteps, { status: 'Test execution failed' });
       }
     }
 
     // Run code metrics analysis
     if (options.all || options.metrics) {
-      const metricsSpinner = ora('Analyzing code metrics...').start();
+      progressBar.update(completedSteps, { status: 'Analyzing code metrics...' });
       try {
         results.metrics = await codeMetricsAnalyzer.analyze(process.cwd());
-        metricsSpinner.succeed(`Code metrics analyzed (${results.metrics.length} files)`);
+        completedSteps++;
+        progressBar.update(completedSteps, { status: `Metrics: ${results.metrics.length} files` });
         displayMetricsResults(results.metrics);
       } catch (error) {
-        metricsSpinner.fail('Metrics analysis failed');
+        completedSteps++;
+        progressBar.update(completedSteps, { status: 'Metrics analysis failed' });
       }
     }
 
     // Detect code smells
     if (options.all || options.smells) {
-      const smellSpinner = ora('Detecting code smells...').start();
+      progressBar.update(completedSteps, { status: 'Detecting code smells...' });
       try {
         results.smells = await codeSmellDetector.detect(process.cwd());
-        smellSpinner.succeed(`Code smells detected (${results.smells.length} issues)`);
+        completedSteps++;
+        progressBar.update(completedSteps, { status: `Smells: ${results.smells.length} issues` });
         displaySmellResults(results.smells);
       } catch (error) {
-        smellSpinner.fail('Code smell detection failed');
+        completedSteps++;
+        progressBar.update(completedSteps, { status: 'Code smell detection failed' });
       }
     }
 
     // Run linters
     if (options.all || options.lint) {
-      const lintSpinner = ora('Running linters...').start();
+      progressBar.update(completedSteps, { status: 'Running linters...' });
       try {
         results.linting = await linterIntegration.runAll(process.cwd());
+        completedSteps++;
         if (results.linting.length > 0) {
-          lintSpinner.succeed(`Linting completed (${results.linting.length} linter(s))`);
+          progressBar.update(completedSteps, { status: `Linting: ${results.linting.length} linter(s)` });
           displayLintResults(results.linting);
         } else {
-          lintSpinner.info('No linters detected');
+          progressBar.update(completedSteps, { status: 'No linters detected' });
         }
       } catch (error) {
-        lintSpinner.fail('Linting failed');
+        completedSteps++;
+        progressBar.update(completedSteps, { status: 'Linting failed' });
       }
     }
 
     // Generate comprehensive report
-    console.log(chalk.gray('\nGenerating comprehensive quality report...'));
+    progressBar.update(completedSteps, { status: 'Generating report...' });
     const reviewResult: ReviewResult = {
       summary: generateQualitySummary(results),
       findings: convertToFindings(results),
@@ -111,7 +130,11 @@ export async function testCommand(options: TestOptions): Promise<void> {
       },
     };
 
-    const reportPath = reporter.saveReport(reviewResult, 'markdown');
+    const reportPath = reporter.saveReport(reviewResult, 'markdown', undefined, 'quality');
+    completedSteps++;
+    progressBar.update(completedSteps, { status: 'Complete' });
+    progressBar.stop();
+
     console.log(chalk.green(`✓ Report saved: ${reportPath}`));
 
     // Record telemetry

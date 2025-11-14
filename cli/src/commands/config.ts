@@ -35,14 +35,36 @@ function showConfig(): void {
   const config = configManager.load();
 
   console.log(chalk.cyan.bold('\n📋 Current Configuration\n'));
+
+  // Show current mode prominently
+  const mode = getModeFromProvider(config.provider);
+  const modeDisplay = mode === 'cloud' ? '✨ AI-Enhanced Reviews' :
+                      mode === 'local' ? '🏠 Local AI (Offline)' :
+                      '🛡️  Static Analysis Only';
+  console.log(chalk.white('Mode:             ') + chalk.cyan.bold(modeDisplay));
+  console.log();
+
   console.log(chalk.white('Client ID:        ') + chalk.gray(config.clientId));
   console.log(chalk.white('Provider:         ') + chalk.green(config.provider));
-  console.log(chalk.white('API Key:          ') + chalk.gray(config.apiKey ? '****' + config.apiKey.slice(-4) : 'Not set'));
+
+  if (config.provider !== 'none') {
+    console.log(chalk.white('API Key:          ') + chalk.gray(config.apiKey ? '****' + config.apiKey.slice(-4) : 'Environment variable'));
+    if (config.apiEndpoint) {
+      console.log(chalk.white('API Endpoint:     ') + chalk.gray(config.apiEndpoint));
+    }
+  }
+
   console.log(chalk.white('Telemetry:        ') + (config.telemetryEnabled ? chalk.green('Enabled') : chalk.yellow('Disabled')));
   console.log(chalk.white('Offline Mode:     ') + (config.offlineMode ? chalk.yellow('Yes') : chalk.green('No')));
   console.log(chalk.white('Created:          ') + chalk.gray(new Date(config.createdAt).toLocaleString()));
   console.log(chalk.white('Last Used:        ') + chalk.gray(new Date(config.lastUsed).toLocaleString()));
   console.log();
+}
+
+function getModeFromProvider(provider: string): 'cloud' | 'local' | 'static' {
+  if (provider === 'none') return 'static';
+  if (provider === 'ollama' || provider === 'lmstudio') return 'local';
+  return 'cloud';
 }
 
 function directConfig(options: ConfigOptions): void {
@@ -67,76 +89,173 @@ async function interactiveConfig(): Promise<void> {
   displaySimpleBanner('config');
 
   const config = configManager.load();
-  const availableProviders = ProviderFactory.getAvailableProviders();
+  const currentMode = getModeFromProvider(config.provider);
 
-  const answers: any = await inquirer.prompt([
-    {
-      type: 'list',
-      name: 'provider',
-      message: 'Select AI provider:',
-      choices: availableProviders.map(p => ({
-        name: p === 'ollama' || p === 'lmstudio' ? `${p} (local)` : p,
-        value: p,
-      })),
-      default: config.provider,
-    },
-    {
-      type: 'input',
-      name: 'apiKey',
-      message: 'Enter API key (leave empty to use environment variable):',
-      when: (answers: any) => !['ollama', 'lmstudio'].includes(answers.provider),
-      default: config.apiKey,
-    },
-    {
-      type: 'input',
-      name: 'apiEndpoint',
-      message: 'Enter API endpoint:',
-      when: (answers: any) => ['ollama', 'lmstudio'].includes(answers.provider),
-      default: (answers: any) => answers.provider === 'ollama' ? 'http://localhost:11434' : 'http://localhost:1234',
-    },
+  // Show current mode
+  console.log(chalk.gray('Current mode: ') + chalk.cyan(
+    currentMode === 'cloud' ? '✨ AI-Enhanced Reviews' :
+    currentMode === 'local' ? '🏠 Local AI' :
+    '🛡️  Static Analysis'
+  ) + '\n');
+
+  // Ask if they want to change mode
+  const { changeMode } = await inquirer.prompt([
     {
       type: 'confirm',
-      name: 'telemetry',
-      message: 'Enable telemetry? (anonymized usage data only)',
-      default: config.telemetryEnabled,
-    },
-    {
-      type: 'confirm',
-      name: 'offlineMode',
-      message: 'Enable offline mode? (skip cloud credit validation)',
-      default: config.offlineMode,
+      name: 'changeMode',
+      message: 'Do you want to change your mode?',
+      default: false,
     },
   ]);
 
-  // Update config
-  config.provider = answers.provider;
-  if (answers.apiKey) {
-    config.apiKey = answers.apiKey;
+  if (changeMode) {
+    const choices = [
+      {
+        name: chalk.cyan('✨ AI-Enhanced Reviews') + chalk.gray(' (Cloud AI providers)'),
+        value: 'cloud',
+      },
+      {
+        name: chalk.cyan('🏠 Local AI') + chalk.gray(' (Ollama, LM Studio)'),
+        value: 'local',
+      },
+      {
+        name: chalk.cyan('🛡️  Static Analysis Only') + chalk.gray(' (No AI)'),
+        value: 'static',
+      },
+    ];
+
+    const { newMode } = await inquirer.prompt([
+      {
+        type: 'list',
+        name: 'newMode',
+        message: 'Select new mode:',
+        choices,
+        default: currentMode,
+      },
+    ]);
+
+    await configureModeSettings(config, newMode);
+  } else {
+    // Just update current mode settings
+    await configureModeSettings(config, currentMode);
   }
-  if (answers.apiEndpoint) {
-    config.apiEndpoint = answers.apiEndpoint;
-  }
-  config.telemetryEnabled = answers.telemetry;
-  config.offlineMode = answers.offlineMode;
 
   configManager.save(config);
-
   console.log(chalk.green('\n✓ Configuration saved\n'));
+}
 
-  // Test connection
-  console.log(chalk.gray('Testing connection...'));
-  try {
-    const provider = ProviderFactory.create(config.provider, config.apiKey, config.apiEndpoint);
-    const isAvailable = await provider.testConnection();
+async function configureModeSettings(config: any, mode: 'cloud' | 'local' | 'static'): Promise<void> {
+  if (mode === 'cloud') {
+    const cloudProviders = [
+      { name: 'OpenAI (GPT-4)', value: 'openai' },
+      { name: 'Claude (Anthropic)', value: 'claude' },
+      { name: 'Gemini (Google)', value: 'gemini' },
+      { name: 'OpenRouter (Multi-model)', value: 'openrouter' },
+    ];
 
-    if (isAvailable) {
-      console.log(chalk.green(`✓ Successfully connected to ${provider.getName()}\n`));
-    } else {
-      console.log(chalk.yellow(`⚠ Could not connect to ${provider.getName()}`));
-      console.log(chalk.gray('Please check your API key and internet connection\n'));
+    const answers = await inquirer.prompt([
+      {
+        type: 'list',
+        name: 'provider',
+        message: 'Select cloud AI provider:',
+        choices: cloudProviders,
+        default: config.provider !== 'none' && !['ollama', 'lmstudio'].includes(config.provider) ? config.provider : 'openai',
+      },
+      {
+        type: 'password',
+        name: 'apiKey',
+        message: 'Enter API key (or press Enter to use environment variable):',
+        mask: '*',
+        default: config.apiKey,
+      },
+      {
+        type: 'confirm',
+        name: 'telemetry',
+        message: 'Enable telemetry?',
+        default: config.telemetryEnabled,
+      },
+      {
+        type: 'confirm',
+        name: 'offlineMode',
+        message: 'Enable offline mode? (skip credit validation)',
+        default: config.offlineMode,
+      },
+    ]);
+
+    config.provider = answers.provider;
+    config.apiKey = answers.apiKey || undefined;
+    config.apiEndpoint = undefined;
+    config.telemetryEnabled = answers.telemetry;
+    config.offlineMode = answers.offlineMode;
+
+    // Test connection
+    if (answers.apiKey) {
+      console.log(chalk.gray('\nTesting connection...'));
+      try {
+        const provider = ProviderFactory.create(config.provider, config.apiKey);
+        const isAvailable = await provider.testConnection();
+        if (isAvailable) {
+          console.log(chalk.green(`✓ Connected to ${provider.getName()}`));
+        } else {
+          console.log(chalk.yellow(`⚠ Could not connect to ${provider.getName()}`));
+        }
+      } catch (error) {
+        console.log(chalk.yellow('⚠ Connection test failed'));
+      }
     }
-  } catch (error) {
-    console.log(chalk.yellow('⚠ Connection test failed'));
-    console.log(chalk.gray('You can still proceed, but reviews may fail\n'));
+
+  } else if (mode === 'local') {
+    const localProviders = [
+      { name: 'Ollama (http://localhost:11434)', value: 'ollama' },
+      { name: 'LM Studio (http://localhost:1234)', value: 'lmstudio' },
+    ];
+
+    const answers = await inquirer.prompt([
+      {
+        type: 'list',
+        name: 'provider',
+        message: 'Select local AI:',
+        choices: localProviders,
+        default: ['ollama', 'lmstudio'].includes(config.provider) ? config.provider : 'ollama',
+      },
+      {
+        type: 'input',
+        name: 'apiEndpoint',
+        message: 'Enter API endpoint:',
+        default: (answers: any) => answers.provider === 'ollama' ? 'http://localhost:11434' : 'http://localhost:1234',
+      },
+      {
+        type: 'confirm',
+        name: 'telemetry',
+        message: 'Enable telemetry?',
+        default: config.telemetryEnabled,
+      },
+    ]);
+
+    config.provider = answers.provider;
+    config.apiKey = undefined;
+    config.apiEndpoint = answers.apiEndpoint;
+    config.telemetryEnabled = answers.telemetry;
+    config.offlineMode = true;
+
+    console.log(chalk.green('\n✓ No internet required for reviews'));
+
+  } else { // static
+    const answers = await inquirer.prompt([
+      {
+        type: 'confirm',
+        name: 'telemetry',
+        message: 'Enable telemetry?',
+        default: config.telemetryEnabled,
+      },
+    ]);
+
+    config.provider = 'none';
+    config.apiKey = undefined;
+    config.apiEndpoint = undefined;
+    config.telemetryEnabled = answers.telemetry;
+    config.offlineMode = true;
+
+    console.log(chalk.green('\n✓ Static analysis only mode'));
   }
 }

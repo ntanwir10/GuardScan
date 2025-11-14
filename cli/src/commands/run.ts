@@ -9,6 +9,7 @@ import { telemetryManager } from '../core/telemetry';
 import { apiClient } from '../utils/api-client';
 import { isOnline } from '../utils/network';
 import { displaySimpleBanner } from '../utils/ascii-art';
+import { createProgressBar } from '../utils/progress';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -33,27 +34,32 @@ export async function runCommand(options: RunOptions): Promise<void> {
     if (repoInfo.branch) {
       console.log(chalk.gray(`Branch: ${repoInfo.branch}`));
     }
+    console.log();
 
-    // Count LOC
-    const spinner = ora('Analyzing codebase...').start();
+    // Initialize progress tracking (3-4 steps depending on validation)
+    const totalSteps = 3; // Analyze, Review, Report (validation is embedded in review)
+    const progressBar = createProgressBar(totalSteps, 'Review Progress');
+
+    // Step 1: Count LOC
+    progressBar.update(0, { status: 'Analyzing codebase...' });
     const locResult = await locCounter.count(options.files);
-    spinner.succeed(`Analyzed ${locResult.fileCount} files (${locResult.codeLines.toLocaleString()} LOC)`);
+    progressBar.update(1, { status: `Analyzed ${locResult.fileCount} files` });
 
     // Check if AI is available and requested
     const provider = config.provider ? ProviderFactory.create(config.provider, config.apiKey, config.apiEndpoint) : null;
     const aiAvailable = provider && provider.isAvailable();
     const useAI = options.withAi !== false && aiAvailable; // Use AI by default if available
 
+    // Step 2: Run review
     let reviewResult: ReviewResult;
 
     if (useAI && provider) {
       // AI-ENHANCED REVIEW (PAID TIER)
-      console.log(chalk.cyan('🤖 Running AI-enhanced code review...\n'));
+      progressBar.update(1, { status: 'Running AI-enhanced review...' });
 
       // Validate credits (if online and not in offline mode)
       const online = await isOnline();
       if (online && !config.offlineMode && !options.noCloud) {
-        const validateSpinner = ora('Validating credits...').start();
         try {
           const validation = await apiClient.validate({
             clientId: config.clientId,
@@ -62,19 +68,10 @@ export async function runCommand(options: RunOptions): Promise<void> {
           });
 
           if (!validation.allowed) {
-            validateSpinner.fail('Insufficient credits');
-            console.log(chalk.yellow('\n⚠ You do not have enough credits for AI review'));
-            console.log(chalk.gray(`  Required: ${locResult.codeLines.toLocaleString()} LOC`));
-            console.log(chalk.gray(`  Available: ${validation.remainingLoc.toLocaleString()} LOC`));
-            console.log(chalk.cyan('\n  Falling back to FREE tier analysis...\n'));
-
-            // Fall back to free tier
+            console.log(chalk.yellow('\n⚠ Insufficient credits - falling back to FREE tier\n'));
             reviewResult = await runStaticAnalysis(repoInfo, locResult, options.files);
           } else {
-            validateSpinner.succeed(`Credits validated (${validation.remainingLoc.toLocaleString()} LOC remaining)`);
-
             // Run AI review
-            const reviewSpinner = ora('Running AI code review...').start();
             const context = await prepareReviewContext(repoInfo, locResult, options.files);
 
             const aiResponse = await provider.chat([
@@ -96,7 +93,6 @@ Provide constructive feedback with specific suggestions for improvement.`,
               },
             ]);
 
-            reviewSpinner.succeed('AI code review completed');
             reviewResult = parseAIResponse(aiResponse.content, repoInfo, locResult, config.provider, aiResponse.model, Date.now() - startTime);
           }
         } catch (error) {
@@ -105,7 +101,6 @@ Provide constructive feedback with specific suggestions for improvement.`,
         }
       } else {
         // Offline or no-cloud mode - run AI locally if available
-        const reviewSpinner = ora('Running AI code review (offline)...').start();
         const context = await prepareReviewContext(repoInfo, locResult, options.files);
 
         const aiResponse = await provider.chat([
@@ -127,24 +122,22 @@ Provide constructive feedback with specific suggestions for improvement.`,
           },
         ]);
 
-        reviewSpinner.succeed('AI code review completed');
         reviewResult = parseAIResponse(aiResponse.content, repoInfo, locResult, config.provider, aiResponse.model, Date.now() - startTime);
       }
     } else {
       // STATIC ANALYSIS (FREE TIER)
-      if (!aiAvailable) {
-        console.log(chalk.yellow('⚠ AI provider not configured - running comprehensive static analysis\n'));
-        console.log(chalk.gray('  Tip: Configure AI with "guardscan config" for enhanced insights\n'));
-      } else {
-        console.log(chalk.cyan('🔍 Running comprehensive static analysis (FREE tier)\n'));
-      }
-
+      progressBar.update(1, { status: 'Running static analysis...' });
       reviewResult = await runStaticAnalysis(repoInfo, locResult, options.files);
     }
 
-    // Generate report
-    console.log(chalk.gray('\nGenerating report...'));
-    const reportPath = reporter.saveReport(reviewResult, 'markdown');
+    progressBar.update(2, { status: 'Analysis complete' });
+
+    // Step 3: Generate report
+    progressBar.update(2, { status: 'Generating report...' });
+    const reportPath = reporter.saveReport(reviewResult, 'markdown', undefined, 'ai-review');
+    progressBar.update(3, { status: 'Complete' });
+    progressBar.stop();
+
     console.log(chalk.green(`✓ Report saved: ${reportPath}`));
 
     // Update duration in metadata
