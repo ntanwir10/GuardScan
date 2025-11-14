@@ -2,6 +2,7 @@ import chalk from 'chalk';
 import ora from 'ora';
 import { execSync } from 'child_process';
 import { performanceTester, PerformanceConfig } from '../core/performance-tester';
+import { createProgressBar } from '../utils/progress';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -68,18 +69,29 @@ export async function perfCommand(options: PerfOptions): Promise<void> {
       }
     }
 
+    // Calculate total steps for progress tracking
+    let totalSteps = 2; // Run test, Save results
+    if (options.compare) totalSteps++; // Regression analysis
+    if (options.baseline) totalSteps++; // Save baseline
+
+    const progressBar = createProgressBar(totalSteps, 'Performance Test');
+    let completedSteps = 0;
+
+    // Step 1: Run performance test
     let result;
 
     if (testType === 'web') {
       // Run Lighthouse
       const url = options.web || 'http://localhost:3000';
-      const spinner = ora(`Running Lighthouse audit on ${url}...`).start();
+      progressBar.update(completedSteps, { status: `Running Lighthouse audit on ${url}...` });
 
       try {
         result = await performanceTester.runLighthouse(url);
-        spinner.succeed('Lighthouse audit complete');
+        completedSteps++;
+        progressBar.update(completedSteps, { status: 'Lighthouse audit complete' });
       } catch (error) {
-        spinner.fail('Lighthouse audit failed');
+        completedSteps++;
+        progressBar.update(completedSteps, { status: 'Lighthouse audit failed' });
         throw error;
       }
     } else {
@@ -90,7 +102,7 @@ export async function perfCommand(options: PerfOptions): Promise<void> {
         endpoints: options.url ? [{ url: options.url }] : undefined,
       };
 
-      const spinner = ora(`Running ${testType} test...`).start();
+      progressBar.update(completedSteps, { status: `Running ${testType} test...` });
 
       try {
         if (testType === 'load') {
@@ -98,9 +110,11 @@ export async function perfCommand(options: PerfOptions): Promise<void> {
         } else {
           result = await performanceTester.runStressTest(config);
         }
-        spinner.succeed(`${testType} test complete`);
+        completedSteps++;
+        progressBar.update(completedSteps, { status: `${testType} test complete` });
       } catch (error) {
-        spinner.fail(`${testType} test failed`);
+        completedSteps++;
+        progressBar.update(completedSteps, { status: `${testType} test failed` });
         throw error;
       }
     }
@@ -108,8 +122,10 @@ export async function perfCommand(options: PerfOptions): Promise<void> {
     // Display results
     displayResults(result);
 
-    // Check for regressions
+    // Step 2 (optional): Check for regressions
     if (options.compare) {
+      progressBar.update(completedSteps, { status: 'Analyzing regressions...' });
+
       console.log(chalk.white.bold('\n📊 Regression Analysis:\n'));
       const regressions = performanceTester.detectRegressions(result);
 
@@ -134,15 +150,22 @@ export async function perfCommand(options: PerfOptions): Promise<void> {
 
         console.log();
       }
+
+      completedSteps++;
+      progressBar.update(completedSteps, { status: 'Regression analysis complete' });
     }
 
-    // Save as baseline
+    // Step 3 (optional): Save as baseline
     if (options.baseline) {
+      progressBar.update(completedSteps, { status: 'Saving baseline...' });
       performanceTester.saveBaseline(result);
       console.log(chalk.green('  ✓ Saved as baseline for future comparisons\n'));
+      completedSteps++;
+      progressBar.update(completedSteps, { status: 'Baseline saved' });
     }
 
-    // Save detailed results
+    // Final step: Save detailed results
+    progressBar.update(completedSteps, { status: 'Saving results...' });
     const resultsPath = path.join(repoPath, '.guardscan', 'performance-results.json');
     const dir = path.dirname(resultsPath);
 
@@ -151,6 +174,10 @@ export async function perfCommand(options: PerfOptions): Promise<void> {
     }
 
     fs.writeFileSync(resultsPath, JSON.stringify(result, null, 2));
+    completedSteps++;
+    progressBar.update(completedSteps, { status: 'Complete' });
+    progressBar.stop();
+
     console.log(chalk.gray(`  Results saved: ${resultsPath}\n`));
 
     // Exit with error if test failed
