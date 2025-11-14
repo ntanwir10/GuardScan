@@ -1,4 +1,5 @@
 # Product Requirements Document (PRD)
+
 # GuardScan - Privacy-First AI Code Review CLI
 
 **Version**: 1.0
@@ -13,6 +14,7 @@
 GuardScan is a privacy-first, developer-friendly CLI tool that combines **offline-capable static analysis** with **optional AI-powered code review**. Unlike traditional code review tools that upload your source code to third-party servers, GuardScan guarantees privacy by performing all analysis locally and only sending anonymized metadata to backend services.
 
 **Key Differentiators:**
+
 - ✅ **Privacy Guarantee**: Source code never leaves your machine
 - ✅ **Offline-First**: Full functionality without internet connection
 - ✅ **AI-Agnostic**: Support for 6+ AI providers (user's choice)
@@ -42,6 +44,7 @@ GuardScan is a privacy-first, developer-friendly CLI tool that combines **offlin
 ### Our Solution
 
 GuardScan provides a **unified CLI** that:
+
 - Performs **all analysis locally** (offline-capable)
 - Supports **multiple AI providers** (user's choice)
 - Uses **pay-per-use pricing** (LOC-based)
@@ -55,24 +58,28 @@ GuardScan provides a **unified CLI** that:
 ### Primary Personas
 
 #### 1. **Security-Conscious Developer** (Priority 1)
+
 - **Profile**: Works at enterprises with strict IP policies (finance, healthcare, government)
 - **Need**: Code review without uploading source code
 - **Pain**: Can't use SonarCloud, CodeClimate, or GitHub Copilot due to security policies
 - **Value**: Privacy guarantee + comprehensive security scanning
 
 #### 2. **Indie Developer / Freelancer** (Priority 2)
+
 - **Profile**: Builds multiple small projects, budget-conscious
 - **Need**: Affordable code quality tools without monthly subscriptions
 - **Pain**: $50-200/month for code review tools is too expensive for side projects
 - **Value**: Pay-per-use pricing (only pay for what you scan)
 
 #### 3. **Open Source Maintainer** (Priority 3)
+
 - **Profile**: Maintains popular OSS projects, wants quality control
 - **Need**: Automated code review for pull requests
 - **Pain**: Free tier limits on existing tools
 - **Value**: Offline-capable scanning, no API rate limits for static analysis
 
 #### 4. **AI Power User** (Priority 4)
+
 - **Profile**: Wants cutting-edge AI review but doesn't want vendor lock-in
 - **Need**: Flexibility to switch between AI providers (OpenAI, Claude, local Ollama)
 - **Pain**: Locked into GitHub Copilot or specific AI provider
@@ -83,6 +90,7 @@ GuardScan provides a **unified CLI** that:
 ## Product Goals & Success Metrics
 
 ### North Star Metric
+
 **Monthly Active Developers (MAD)** using GuardScan for code review
 
 ### Key Performance Indicators (KPIs)
@@ -114,6 +122,7 @@ GuardScan provides a **unified CLI** that:
 **Requirement**: Source code must NEVER be uploaded to GuardScan servers.
 
 **Implementation**:
+
 - ✅ All static analysis runs locally
 - ✅ Only anonymized metadata sent to backend:
   - `client_id` (UUID)
@@ -124,6 +133,7 @@ GuardScan provides a **unified CLI** that:
 - ✅ Clear privacy policy visible in CLI: `guardscan status`
 
 **Acceptance Criteria**:
+
 - [ ] Code audit confirms zero file uploads
 - [ ] Privacy policy displayed on first run
 - [ ] Telemetry is opt-out with clear messaging
@@ -136,6 +146,7 @@ GuardScan provides a **unified CLI** that:
 **Requirement**: All security and quality scanning must work without internet.
 
 **Features**:
+
 - ✅ **Secrets Detection**: Detect 20+ types of hardcoded secrets
   - AWS keys, API keys, private keys, JWT tokens
   - High-entropy string detection (Shannon entropy)
@@ -161,6 +172,7 @@ GuardScan provides a **unified CLI** that:
   - Cloud provider misconfigurations
 
 **Acceptance Criteria**:
+
 - [ ] Works with airplane mode enabled
 - [ ] No network calls for static analysis
 - [ ] Graceful degradation when offline (skip credit validation)
@@ -171,6 +183,7 @@ GuardScan provides a **unified CLI** that:
 ### 3. Code Quality Analysis (P0 - Must Have)
 
 **Features**:
+
 - ✅ **LOC Counter**: Language-aware line counting
   - 20+ languages supported
   - Comment detection (single-line, block, docstrings)
@@ -189,6 +202,7 @@ GuardScan provides a **unified CLI** that:
   - Coverage report parsing
 
 **Acceptance Criteria**:
+
 - [ ] Accurate LOC counts (within 5% of manual count)
 - [ ] Language detection for 20+ languages
 - [ ] Code smell detection with actionable recommendations
@@ -200,6 +214,7 @@ GuardScan provides a **unified CLI** that:
 **Requirement**: Support multiple AI providers without vendor lock-in.
 
 **Supported Providers**:
+
 - ✅ **OpenAI**: GPT-4, GPT-3.5-turbo
 - ✅ **Anthropic**: Claude 3 (Opus, Sonnet, Haiku)
 - ✅ **Google**: Gemini Pro
@@ -208,12 +223,14 @@ GuardScan provides a **unified CLI** that:
 - ✅ **OpenRouter**: Multi-model aggregator
 
 **Features**:
+
 - Smart context selection (5 files × 100 lines max)
 - Provider-specific token limit handling
 - Graceful fallback if AI unavailable
 - Local AI support for complete offline usage
 
 **Acceptance Criteria**:
+
 - [ ] Users can switch providers without data migration
 - [ ] Local AI (Ollama) works offline
 - [ ] Clear error messages if API key invalid
@@ -226,6 +243,7 @@ GuardScan provides a **unified CLI** that:
 **Requirement**: All scan results exported as readable Markdown reports.
 
 **Report Sections**:
+
 - Executive summary with severity breakdown
 - Security findings (critical, high, medium, low)
 - Code quality metrics
@@ -234,12 +252,14 @@ GuardScan provides a **unified CLI** that:
 - Recommendations with priority
 
 **Features**:
+
 - ✅ Color-coded severity (in terminal)
 - ✅ File and line number references
 - ✅ Chart generation (PNG) for metrics
 - ✅ Shareable reports (commit to repo or share with team)
 
 **Acceptance Criteria**:
+
 - [ ] Reports render correctly on GitHub
 - [ ] Charts generate without errors
 - [ ] All findings include file:line references
@@ -252,12 +272,14 @@ GuardScan provides a **unified CLI** that:
 **Requirement**: Fair, transparent pricing based on LOC scanned with AI.
 
 **Pricing Model**:
+
 - **FREE Tier**: Unlimited static analysis (offline)
 - **PAID Tier**: $5 per 100,000 LOC for AI-enhanced review
   - Example: 10,000 LOC repo = $0.50
   - Example: 100,000 LOC repo = $5.00
 
 **Backend Features**:
+
 - ✅ Credit validation before AI scans
 - ✅ Supabase PostgreSQL database
 - ✅ Stripe payment integration
@@ -265,6 +287,7 @@ GuardScan provides a **unified CLI** that:
 - ✅ Client auto-creation on first use
 
 **Acceptance Criteria**:
+
 - [ ] Credit balance displayed: `guardscan status`
 - [ ] Purchase flow integrated (Stripe Checkout)
 - [ ] Credits deducted accurately after scans
@@ -290,11 +313,13 @@ guardscan reset         # Clear local cache & config
 ```
 
 **Configuration**:
+
 - Stored in `~/.guardscan/config.yml`
 - Environment variable fallbacks
 - Per-repo `.guardscanrc` overrides
 
 **Acceptance Criteria**:
+
 - [ ] Intuitive command names (no confusion)
 - [ ] `--help` for every command
 - [ ] Colored terminal output (chalk)
@@ -338,6 +363,7 @@ guardscan reset         # Clear local cache & config
 ### Technology Stack
 
 **CLI**:
+
 - Language: TypeScript 5.3+
 - Runtime: Node.js 18+
 - Framework: Commander.js (CLI)
@@ -346,12 +372,14 @@ guardscan reset         # Clear local cache & config
 - Tests: Jest + ts-jest (73 tests, 50%+ coverage)
 
 **Backend**:
+
 - Platform: Cloudflare Workers (serverless edge)
 - Database: Supabase (PostgreSQL with Row Level Security)
 - Payments: Stripe (Checkout + Webhooks)
 - Deployment: Wrangler CLI
 
 **CI/CD**:
+
 - GitHub Actions (9-stage pipeline)
 - Automated testing (Node 18, 20)
 - Codecov integration
@@ -367,6 +395,7 @@ guardscan reset         # Clear local cache & config
 **US-1.1**: As a security-conscious developer, I want to scan my code for vulnerabilities without uploading it to third-party servers, so that I comply with my company's IP policy.
 
 **Acceptance Criteria**:
+
 - When I run `guardscan security`, no source code is uploaded
 - I can verify this with network monitoring tools
 - A privacy statement is displayed on first use
@@ -374,6 +403,7 @@ guardscan reset         # Clear local cache & config
 **US-1.2**: As an enterprise developer, I want to run GuardScan completely offline, so that I can scan classified code in air-gapped environments.
 
 **Acceptance Criteria**:
+
 - All commands work without internet (except AI review)
 - Clear messaging when offline: "Offline mode - skipping credit validation"
 - No errors or crashes due to network unavailability
@@ -385,6 +415,7 @@ guardscan reset         # Clear local cache & config
 **US-2.1**: As an AI power user, I want to switch between OpenAI and Claude without changing my workflow, so that I can compare results and avoid vendor lock-in.
 
 **Acceptance Criteria**:
+
 - `guardscan config` allows switching providers
 - No data migration required
 - Same report format regardless of provider
@@ -392,6 +423,7 @@ guardscan reset         # Clear local cache & config
 **US-2.2**: As a privacy-focused developer, I want to use local AI (Ollama) for code review, so that no code snippets leave my machine.
 
 **Acceptance Criteria**:
+
 - Ollama provider works with locally-run models
 - No internet required for AI review (fully offline)
 - Performance is acceptable (<2min for 10k LOC)
@@ -403,6 +435,7 @@ guardscan reset         # Clear local cache & config
 **US-3.1**: As an indie developer, I want to pay only for the LOC I scan, so that I don't waste money on unused subscriptions.
 
 **Acceptance Criteria**:
+
 - No monthly fees
 - Pricing displayed before scan: "This will cost $0.50 (10k LOC)"
 - Can purchase credits in $5, $25, $100 increments
@@ -410,6 +443,7 @@ guardscan reset         # Clear local cache & config
 **US-3.2**: As a casual user, I want free static analysis, so that I can try GuardScan without payment.
 
 **Acceptance Criteria**:
+
 - `guardscan security` works without credits
 - Only AI review requires credits
 - Clear distinction between free and paid features
@@ -421,6 +455,7 @@ guardscan reset         # Clear local cache & config
 **US-4.1**: As a first-time user, I want to get started in under 2 minutes, so that I can evaluate GuardScan quickly.
 
 **Acceptance Criteria**:
+
 - `npm install -g guardscan && guardscan init && guardscan security`
 - First scan completes in <2 minutes
 - Report is easy to understand
@@ -428,6 +463,7 @@ guardscan reset         # Clear local cache & config
 **US-4.2**: As a busy developer, I want actionable recommendations, so that I know exactly what to fix.
 
 **Acceptance Criteria**:
+
 - Each finding includes file:line reference
 - Recommendations are specific ("Change X to Y")
 - Severity is clearly marked (critical, high, medium, low)
@@ -504,6 +540,7 @@ guardscan reset         # Clear local cache & config
 - [ ] Analytics dashboard (Mixpanel/Amplitude)
 
 **Success Criteria**:
+
 - 100 active beta users
 - 50+ GitHub stars
 - NPS score >30
@@ -522,6 +559,7 @@ guardscan reset         # Clear local cache & config
 - [ ] Annual billing discounts
 
 **Success Criteria**:
+
 - 1,000 paying users
 - $10,000 MRR
 - 10,000 NPM downloads/month
@@ -540,6 +578,7 @@ guardscan reset         # Clear local cache & config
 - [ ] Multi-repo scanning
 
 **Success Criteria**:
+
 - 10 enterprise customers ($500+/month each)
 - $50,000 MRR
 - SOC 2 Type II compliance
@@ -592,6 +631,7 @@ guardscan reset         # Clear local cache & config
 ## Success Criteria (6-Month Horizon)
 
 ### Product Metrics
+
 - [ ] 10,000 monthly active developers
 - [ ] 50,000 scans per week
 - [ ] 70%+ test coverage maintained
@@ -599,12 +639,14 @@ guardscan reset         # Clear local cache & config
 - [ ] 99.9% backend uptime
 
 ### Business Metrics
+
 - [ ] 500 paying users
 - [ ] $5,000 MRR
 - [ ] <10% monthly churn
 - [ ] 1 billion LOC scanned (cumulative)
 
 ### Quality Metrics
+
 - [ ] NPS score >30
 - [ ] 4.5+ stars on NPM
 - [ ] <1% error rate in production
