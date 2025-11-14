@@ -14,6 +14,7 @@ import { apiScanner } from '../core/api-scanner';
 import { complianceChecker } from '../core/compliance-checker';
 import { licenseScanner } from '../core/license-scanner';
 import { displaySimpleBanner } from '../utils/ascii-art';
+import { createProgressBar } from '../utils/progress';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -33,17 +34,21 @@ export async function securityCommand(options: SecurityOptions): Promise<void> {
 
     // Get repository info
     const repoInfo = repositoryManager.getRepoInfo();
-    console.log(chalk.gray(`Repository: ${repoInfo.name}`));
+    console.log(chalk.gray(`Repository: ${repoInfo.name}\n`));
 
-    // Count LOC
-    const spinner = ora('Scanning files...').start();
+    // Initialize progress tracking
+    const totalSteps = 3; // Scan files, Run checks, Generate report
+    const progressBar = createProgressBar(totalSteps, 'Security Scan');
+
+    // Step 1: Count LOC
+    progressBar.update(0, { status: 'Scanning files...' });
     const locResult = await locCounter.count(options.files);
-    spinner.succeed(`Scanned ${locResult.fileCount} files`);
+    progressBar.update(1, { status: `Scanned ${locResult.fileCount} files` });
 
-    // Run security checks
-    const scanSpinner = ora('Running security analysis...').start();
+    // Step 2: Run security checks
+    progressBar.update(1, { status: 'Running security analysis...' });
     const findings = await runSecurityChecks(locResult.fileBreakdown);
-    scanSpinner.succeed(`Security analysis complete (${findings.length} findings)`);
+    progressBar.update(2, { status: `Found ${findings.length} findings` });
 
     // Create review result
     const reviewResult: ReviewResult = {
@@ -60,9 +65,12 @@ export async function securityCommand(options: SecurityOptions): Promise<void> {
       },
     };
 
-    // Generate report
-    console.log(chalk.gray('\nGenerating security report...'));
+    // Step 3: Generate report
+    progressBar.update(2, { status: 'Generating report...' });
     const reportPath = reporter.saveReport(reviewResult, 'markdown', undefined, 'security');
+    progressBar.update(3, { status: 'Complete' });
+    progressBar.stop();
+
     console.log(chalk.green(`✓ Report saved: ${reportPath}`));
 
     // Display summary
