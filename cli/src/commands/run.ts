@@ -26,7 +26,7 @@ export async function runCommand(options: RunOptions): Promise<void> {
 
   try {
     // Load config
-    const config = configManager.load();
+    const config = configManager.loadOrInit();
 
     // Get repository info
     const repoInfo = repositoryManager.getRepoInfo();
