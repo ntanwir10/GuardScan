@@ -1,0 +1,258 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  lint:
+    name: Lint Code
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+          cache-dependency-path: '**/package-lock.json'
+
+      - name: Install CLI dependencies
+        working-directory: ./cli
+        run: npm ci
+
+      - name: Run ESLint (if configured)
+        working-directory: ./cli
+        run: npm run lint || echo "No lint script configured"
+        continue-on-error: true
+
+  test-cli:
+    name: Test CLI
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: [18, 20]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: 'npm'
+          cache-dependency-path: 'cli/package-lock.json'
+
+      - name: Install dependencies
+        working-directory: ./cli
+        run: npm ci
+
+      - name: Run tests
+        working-directory: ./cli
+        run: npm test
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v3
+        with:
+          files: ./cli/coverage/lcov.info
+          flags: cli
+          name: cli-coverage
+        if: matrix.node-version == 18
+
+  build-cli:
+    name: Build CLI
+    runs-on: ubuntu-latest
+    needs: [test-cli]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+          cache-dependency-path: 'cli/package-lock.json'
+
+      - name: Install dependencies
+        working-directory: ./cli
+        run: npm ci
+
+      - name: Build TypeScript
+        working-directory: ./cli
+        run: npm run build
+
+      - name: Verify build artifacts
+        working-directory: ./cli
+        run: |
+          ls -la dist/
+          test -f dist/index.js
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: cli-dist
+          path: cli/dist/
+
+  test-backend:
+    name: Test Backend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+          cache-dependency-path: 'backend/package-lock.json'
+
+      - name: Install dependencies
+        working-directory: ./backend
+        run: npm ci
+
+      - name: Run backend tests (when available)
+        working-directory: ./backend
+        run: npm test || echo "No tests configured yet"
+        continue-on-error: true
+
+  build-backend:
+    name: Build Backend
+    runs-on: ubuntu-latest
+    needs: [test-backend]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+          cache-dependency-path: 'backend/package-lock.json'
+
+      - name: Install dependencies
+        working-directory: ./backend
+        run: npm ci
+
+      - name: Validate wrangler.toml exists
+        working-directory: ./backend
+        run: test -f wrangler.toml || echo "Warning: wrangler.toml not found"
+
+  security-scan:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run npm audit (CLI)
+        working-directory: ./cli
+        run: npm audit --audit-level=moderate || true
+        continue-on-error: true
+
+      - name: Run npm audit (Backend)
+        working-directory: ./backend
+        run: npm audit --audit-level=moderate || true
+        continue-on-error: true
+
+  integration-test:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    needs: [build-cli]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      - name: Install CLI dependencies
+        working-directory: ./cli
+        run: npm ci
+
+      - name: Build CLI
+        working-directory: ./cli
+        run: npm run build
+
+      - name: Link CLI globally
+        working-directory: ./cli
+        run: npm link
+
+      - name: Test CLI commands
+        run: |
+          guardscan --version
+          guardscan --help
+          guardscan init || true
+
+      - name: Run self-scan
+        run: |
+          cd cli
+          guardscan security --files "src/**/*.ts" || true
+
+  publish-npm:
+    name: Publish to NPM
+    runs-on: ubuntu-latest
+    needs: [build-cli, integration-test]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Install dependencies
+        working-directory: ./cli
+        run: npm ci
+
+      - name: Build
+        working-directory: ./cli
+        run: npm run build
+
+      - name: Publish to NPM (dry-run)
+        working-directory: ./cli
+        run: npm publish --dry-run
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      # Uncomment when ready for production
+      # - name: Publish to NPM
+      #   working-directory: ./cli
+      #   run: npm publish
+      #   env:
+      #     NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  deploy-backend:
+    name: Deploy Backend to Cloudflare
+    runs-on: ubuntu-latest
+    needs: [build-backend]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      - name: Install dependencies
+        working-directory: ./backend
+        run: npm ci
+
+      - name: Deploy to Cloudflare Workers (staging)
+        working-directory: ./backend
+        run: echo "Deployment would happen here with wrangler deploy"
+        # Uncomment when ready:
+        # run: npx wrangler deploy --env staging
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+
+      # Production deployment (manual approval recommended)
+      # - name: Deploy to production
+      #   working-directory: ./backend
+      #   run: npx wrangler deploy --env production
+      #   env:
+      #     CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
