@@ -102,6 +102,37 @@ export class ConfigManager {
   }
 
   /**
+   * Load configuration or auto-initialize if not found
+   * This allows commands to work for first-time users without requiring init
+   */
+  loadOrInit(): Config {
+    if (this.exists()) {
+      return this.load();
+    }
+
+    // Auto-initialize with minimal defaults for first-time users
+    if (!fs.existsSync(this.configDir)) {
+      fs.mkdirSync(this.configDir, { recursive: true });
+    }
+
+    if (!fs.existsSync(this.cacheDir)) {
+      fs.mkdirSync(this.cacheDir, { recursive: true });
+    }
+
+    const config: Config = {
+      clientId: uuidv4(),
+      provider: 'none', // Start with static analysis only
+      telemetryEnabled: false, // Opt-in for telemetry
+      offlineMode: true, // Default to offline for privacy
+      createdAt: new Date().toISOString(),
+      lastUsed: new Date().toISOString(),
+    };
+
+    this.save(config);
+    return config;
+  }
+
+  /**
    * Reset configuration
    */
   reset(full: boolean = false): void {
