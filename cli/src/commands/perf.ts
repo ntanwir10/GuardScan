@@ -1,5 +1,6 @@
 import chalk from 'chalk';
 import ora from 'ora';
+import { execSync } from 'child_process';
 import { performanceTester, PerformanceConfig } from '../core/performance-tester';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -28,6 +29,44 @@ export async function perfCommand(options: PerfOptions): Promise<void> {
 
     console.log(chalk.gray(`Test Type: ${testType}`));
     console.log();
+
+    // Check for required external dependencies
+    if (testType === 'web') {
+      if (!checkLighthouseInstalled()) {
+        console.log(chalk.yellow('⚠️  Lighthouse is not installed\n'));
+        console.log(chalk.white('Lighthouse is required for web performance testing.\n'));
+        console.log(chalk.cyan('Install Lighthouse:'));
+        console.log(chalk.gray('  npm install -g lighthouse'));
+        console.log();
+        console.log(chalk.cyan('Or using Homebrew (macOS):'));
+        console.log(chalk.gray('  brew install lighthouse'));
+        console.log();
+        console.log(chalk.gray('For more info: https://github.com/GoogleChrome/lighthouse\n'));
+        process.exit(1);
+      }
+    } else {
+      // load or stress tests require k6
+      if (!checkK6Installed()) {
+        console.log(chalk.yellow('⚠️  k6 is not installed\n'));
+        console.log(chalk.white('k6 is required for load and stress testing.\n'));
+        console.log(chalk.cyan('Install k6:'));
+        console.log(chalk.gray('  # macOS (Homebrew)'));
+        console.log(chalk.gray('  brew install k6'));
+        console.log();
+        console.log(chalk.gray('  # Windows (Chocolatey)'));
+        console.log(chalk.gray('  choco install k6'));
+        console.log();
+        console.log(chalk.gray('  # Linux (Debian/Ubuntu)'));
+        console.log(chalk.gray('  sudo gpg -k'));
+        console.log(chalk.gray('  sudo gpg --no-default-keyring --keyring /usr/share/keyrings/k6-archive-keyring.gpg --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys C5AD17C747E3415A3642D57D77C6C491D6AC1D69'));
+        console.log(chalk.gray('  echo "deb [signed-by=/usr/share/keyrings/k6-archive-keyring.gpg] https://dl.k6.io/deb stable main" | sudo tee /etc/apt/sources.list.d/k6.list'));
+        console.log(chalk.gray('  sudo apt-get update'));
+        console.log(chalk.gray('  sudo apt-get install k6'));
+        console.log();
+        console.log(chalk.gray('For more info: https://k6.io/docs/get-started/installation/\n'));
+        process.exit(1);
+      }
+    }
 
     let result;
 
@@ -174,4 +213,28 @@ function displayResults(result: any): void {
   }
 
   console.log();
+}
+
+/**
+ * Check if k6 is installed
+ */
+function checkK6Installed(): boolean {
+  try {
+    execSync('k6 version', { stdio: 'ignore' });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Check if Lighthouse is installed
+ */
+function checkLighthouseInstalled(): boolean {
+  try {
+    execSync('lighthouse --version', { stdio: 'ignore' });
+    return true;
+  } catch {
+    return false;
+  }
 }
