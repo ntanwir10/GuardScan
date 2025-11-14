@@ -144,7 +144,7 @@ Provide constructive feedback with specific suggestions for improvement.`,
 
     // Generate report
     console.log(chalk.gray('\nGenerating report...'));
-    const reportPath = reporter.saveReport(reviewResult, 'markdown');
+    const reportPath = reporter.saveReport(reviewResult, 'markdown', undefined, 'ai-review');
     console.log(chalk.green(`✓ Report saved: ${reportPath}`));
 
     // Update duration in metadata
