@@ -62,7 +62,7 @@ export async function securityCommand(options: SecurityOptions): Promise<void> {
 
     // Generate report
     console.log(chalk.gray('\nGenerating security report...'));
-    const reportPath = reporter.saveReport(reviewResult, 'markdown');
+    const reportPath = reporter.saveReport(reviewResult, 'markdown', undefined, 'security');
     console.log(chalk.green(`✓ Report saved: ${reportPath}`));
 
     // Display summary

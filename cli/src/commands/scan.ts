@@ -20,6 +20,7 @@ import { locCounter } from '../core/loc-counter';
 import { reporter, ReviewResult } from '../utils/reporter';
 import { telemetryManager } from '../core/telemetry';
 import { ConfigManager } from '../core/config';
+import { createProgressBar } from '../utils/progress';
 
 interface ScanOptions {
   skipTests?: boolean;
@@ -46,8 +47,7 @@ export async function scanCommand(options: ScanOptions): Promise<void> {
   console.log(chalk.cyan.bold('\n🛡️  GuardScan - Comprehensive Security & Quality Analysis\n'));
 
   const repoInfo = repositoryManager.getRepoInfo();
-  console.log(chalk.gray(`Repository: ${repoInfo.name}`));
-  console.log(chalk.gray(`Running comprehensive scan...\n`));
+  console.log(chalk.gray(`Repository: ${repoInfo.name}\n`));
 
   const results: ScanResults = {
     security: {},
@@ -58,28 +58,44 @@ export async function scanCommand(options: ScanOptions): Promise<void> {
   };
 
   try {
-    // Run all scans in parallel
+    // Calculate total tasks for progress tracking
+    const securityTasks = options.licenses ? 8 : 7;
+    const qualityTasks = options.skipTests ? 0 : 4;
+    const totalTasks = securityTasks + qualityTasks + 1; // +1 for SBOM
+
+    let completed = 0;
+    const overallProgress = createProgressBar(totalTasks, 'Overall Progress');
+
+    // Run all scans in parallel with progress tracking
     const scanPromises: Promise<any>[] = [];
 
     // 1. Security Scans (run in parallel)
-    console.log(chalk.white.bold('📋 Security Analysis\n'));
-    const securityPromises = runSecurityScans(process.cwd(), options);
+    const securityPromises = runSecurityScans(process.cwd(), options, () => {
+      completed++;
+      overallProgress.update(completed, { status: `${completed}/${totalTasks} checks complete` });
+    });
     scanPromises.push(...securityPromises);
 
     // 2. Quality Analysis (run in parallel)
     if (!options.skipTests) {
-      console.log(chalk.white.bold('\n📋 Quality Analysis\n'));
-      const qualityPromises = runQualityAnalysis(process.cwd(), options);
+      const qualityPromises = runQualityAnalysis(process.cwd(), options, () => {
+        completed++;
+        overallProgress.update(completed, { status: `${completed}/${totalTasks} checks complete` });
+      });
       scanPromises.push(...qualityPromises);
     }
 
     // 3. SBOM Generation
-    console.log(chalk.white.bold('\n📋 SBOM Generation\n'));
-    const sbomPromise = runSBOMGeneration(process.cwd());
+    const sbomPromise = runSBOMGeneration(process.cwd()).then(result => {
+      completed++;
+      overallProgress.update(completed, { status: `${completed}/${totalTasks} checks complete` });
+      return result;
+    });
     scanPromises.push(sbomPromise);
 
     // Wait for all scans to complete
     const allResults = await Promise.allSettled(scanPromises);
+    overallProgress.stop();
 
     // Process results
     processResults(allResults, results);
@@ -93,10 +109,10 @@ export async function scanCommand(options: ScanOptions): Promise<void> {
     results.duration = Date.now() - startTime;
 
     // Generate comprehensive report
-    console.log(chalk.white.bold('\n📊 Generating Comprehensive Report\n'));
+    console.log(chalk.gray('\nGenerating comprehensive report...'));
     const report = generateComprehensiveReport(results, repoInfo);
-    const reportPath = reporter.saveReport(report, 'markdown');
-    console.log(chalk.green(`✓ Comprehensive report saved: ${reportPath}`));
+    const reportPath = reporter.saveReport(report, 'markdown', undefined, 'comprehensive');
+    console.log(chalk.green(`✓ Report saved: ${reportPath}`));
 
     // Display summary
     displaySummary(results);
@@ -120,7 +136,11 @@ export async function scanCommand(options: ScanOptions): Promise<void> {
 /**
  * Run all security scans in parallel
  */
-function runSecurityScans(repoPath: string, options: ScanOptions): Promise<any>[] {
+function runSecurityScans(
+  repoPath: string,
+  options: ScanOptions,
+  onProgress?: () => void
+): Promise<any>[] {
   const promises: Promise<any>[] = [];
 
   // Get file list for scanners that need it
@@ -143,9 +163,11 @@ function runSecurityScans(repoPath: string, options: ScanOptions): Promise<any>[
         const gitResults = await secretsDetector.scanGitHistory(repoPath);
         const allResults = [...results, ...gitResults];
         secretsSpinner.succeed(`Secrets scan complete (${allResults.length} findings)`);
+        if (onProgress) onProgress();
         return { type: 'secrets', results: allResults };
       } catch (error: any) {
         secretsSpinner.fail('Secrets scan failed');
+        if (onProgress) onProgress();
         return { type: 'secrets', results: [], error };
       }
     })()
@@ -158,9 +180,11 @@ function runSecurityScans(repoPath: string, options: ScanOptions): Promise<any>[
       try {
         const results = await dependencyScanner.scan(repoPath);
         depsSpinner.succeed(`Dependency scan complete (${results.length} findings)`);
+        if (onProgress) onProgress();
         return { type: 'dependencies', results };
       } catch (error: any) {
         depsSpinner.fail('Dependency scan failed');
+        if (onProgress) onProgress();
         return { type: 'dependencies', results: [], error };
       }
     })()
@@ -173,9 +197,11 @@ function runSecurityScans(repoPath: string, options: ScanOptions): Promise<any>[
       try {
         const results = await dockerfileScanner.scan(repoPath);
         dockerSpinner.succeed(`Dockerfile scan complete (${results.length} findings)`);
+        if (onProgress) onProgress();
         return { type: 'dockerfile', results };
       } catch (error: any) {
         dockerSpinner.fail('Dockerfile scan failed');
+        if (onProgress) onProgress();
         return { type: 'dockerfile', results: [], error };
       }
     })()
@@ -188,9 +214,11 @@ function runSecurityScans(repoPath: string, options: ScanOptions): Promise<any>[
       try {
         const results = await iacScanner.scan(repoPath);
         iacSpinner.succeed(`IaC scan complete (${results.length} findings)`);
+        if (onProgress) onProgress();
         return { type: 'iac', results };
       } catch (error: any) {
         iacSpinner.fail('IaC scan failed');
+        if (onProgress) onProgress();
         return { type: 'iac', results: [], error };
       }
     })()
@@ -203,9 +231,11 @@ function runSecurityScans(repoPath: string, options: ScanOptions): Promise<any>[
       try {
         const results = await owaspScanner.scan(repoPath);
         owaspSpinner.succeed(`OWASP scan complete (${results.length} findings)`);
+        if (onProgress) onProgress();
         return { type: 'owasp', results };
       } catch (error: any) {
         owaspSpinner.fail('OWASP scan failed');
+        if (onProgress) onProgress();
         return { type: 'owasp', results: [], error };
       }
     })()
@@ -218,9 +248,11 @@ function runSecurityScans(repoPath: string, options: ScanOptions): Promise<any>[
       try {
         const results = await apiScanner.scan(repoPath);
         apiSpinner.succeed(`API scan complete (${results.length} findings)`);
+        if (onProgress) onProgress();
         return { type: 'api', results };
       } catch (error: any) {
         apiSpinner.fail('API scan failed');
+        if (onProgress) onProgress();
         return { type: 'api', results: [], error };
       }
     })()
@@ -234,9 +266,11 @@ function runSecurityScans(repoPath: string, options: ScanOptions): Promise<any>[
         try {
           const results = await licenseScanner.scan(repoPath, 'proprietary');
           licenseSpinner.succeed(`License scan complete (${results.totalDependencies} packages)`);
+          if (onProgress) onProgress();
           return { type: 'licenses', results };
         } catch (error: any) {
           licenseSpinner.fail('License scan failed');
+          if (onProgress) onProgress();
           return { type: 'licenses', results: null, error };
         }
       })()
@@ -250,9 +284,11 @@ function runSecurityScans(repoPath: string, options: ScanOptions): Promise<any>[
       try {
         const results = await complianceChecker.check(repoPath);
         complianceSpinner.succeed(`Compliance check complete`);
+        if (onProgress) onProgress();
         return { type: 'compliance', results };
       } catch (error: any) {
         complianceSpinner.fail('Compliance check failed');
+        if (onProgress) onProgress();
         return { type: 'compliance', results: [], error };
       }
     })()
@@ -264,7 +300,11 @@ function runSecurityScans(repoPath: string, options: ScanOptions): Promise<any>[
 /**
  * Run quality analysis in parallel
  */
-function runQualityAnalysis(repoPath: string, options: ScanOptions): Promise<any>[] {
+function runQualityAnalysis(
+  repoPath: string,
+  options: ScanOptions,
+  onProgress?: () => void
+): Promise<any>[] {
   const promises: Promise<any>[] = [];
 
   // 1. Test execution
@@ -278,9 +318,11 @@ function runQualityAnalysis(repoPath: string, options: ScanOptions): Promise<any
         } else {
           testSpinner.info('No test frameworks detected');
         }
+        if (onProgress) onProgress();
         return { type: 'tests', results };
       } catch (error: any) {
         testSpinner.fail('Test execution failed');
+        if (onProgress) onProgress();
         return { type: 'tests', results: [], error };
       }
     })()
@@ -293,9 +335,11 @@ function runQualityAnalysis(repoPath: string, options: ScanOptions): Promise<any
       try {
         const results = await codeMetricsAnalyzer.analyze(repoPath);
         metricsSpinner.succeed(`Metrics analyzed (${results.length} files)`);
+        if (onProgress) onProgress();
         return { type: 'metrics', results };
       } catch (error: any) {
         metricsSpinner.fail('Metrics analysis failed');
+        if (onProgress) onProgress();
         return { type: 'metrics', results: [], error };
       }
     })()
@@ -308,9 +352,11 @@ function runQualityAnalysis(repoPath: string, options: ScanOptions): Promise<any
       try {
         const results = await codeSmellDetector.detect(repoPath);
         smellSpinner.succeed(`Code smells detected (${results.length} issues)`);
+        if (onProgress) onProgress();
         return { type: 'smells', results };
       } catch (error: any) {
         smellSpinner.fail('Code smell detection failed');
+        if (onProgress) onProgress();
         return { type: 'smells', results: [], error };
       }
     })()
@@ -327,9 +373,11 @@ function runQualityAnalysis(repoPath: string, options: ScanOptions): Promise<any
         } else {
           lintSpinner.info('No linters detected');
         }
+        if (onProgress) onProgress();
         return { type: 'linting', results };
       } catch (error: any) {
         lintSpinner.fail('Linting failed');
+        if (onProgress) onProgress();
         return { type: 'linting', results: [], error };
       }
     })()
