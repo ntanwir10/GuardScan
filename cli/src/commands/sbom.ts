@@ -2,6 +2,7 @@ import chalk from 'chalk';
 import ora from 'ora';
 import { licenseScanner } from '../core/license-scanner';
 import { repositoryManager } from '../core/repository';
+import { createProgressBar } from '../utils/progress';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -20,19 +21,27 @@ export async function sbomCommand(options: SBOMOptions): Promise<void> {
     console.log(chalk.gray(`Repository: ${repoInfo.name}`));
     console.log(chalk.gray(`Format: ${options.format || 'spdx'}\n`));
 
-    const spinner = ora('Scanning dependencies...').start();
+    // Initialize progress tracking (3 steps)
+    const totalSteps = 3; // Scan dependencies, Generate SBOM, Save SBOM
+    const progressBar = createProgressBar(totalSteps, 'SBOM Generation');
 
-    // Scan licenses
+    // Step 1: Scan licenses/dependencies
+    progressBar.update(0, { status: 'Scanning dependencies...' });
+
     const licenseReport = await licenseScanner.scan(repoPath, 'proprietary');
 
-    spinner.succeed(`Found ${licenseReport.totalDependencies} dependencies`);
+    progressBar.update(1, { status: `Found ${licenseReport.totalDependencies} dependencies` });
 
-    // Generate SBOM
+    // Step 2: Generate SBOM
+    progressBar.update(1, { status: 'Generating SBOM...' });
+
     const sbom = licenseScanner.generateSBOM(
       licenseReport.findings,
       options.format || 'spdx',
       repoInfo.name
     );
+
+    progressBar.update(2, { status: 'SBOM generated' });
 
     // Display summary
     console.log(chalk.white.bold('\n📊 SBOM Summary:\n'));
@@ -76,10 +85,15 @@ export async function sbomCommand(options: SBOMOptions): Promise<void> {
       }
     }
 
-    // Save SBOM
+    // Step 3: Save SBOM
+    progressBar.update(2, { status: 'Saving SBOM...' });
+
     const outputPath = options.output || path.join(repoPath, `sbom-${sbom.format}.json`);
 
     fs.writeFileSync(outputPath, JSON.stringify(sbom, null, 2));
+
+    progressBar.update(3, { status: 'Complete' });
+    progressBar.stop();
 
     console.log(chalk.green(`\n✓ SBOM saved: ${outputPath}`));
     console.log();

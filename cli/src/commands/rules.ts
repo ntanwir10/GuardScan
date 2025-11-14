@@ -2,6 +2,7 @@ import chalk from 'chalk';
 import ora from 'ora';
 import { ruleEngine, Rule } from '../core/rule-engine';
 import { repositoryManager } from '../core/repository';
+import { createProgressBar } from '../utils/progress';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -22,67 +23,106 @@ export async function rulesCommand(options: RulesOptions): Promise<void> {
     const repoPath = process.cwd();
     const repoInfo = repositoryManager.getRepoInfo();
 
-    // Load custom rules if directory specified
-    if (options.customRules) {
-      const spinner = ora('Loading custom rules...').start();
-      ruleEngine.loadCustomRules(options.customRules);
-      spinner.succeed(`Custom rules loaded from ${options.customRules}`);
-    } else {
-      ruleEngine.loadCustomRules();
-    }
-
     // List rules
     if (options.list) {
+      // Load custom rules first
+      if (options.customRules) {
+        const spinner = ora('Loading custom rules...').start();
+        ruleEngine.loadCustomRules(options.customRules);
+        spinner.succeed(`Custom rules loaded from ${options.customRules}`);
+      } else {
+        ruleEngine.loadCustomRules();
+      }
+
       displayRules();
       return;
     }
 
     // Export rule
     if (options.export) {
+      // Load custom rules first
+      if (options.customRules) {
+        const spinner = ora('Loading custom rules...').start();
+        ruleEngine.loadCustomRules(options.customRules);
+        spinner.succeed(`Custom rules loaded from ${options.customRules}`);
+      } else {
+        ruleEngine.loadCustomRules();
+      }
+
       const [ruleId, outputPath] = options.export.split(':');
       exportRule(ruleId, outputPath);
       return;
     }
 
-    // Run rules
+    // Run rules (default mode)
     if (options.run !== false) {  // Default to true
       console.log(chalk.gray(`Repository: ${repoInfo.name}\n`));
 
-      // Get files to scan
-      const spinner = ora('Scanning files...').start();
+      // Calculate total steps for progress tracking
+      let totalSteps = 4; // Load rules, Scan files, Run rules, Save results
+      if (options.fix) totalSteps++; // Apply autofixes
+
+      const progressBar = createProgressBar(totalSteps, 'Rules Engine');
+      let completedSteps = 0;
+
+      // Step 1: Load custom rules
+      progressBar.update(completedSteps, { status: 'Loading rules...' });
+
+      if (options.customRules) {
+        ruleEngine.loadCustomRules(options.customRules);
+      } else {
+        ruleEngine.loadCustomRules();
+      }
+
+      completedSteps++;
+      progressBar.update(completedSteps, { status: 'Rules loaded' });
+
+      // Step 2: Get files to scan
+      progressBar.update(completedSteps, { status: 'Scanning files...' });
+
       const files = options.files
         ? options.files.split(',').map(f => f.trim())
         : getAllFiles(repoPath);
-      spinner.succeed(`Found ${files.length} files to scan`);
+
+      completedSteps++;
+      progressBar.update(completedSteps, { status: `Found ${files.length} files` });
 
       // Parse rule IDs if specified
       const ruleIds = options.ruleIds
         ? options.ruleIds.split(',').map(id => id.trim())
         : undefined;
 
-      // Run rules
-      const runSpinner = ora('Running custom rules...').start();
+      // Step 3: Run rules
+      progressBar.update(completedSteps, { status: 'Running custom rules...' });
+
       const result = await ruleEngine.runRules(files, ruleIds);
-      runSpinner.succeed(`Found ${result.totalViolations} violations`);
+
+      completedSteps++;
+      progressBar.update(completedSteps, { status: `Found ${result.totalViolations} violations` });
 
       // Display results
       displayResults(result);
 
-      // Apply autofixes if requested
+      // Step 4 (optional): Apply autofixes if requested
       if (options.fix && result.violations.some(v => v.autofix?.available)) {
+        progressBar.update(completedSteps, { status: 'Applying auto-fixes...' });
+
         console.log(chalk.yellow('\n🔧 Applying auto-fixes...\n'));
 
         const fixableViolations = result.violations.filter(v => v.autofix?.available);
         console.log(chalk.gray(`  ${fixableViolations.length} violations can be auto-fixed\n`));
 
-        const fixSpinner = ora('Applying fixes...').start();
         const fixedCount = await ruleEngine.applyAutofixes(result.violations);
-        fixSpinner.succeed(`Applied ${fixedCount} auto-fixes`);
 
         console.log(chalk.green(`\n✓ Fixed ${fixedCount} violations automatically\n`));
+
+        completedSteps++;
+        progressBar.update(completedSteps, { status: `Applied ${fixedCount} auto-fixes` });
       }
 
-      // Save results
+      // Final step: Save results
+      progressBar.update(completedSteps, { status: 'Saving results...' });
+
       const resultsPath = path.join(repoPath, '.guardscan', 'rules-results.json');
       const dir = path.dirname(resultsPath);
 
@@ -91,6 +131,11 @@ export async function rulesCommand(options: RulesOptions): Promise<void> {
       }
 
       fs.writeFileSync(resultsPath, JSON.stringify(result, null, 2));
+
+      completedSteps++;
+      progressBar.update(completedSteps, { status: 'Complete' });
+      progressBar.stop();
+
       console.log(chalk.gray(`  Results saved: ${resultsPath}\n`));
 
       // Exit with error if violations found
