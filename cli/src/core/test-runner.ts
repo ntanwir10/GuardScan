@@ -65,15 +65,36 @@ export class TestRunner {
    * Check if Jest is configured
    */
   private hasJest(repoPath: string): boolean {
+    // Check package.json for jest dependency
     const packageJsonPath = path.join(repoPath, 'package.json');
-    if (!fs.existsSync(packageJsonPath)) return false;
-
-    try {
-      const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf-8'));
-      return !!(packageJson.devDependencies?.jest || packageJson.dependencies?.jest);
-    } catch {
-      return false;
+    if (fs.existsSync(packageJsonPath)) {
+      try {
+        const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf-8'));
+        if (packageJson.devDependencies?.jest || packageJson.dependencies?.jest) {
+          return true;
+        }
+      } catch {
+        // Continue to file-based detection
+      }
     }
+
+    // Check for Jest test file patterns
+    const testPatterns = [
+      /\.test\.(js|jsx|ts|tsx)$/,
+      /\.spec\.(js|jsx|ts|tsx)$/,
+    ];
+
+    const hasTestFiles = testPatterns.some(pattern =>
+      this.findFiles(repoPath, pattern).length > 0
+    );
+
+    if (hasTestFiles) {
+      return true;
+    }
+
+    // Check for __tests__ directory
+    const testDirs = ['__tests__', 'tests', 'test'];
+    return testDirs.some(dir => fs.existsSync(path.join(repoPath, dir)));
   }
 
   /**
@@ -156,10 +177,22 @@ export class TestRunner {
    * Check if pytest is available
    */
   private hasPytest(repoPath: string): boolean {
-    return fs.existsSync(path.join(repoPath, 'pytest.ini')) ||
-           fs.existsSync(path.join(repoPath, 'setup.cfg')) ||
-           fs.existsSync(path.join(repoPath, 'pyproject.toml')) ||
-           this.findFiles(repoPath, /test_.*\.py$|.*_test\.py$/).length > 0;
+    // Check for pytest config files
+    if (fs.existsSync(path.join(repoPath, 'pytest.ini')) ||
+        fs.existsSync(path.join(repoPath, 'setup.cfg')) ||
+        fs.existsSync(path.join(repoPath, 'pyproject.toml'))) {
+      return true;
+    }
+
+    // Check for Python test file patterns
+    const pythonTestPatterns = [
+      /test_.*\.py$/,
+      /.*_test\.py$/,
+    ];
+
+    return pythonTestPatterns.some(pattern =>
+      this.findFiles(repoPath, pattern).length > 0
+    );
   }
 
   /**
@@ -392,16 +425,20 @@ export class TestRunner {
   /**
    * Find files matching pattern
    */
-  private findFiles(dir: string, pattern: RegExp): string[] {
+  private findFiles(dir: string, pattern: RegExp, maxDepth: number = 5): string[] {
     const files: string[] = [];
 
     const search = (currentDir: string, depth: number) => {
-      if (depth > 3) return;
+      if (depth > maxDepth) return;
 
       try {
         const items = fs.readdirSync(currentDir);
         for (const item of items) {
-          if (item === 'node_modules' || item === '.git') continue;
+          // Skip common directories that don't contain tests
+          if (item === 'node_modules' || item === '.git' || item === 'dist' ||
+              item === 'build' || item === '.next' || item === 'coverage') {
+            continue;
+          }
 
           const fullPath = path.join(currentDir, item);
           const stat = fs.statSync(fullPath);
@@ -413,7 +450,7 @@ export class TestRunner {
           }
         }
       } catch {
-        // Skip
+        // Skip directories we can't read
       }
     };
 

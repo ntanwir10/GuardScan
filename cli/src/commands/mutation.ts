@@ -2,6 +2,7 @@ import chalk from 'chalk';
 import ora from 'ora';
 import { mutationTester, MutationConfig } from '../core/mutation-tester';
 import { repositoryManager } from '../core/repository';
+import { createProgressBar } from '../utils/progress';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -36,17 +37,25 @@ export async function mutationCommand(options: MutationOptions): Promise<void> {
       config.files = options.files.split(',').map(f => f.trim());
     }
 
-    // Run mutation testing
-    const spinner = ora('Running mutation testing...').start();
+    // Initialize progress tracking (3 steps)
+    const totalSteps = 3; // Run test, Display results, Save results
+    const progressBar = createProgressBar(totalSteps, 'Mutation Testing');
+
+    // Step 1: Run mutation testing
+    progressBar.update(0, { status: 'Running mutation testing...' });
 
     let result;
     try {
       result = await mutationTester.runMutationTest(config);
-      spinner.succeed('Mutation testing complete');
+      progressBar.update(1, { status: 'Mutation testing complete' });
     } catch (error: any) {
-      spinner.fail('Mutation testing failed');
+      progressBar.update(1, { status: 'Mutation testing failed' });
+      progressBar.stop();
       throw error;
     }
+
+    // Step 2: Display results
+    progressBar.update(1, { status: 'Analyzing results...' });
 
     // Display results
     displayResults(result);
@@ -81,7 +90,11 @@ export async function mutationCommand(options: MutationOptions): Promise<void> {
       }
     }
 
-    // Save detailed results
+    progressBar.update(2, { status: 'Analysis complete' });
+
+    // Step 3: Save detailed results
+    progressBar.update(2, { status: 'Saving results...' });
+
     const resultsPath = path.join(repoPath, '.guardscan', 'mutation-results.json');
     const dir = path.dirname(resultsPath);
 
@@ -90,6 +103,9 @@ export async function mutationCommand(options: MutationOptions): Promise<void> {
     }
 
     fs.writeFileSync(resultsPath, JSON.stringify(result, null, 2));
+    progressBar.update(3, { status: 'Complete' });
+    progressBar.stop();
+
     console.log(chalk.gray(`  Results saved: ${resultsPath}\n`));
 
     // Exit with error if threshold not met
