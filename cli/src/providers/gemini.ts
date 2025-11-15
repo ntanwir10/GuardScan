@@ -1,5 +1,12 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
-import { AIProvider, AIMessage, AIResponse, ChatOptions } from './base';
+import {
+  AIProvider,
+  AIMessage,
+  AIResponse,
+  ChatOptions,
+  ProviderCapabilities,
+  CostEstimate
+} from './base';
 
 export class GeminiProvider extends AIProvider {
   private client: GoogleGenerativeAI;
@@ -52,5 +59,60 @@ export class GeminiProvider extends AIProvider {
     } catch {
       return false;
     }
+  }
+
+  getCapabilities(): ProviderCapabilities {
+    return {
+      supportsChat: true,
+      supportsEmbeddings: false, // Gemini embeddings available but not implemented yet
+      supportsStreaming: true,
+      maxContextTokens: 32000, // Gemini Pro context window
+    };
+  }
+
+  /**
+   * Estimate chat API cost
+   */
+  estimateChatCost(messages: AIMessage[], options?: ChatOptions): CostEstimate {
+    const model = options?.model || this.defaultModel;
+    const pricing = this.getModelPricing(model);
+
+    const promptTokens = this.countMessagesTokens(messages);
+    const completionTokens = options?.maxTokens || 1000; // Estimate
+
+    const promptCost = (promptTokens / 1000000) * pricing.input;
+    const completionCost = (completionTokens / 1000000) * pricing.output;
+
+    return {
+      promptCost,
+      completionCost,
+      totalCost: promptCost + completionCost,
+      currency: 'USD',
+    };
+  }
+
+  /**
+   * Get pricing for current default model
+   */
+  getPricing() {
+    return {
+      chat: {
+        input: 0.5,   // $0.50 per 1M tokens for Gemini Pro input
+        output: 1.5,  // $1.50 per 1M tokens for Gemini Pro output
+      },
+    };
+  }
+
+  /**
+   * Get pricing for specific model
+   */
+  private getModelPricing(model: string): { input: number; output: number } {
+    const pricing: Record<string, { input: number; output: number }> = {
+      'gemini-pro': { input: 0.5, output: 1.5 },
+      'gemini-1.5-pro': { input: 3.5, output: 10.5 },
+      'gemini-1.5-flash': { input: 0.075, output: 0.3 },
+    };
+
+    return pricing[model] || pricing['gemini-pro'];
   }
 }
