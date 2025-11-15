@@ -16,6 +16,8 @@ import { statusCommand } from './commands/status';
 import { resetCommand } from './commands/reset';
 import { commitCommand } from './commands/commit';
 import { explainCommand } from './commands/explain';
+import { testGenCommand } from './commands/test-gen';
+import { docsCommand } from './commands/docs';
 import { checkForUpdates } from './utils/version';
 import { displayLogo } from './utils/ascii-art';
 
@@ -148,6 +150,27 @@ program
   .option('-t, --type <type>', 'Target type: function, class, file, module', 'function')
   .option('-o, --output <path>', 'Save explanation to file')
   .action(explainCommand);
+
+program
+  .command('test-gen')
+  .description('Generate tests using AI (Phase 3 feature)')
+  .option('--function <name>', 'Generate tests for a specific function')
+  .option('--class <name>', 'Generate tests for a specific class')
+  .option('--file <path>', 'Generate tests for all exports in a file')
+  .option('--framework <framework>', 'Test framework (jest, vitest, mocha, pytest, auto)', 'auto')
+  .option('-o, --output <path>', 'Custom output path for test file')
+  .option('--coverage', 'Show coverage estimation')
+  .action(testGenCommand);
+
+program
+  .command('docs')
+  .description('Generate documentation using AI (Phase 3 feature)')
+  .option('-t, --type <type>', 'Documentation type: readme, api, architecture, contributing', 'readme')
+  .option('-o, --output <path>', 'Custom output path')
+  .option('--diagrams', 'Include architecture diagrams (Mermaid)', true)
+  .option('--examples', 'Include code examples', true)
+  .option('--audience <audience>', 'Target audience: developer, user, contributor', 'user')
+  .action(docsCommand);
 
 // Display logo when showing help or version
 const args = process.argv.slice(2);

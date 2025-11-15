@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { configManager } from '../core/config';
 import { repositoryManager } from '../core/repository';
-import { createProvider } from '../providers/factory';
+import { ProviderFactory } from '../providers/factory';
 import { CodeExplainer, ExplanationLevel, ExplanationTarget } from '../features/code-explainer';
 import { CodebaseIndexer } from '../core/codebase-indexer';
 import { AICache } from '../core/ai-cache';
@@ -21,7 +21,7 @@ export async function explainCommand(target: string, options: ExplainOptions): P
 
     // Get repository info
     const repoInfo = repositoryManager.getRepoInfo();
-    const repoRoot = repoInfo.rootPath;
+    const repoRoot = repoInfo.path;
 
     console.log(chalk.blue(`🤖 Explaining: ${target}...`));
 
@@ -46,13 +46,13 @@ export async function explainCommand(target: string, options: ExplainOptions): P
     }
 
     // Create AI provider
-    const provider = createProvider(config.provider, config.apiKey);
+    const provider = ProviderFactory.create(config.provider, config.apiKey, config.apiEndpoint);
 
     // Create AI cache
-    const cache = new AICache(repoInfo.id, 100); // 100MB cache
+    const cache = new AICache(repoInfo.repoId, 100); // 100MB cache
 
     // Create indexer
-    const indexer = new CodebaseIndexer(repoRoot, repoInfo.id);
+    const indexer = new CodebaseIndexer(repoRoot, repoInfo.repoId);
 
     // Create explainer
     const explainer = new CodeExplainer(provider, indexer, cache, repoRoot);
