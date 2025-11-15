@@ -54,30 +54,15 @@ export async function runCommand(options: RunOptions): Promise<void> {
     let reviewResult: ReviewResult;
 
     if (useAI && provider) {
-      // AI-ENHANCED REVIEW (PAID TIER)
+      // AI-ENHANCED REVIEW (User brings own API key)
       progressBar.update(1, { status: 'Running AI-enhanced review...' });
 
-      // Validate credits (if online and not in offline mode)
-      const online = await isOnline();
-      if (online && !config.offlineMode && !options.noCloud) {
-        try {
-          const validation = await apiClient.validate({
-            clientId: config.clientId,
-            repoId: repoInfo.repoId,
-            locCount: locResult.codeLines,
-          });
+      const context = await prepareReviewContext(repoInfo, locResult, options.files);
 
-          if (!validation.allowed) {
-            console.log(chalk.yellow('\n⚠ Insufficient credits - falling back to FREE tier\n'));
-            reviewResult = await runStaticAnalysis(repoInfo, locResult, options.files);
-          } else {
-            // Run AI review
-            const context = await prepareReviewContext(repoInfo, locResult, options.files);
-
-            const aiResponse = await provider.chat([
-              {
-                role: 'system',
-                content: `You are an expert code reviewer. Analyze the provided code and identify:
+      const aiResponse = await provider.chat([
+        {
+          role: 'system',
+          content: `You are an expert code reviewer. Analyze the provided code and identify:
 - Code quality issues
 - Potential bugs
 - Security vulnerabilities
@@ -86,46 +71,16 @@ export async function runCommand(options: RunOptions): Promise<void> {
 - Maintainability concerns
 
 Provide constructive feedback with specific suggestions for improvement.`,
-              },
-              {
-                role: 'user',
-                content: context,
-              },
-            ]);
+        },
+        {
+          role: 'user',
+          content: context,
+        },
+      ]);
 
-            reviewResult = parseAIResponse(aiResponse.content, repoInfo, locResult, config.provider, aiResponse.model, Date.now() - startTime);
-          }
-        } catch (error) {
-          console.log(chalk.yellow('\n⚠ Could not validate credits - running FREE tier analysis\n'));
-          reviewResult = await runStaticAnalysis(repoInfo, locResult, options.files);
-        }
-      } else {
-        // Offline or no-cloud mode - run AI locally if available
-        const context = await prepareReviewContext(repoInfo, locResult, options.files);
-
-        const aiResponse = await provider.chat([
-          {
-            role: 'system',
-            content: `You are an expert code reviewer. Analyze the provided code and identify:
-- Code quality issues
-- Potential bugs
-- Security vulnerabilities
-- Performance problems
-- Best practice violations
-- Maintainability concerns
-
-Provide constructive feedback with specific suggestions for improvement.`,
-          },
-          {
-            role: 'user',
-            content: context,
-          },
-        ]);
-
-        reviewResult = parseAIResponse(aiResponse.content, repoInfo, locResult, config.provider, aiResponse.model, Date.now() - startTime);
-      }
+      reviewResult = parseAIResponse(aiResponse.content, repoInfo, locResult, config.provider, aiResponse.model, Date.now() - startTime);
     } else {
-      // STATIC ANALYSIS (FREE TIER)
+      // STATIC ANALYSIS (No AI configured)
       progressBar.update(1, { status: 'Running static analysis...' });
       reviewResult = await runStaticAnalysis(repoInfo, locResult, options.files);
     }
