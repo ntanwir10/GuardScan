@@ -45,22 +45,12 @@ export async function statusCommand(): Promise<void> {
     const online = await isOnline();
     console.log(chalk.gray(`  Internet: ${online ? chalk.green('Connected') : chalk.red('Offline')}`));
 
-    // Fetch credits if online and not in offline mode
-    if (online && !config.offlineMode) {
-      const spinner = ora('Fetching credit balance...').start();
-      try {
-        const credits = await apiClient.getCredits(config.clientId);
-        spinner.succeed('Credit balance fetched');
-        console.log(chalk.white.bold('\nCredits:'));
-        console.log(chalk.gray(`  Remaining LOC: ${chalk.green(credits.remainingLoc.toLocaleString())}`));
-        console.log(chalk.gray(`  Plan: ${credits.plan}`));
-      } catch (error) {
-        spinner.fail('Could not fetch credits');
-        console.log(chalk.gray('  API may be unreachable or you may not have an account'));
-      }
-    } else if (config.offlineMode) {
-      console.log(chalk.gray('  Credits: Offline mode enabled'));
-    }
+    // GuardScan is now 100% free and open source!
+    console.log(chalk.white.bold('\nLicense:'));
+    console.log(chalk.green('  ✓ GuardScan is 100% free and open source'));
+    console.log(chalk.gray('  ✓ Unlimited static analysis (offline)'));
+    console.log(chalk.gray('  ✓ AI review with your own API key (BYOK)'));
+    console.log(chalk.gray('  ✓ No usage limits or subscriptions'))
 
     console.log();
   } catch (error) {

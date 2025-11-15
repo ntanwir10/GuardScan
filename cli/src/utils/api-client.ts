@@ -1,34 +1,18 @@
 import axios, { AxiosInstance } from 'axios';
 
-export interface ValidateRequest {
-  clientId: string;
-  repoId: string;
-  locCount: number;
-}
-
-export interface ValidateResponse {
-  allowed: boolean;
-  remainingLoc: number;
-}
-
 export interface TelemetryEvent {
   action: string;
   loc: number;
   durationMs: number;
   model: string;
   timestamp: number;
+  metadata?: Record<string, any>;
 }
 
 export interface TelemetryRequest {
   clientId: string;
   repoId: string;
   events: TelemetryEvent[];
-}
-
-export interface CreditsResponse {
-  clientId: string;
-  remainingLoc: number;
-  plan: string;
 }
 
 export class APIClient {
@@ -47,26 +31,10 @@ export class APIClient {
   }
 
   /**
-   * Validate LOC credits before review
-   */
-  async validate(request: ValidateRequest): Promise<ValidateResponse> {
-    const response = await this.client.post<ValidateResponse>('/api/validate', request);
-    return response.data;
-  }
-
-  /**
-   * Send telemetry batch
+   * Send telemetry batch (optional, privacy-preserving)
    */
   async sendTelemetry(request: TelemetryRequest): Promise<void> {
     await this.client.post('/api/telemetry', request);
-  }
-
-  /**
-   * Get remaining credits
-   */
-  async getCredits(clientId: string): Promise<CreditsResponse> {
-    const response = await this.client.get<CreditsResponse>(`/api/credits/${clientId}`);
-    return response.data;
   }
 
   /**

@@ -3,17 +3,9 @@ import { Env } from './index';
 export interface Client {
   client_id: string;
   created_at: string;
-  total_loc_used: number;
-  plan_tier: string;
-}
-
-export interface Transaction {
-  transaction_id: string;
-  client_id: string;
-  loc_purchased: number;
-  amount_usd: number;
-  payment_status: string;
-  created_at: string;
+  last_seen_at: string | null;
+  cli_version: string | null;
+  metadata: Record<string, any>;
 }
 
 export interface TelemetryEvent {
@@ -21,10 +13,11 @@ export interface TelemetryEvent {
   client_id: string;
   repo_id: string;
   action_type: string;
-  duration_ms: number;
-  model?: string;
-  loc?: number;
+  duration_ms: number | null;
+  model: string | null;
+  loc: number | null;
   timestamp: string;
+  metadata: Record<string, any>;
 }
 
 export class Database {
@@ -108,6 +101,9 @@ export class Database {
     }
   }
 
+  /**
+   * Get client by ID
+   */
   async getClient(clientId: string): Promise<Client | null> {
     const results = await this.query<Client>('clients', {
       eq: { client_id: clientId },
@@ -116,50 +112,66 @@ export class Database {
     return results.length > 0 ? results[0] : null;
   }
 
-  async createClient(clientId: string): Promise<Client> {
+  /**
+   * Create new client
+   */
+  async createClient(clientId: string, cliVersion?: string): Promise<Client> {
     return await this.insert<Client>('clients', {
       client_id: clientId,
       created_at: new Date().toISOString(),
-      total_loc_used: 0,
-      plan_tier: 'free',
+      last_seen_at: new Date().toISOString(),
+      cli_version: cliVersion || null,
+      metadata: {},
     });
   }
 
-  async updateClientLocUsage(clientId: string, locUsed: number): Promise<void> {
-    await this.update('clients', { client_id: clientId }, {
-      total_loc_used: locUsed,
-    });
+  /**
+   * Update client's last seen timestamp
+   */
+  async updateClientActivity(clientId: string, cliVersion?: string): Promise<void> {
+    const updateData: any = {
+      last_seen_at: new Date().toISOString(),
+    };
+
+    if (cliVersion) {
+      updateData.cli_version = cliVersion;
+    }
+
+    await this.update('clients', { client_id: clientId }, updateData);
   }
 
-  async createTransaction(transaction: Omit<Transaction, 'transaction_id' | 'created_at'>): Promise<Transaction> {
-    return await this.insert<Transaction>('transactions', {
-      ...transaction,
-      created_at: new Date().toISOString(),
-    });
-  }
-
+  /**
+   * Insert telemetry events (batch)
+   */
   async insertTelemetry(events: Omit<TelemetryEvent, 'event_id'>[]): Promise<void> {
     const data = events.map(event => ({
       ...event,
       event_id: crypto.randomUUID(),
+      metadata: event.metadata || {},
     }));
 
     await this.insert('telemetry', data);
   }
 
-  async getRemainingCredits(clientId: string): Promise<number> {
-    // Get total purchased
-    const transactions = await this.query<Transaction>('transactions', {
-      eq: { client_id: clientId, payment_status: 'paid' },
-      select: 'loc_purchased',
+  /**
+   * Get client statistics (for admin/analytics)
+   */
+  async getClientStats(clientId: string): Promise<any> {
+    const client = await this.getClient(clientId);
+    if (!client) {
+      return null;
+    }
+
+    // Count telemetry events
+    const events = await this.query<TelemetryEvent>('telemetry', {
+      eq: { client_id: clientId },
     });
 
-    const totalPurchased = transactions.reduce((sum, t) => sum + t.loc_purchased, 0);
-
-    // Get total used
-    const client = await this.getClient(clientId);
-    const totalUsed = client?.total_loc_used || 0;
-
-    return totalPurchased - totalUsed;
+    return {
+      client,
+      total_events: events.length,
+      first_seen: client.created_at,
+      last_seen: client.last_seen_at,
+    };
   }
 }
