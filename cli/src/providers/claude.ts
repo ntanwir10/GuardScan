@@ -1,5 +1,12 @@
 import Anthropic from '@anthropic-ai/sdk';
-import { AIProvider, AIMessage, AIResponse, ChatOptions } from './base';
+import {
+  AIProvider,
+  AIMessage,
+  AIResponse,
+  ChatOptions,
+  ProviderCapabilities,
+  CostEstimate
+} from './base';
 
 export class ClaudeProvider extends AIProvider {
   private client: Anthropic;
@@ -26,6 +33,7 @@ export class ClaudeProvider extends AIProvider {
         role: msg.role as 'user' | 'assistant',
         content: msg.content,
       })),
+      stream: options?.stream || false,
     });
 
     const content = response.content[0];
@@ -59,5 +67,61 @@ export class ClaudeProvider extends AIProvider {
     } catch {
       return false;
     }
+  }
+
+  getCapabilities(): ProviderCapabilities {
+    return {
+      supportsChat: true,
+      supportsEmbeddings: false, // Claude doesn't support embeddings
+      supportsStreaming: true,
+      maxContextTokens: 200000, // Claude 3.5 Sonnet context window
+    };
+  }
+
+  /**
+   * Estimate chat API cost
+   */
+  estimateChatCost(messages: AIMessage[], options?: ChatOptions): CostEstimate {
+    const model = options?.model || this.defaultModel;
+    const pricing = this.getModelPricing(model);
+
+    const promptTokens = this.countMessagesTokens(messages);
+    const completionTokens = options?.maxTokens || 1000; // Estimate
+
+    const promptCost = (promptTokens / 1000000) * pricing.input;
+    const completionCost = (completionTokens / 1000000) * pricing.output;
+
+    return {
+      promptCost,
+      completionCost,
+      totalCost: promptCost + completionCost,
+      currency: 'USD',
+    };
+  }
+
+  /**
+   * Get pricing for current default model
+   */
+  getPricing() {
+    return {
+      chat: {
+        input: 3.0,   // $3 per 1M tokens for Claude 3.5 Sonnet input
+        output: 15.0, // $15 per 1M tokens for Claude 3.5 Sonnet output
+      },
+    };
+  }
+
+  /**
+   * Get pricing for specific model
+   */
+  private getModelPricing(model: string): { input: number; output: number } {
+    const pricing: Record<string, { input: number; output: number }> = {
+      'claude-3-5-sonnet-20241022': { input: 3.0, output: 15.0 },
+      'claude-3-opus-20240229': { input: 15.0, output: 75.0 },
+      'claude-3-sonnet-20240229': { input: 3.0, output: 15.0 },
+      'claude-3-haiku-20240307': { input: 0.25, output: 1.25 },
+    };
+
+    return pricing[model] || pricing['claude-3-5-sonnet-20241022'];
   }
 }
