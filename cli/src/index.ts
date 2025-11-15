@@ -14,6 +14,8 @@ import { rulesCommand } from './commands/rules';
 import { configCommand } from './commands/config';
 import { statusCommand } from './commands/status';
 import { resetCommand } from './commands/reset';
+import { commitCommand } from './commands/commit';
+import { explainCommand } from './commands/explain';
 import { checkForUpdates } from './utils/version';
 import { displayLogo } from './utils/ascii-art';
 
@@ -54,6 +56,8 @@ program
   .description('Run security vulnerability scan')
   .option('-f, --files <patterns...>', 'Specific files or patterns to scan')
   .option('--licenses', 'Include license compliance scanning')
+  .option('--ai-fix', 'Generate AI-powered fix suggestions')
+  .option('--interactive', 'Interactively review and apply fixes')
   .action(securityCommand);
 
 program
@@ -126,6 +130,24 @@ program
   .description('Clear local context and cache')
   .option('--all', 'Reset all configuration including client_id')
   .action(resetCommand);
+
+program
+  .command('commit')
+  .description('Generate AI-powered commit messages')
+  .option('--ai', 'Use AI to generate commit message', true)
+  .option('--auto', 'Automatically commit with generated message')
+  .option('--scope <scope>', 'Specify commit scope')
+  .option('--type <type>', 'Specify commit type (feat, fix, docs, etc.)')
+  .option('--no-body', 'Skip commit body (subject only)')
+  .action(commitCommand);
+
+program
+  .command('explain <target>')
+  .description('Explain code using AI (function, class, file, or theme)')
+  .option('-l, --level <level>', 'Explanation level: brief, detailed, comprehensive', 'detailed')
+  .option('-t, --type <type>', 'Target type: function, class, file, module', 'function')
+  .option('-o, --output <path>', 'Save explanation to file')
+  .action(explainCommand);
 
 // Display logo when showing help or version
 const args = process.argv.slice(2);
