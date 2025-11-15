@@ -150,7 +150,7 @@ export class FixSuggestionsGenerator {
     }
 
     // Extract imports
-    const imports = parsed.imports;
+    const imports = parsed.imports.map(imp => imp.module);
 
     // Build related code context (limited to 1000 tokens)
     const relatedCode = await this.buildRelatedContext(issue, containingFunction);

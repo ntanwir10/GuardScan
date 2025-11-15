@@ -397,8 +397,8 @@ export class CodebaseIndexer {
       lastModified: fs.statSync(filePath).mtime,
       functions: [],
       classes: [],
-      imports: parsed.imports,
-      exports: parsed.exports,
+      imports: parsed.imports.map(imp => imp.module),
+      exports: parsed.exports.map(exp => exp.name),
     };
 
     // Add functions to index

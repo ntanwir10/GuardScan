@@ -15,7 +15,7 @@ import { complianceChecker } from '../core/compliance-checker';
 import { licenseScanner } from '../core/license-scanner';
 import { displaySimpleBanner } from '../utils/ascii-art';
 import { createProgressBar } from '../utils/progress';
-import { createProvider } from '../providers/factory';
+import { ProviderFactory } from '../providers/factory';
 import { FixSuggestionsGenerator, SecurityIssue } from '../features/fix-suggestions';
 import { CodebaseIndexer } from '../core/codebase-indexer';
 import { AICache } from '../core/ai-cache';
@@ -74,7 +74,7 @@ export async function securityCommand(options: SecurityOptions): Promise<void> {
     // Step 3: Generate AI fixes if requested
     if (options.aiFix && findings.length > 0) {
       progressBar.update(2, { status: 'Generating AI fixes...' });
-      await generateAIFixes(findings, repoInfo.rootPath, config, options.interactive || false);
+      await generateAIFixes(findings, repoInfo.path, config, options.interactive || false);
       progressBar.update(2.5, { status: 'AI fixes generated' });
     }
 
@@ -521,16 +521,16 @@ async function generateAIFixes(
 
   try {
     // Create AI provider
-    const provider = createProvider(config.provider, config.apiKey);
+    const provider = ProviderFactory.create(config.provider, config.apiKey, config.apiEndpoint);
 
     // Get repo ID for cache
     const repoInfo = repositoryManager.getRepoInfo();
 
     // Create AI cache
-    const cache = new AICache(repoInfo.id, 100); // 100MB cache
+    const cache = new AICache(repoInfo.repoId, 100); // 100MB cache
 
     // Create indexer
-    const indexer = new CodebaseIndexer(repoRoot, repoInfo.id);
+    const indexer = new CodebaseIndexer(repoRoot, repoInfo.repoId);
 
     // Create fix generator
     const fixGenerator = new FixSuggestionsGenerator(provider, indexer, cache, repoRoot);

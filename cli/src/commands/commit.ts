@@ -1,7 +1,7 @@
 import chalk from 'chalk';
 import { configManager } from '../core/config';
 import { repositoryManager } from '../core/repository';
-import { createProvider } from '../providers/factory';
+import { ProviderFactory } from '../providers/factory';
 import { CommitMessageGenerator } from '../features/commit-generator';
 import { AICache } from '../core/ai-cache';
 import { exec } from 'child_process';
@@ -24,7 +24,7 @@ export async function commitCommand(options: CommitOptions): Promise<void> {
 
     // Get repository info
     const repoInfo = repositoryManager.getRepoInfo();
-    const repoRoot = repoInfo.rootPath;
+    const repoRoot = repoInfo.path;
 
     console.log(chalk.blue('🤖 Generating commit message...'));
 
@@ -36,10 +36,10 @@ export async function commitCommand(options: CommitOptions): Promise<void> {
     }
 
     // Create AI provider
-    const provider = createProvider(config.provider, config.apiKey);
+    const provider = ProviderFactory.create(config.provider, config.apiKey, config.apiEndpoint);
 
     // Create AI cache
-    const cache = new AICache(repoInfo.id, 100); // 100MB cache
+    const cache = new AICache(repoInfo.repoId, 100); // 100MB cache
 
     // Create commit generator
     const commitGenerator = new CommitMessageGenerator(provider, cache, repoRoot);

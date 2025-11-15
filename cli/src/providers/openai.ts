@@ -32,19 +32,25 @@ export class OpenAIProvider extends AIProvider {
       stream: options?.stream || false,
     });
 
-    const choice = response.choices[0];
+    // Type narrowing: check if response is not a stream
+    if (Symbol.asyncIterator in response) {
+      throw new Error('Streaming responses are not supported in this method');
+    }
+
+    const chatCompletion = response as OpenAI.Chat.Completions.ChatCompletion;
+    const choice = chatCompletion.choices[0];
     if (!choice?.message?.content) {
       throw new Error('No response from OpenAI');
     }
 
     return {
       content: choice.message.content,
-      usage: response.usage ? {
-        promptTokens: response.usage.prompt_tokens,
-        completionTokens: response.usage.completion_tokens,
-        totalTokens: response.usage.total_tokens,
+      usage: chatCompletion.usage ? {
+        promptTokens: chatCompletion.usage.prompt_tokens,
+        completionTokens: chatCompletion.usage.completion_tokens,
+        totalTokens: chatCompletion.usage.total_tokens,
       } : undefined,
-      model: response.model,
+      model: chatCompletion.model,
     };
   }
 
