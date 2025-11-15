@@ -15,12 +15,18 @@ import { complianceChecker } from '../core/compliance-checker';
 import { licenseScanner } from '../core/license-scanner';
 import { displaySimpleBanner } from '../utils/ascii-art';
 import { createProgressBar } from '../utils/progress';
+import { createProvider } from '../providers/factory';
+import { FixSuggestionsGenerator, SecurityIssue } from '../features/fix-suggestions';
+import { CodebaseIndexer } from '../core/codebase-indexer';
+import { AICache } from '../core/ai-cache';
 import * as fs from 'fs';
 import * as path from 'path';
 
 interface SecurityOptions {
   files?: string[];
   licenses?: boolean;
+  aiFix?: boolean;
+  interactive?: boolean;
 }
 
 export async function securityCommand(options: SecurityOptions): Promise<void> {
@@ -65,8 +71,15 @@ export async function securityCommand(options: SecurityOptions): Promise<void> {
       },
     };
 
-    // Step 3: Generate report
-    progressBar.update(2, { status: 'Generating report...' });
+    // Step 3: Generate AI fixes if requested
+    if (options.aiFix && findings.length > 0) {
+      progressBar.update(2, { status: 'Generating AI fixes...' });
+      await generateAIFixes(findings, repoInfo.rootPath, config, options.interactive || false);
+      progressBar.update(2.5, { status: 'AI fixes generated' });
+    }
+
+    // Step 4: Generate report
+    progressBar.update(2.5, { status: 'Generating report...' });
     const reportPath = reporter.saveReport(reviewResult, 'markdown', undefined, 'security');
     progressBar.update(3, { status: 'Complete' });
     progressBar.stop();
@@ -488,5 +501,138 @@ function displaySecuritySummary(findings: Finding[]): void {
 
   if (findings.length === 0) {
     console.log(chalk.green('  ✅ No security issues found!'));
+  }
+}
+
+/**
+ * Generate AI fixes for security findings
+ */
+async function generateAIFixes(
+  findings: Finding[],
+  repoRoot: string,
+  config: any,
+  interactive: boolean
+): Promise<void> {
+  // Check if AI provider is configured
+  if (!config.provider || !config.apiKey) {
+    console.log(chalk.yellow('\n⚠ AI provider not configured. Run `guardscan config` to set up.'));
+    return;
+  }
+
+  try {
+    // Create AI provider
+    const provider = createProvider(config.provider, config.apiKey);
+
+    // Get repo ID for cache
+    const repoInfo = repositoryManager.getRepoInfo();
+
+    // Create AI cache
+    const cache = new AICache(repoInfo.id, 100); // 100MB cache
+
+    // Create indexer
+    const indexer = new CodebaseIndexer(repoRoot, repoInfo.id);
+
+    // Create fix generator
+    const fixGenerator = new FixSuggestionsGenerator(provider, indexer, cache, repoRoot);
+
+    // Convert findings to SecurityIssue format
+    const issues: SecurityIssue[] = findings
+      .filter(f => f.file && f.line) // Only issues with file and line info
+      .map(f => ({
+        severity: f.severity as 'high' | 'medium' | 'low',
+        category: f.category,
+        file: f.file!,
+        line: f.line!,
+        codeSnippet: extractCodeSnippet(f.file!, f.line!),
+        description: f.description,
+      }));
+
+    if (issues.length === 0) {
+      console.log(chalk.yellow('\n⚠ No fixable issues found (issues must have file and line information).'));
+      return;
+    }
+
+    console.log(chalk.blue(`\n🤖 Generating AI fixes for ${issues.length} issue(s)...`));
+
+    // Generate fixes
+    const fixes = await fixGenerator.generateFixes(issues, 5); // Max 5 concurrent
+
+    // Display fixes
+    console.log(chalk.white.bold('\n💡 AI Fix Suggestions:\n'));
+
+    let fixCount = 0;
+    for (const [key, fix] of fixes) {
+      fixCount++;
+      const issue = issues.find(i => `${i.file}:${i.line}` === key);
+      if (!issue) continue;
+
+      console.log(chalk.cyan(`\n[${fixCount}] ${issue.file}:${issue.line}`));
+      console.log(chalk.white(`   Issue: ${issue.description}`));
+      console.log(chalk.gray(`   Confidence: ${(fix.confidence * 100).toFixed(0)}%\n`));
+
+      console.log(chalk.yellow('   Explanation:'));
+      console.log(chalk.gray(`   ${fix.explanation}\n`));
+
+      console.log(chalk.green('   Suggested Fix:'));
+      console.log(chalk.gray(`   \`\`\`\n${fix.fixedCode.split('\n').slice(0, 15).join('\n')}\n   ...\`\`\`\n`));
+
+      if (fix.alternatives && fix.alternatives.length > 0) {
+        console.log(chalk.blue('   Alternatives:'));
+        fix.alternatives.forEach((alt, i) => {
+          console.log(chalk.gray(`   ${i + 1}. ${alt}`));
+        });
+        console.log();
+      }
+
+      if (fix.bestPractices && fix.bestPractices.length > 0) {
+        console.log(chalk.magenta('   Best Practices:'));
+        fix.bestPractices.forEach(bp => {
+          console.log(chalk.gray(`   • ${bp}`));
+        });
+        console.log();
+      }
+    }
+
+    console.log(chalk.green(`\n✓ Generated ${fixes.size} AI fix suggestion(s)`));
+    console.log(chalk.gray('  Review these fixes carefully before applying them to your code.'));
+
+    // Save fixes to file
+    const fixesDir = path.join(repoRoot, '.guardscan', 'fixes');
+    if (!fs.existsSync(fixesDir)) {
+      fs.mkdirSync(fixesDir, { recursive: true });
+    }
+
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const fixesPath = path.join(fixesDir, `fixes-${timestamp}.json`);
+
+    const fixesData = Array.from(fixes.entries()).map(([key, fix]) => {
+      const issue = issues.find(i => `${i.file}:${i.line}` === key);
+      return {
+        issue,
+        fix,
+      };
+    });
+
+    fs.writeFileSync(fixesPath, JSON.stringify(fixesData, null, 2), 'utf-8');
+    console.log(chalk.gray(`\n  Fixes saved to: ${fixesPath}`));
+
+  } catch (error) {
+    console.error(chalk.red('\n✗ Failed to generate AI fixes:'), error);
+  }
+}
+
+/**
+ * Extract code snippet around a line
+ */
+function extractCodeSnippet(filePath: string, line: number, context: number = 3): string {
+  try {
+    const content = fs.readFileSync(filePath, 'utf-8');
+    const lines = content.split('\n');
+    const start = Math.max(0, line - context - 1);
+    const end = Math.min(lines.length, line + context);
+
+    return lines.slice(start, end).join('\n');
+  } catch {
+    return '';
   }
 }
