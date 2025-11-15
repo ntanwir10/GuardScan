@@ -23,17 +23,16 @@ API_VERSION = "v1"
 MAX_REQUEST_SIZE_MB = 10
 
 # Secrets (NEVER commit these - set via: wrangler secret put SECRET_NAME)
-# Required secrets for production:
+# Required secrets for telemetry backend:
 # - SUPABASE_URL          (from Supabase dashboard → Settings → API)
 # - SUPABASE_KEY          (service_role key from Supabase)
-# - STRIPE_SECRET_KEY     (from Stripe dashboard → Developers → API keys)
-# - STRIPE_WEBHOOK_SECRET (from Stripe dashboard → Webhooks)
 #
 # Setup commands:
 #   wrangler secret put SUPABASE_URL
 #   wrangler secret put SUPABASE_KEY
-#   wrangler secret put STRIPE_SECRET_KEY
-#   wrangler secret put STRIPE_WEBHOOK_SECRET
+#
+# Note: GuardScan is now 100% open source and free.
+# Backend is only used for optional, privacy-preserving telemetry.
 
 # KV Namespace for caching
 # [[kv_namespaces]]

@@ -1,17 +1,13 @@
 import { Router } from './router';
-import { handleValidate } from './handlers/validate';
 import { handleTelemetry } from './handlers/telemetry';
-import { handleCredits } from './handlers/credits';
-import { handleStripeWebhook } from './handlers/stripe-webhook';
 import { handleHealth } from './handlers/health';
 
 export interface Env {
   SUPABASE_URL: string;
   SUPABASE_KEY: string;
-  STRIPE_SECRET_KEY: string;
-  STRIPE_WEBHOOK_SECRET: string;
-  CACHE: KVNamespace;
-  ENVIRONMENT: string;
+  CACHE?: KVNamespace;
+  ENVIRONMENT?: string;
+  API_VERSION?: string;
 }
 
 export default {
@@ -20,14 +16,10 @@ export default {
 
     // Health check
     router.get('/health', () => handleHealth());
+    router.get('/api/health', () => handleHealth());
 
-    // API endpoints
-    router.post('/api/validate', (req) => handleValidate(req, env));
+    // Telemetry endpoint (optional, privacy-preserving)
     router.post('/api/telemetry', (req) => handleTelemetry(req, env));
-    router.get('/api/credits/:clientId', (req, params) => handleCredits(req, env, params));
-
-    // Stripe webhook
-    router.post('/api/stripe-webhook', (req) => handleStripeWebhook(req, env));
 
     // CORS headers
     if (request.method === 'OPTIONS') {
