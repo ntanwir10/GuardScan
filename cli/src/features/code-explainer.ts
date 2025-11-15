@@ -481,7 +481,7 @@ export class CodeExplainer {
 
     context += `## Properties (${cls.properties.length})\n`;
     for (const prop of cls.properties) {
-      context += `- ${prop.name}: ${prop.type}${prop.isPrivate ? ' (private)' : ''}\n`;
+      context += `- ${prop.name}: ${prop.type}${prop.visibility === 'private' ? ' (private)' : ''}\n`;
     }
 
     context += `\n## Methods (${cls.methods.length})\n`;
@@ -586,9 +586,9 @@ export class CodeExplainer {
 
     if (explanation.outputs && explanation.outputs.length > 0) {
       output += `## Outputs\n`;
-      for (const output of explanation.outputs) {
-        output += `- **${output.type}**: ${output.description}`;
-        if (output.conditions) output += ` (${output.conditions})`;
+      for (const outputItem of explanation.outputs) {
+        output += `- **${outputItem.type}**: ${outputItem.description}`;
+        if (outputItem.conditions) output += ` (${outputItem.conditions})`;
         output += '\n';
       }
       output += '\n';
