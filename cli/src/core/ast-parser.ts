@@ -605,9 +605,11 @@ export class ASTParser {
    * Check if node is exported
    */
   private isExported(node: ts.Node): boolean {
+    if (!ts.canHaveModifiers(node)) return false;
+    const modifiers = ts.getModifiers(node);
     return !!(
-      node.modifiers?.some(
-        m => m.kind === ts.SyntaxKind.ExportKeyword
+      modifiers?.some(
+        (m: ts.Modifier) => m.kind === ts.SyntaxKind.ExportKeyword
       )
     );
   }
@@ -616,9 +618,11 @@ export class ASTParser {
    * Check if node is default export
    */
   private isDefaultExport(node: ts.Node): boolean {
+    if (!ts.canHaveModifiers(node)) return false;
+    const modifiers = ts.getModifiers(node);
     return !!(
-      node.modifiers?.some(
-        m => m.kind === ts.SyntaxKind.DefaultKeyword
+      modifiers?.some(
+        (m: ts.Modifier) => m.kind === ts.SyntaxKind.DefaultKeyword
       )
     );
   }
