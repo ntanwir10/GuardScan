@@ -19,6 +19,10 @@ import { explainCommand } from './commands/explain';
 import { testGenCommand } from './commands/test-gen';
 import { docsCommand } from './commands/docs';
 import { chatCommand } from './commands/chat';
+import { refactorCommand } from './commands/refactor';
+import { threatModelCommand } from './commands/threat-model';
+import { migrateCommand } from './commands/migrate';
+import { reviewCommand } from './commands/review';
 import { checkForUpdates } from './utils/version';
 import { displayLogo } from './utils/ascii-art';
 
@@ -183,6 +187,59 @@ program
   .option('--session <path>', 'Load existing session from file')
   .option('--export <path>', 'Export conversation to file')
   .action(chatCommand);
+
+program
+  .command('refactor')
+  .description('AI-powered refactoring suggestions (Phase 5 feature)')
+  .option('-f, --file <path>', 'Specific file to analyze')
+  .option('--function <name>', 'Analyze specific function')
+  .option('--class <name>', 'Analyze specific class')
+  .option('--smell <type>', 'Target specific code smell type')
+  .option('--pattern <pattern>', 'Suggest specific design pattern')
+  .option('--analyze', 'Analyze code smells only')
+  .option('--apply', 'Generate refactored code')
+  .option('-i, --interactive', 'Interactive refactoring mode')
+  .option('--report', 'Generate full refactoring report')
+  .option('-o, --output <path>', 'Save report to file')
+  .action(refactorCommand);
+
+program
+  .command('threat-model')
+  .description('AI-powered threat modeling with STRIDE analysis (Phase 5 feature)')
+  .option('-f, --file <path>', 'Specific file to analyze')
+  .option('-c, --category <category>', 'Focus on specific STRIDE category (spoofing, tampering, repudiation, information-disclosure, denial-of-service, elevation-of-privilege)')
+  .option('--flows', 'Include data flow mapping', true)
+  .option('--diagram', 'Generate threat model diagram')
+  .option('--focus <area>', 'Focus area: authentication, data-protection, api-security, or all')
+  .option('-s, --severity <level>', 'Minimum severity level: low, medium, high, critical')
+  .option('--report', 'Generate full threat model report')
+  .option('-o, --output <path>', 'Save report to file')
+  .action(threatModelCommand);
+
+program
+  .command('migrate')
+  .description('AI-powered code migration assistant (Phase 5 feature)')
+  .option('-t, --type <type>', 'Migration type: framework, language, modernization, dependency')
+  .option('--target <target>', 'Migration target (e.g., react-class-to-hooks, typescript, es5-to-es6)')
+  .option('-f, --file <path>', 'Specific file to migrate')
+  .option('--dry-run', 'Preview changes without applying them', true)
+  .option('--auto-fix', 'Automatically apply fixes')
+  .option('--backup', 'Create backups of original files', true)
+  .option('--report', 'Generate migration report')
+  .option('-o, --output <path>', 'Save report to file')
+  .action(migrateCommand);
+
+program
+  .command('review')
+  .description('AI-powered code review for git changes (Phase 5 feature)')
+  .option('--base <ref>', 'Base git reference (default: HEAD)', 'HEAD')
+  .option('--head <ref>', 'Head git reference for comparison')
+  .option('-f, --file <path>', 'Review specific file only')
+  .option('-s, --severity <level>', 'Minimum severity level: critical, high, medium, low, info')
+  .option('-c, --category <category>', 'Filter by category: bug, security, performance, maintainability, style, documentation, testing, accessibility, best-practice')
+  .option('--report', 'Generate full detailed report')
+  .option('-o, --output <path>', 'Save report to file')
+  .action(reviewCommand);
 
 // Display logo when showing help or version
 const args = process.argv.slice(2);
