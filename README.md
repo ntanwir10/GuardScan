@@ -47,28 +47,67 @@ guardscan status
 
 ## 📋 Core Features
 
-### Security Scanning (FREE, Offline)
+### 🔒 Security Scanning (FREE, Offline)
 
-GuardScan includes **9 comprehensive security scanners**:
+GuardScan includes **comprehensive security scanners**:
 
-1. **Secrets Detection** - Find hardcoded API keys, passwords, tokens
-2. **Dependency Vulnerabilities** - Scan npm, pip, Maven dependencies
-3. **OWASP Top 10** - SQL injection, XSS, insecure configs
+1. **Secrets Detection** - Find hardcoded API keys, passwords, tokens (20+ patterns)
+2. **Dependency Vulnerabilities** - Scan npm, pip, Maven, Cargo dependencies
+3. **OWASP Top 10** - SQL injection, XSS, insecure configs, CSRF, XXE
 4. **Docker Security** - Dockerfile and container scanning
-5. **Infrastructure as Code** - Terraform, CloudFormation, Kubernetes
+5. **Infrastructure as Code** - Terraform, CloudFormation, Kubernetes security
 6. **API Security** - REST and GraphQL endpoint analysis
-7. **License Compliance** - Check dependency licenses
-8. **Code Quality** - Complexity metrics, code smells
-9. **Compliance** - GDPR, HIPAA, PCI-DSS checks
 
-### AI-Enhanced Review (BYOK - Bring Your Own Key)
+### 📊 Code Quality & Analysis (FREE, Offline)
+
+7. **Code Metrics** - Cyclomatic complexity, Halstead metrics, maintainability index
+8. **Code Smells** - 30+ anti-patterns (god classes, long methods, magic numbers)
+9. **License Compliance** - Check dependency licenses (MIT, GPL, Apache, etc.)
+10. **Compliance Checks** - GDPR, HIPAA, PCI-DSS compliance scanning
+11. **Linter Integration** - ESLint, Pylint, RuboCop, etc.
+12. **LOC Counter** - Language-aware line counting (20+ languages)
+
+### 🧪 Testing & Performance (FREE, Offline)
+
+13. **Test Runner** - Execute and analyze Jest, pytest, JUnit tests
+14. **Mutation Testing** - Validate test suite effectiveness
+15. **Performance Testing** - Load testing and benchmarking
+16. **SBOM Generation** - Software Bill of Materials (CycloneDX, SPDX)
+
+### 🤖 AI-Enhanced Features (BYOK - Bring Your Own Key)
+
+**9 Advanced AI-Powered Features:**
+
+1. **Code Explainer** (`guardscan explain`) - Understand complex code
+2. **Code Review** (`guardscan review`) - Comprehensive AI code review
+3. **Commit Generator** (`guardscan commit`) - Generate commit messages
+4. **Docs Generator** (`guardscan docs`) - Auto-generate documentation
+5. **Test Generator** (`guardscan test-gen`) - Generate unit tests
+6. **Refactoring Suggestions** (`guardscan refactor`) - Improve code quality
+7. **Threat Modeling** (`guardscan threat-model`) - Security architecture analysis
+8. **Migration Assistant** (`guardscan migrate`) - Framework/language migrations
+9. **Interactive Chat** (`guardscan chat`) - RAG-powered codebase Q&A
+
+### 🌍 Multi-Language Support
+
+**AST Parsers for 7+ Languages:**
+- TypeScript/JavaScript
+- Python
+- Java
+- Go
+- Rust
+- Ruby
+- PHP
+- C#
+
+### 🔌 AI Provider Integrations
 
 Configure any AI provider you prefer:
 
-- **OpenAI** (GPT-4, GPT-4 Turbo)
+- **OpenAI** (GPT-4, GPT-4 Turbo, GPT-3.5)
 - **Anthropic Claude** (Claude 3 Opus, Sonnet, Haiku)
 - **Google Gemini** (Gemini Pro)
-- **Ollama** (Local, privacy-focused)
+- **Ollama** (Local, privacy-focused - llama2, codellama, mistral)
 - **LM Studio** (Local models)
 - **OpenRouter** (Access to multiple models)
 
@@ -78,19 +117,48 @@ Configure any AI provider you prefer:
 
 ## 🛠️ Commands
 
-| Command | Description | Cost |
-|---------|-------------|------|
-| `guardscan init` | Initialize config, generate client_id | FREE |
-| `guardscan security` | Run 9 security scanners (offline) | FREE |
-| `guardscan run` | AI-enhanced code review | FREE (BYOK) |
-| `guardscan test` | Run tests & code quality analysis | FREE |
-| `guardscan sbom` | Generate Software Bill of Materials | FREE |
-| `guardscan perf` | Performance testing & benchmarks | FREE |
-| `guardscan mutation` | Mutation testing | FREE |
-| `guardscan rules` | Custom YAML-based rule engine | FREE |
-| `guardscan config` | Configure AI provider & settings | FREE |
-| `guardscan status` | Show configuration and repo info | FREE |
-| `guardscan reset` | Clear local cache & config | FREE |
+All commands are **100% FREE** with no limits!
+
+### Configuration Commands
+| Command | Description |
+|---------|-------------|
+| `guardscan init` | Initialize config, generate client_id |
+| `guardscan config` | Configure AI provider & settings |
+| `guardscan status` | Show configuration and repo info |
+| `guardscan reset` | Clear local cache & config |
+
+### Security & Analysis Commands
+| Command | Description |
+|---------|-------------|
+| `guardscan security` | Run comprehensive security scan (offline) |
+| `guardscan scan` | Quick security scan |
+| `guardscan run` | AI-enhanced full code review (BYOK) |
+
+### Testing & Quality Commands
+| Command | Description |
+|---------|-------------|
+| `guardscan test` | Run tests & code quality analysis |
+| `guardscan perf` | Performance testing & load testing |
+| `guardscan mutation` | Mutation testing for test quality |
+
+### Utility Commands
+| Command | Description |
+|---------|-------------|
+| `guardscan sbom` | Generate Software Bill of Materials |
+| `guardscan rules` | Custom YAML-based rule engine |
+
+### AI-Powered Commands (BYOK)
+| Command | Description |
+|---------|-------------|
+| `guardscan explain <file>` | Explain how code works |
+| `guardscan review <file>` | Comprehensive AI code review |
+| `guardscan commit` | Generate commit messages |
+| `guardscan docs <file>` | Auto-generate documentation |
+| `guardscan test-gen <file>` | Generate unit tests |
+| `guardscan refactor <file>` | Get refactoring suggestions |
+| `guardscan threat-model` | Security architecture analysis |
+| `guardscan migrate` | Framework/language migration help |
+| `guardscan chat` | Interactive Q&A about codebase (RAG)
 
 ---
 
@@ -179,18 +247,60 @@ No credit system. No subscriptions. No paywalls.
 
 ## 🏗️ Architecture
 
-### CLI (Node.js/TypeScript)
-- Runs locally on your machine
-- No account required
-- All security scanning happens offline
-- Lightweight and fast
+GuardScan follows a **privacy-first, client-side architecture** where all code analysis happens locally.
 
-### Backend (Optional, Telemetry Only)
-- Cloudflare Workers (serverless)
-- Supabase (PostgreSQL)
-- **Only for optional, anonymized telemetry**
-- **Does NOT store source code**
-- **Does NOT validate credits** (no credit system!)
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    USER'S MACHINE                            │
+│                                                              │
+│  ┌─────────────────────────────────────────────────────┐   │
+│  │         GuardScan CLI (Node.js/TypeScript)          │   │
+│  │                                                      │   │
+│  │  • 21 Commands (security, run, test, explain...)    │   │
+│  │  • 30 Core Modules (scanners, parsers, metrics)     │   │
+│  │  • 9 AI Features (explain, review, test-gen, etc.)  │   │
+│  │  • 7 Language Parsers (Python, Java, Go, Rust...)   │   │
+│  │  • 6 AI Provider Integrations                       │   │
+│  │                                                      │   │
+│  │  Config: ~/.guardscan/config.yml                   │   │
+│  │  Cache: ~/.guardscan/cache/                        │   │
+│  └─────────────────────────────────────────────────────┘   │
+│                           │                                  │
+│                           │ Optional telemetry only          │
+│                           ▼                                  │
+└───────────────────────────────────────────────────────────────┘
+                            │
+                ┌───────────┴──────────┐
+                │                      │
+                ▼                      ▼
+┌──────────────────────────┐  ┌──────────────────────────┐
+│  User's AI Provider      │  │  GuardScan Backend       │
+│  (User pays directly)    │  │  (Optional telemetry)    │
+│                          │  │                          │
+│  • OpenAI (GPT-4)        │  │  Cloudflare Workers      │
+│  • Anthropic (Claude)    │  │  + Supabase              │
+│  • Google (Gemini)       │  │                          │
+│  • Ollama (Local)        │  │  • Health checks         │
+│                          │  │  • Anonymous telemetry   │
+│  User's API Key →        │  │  • NO source code        │
+│  User's billing →        │  │  • NO credit validation  │
+└──────────────────────────┘  └──────────────────────────┘
+```
+
+### Technology Stack
+
+**CLI (34,213 LOC):**
+- Language: TypeScript 5.3+ (strict mode)
+- Runtime: Node.js 18+
+- Framework: Commander.js
+- Testing: Jest (70%+ coverage)
+- Build: TypeScript Compiler (tsc)
+
+**Backend (913 LOC - Optional):**
+- Platform: Cloudflare Workers (serverless)
+- Database: Supabase PostgreSQL (optional)
+- Purpose: Anonymous telemetry only
+- Cost: $0-5/month (Cloudflare free tier)
 
 ---
 
