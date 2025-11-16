@@ -537,13 +537,18 @@ export class CSharpParser {
 
         const values = this.extractEnumValues(enumBody);
 
+        // Enums don't support compound visibility modifiers
+        const enumVisibility = visibility === 'protected internal' || visibility === 'private protected'
+          ? 'internal'
+          : visibility as 'public' | 'private' | 'protected' | 'internal';
+
         enums.push({
           name,
           file: filePath,
           line: i + 1,
           endLine: endLine + 1,
           namespace,
-          visibility,
+          visibility: enumVisibility,
           baseType,
           values,
           attributes: this.extractAttributes(lines, i),

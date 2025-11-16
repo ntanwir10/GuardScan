@@ -298,7 +298,8 @@ export class MonitoringManager {
     } catch (error) {
       // Silently fail - don't block user operations
       // Keep data in buffer for next flush attempt
-      console.error('Failed to send monitoring data:', error.message);
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      console.error('Failed to send monitoring data:', errorMessage);
     }
   }
 
@@ -346,7 +347,8 @@ export class MonitoringManager {
         details.endpoint = { status: response.status };
       } catch (error) {
         checks.endpoint = false;
-        details.endpoint = { error: error.message };
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        details.endpoint = { error: errorMessage };
       }
     } else {
       checks.endpoint = true; // Skip if no endpoint configured
