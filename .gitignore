@@ -22,3 +22,36 @@ FINAL_PR_DESCRIPTION.md
 SECURITY_TESTING_ANALYSIS.md
 SHIPPING_CHECKLIST.md
 WARP.md
+
+# ============================================
+# Internal/Development Documentation
+# (Kept locally, not for public repository)
+# ============================================
+
+# Root level internal docs
+ARCHITECTURE.md
+BUILD_STATUS.md
+CLAUDE.md
+COMPLETION_REPORT.md
+DEPLOYMENT.md
+EDGE_CASES.md
+PRD.md
+
+# Backend internal docs
+backend/DATABASE_SCHEMA.md
+backend/DEPLOYMENT_CHECKLIST.md
+backend/README.md
+backend/SETUP_SUMMARY.md
+backend/SUPABASE_SETUP.md
+
+# Docs folder internal planning
+docs/AI_ARCHITECTURE.md
+docs/AI_FEATURES_MASTER_PLAN.md
+docs/AI_IMPLEMENTATION_DECISIONS.md
+docs/PHASE_4_5_IMPLEMENTATION_PLAN.md
+docs/CLOUDFLARE_DOMAIN_SETUP.md
+docs/database-schema.md
+docs/deployment.md
+
+# CLI test artifacts
+cli/code-review-*.md
