@@ -18,6 +18,7 @@ import { commitCommand } from './commands/commit';
 import { explainCommand } from './commands/explain';
 import { testGenCommand } from './commands/test-gen';
 import { docsCommand } from './commands/docs';
+import { chatCommand } from './commands/chat';
 import { checkForUpdates } from './utils/version';
 import { displayLogo } from './utils/ascii-art';
 
@@ -171,6 +172,17 @@ program
   .option('--examples', 'Include code examples', true)
   .option('--audience <audience>', 'Target audience: developer, user, contributor', 'user')
   .action(docsCommand);
+
+program
+  .command('chat')
+  .description('Interactive AI chat about your codebase (Phase 4 RAG feature)')
+  .option('-m, --model <model>', 'Override AI model')
+  .option('-t, --temperature <temp>', 'Temperature 0-1', '0.7')
+  .option('--rebuild', 'Rebuild embeddings index')
+  .option('--embedding-provider <provider>', 'Embedding provider: openai or ollama', 'ollama')
+  .option('--session <path>', 'Load existing session from file')
+  .option('--export <path>', 'Export conversation to file')
+  .action(chatCommand);
 
 // Display logo when showing help or version
 const args = process.argv.slice(2);
