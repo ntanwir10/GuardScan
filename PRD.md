@@ -19,7 +19,7 @@ GuardScan is a privacy-first, developer-friendly CLI tool that combines **offlin
 - ✅ **Offline-First**: Full functionality without internet connection
 - ✅ **AI-Agnostic**: Support for 6+ AI providers (user's choice)
 - ✅ **Comprehensive**: Security + Quality + Testing in one tool
-- ✅ **Transparent Pricing**: Pay per LOC (lines of code), no subscriptions
+- ✅ **100% Free & Open Source**: BYOK (Bring Your Own Key) model, no subscriptions
 
 ---
 
@@ -47,9 +47,10 @@ GuardScan provides a **unified CLI** that:
 
 - Performs **all analysis locally** (offline-capable)
 - Supports **multiple AI providers** (user's choice)
-- Uses **pay-per-use pricing** (LOC-based)
+- Uses **BYOK model** (bring your own AI API key)
 - Guarantees **source code privacy** (never uploaded)
 - Works **completely offline** for static analysis
+- **100% free forever** (no subscriptions, no credits, no paywalls)
 
 ---
 
@@ -67,9 +68,9 @@ GuardScan provides a **unified CLI** that:
 #### 2. **Indie Developer / Freelancer** (Priority 2)
 
 - **Profile**: Builds multiple small projects, budget-conscious
-- **Need**: Affordable code quality tools without monthly subscriptions
+- **Need**: Code quality tools without monthly subscriptions
 - **Pain**: $50-200/month for code review tools is too expensive for side projects
-- **Value**: Pay-per-use pricing (only pay for what you scan)
+- **Value**: 100% free with BYOK model (bring your own AI API key)
 
 #### 3. **Open Source Maintainer** (Priority 3)
 
@@ -104,14 +105,14 @@ GuardScan provides a **unified CLI** that:
 | Test Coverage | 70%+ | Jest coverage reports |
 | NPM Downloads | 5,000/month | NPM stats |
 
-### Business Metrics
+### Adoption Metrics
 
 | Metric | Target (12 months) |
 |--------|-------------------|
 | Total LOC Scanned | 1 billion lines |
-| Paying Users | 500 developers |
-| Monthly Revenue | $5,000 MRR |
-| Churn Rate | <10% monthly |
+| Active Users | 10,000 developers |
+| GitHub Stars | 5,000+ |
+| NPM Weekly Downloads | 10,000+ |
 
 ---
 
@@ -267,31 +268,29 @@ GuardScan provides a **unified CLI** that:
 
 ---
 
-### 6. Credit System & Backend (P1 - Should Have)
+### 6. Optional Telemetry Backend (P2 - Nice to Have)
 
-**Requirement**: Fair, transparent pricing based on LOC scanned with AI.
+**Requirement**: Optional anonymous telemetry for product analytics and debugging.
 
-**Pricing Model**:
+**Privacy Model**:
 
-- **FREE Tier**: Unlimited static analysis (offline)
-- **PAID Tier**: $5 per 100,000 LOC for AI-enhanced review
-  - Example: 10,000 LOC repo = $0.50
-  - Example: 100,000 LOC repo = $5.00
+- **100% FREE**: All features, unlimited usage, no payments
+- **BYOK (Bring Your Own Key)**: Users provide their own AI provider API keys
+- **Optional Telemetry**: Can be completely disabled with --no-telemetry flag
 
-**Backend Features**:
+**Backend Features (OPTIONAL)**:
 
-- ✅ Credit validation before AI scans
-- ✅ Supabase PostgreSQL database
-- ✅ Stripe payment integration
+- ✅ Anonymous usage analytics (no source code, file paths, or identifiable information)
+- ✅ Supabase PostgreSQL database (optional)
 - ✅ Cloudflare Workers serverless API
-- ✅ Client auto-creation on first use
+- ✅ Graceful degradation if backend unavailable
 
 **Acceptance Criteria**:
 
-- [ ] Credit balance displayed: `guardscan status`
-- [ ] Purchase flow integrated (Stripe Checkout)
-- [ ] Credits deducted accurately after scans
-- [ ] Grace period for small scans (<1000 LOC)
+- [ ] Works 100% without backend/telemetry
+- [ ] Clear messaging: "GuardScan is 100% free"
+- [ ] Telemetry can be disabled: `--no-telemetry` flag
+- [ ] Privacy guarantee documented
 
 ---
 
@@ -371,11 +370,11 @@ guardscan reset         # Clear local cache & config
 - Build: tsc (TypeScript compiler)
 - Tests: Jest + ts-jest (73 tests, 50%+ coverage)
 
-**Backend**:
+**Backend (Optional - Telemetry Only)**:
 
 - Platform: Cloudflare Workers (serverless edge)
-- Database: Supabase (PostgreSQL with Row Level Security)
-- Payments: Stripe (Checkout + Webhooks)
+- Database: Supabase (PostgreSQL with Row Level Security) - Optional
+- Purpose: Anonymous usage analytics only
 - Deployment: Wrangler CLI
 
 **CI/CD**:
@@ -430,23 +429,25 @@ guardscan reset         # Clear local cache & config
 
 ---
 
-### Epic 3: Affordable Pay-Per-Use Pricing
+### Epic 3: 100% Free & Open Source Model
 
-**US-3.1**: As an indie developer, I want to pay only for the LOC I scan, so that I don't waste money on unused subscriptions.
-
-**Acceptance Criteria**:
-
-- No monthly fees
-- Pricing displayed before scan: "This will cost $0.50 (10k LOC)"
-- Can purchase credits in $5, $25, $100 increments
-
-**US-3.2**: As a casual user, I want free static analysis, so that I can try GuardScan without payment.
+**US-3.1**: As an indie developer, I want to use GuardScan without any costs or subscriptions, so that I can scan unlimited projects for free.
 
 **Acceptance Criteria**:
 
-- `guardscan security` works without credits
-- Only AI review requires credits
-- Clear distinction between free and paid features
+- All features work without payment
+- No credit system or paywalls
+- BYOK model (bring your own AI API key)
+- GuardScan receives $0, users pay AI providers directly
+
+**US-3.2**: As a security-conscious user, I want to control my AI provider costs, so that I can choose between free local AI (Ollama) or paid cloud AI (OpenAI, Claude).
+
+**Acceptance Criteria**:
+
+- Can use free local AI (Ollama, LM Studio)
+- Can use paid cloud AI with own API key
+- No GuardScan-specific costs ever
+- Clear documentation of AI provider costs
 
 ---
 
@@ -546,43 +547,43 @@ guardscan reset         # Clear local cache & config
 - NPS score >30
 - <5% churn rate
 
-### Phase 3: Growth & Monetization (Q2 2025)
+### Phase 3: Growth & Community (Q2 2025)
 
-**Goal**: Reach 1,000 paying users and $10k MRR
+**Goal**: Reach 10,000 active users and strong community engagement
 
-- [ ] Team plans (shared credit pools)
+- [ ] Team collaboration features (shared configs)
 - [ ] CI/CD integration (GitHub Actions plugin)
 - [ ] VS Code extension (inline suggestions)
 - [ ] Enhanced AI features (auto-fix suggestions)
 - [ ] Custom rule marketplace
-- [ ] Enterprise SSO support
-- [ ] Annual billing discounts
+- [ ] Community plugin system
+- [ ] Documentation site improvements
 
 **Success Criteria**:
 
-- 1,000 paying users
-- $10,000 MRR
-- 10,000 NPM downloads/month
+- 10,000 active users
+- 5,000+ GitHub stars
+- 100,000 NPM downloads/month
 - Featured on Product Hunt
 
 ### Phase 4: Enterprise & Scale (Q3-Q4 2025)
 
-**Goal**: Serve enterprise customers with advanced needs
+**Goal**: Serve enterprise customers with advanced self-hosted needs
 
-- [ ] Self-hosted backend option
+- [ ] Self-hosted backend option (Docker/Kubernetes)
 - [ ] SAML/SSO authentication
 - [ ] Audit logs & compliance reports
 - [ ] Advanced analytics (security trends)
-- [ ] White-labeling options
-- [ ] Dedicated support (SLA)
+- [ ] Enterprise support (documentation & examples)
 - [ ] Multi-repo scanning
+- [ ] Air-gapped environment support
 
 **Success Criteria**:
 
-- 10 enterprise customers ($500+/month each)
-- $50,000 MRR
-- SOC 2 Type II compliance
-- 99.99% uptime SLA
+- 50 enterprise deployments
+- SOC 2 Type II compliance documentation
+- 99.99% uptime for optional backend
+- 50,000+ active users
 
 ---
 
@@ -590,23 +591,23 @@ guardscan reset         # Clear local cache & config
 
 ### Open Questions
 
-1. **Pricing Validation**: Is $5 per 100k LOC the right price point?
-   - **Mitigation**: A/B test pricing during beta ($3, $5, $10)
+1. **Adoption**: Will developers adopt GuardScan given the BYOK model?
+   - **Mitigation**: Clear documentation, easy setup, free forever
 
-2. **AI Provider Costs**: Can we maintain margins with AI API costs?
-   - **Mitigation**: Pass through costs directly, take small markup
+2. **AI Provider Diversity**: Will users prefer local AI (Ollama) or cloud AI?
+   - **Mitigation**: Support both equally, let users choose
 
-3. **Market Size**: How many developers care about privacy enough to pay?
-   - **Mitigation**: Survey beta users, validate with early sales
+3. **Market Size**: How many developers care about privacy-first tools?
+   - **Mitigation**: Survey beta users, gather feedback, iterate
 
 ### Risks
 
 | Risk | Impact | Probability | Mitigation |
 |------|--------|-------------|------------|
-| AI providers raise prices | High | Medium | Support local AI (Ollama) as free alternative |
-| Competitors copy our model | Medium | High | Build strong brand around privacy |
-| Low adoption (privacy not valued) | High | Low | Pivot to emphasize cost savings vs subscriptions |
-| Backend scaling costs | Medium | Medium | Cloudflare Workers auto-scales efficiently |
+| AI providers raise prices | Low | Medium | Users choose their own provider, can switch to local AI (Ollama) |
+| Competitors copy our model | Low | High | First-mover advantage, build strong brand around privacy |
+| Low adoption (privacy not valued) | Medium | Low | Emphasize free model and privacy guarantees |
+| Backend costs (telemetry only) | Low | Low | Minimal backend, Cloudflare free tier sufficient |
 | Regulatory changes (AI usage) | Medium | Low | Stay informed, adapt quickly |
 
 ---
@@ -624,7 +625,7 @@ guardscan reset         # Clear local cache & config
 
 ### Unique Value Proposition
 
-**"GuardScan is the only code review tool that combines comprehensive security scanning, AI-powered insights, and absolute privacy guarantees—all in a single CLI that works completely offline."**
+**"GuardScan is the only 100% free, privacy-first code review tool that combines comprehensive security scanning, AI-powered insights (with your own API key), and absolute privacy guarantees—all in a single CLI that works completely offline. No subscriptions, no credits, no paywalls, ever."**
 
 ---
 
@@ -638,11 +639,11 @@ guardscan reset         # Clear local cache & config
 - [ ] <100ms p95 CLI startup time
 - [ ] 99.9% backend uptime
 
-### Business Metrics
+### Adoption Metrics
 
-- [ ] 500 paying users
-- [ ] $5,000 MRR
-- [ ] <10% monthly churn
+- [ ] 10,000 active users
+- [ ] 5,000+ GitHub stars
+- [ ] 100,000+ NPM downloads
 - [ ] 1 billion LOC scanned (cumulative)
 
 ### Quality Metrics
