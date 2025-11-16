@@ -1,0 +1,34 @@
+# NPM Ignore - Controls what gets published to NPM
+
+# Development files
+src/
+__tests__/
+*.test.ts
+*.spec.ts
+jest.config.js
+tsconfig.json
+
+# Documentation (keep minimal)
+docs/
+
+# Build artifacts
+*.tsbuildinfo
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+
+# Test artifacts
+code-review-*.md
+
+# Development
+.git/
+.gitignore

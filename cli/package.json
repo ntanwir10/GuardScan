@@ -18,10 +18,35 @@
     "ai",
     "cli",
     "security",
-    "sast"
+    "sast",
+    "vulnerability-scanner",
+    "code-analysis",
+    "security-scanner",
+    "static-analysis",
+    "ai-code-review",
+    "openai",
+    "claude",
+    "gemini",
+    "ollama",
+    "privacy-first",
+    "offline"
   ],
-  "author": "",
+  "author": "Nauman Tanwir <ntanwir10@gmail.com>",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ntanwir10/GuardScan.git",
+    "directory": "cli"
+  },
+  "homepage": "https://github.com/ntanwir10/GuardScan#readme",
+  "bugs": {
+    "url": "https://github.com/ntanwir10/GuardScan/issues"
+  },
+  "files": [
+    "dist/",
+    "README.md",
+    "LICENSE"
+  ],
   "dependencies": {
     "@anthropic-ai/sdk": "^0.68.0",
     "@google/generative-ai": "^0.1.3",
