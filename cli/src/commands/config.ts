@@ -177,7 +177,7 @@ async function configureModeSettings(config: any, mode: 'cloud' | 'local' | 'sta
       {
         type: 'confirm',
         name: 'offlineMode',
-        message: 'Enable offline mode? (skip credit validation)',
+        message: 'Enable offline mode? (skip telemetry and monitoring)',
         default: config.offlineMode,
       },
     ]);

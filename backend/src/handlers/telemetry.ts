@@ -1,3 +1,17 @@
+/**
+ * Telemetry Handler
+ *
+ * Optional anonymous usage analytics for product improvements
+ * Can be disabled with --no-telemetry flag
+ *
+ * PRIVACY GUARANTEE:
+ * - NO source code sent
+ * - NO file names or paths sent
+ * - Only anonymized metadata (client_id, repo_id hash, LOC counts)
+ * - Client ID is local UUID, not tied to user identity
+ * - Repo ID is cryptographic hash of git remote URL
+ */
+
 import { Env } from '../index';
 import { Database } from '../db';
 
@@ -27,6 +41,14 @@ export async function handleTelemetry(request: Request, env: Env): Promise<Respo
       });
     }
 
+    // If Supabase not configured, accept but don't store (graceful degradation)
+    if (!env.SUPABASE_URL || !env.SUPABASE_KEY) {
+      return new Response(JSON.stringify({ status: 'ok', message: 'Telemetry accepted (not stored)' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
+
     const db = new Database(env);
 
     // Transform events for database
@@ -49,8 +71,9 @@ export async function handleTelemetry(request: Request, env: Env): Promise<Respo
     });
   } catch (error) {
     console.error('Telemetry error:', error);
-    return new Response(JSON.stringify({ error: 'Internal server error' }), {
-      status: 500,
+    // Don't fail hard - telemetry is optional
+    return new Response(JSON.stringify({ status: 'ok', message: 'Telemetry error (non-blocking)' }), {
+      status: 200,
       headers: { 'Content-Type': 'application/json' },
     });
   }

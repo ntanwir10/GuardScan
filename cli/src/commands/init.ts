@@ -165,7 +165,7 @@ async function setupCloudAI(config: any): Promise<void> {
     {
       type: 'confirm',
       name: 'offlineMode',
-      message: 'Enable offline mode? (skip cloud credit validation)',
+      message: 'Enable offline mode? (skip telemetry and monitoring)',
       default: false,
     },
   ]);
