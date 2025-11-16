@@ -172,6 +172,24 @@ GuardScan provides a **unified CLI** that:
   - Kubernetes security policies
   - Cloud provider misconfigurations
 
+- ✅ **API Security Scanning**: REST and GraphQL analysis
+  - Endpoint discovery
+  - Authentication checks
+  - Rate limiting detection
+  - CORS configuration
+
+- ✅ **License Compliance**: Dependency license checking
+  - MIT, GPL, Apache detection
+  - License compatibility checking
+  - Commercial license warnings
+  - SPDX format support
+
+- ✅ **Compliance Checking**: Regulatory compliance
+  - GDPR data protection patterns
+  - HIPAA healthcare compliance
+  - PCI-DSS payment security
+  - SOC 2 control mapping
+
 **Acceptance Criteria**:
 
 - [ ] Works with airplane mode enabled
@@ -210,13 +228,13 @@ GuardScan provides a **unified CLI** that:
 
 ---
 
-### 4. Multi-Provider AI Integration (P1 - Should Have)
+### 4. Multi-Provider AI Integration (P0 - Must Have)
 
 **Requirement**: Support multiple AI providers without vendor lock-in.
 
 **Supported Providers**:
 
-- ✅ **OpenAI**: GPT-4, GPT-3.5-turbo
+- ✅ **OpenAI**: GPT-4, GPT-4 Turbo, GPT-3.5-turbo
 - ✅ **Anthropic**: Claude 3 (Opus, Sonnet, Haiku)
 - ✅ **Google**: Gemini Pro
 - ✅ **Ollama**: Local AI (llama2, codellama, mistral)
@@ -229,6 +247,9 @@ GuardScan provides a **unified CLI** that:
 - Provider-specific token limit handling
 - Graceful fallback if AI unavailable
 - Local AI support for complete offline usage
+- RAG (Retrieval-Augmented Generation) for codebase Q&A
+- Embedding support (OpenAI, Ollama)
+- AI response caching to reduce API costs
 
 **Acceptance Criteria**:
 
@@ -236,6 +257,108 @@ GuardScan provides a **unified CLI** that:
 - [ ] Local AI (Ollama) works offline
 - [ ] Clear error messages if API key invalid
 - [ ] Token limit warnings before expensive scans
+
+---
+
+### 4.1 AI-Enhanced Features (P1 - Should Have)
+
+**Requirement**: Advanced AI-powered development features using BYOK model.
+
+**9 AI-Powered Features:**
+
+1. **Code Explainer** (`guardscan explain <file>`)
+   - Deep code understanding and explanation
+   - Function-by-function breakdown
+   - Data flow visualization
+   - Complexity analysis
+
+2. **Code Review** (`guardscan review <file>`)
+   - Comprehensive AI code review
+   - Best practices checking
+   - Performance suggestions
+   - Security recommendations
+
+3. **Commit Message Generator** (`guardscan commit`)
+   - Analyze git diff
+   - Generate conventional commit messages
+   - Include scope and breaking changes
+   - Multiple suggestions
+
+4. **Documentation Generator** (`guardscan docs <file>`)
+   - Auto-generate API documentation
+   - JSDoc, docstrings, inline comments
+   - README sections
+   - Architecture diagrams (textual)
+
+5. **Test Generator** (`guardscan test-gen <file>`)
+   - Generate unit tests
+   - Edge case coverage
+   - Mock suggestions
+   - Framework-specific (Jest, pytest, JUnit)
+
+6. **Refactoring Suggestions** (`guardscan refactor <file>`)
+   - Identify improvement opportunities
+   - SOLID principles violations
+   - Design pattern suggestions
+   - Performance optimizations
+
+7. **Threat Modeling** (`guardscan threat-model`)
+   - Security architecture analysis
+   - STRIDE threat model
+   - Attack surface mapping
+   - Mitigation recommendations
+
+8. **Migration Assistant** (`guardscan migrate`)
+   - Framework migration guidance
+   - Language migration help
+   - Dependency upgrade path
+   - Breaking change detection
+
+9. **Interactive Chat** (`guardscan chat`)
+   - RAG-powered codebase Q&A
+   - Semantic code search
+   - Natural language queries
+   - Context-aware responses
+
+**Acceptance Criteria**:
+
+- [ ] All features work with any supported AI provider
+- [ ] Graceful degradation if AI unavailable
+- [ ] Clear cost estimates before API calls
+- [ ] Local AI (Ollama) supported for all features
+
+---
+
+### 4.2 Multi-Language Parser Support (P1 - Should Have)
+
+**Requirement**: Deep code analysis for multiple programming languages.
+
+**7 Language Parsers:**
+
+1. **TypeScript/JavaScript** - Built-in AST parser
+2. **Python** - Dual strategy (Python ast module + regex fallback)
+3. **Java** - Annotations, generics, Javadoc support
+4. **Go** - Receiver methods, interfaces, struct tags
+5. **Rust** - Traits, lifetimes, impl blocks
+6. **Ruby** - Modules, attr_*, blocks
+7. **PHP** - Namespaces, traits, type hints
+8. **C#** - Properties, events, LINQ patterns
+
+**Features:**
+
+- AST (Abstract Syntax Tree) parsing
+- Function and class extraction
+- Cyclomatic complexity calculation
+- Documentation extraction
+- Visibility modifiers
+- Type annotations
+
+**Acceptance Criteria**:
+
+- [ ] All parsers extract functions and classes correctly
+- [ ] Complexity calculation accurate within 10%
+- [ ] Fallback parsing for unsupported constructs
+- [ ] Documentation strings preserved
 
 ---
 
@@ -296,19 +419,47 @@ GuardScan provides a **unified CLI** that:
 
 ### 7. Developer Experience (P0 - Must Have)
 
-**CLI Commands**:
+**21 CLI Commands (All 100% FREE):**
+
+**Configuration Commands:**
 ```bash
 guardscan init          # Initialize config, generate client_id
 guardscan config        # Configure AI provider & API key
-guardscan status        # Show credits, provider, repo info
-guardscan security      # Security vulnerability scanning (offline)
-guardscan test          # Run tests & code quality analysis
-guardscan sbom          # Generate Software Bill of Materials
-guardscan perf          # Performance testing
-guardscan mutation      # Mutation testing
-guardscan rules         # Custom YAML-based rule engine
-guardscan run           # AI-powered code review (requires credits)
+guardscan status        # Show provider, repo info, configuration
 guardscan reset         # Clear local cache & config
+```
+
+**Security & Analysis Commands:**
+```bash
+guardscan security      # Comprehensive security scan (offline)
+guardscan scan          # Quick security scan
+guardscan run           # AI-enhanced full code review (BYOK)
+```
+
+**Testing & Quality Commands:**
+```bash
+guardscan test          # Run tests & code quality analysis
+guardscan perf          # Performance testing & load testing
+guardscan mutation      # Mutation testing for test quality
+```
+
+**Utility Commands:**
+```bash
+guardscan sbom          # Generate Software Bill of Materials
+guardscan rules         # Custom YAML-based rule engine
+```
+
+**AI-Powered Commands (BYOK):**
+```bash
+guardscan explain <file>     # Explain how code works
+guardscan review <file>      # Comprehensive AI code review
+guardscan commit             # Generate commit messages
+guardscan docs <file>        # Auto-generate documentation
+guardscan test-gen <file>    # Generate unit tests
+guardscan refactor <file>    # Get refactoring suggestions
+guardscan threat-model       # Security architecture analysis
+guardscan migrate            # Framework/language migration help
+guardscan chat               # Interactive Q&A about codebase (RAG)
 ```
 
 **Configuration**:
@@ -361,29 +512,36 @@ guardscan reset         # Clear local cache & config
 
 ### Technology Stack
 
-**CLI**:
+**CLI (34,213 LOC):**
 
-- Language: TypeScript 5.3+
+- Language: TypeScript 5.3+ (strict mode)
 - Runtime: Node.js 18+
 - Framework: Commander.js (CLI)
-- Dependencies: chalk, ora, fast-glob, ignore, js-yaml
-- Build: tsc (TypeScript compiler)
-- Tests: Jest + ts-jest (73 tests, 50%+ coverage)
+- Testing: Jest + ts-jest (70%+ coverage, 130+ tests)
+- Build: TypeScript compiler (tsc)
+- Components:
+  - 21 Commands
+  - 30 Core Modules
+  - 9 AI Features
+  - 7 Language Parsers
+  - 6 AI Provider Integrations
+  - 9 Utility Modules
 
-**Backend (Optional - Telemetry Only)**:
+**Backend (913 LOC - Optional):**
 
 - Platform: Cloudflare Workers (serverless edge)
-- Database: Supabase (PostgreSQL with Row Level Security) - Optional
-- Purpose: Anonymous usage analytics only
+- Database: Supabase PostgreSQL (optional)
+- Purpose: Anonymous telemetry only
 - Deployment: Wrangler CLI
+- Cost: $0-5/month (Cloudflare free tier)
 
 **CI/CD**:
 
 - GitHub Actions (9-stage pipeline)
-- Automated testing (Node 18, 20)
-- Codecov integration
+- Automated testing (Node 18, 20, 22)
+- Codecov integration (70%+ coverage)
 - Automated NPM publish
-- Cloudflare Workers deployment
+- Optional Cloudflare Workers deployment
 
 ---
 
