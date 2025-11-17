@@ -1,0 +1,41 @@
+# Dependencies
+node_modules/
+
+# Build output (Wrangler compiles on-the-fly)
+dist/
+*.js
+*.js.map
+*.d.ts
+*.d.ts.map
+
+# Except the root config files
+!wrangler.toml
+!package.json
+
+# Wrangler
+.wrangler/
+.dev.vars
+.env.*
+.env.example
+.env.production
+
+# Logs
+*.log
+npm-debug.log*
+wrangler-*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Test
+coverage/
+.nyc_output/
+
