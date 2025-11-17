@@ -58,8 +58,9 @@ vars = { ENVIRONMENT = "production", API_VERSION = "v1", MAX_REQUEST_SIZE_MB = 1
 # ]
 
 # Limits and configuration
-[limits]
-cpu_ms = 50
+# Note: CPU limits require a paid Cloudflare Workers plan
+# [limits]
+# cpu_ms = 50
 
 # Triggers (for scheduled tasks if needed)
 # [triggers]
