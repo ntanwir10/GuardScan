@@ -1,7 +1,7 @@
-import { Router } from './router';
-import { handleTelemetry } from './handlers/telemetry';
-import { handleHealth } from './handlers/health';
-import { handleMonitoring, handleMonitoringStats } from './handlers/monitoring';
+import { Router } from "./router";
+import { handleTelemetry } from "./handlers/telemetry";
+import { handleHealth } from "./handlers/health";
+import { handleMonitoring, handleMonitoringStats } from "./handlers/monitoring";
 
 /**
  * GuardScan Backend Environment
@@ -24,31 +24,63 @@ export interface Env {
 }
 
 export default {
-  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+  async fetch(
+    request: Request,
+    env: Env,
+    ctx: ExecutionContext
+  ): Promise<Response> {
     const router = new Router();
 
+    // Root endpoint - API info
+    router.get("/", () => {
+      return new Response(
+        JSON.stringify(
+          {
+            name: "GuardScan Backend",
+            version: env.API_VERSION || "v1",
+            environment: env.ENVIRONMENT || "development",
+            endpoints: {
+              health: "/health",
+              telemetry: "POST /api/telemetry",
+              monitoring: "POST /api/monitoring",
+              stats: "GET /api/monitoring/stats",
+            },
+            status: "operational",
+          },
+          null,
+          2
+        ),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }
+      );
+    });
+
     // Health check (always available)
-    router.get('/health', () => handleHealth());
-    router.get('/api/health', () => handleHealth());
+    router.get("/health", () => handleHealth());
+    router.get("/api/health", () => handleHealth());
 
     // Optional telemetry (can be disabled with --no-telemetry)
     // PRIVACY: No source code sent, only anonymized metadata
-    router.post('/api/telemetry', (req) => handleTelemetry(req, env));
+    router.post("/api/telemetry", (req) => handleTelemetry(req, env));
 
     // Optional monitoring (errors, metrics, usage analytics)
     // For debugging and product improvements
     if (env.SUPABASE_URL && env.SUPABASE_KEY) {
-      router.post('/api/monitoring', (req) => handleMonitoring(req, env));
-      router.get('/api/monitoring/stats', (req) => handleMonitoringStats(req, env));
+      router.post("/api/monitoring", (req) => handleMonitoring(req, env));
+      router.get("/api/monitoring/stats", (req) =>
+        handleMonitoringStats(req, env)
+      );
     }
 
     // CORS headers
-    if (request.method === 'OPTIONS') {
+    if (request.method === "OPTIONS") {
       return new Response(null, {
         headers: {
-          'Access-Control-Allow-Origin': '*',
-          'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-          'Access-Control-Allow-Headers': 'Content-Type',
+          "Access-Control-Allow-Origin": "*",
+          "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+          "Access-Control-Allow-Headers": "Content-Type",
         },
       });
     }
@@ -58,7 +90,7 @@ export default {
 
       // Add CORS headers to response
       const headers = new Headers(response.headers);
-      headers.set('Access-Control-Allow-Origin', '*');
+      headers.set("Access-Control-Allow-Origin", "*");
 
       return new Response(response.body, {
         status: response.status,
@@ -66,12 +98,12 @@ export default {
         headers,
       });
     } catch (error) {
-      console.error('Error handling request:', error);
-      return new Response(JSON.stringify({ error: 'Internal server error' }), {
+      console.error("Error handling request:", error);
+      return new Response(JSON.stringify({ error: "Internal server error" }), {
         status: 500,
         headers: {
-          'Content-Type': 'application/json',
-          'Access-Control-Allow-Origin': '*',
+          "Content-Type": "application/json",
+          "Access-Control-Allow-Origin": "*",
         },
       });
     }
