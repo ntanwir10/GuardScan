@@ -65,3 +65,11 @@ vars = { ENVIRONMENT = "production", API_VERSION = "v1", MAX_REQUEST_SIZE_MB = 1
 # Triggers (for scheduled tasks if needed)
 # [triggers]
 # crons = ["0 0 * * *"]  # Daily at midnight
+
+# Observability
+[observability]
+[observability.logs]
+enabled = true
+head_sampling_rate = 1
+invocation_logs = true
+persist = true
