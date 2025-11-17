@@ -2,6 +2,16 @@
 
 **100% Free & Open Source** • Privacy-First Security Scanning and AI Code Review CLI
 
+```
+  ____ _   _   _    ____  ____    ____   ____    _    _   _            ____ _     ___ 
+ / ___| | | | / \  |  _ \|  _ \  / ___| / ___|  / \  | \ | |          / ___| |   |_ _|
+| |  _| | | |/ _ \ | |_) | | | | \___ \| |     / _ \ |  \| |  _____  | |   | |    | |
+| |_| | |_| / ___ \|  _ <| |_| |  ___) | |___ / ___ \| |\  | |_____| | |___| |___ | | 
+ \____|\___/_/   \_\_| \_\____/  |____/ \____/_/   \_\_| \_|          \____|_____|___|
+
+ Privacy-First AI Code Review & Security Scanning
+```
+
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 [![Node.js Version](https://img.shields.io/badge/node-%3E%3D18.0.0-brightgreen)](https://nodejs.org)
 
@@ -11,7 +21,7 @@
 
 GuardScan is **100% free and open source**! No credit system, no paywalls, no subscriptions.
 
-### What You Get (All FREE):
+### What You Get (All FREE)
 
 - ✅ **Unlimited static analysis** - 9 security scanners + code quality tools
 - ✅ **AI-enhanced code review** - Bring your own API key (OpenAI, Claude, Gemini, Ollama)
@@ -91,6 +101,7 @@ GuardScan includes **comprehensive security scanners**:
 ### 🌍 Multi-Language Support
 
 **AST Parsers for 7+ Languages:**
+
 - TypeScript/JavaScript
 - Python
 - Java
@@ -120,45 +131,50 @@ Configure any AI provider you prefer:
 All commands are **100% FREE** with no limits!
 
 ### Configuration Commands
-| Command | Description |
-|---------|-------------|
-| `guardscan init` | Initialize config, generate client_id |
-| `guardscan config` | Configure AI provider & settings |
-| `guardscan status` | Show configuration and repo info |
-| `guardscan reset` | Clear local cache & config |
+
+| Command            | Description                           |
+| ------------------ | ------------------------------------- |
+| `guardscan init`   | Initialize config, generate client_id |
+| `guardscan config` | Configure AI provider & settings      |
+| `guardscan status` | Show configuration and repo info      |
+| `guardscan reset`  | Clear local cache & config            |
 
 ### Security & Analysis Commands
-| Command | Description |
-|---------|-------------|
+
+| Command              | Description                               |
+| -------------------- | ----------------------------------------- |
 | `guardscan security` | Run comprehensive security scan (offline) |
-| `guardscan scan` | Quick security scan |
-| `guardscan run` | AI-enhanced full code review (BYOK) |
+| `guardscan scan`     | Quick security scan                       |
+| `guardscan run`      | AI-enhanced full code review (BYOK)       |
 
 ### Testing & Quality Commands
-| Command | Description |
-|---------|-------------|
-| `guardscan test` | Run tests & code quality analysis |
-| `guardscan perf` | Performance testing & load testing |
-| `guardscan mutation` | Mutation testing for test quality |
+
+| Command              | Description                        |
+| -------------------- | ---------------------------------- |
+| `guardscan test`     | Run tests & code quality analysis  |
+| `guardscan perf`     | Performance testing & load testing |
+| `guardscan mutation` | Mutation testing for test quality  |
 
 ### Utility Commands
-| Command | Description |
-|---------|-------------|
-| `guardscan sbom` | Generate Software Bill of Materials |
-| `guardscan rules` | Custom YAML-based rule engine |
+
+| Command           | Description                         |
+| ----------------- | ----------------------------------- |
+| `guardscan sbom`  | Generate Software Bill of Materials |
+| `guardscan rules` | Custom YAML-based rule engine       |
 
 ### AI-Powered Commands (BYOK)
-| Command | Description |
-|---------|-------------|
-| `guardscan explain <file>` | Explain how code works |
-| `guardscan review <file>` | Comprehensive AI code review |
-| `guardscan commit` | Generate commit messages |
-| `guardscan docs <file>` | Auto-generate documentation |
-| `guardscan test-gen <file>` | Generate unit tests |
-| `guardscan refactor <file>` | Get refactoring suggestions |
-| `guardscan threat-model` | Security architecture analysis |
-| `guardscan migrate` | Framework/language migration help |
-| `guardscan chat` | Interactive Q&A about codebase (RAG)
+
+| Command                     | Description                          |
+| --------------------------- | ------------------------------------ |
+| `guardscan explain <file>`  | Explain how code works               |
+| `guardscan review <file>`   | Comprehensive AI code review         |
+| `guardscan commit`          | Generate commit messages             |
+| `guardscan docs <file>`     | Auto-generate documentation          |
+| `guardscan test-gen <file>` | Generate unit tests                  |
+| `guardscan refactor <file>` | Get refactoring suggestions          |
+| `guardscan threat-model`    | Security architecture analysis       |
+| `guardscan migrate`         | Framework/language migration help    |
+| `guardscan chat`            | Interactive Q&A about codebase (RAG) |
 
 ---
 
@@ -166,20 +182,23 @@ All commands are **100% FREE** with no limits!
 
 We take privacy seriously:
 
-### ❌ Never Stored or Transmitted:
+### ❌ Never Stored or Transmitted
+
 - Your source code
 - File paths or file names
 - Code snippets
 - API keys or secrets
 - Proprietary information
 
-### ✅ Optional Telemetry (Anonymized):
+### ✅ Optional Telemetry (Anonymized)
+
 - Command usage (e.g., "security" command ran)
 - Execution duration
 - LOC count (aggregate number only)
 - AI model used (e.g., "gpt-4")
 
 **Telemetry is:**
+
 - Optional (easily disabled: `guardscan config --telemetry=false`)
 - Completely anonymized
 - Only used to improve GuardScan
@@ -196,6 +215,7 @@ guardscan security
 ```
 
 Runs **9 security scanners** locally:
+
 - Scans your codebase
 - Generates markdown report
 - **100% offline** - no internet needed
@@ -214,6 +234,7 @@ guardscan run
 ```
 
 How it works:
+
 1. GuardScan analyzes your code locally
 2. Sends anonymized context to **your AI provider** (using **your API key**)
 3. AI provides insights and suggestions
@@ -229,7 +250,7 @@ How it works:
 
 No credit system. No subscriptions. No paywalls.
 
-### AI Providers (If You Use AI Features):
+### AI Providers (If You Use AI Features)
 
 **You pay them directly (not GuardScan):**
 
@@ -239,6 +260,7 @@ No credit system. No subscriptions. No paywalls.
 - **Ollama**: 100% free (runs locally)
 
 **Example costs for 10K LOC codebase:**
+
 - Static analysis only: **$0**
 - With OpenAI GPT-4: **~$2-5** (paid to OpenAI)
 - With Ollama (local): **$0**
@@ -290,6 +312,7 @@ GuardScan follows a **privacy-first, client-side architecture** where all code a
 ### Technology Stack
 
 **CLI (34,213 LOC):**
+
 - Language: TypeScript 5.3+ (strict mode)
 - Runtime: Node.js 18+
 - Framework: Commander.js
@@ -297,6 +320,7 @@ GuardScan follows a **privacy-first, client-side architecture** where all code a
 - Build: TypeScript Compiler (tsc)
 
 **Backend (913 LOC - Optional):**
+
 - Platform: Cloudflare Workers (serverless)
 - Database: Supabase PostgreSQL (optional)
 - Purpose: Anonymous telemetry only
@@ -401,7 +425,7 @@ GuardScan is built with these amazing open-source tools:
 
 - **Issues**: [GitHub Issues](https://github.com/ntanwir10/GuardScan/issues)
 - **Discussions**: [GitHub Discussions](https://github.com/ntanwir10/GuardScan/discussions)
-- **Email**: support@guardscan.com (coming soon)
+- **Email**: <support@guardscan.com> (coming soon)
 
 ---
 
