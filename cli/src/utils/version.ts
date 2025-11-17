@@ -3,8 +3,8 @@ import chalk from 'chalk';
 import * as fs from 'fs';
 import * as path from 'path';
 
-const CURRENT_VERSION = '0.1.0';
-const VERSION_CHECK_URL = 'https://api.github.com/repos/yourusername/ai-code-review/releases/latest';
+const CURRENT_VERSION = '1.0.0';
+const VERSION_CHECK_URL = 'https://api.github.com/repos/ntanwir10/GuardScan/releases/latest';
 const VERSION_CACHE_FILE = '.version-cache';
 
 interface VersionInfo {
@@ -29,7 +29,7 @@ export async function checkForUpdates(): Promise<void> {
         // Use cached version
         if (cache.latest !== CURRENT_VERSION) {
           displayUpdateMessage(cache.latest);
-        }
+        }``
         return;
       }
     }
@@ -63,7 +63,7 @@ function displayUpdateMessage(latestVersion: string): void {
   console.log(chalk.yellow('│') + '  ' + chalk.bold('Update Available!') + '                                      ' + chalk.yellow('│'));
   console.log(chalk.yellow('│') + `  Current: ${CURRENT_VERSION}  →  Latest: ${latestVersion}                    ` + chalk.yellow('│'));
   console.log(chalk.yellow('│') + '                                                            ' + chalk.yellow('│'));
-  console.log(chalk.yellow('│') + '  Run: ' + chalk.cyan('npm update -g ai-code-review') + '                  ' + chalk.yellow('│'));
+  console.log(chalk.yellow('│') + '  Run: ' + chalk.cyan('npm update -g guardscan') + '                  ' + chalk.yellow('│'));
   console.log(chalk.yellow('└────────────────────────────────────────────────────────────┘'));
   console.log('');
 }

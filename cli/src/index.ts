@@ -31,7 +31,7 @@ const program = new Command();
 program
   .name('guardscan')
   .description('GuardScan - Privacy-first AI Code Review CLI with comprehensive security scanning')
-  .version('0.1.0');
+  .version('1.0.0');
 
 program
   .command('init')
