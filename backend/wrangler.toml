@@ -10,11 +10,9 @@ workers_dev = true
 # Get your account_id from: https://dash.cloudflare.com/
 # account_id = "your-account-id"
 
-[build]
-command = "npm install && npx tsc"
-
-[build.upload]
-format = "service-worker"
+# Build configuration
+# Wrangler will automatically compile TypeScript
+# No need for custom build command during development
 
 # Environment variables (non-sensitive)
 [vars]

@@ -13,6 +13,7 @@ export interface TelemetryRequest {
   clientId: string;
   repoId: string;
   events: TelemetryEvent[];
+  cliVersion?: string;
 }
 
 export class APIClient {
@@ -20,7 +21,10 @@ export class APIClient {
   private baseUrl: string;
 
   constructor(baseUrl?: string) {
-    this.baseUrl = baseUrl || process.env.API_BASE_URL || 'https://api.guardscancli.com';
+    this.baseUrl =
+      baseUrl ||
+      process.env.API_BASE_URL ||
+      "https://guardscan-backend.ntanwir10.workers.dev";
     this.client = axios.create({
       baseURL: this.baseUrl,
       timeout: 10000,
