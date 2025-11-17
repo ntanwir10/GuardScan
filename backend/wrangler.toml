@@ -47,7 +47,7 @@ vars = { ENVIRONMENT = "staging", API_VERSION = "v1" }
 
 # Production environment
 [env.production]
-name = "guardscan-backend-production"
+name = "guardscan-backend"
 # Uncomment and configure when you have a custom domain:
 # route = { pattern = "api.guardscan.com/*", zone_name = "guardscan.com" }
 vars = { ENVIRONMENT = "production", API_VERSION = "v1", MAX_REQUEST_SIZE_MB = 10 }
