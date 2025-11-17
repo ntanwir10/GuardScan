@@ -1,6 +1,6 @@
 {
   "name": "guardscan-backend",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Cloudflare Workers backend for GuardScan",
   "main": "src/index.ts",
   "scripts": {
