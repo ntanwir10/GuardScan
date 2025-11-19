@@ -37,19 +37,16 @@ ALLOWED_ORIGINS = "http://localhost:3000,http://localhost:8787"
 # Backend is only used for optional, privacy-preserving telemetry.
 
 # KV Namespace for caching
-# To create KV namespace: wrangler kv:namespace create "CACHE"
-# Then uncomment and update IDs below:
 [[kv_namespaces]]
 binding = "CACHE"
-id = "guardscan_cache"
-preview_id = "guardscan_cache_preview"
+id = "7103d419bc9a4a3a8eca759b24e909c5"
+preview_id = "6bfd9a39e7d34cc7a4346bdb34423a81"
 
 # KV Namespace for rate limiting
-# To create KV namespace: wrangler kv:namespace create "RATE_LIMIT_KV"
 [[kv_namespaces]]
 binding = "RATE_LIMIT_KV"
-id = "guardscan_ratelimit"
-preview_id = "guardscan_ratelimit_preview"
+id = "9f5fd48acc154035a9aa0b1366f7d6e5"
+preview_id = "eed9584bbabd4189aed22c0a1be1b151"
 
 # Staging environment
 [env.staging]
@@ -61,9 +58,18 @@ vars = { ENVIRONMENT = "staging", API_VERSION = "v1" }
 # Production environment
 [env.production]
 name = "guardscan-backend"
-# Uncomment and configure when you have a custom domain:
-# route = { pattern = "api.guardscan.com/*", zone_name = "guardscan.com" }
-vars = { ENVIRONMENT = "production", API_VERSION = "v1", ALLOWED_ORIGINS = "https://guardscan.com,https://api.guardscan.com,https://cli.guardscan.com, https://guardscan-backend.ntanwir10.workers.dev" }
+# Custom domain route (configure after setting up DNS)
+route = { pattern = "api.guardscancli.com/*", zone_name = "guardscancli.com" }
+vars = { ENVIRONMENT = "production", API_VERSION = "v1", ALLOWED_ORIGINS = "https://guardscan.dev,https://api.guardscan.dev,https://guardscan-backend.ntanwir10.workers.dev" }
+
+# KV Namespaces for production
+[[env.production.kv_namespaces]]
+binding = "CACHE"
+id = "7103d419bc9a4a3a8eca759b24e909c5"
+
+[[env.production.kv_namespaces]]
+binding = "RATE_LIMIT_KV"
+id = "9f5fd48acc154035a9aa0b1366f7d6e5"
 
 # Routes (if using custom domains)
 # routes = [
