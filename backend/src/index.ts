@@ -8,36 +8,36 @@ import { rateLimiters } from "./utils/rate-limiter";
  * Get CORS headers with proper origin validation
  */
 function getCorsHeaders(request: Request, env: Env): Headers {
-  const origin = request.headers.get('Origin');
+  const origin = request.headers.get("Origin");
   const headers = new Headers();
-  
+
   // Parse allowed origins from env (comma-separated)
   let allowedOrigins: string[] = [];
   if (env.ALLOWED_ORIGINS) {
-    allowedOrigins = env.ALLOWED_ORIGINS.split(',').map(o => o.trim());
+    allowedOrigins = env.ALLOWED_ORIGINS.split(",").map((o) => o.trim());
   }
-  
+
   // In development, always allow localhost origins
-  if (env.ENVIRONMENT === 'development') {
+  if (env.ENVIRONMENT === "development") {
     allowedOrigins.push(
-      'http://localhost:3000',
-      'http://localhost:8787',
-      'http://127.0.0.1:3000',
-      'http://127.0.0.1:8787'
+      "http://localhost:3000",
+      "http://localhost:8787",
+      "http://127.0.0.1:3000",
+      "http://127.0.0.1:8787"
     );
   }
-  
+
   // Check if origin is allowed
   if (origin && allowedOrigins.includes(origin)) {
-    headers.set('Access-Control-Allow-Origin', origin);
-    headers.set('Access-Control-Allow-Credentials', 'true');
+    headers.set("Access-Control-Allow-Origin", origin);
+    headers.set("Access-Control-Allow-Credentials", "true");
   }
-  
+
   // Set other CORS headers
-  headers.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  headers.set('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-  headers.set('Access-Control-Max-Age', '86400'); // 24 hours
-  
+  headers.set("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  headers.set("Access-Control-Allow-Headers", "Content-Type, Authorization");
+  headers.set("Access-Control-Max-Age", "86400"); // 24 hours
+
   return headers;
 }
 
@@ -78,19 +78,19 @@ export default {
     ctx: ExecutionContext
   ): Promise<void> {
     console.log("Running scheduled cleanup...");
-    
+
     // Clean up expired rate limit records to prevent memory leaks
     try {
       rateLimiters.telemetry.cleanup();
       rateLimiters.monitoring.cleanup();
       rateLimiters.monitoringStats.cleanup();
-      
+
       const stats = {
         telemetry: rateLimiters.telemetry.getStats(),
         monitoring: rateLimiters.monitoring.getStats(),
         monitoringStats: rateLimiters.monitoringStats.getStats(),
       };
-      
+
       console.log("Cleanup complete. Active keys:", {
         telemetry: stats.telemetry.totalKeys,
         monitoring: stats.monitoring.totalKeys,
@@ -135,8 +135,8 @@ export default {
     });
 
     // Health check (always available)
-    router.get("/health", () => handleHealth());
-    router.get("/api/health", () => handleHealth());
+    router.get("/health", () => handleHealth(env));
+    router.get("/api/health", () => handleHealth(env));
 
     // Optional telemetry (can be disabled with --no-telemetry)
     // PRIVACY: No source code sent, only anonymized metadata
@@ -177,7 +177,7 @@ export default {
       });
     } catch (error) {
       console.error("Error handling request:", error);
-      
+
       const errorHeaders = new Headers({
         "Content-Type": "application/json",
       });
