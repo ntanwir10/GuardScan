@@ -1,6 +1,6 @@
 {
   "name": "guardscan",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "GuardScan - Privacy-first AI Code Review CLI with comprehensive security scanning",
   "main": "dist/index.js",
   "bin": {

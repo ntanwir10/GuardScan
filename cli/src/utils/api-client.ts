@@ -18,13 +18,16 @@ export interface TelemetryRequest {
 
 export class APIClient {
   private client: AxiosInstance;
-  private baseUrl: string | undefined;
+  private baseUrl: string;
 
   constructor(baseUrl?: string) {
     // Default backend for project-wide telemetry (optional, privacy-preserving)
     // Users can opt-out with --no-telemetry flag
-    // Or override with API_BASE_URL env var (for testing/self-hosting)
-    this.baseUrl = baseUrl || process.env.GUARDSCAN_API_URL || undefined;
+    // Or override with GUARDSCAN_API_URL env var (for testing/self-hosting)
+    this.baseUrl =
+      baseUrl ||
+      process.env.GUARDSCAN_API_URL ||
+      "https://api.guardscancli.com"; // Production backend
 
     this.client = axios.create({
       baseURL: this.baseUrl,
