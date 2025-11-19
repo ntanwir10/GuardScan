@@ -1,5 +1,8 @@
 import { Env } from "./index";
 
+// Database query timeout in milliseconds
+const QUERY_TIMEOUT = 5000; // 5 seconds
+
 export interface Client {
   client_id: string;
   created_at: string;
@@ -42,41 +45,69 @@ export class Database {
       }
     }
 
-    const response = await fetch(url.toString(), {
-      headers: {
-        apikey: this.supabaseKey,
-        Authorization: `Bearer ${this.supabaseKey}`,
-        "Content-Type": "application/json",
-      },
-    });
+    // Set up timeout using AbortController
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), QUERY_TIMEOUT);
 
-    if (!response.ok) {
-      throw new Error(`Database query failed: ${response.statusText}`);
+    try {
+      const response = await fetch(url.toString(), {
+        headers: {
+          apikey: this.supabaseKey,
+          Authorization: `Bearer ${this.supabaseKey}`,
+          "Content-Type": "application/json",
+        },
+        signal: controller.signal,
+      });
+
+      if (!response.ok) {
+        throw new Error(`Database query failed: ${response.statusText}`);
+      }
+
+      return await response.json();
+    } catch (error: any) {
+      if (error.name === 'AbortError') {
+        throw new Error(`Database query timeout after ${QUERY_TIMEOUT}ms`);
+      }
+      throw error;
+    } finally {
+      clearTimeout(timeoutId);
     }
-
-    return await response.json();
   }
 
   private async insert<T>(table: string, data: any): Promise<T> {
     const url = `${this.supabaseUrl}/rest/v1/${table}`;
 
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        apikey: this.supabaseKey,
-        Authorization: `Bearer ${this.supabaseKey}`,
-        "Content-Type": "application/json",
-        Prefer: "return=representation",
-      },
-      body: JSON.stringify(data),
-    });
+    // Set up timeout using AbortController
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), QUERY_TIMEOUT);
 
-    if (!response.ok) {
-      throw new Error(`Database insert failed: ${response.statusText}`);
+    try {
+      const response = await fetch(url, {
+        method: "POST",
+        headers: {
+          apikey: this.supabaseKey,
+          Authorization: `Bearer ${this.supabaseKey}`,
+          "Content-Type": "application/json",
+          Prefer: "return=representation",
+        },
+        body: JSON.stringify(data),
+        signal: controller.signal,
+      });
+
+      if (!response.ok) {
+        throw new Error(`Database insert failed: ${response.statusText}`);
+      }
+
+      const result = (await response.json()) as any[];
+      return result[0] as T;
+    } catch (error: any) {
+      if (error.name === 'AbortError') {
+        throw new Error(`Database insert timeout after ${QUERY_TIMEOUT}ms`);
+      }
+      throw error;
+    } finally {
+      clearTimeout(timeoutId);
     }
-
-    const result = (await response.json()) as any[];
-    return result[0] as T;
   }
 
   private async update(table: string, filter: any, data: any): Promise<void> {
@@ -86,18 +117,32 @@ export class Database {
       url.searchParams.set(key, `eq.${value}`);
     }
 
-    const response = await fetch(url.toString(), {
-      method: "PATCH",
-      headers: {
-        apikey: this.supabaseKey,
-        Authorization: `Bearer ${this.supabaseKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(data),
-    });
+    // Set up timeout using AbortController
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), QUERY_TIMEOUT);
 
-    if (!response.ok) {
-      throw new Error(`Database update failed: ${response.statusText}`);
+    try {
+      const response = await fetch(url.toString(), {
+        method: "PATCH",
+        headers: {
+          apikey: this.supabaseKey,
+          Authorization: `Bearer ${this.supabaseKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(data),
+        signal: controller.signal,
+      });
+
+      if (!response.ok) {
+        throw new Error(`Database update failed: ${response.statusText}`);
+      }
+    } catch (error: any) {
+      if (error.name === 'AbortError') {
+        throw new Error(`Database update timeout after ${QUERY_TIMEOUT}ms`);
+      }
+      throw error;
+    } finally {
+      clearTimeout(timeoutId);
     }
   }
 
@@ -201,19 +246,33 @@ export class Database {
     url.searchParams.set("timestamp", `gte.${since}`);
     url.searchParams.set("order", "timestamp.desc");
 
-    const response = await fetch(url.toString(), {
-      headers: {
-        apikey: this.supabaseKey,
-        Authorization: `Bearer ${this.supabaseKey}`,
-        "Content-Type": "application/json",
-      },
-    });
+    // Set up timeout using AbortController
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), QUERY_TIMEOUT);
 
-    if (!response.ok) {
-      throw new Error(`Failed to get errors: ${response.statusText}`);
+    try {
+      const response = await fetch(url.toString(), {
+        headers: {
+          apikey: this.supabaseKey,
+          Authorization: `Bearer ${this.supabaseKey}`,
+          "Content-Type": "application/json",
+        },
+        signal: controller.signal,
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to get errors: ${response.statusText}`);
+      }
+
+      return await response.json();
+    } catch (error: any) {
+      if (error.name === 'AbortError') {
+        throw new Error(`Get errors timeout after ${QUERY_TIMEOUT}ms`);
+      }
+      throw error;
+    } finally {
+      clearTimeout(timeoutId);
     }
-
-    return await response.json();
   }
 
   /**
@@ -238,19 +297,33 @@ export class Database {
     url.searchParams.set("timestamp", `gte.${since}`);
     url.searchParams.set("order", "timestamp.desc");
 
-    const response = await fetch(url.toString(), {
-      headers: {
-        apikey: this.supabaseKey,
-        Authorization: `Bearer ${this.supabaseKey}`,
-        "Content-Type": "application/json",
-      },
-    });
+    // Set up timeout using AbortController
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), QUERY_TIMEOUT);
 
-    if (!response.ok) {
-      throw new Error(`Failed to get metrics: ${response.statusText}`);
+    try {
+      const response = await fetch(url.toString(), {
+        headers: {
+          apikey: this.supabaseKey,
+          Authorization: `Bearer ${this.supabaseKey}`,
+          "Content-Type": "application/json",
+        },
+        signal: controller.signal,
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to get metrics: ${response.statusText}`);
+      }
+
+      return await response.json();
+    } catch (error: any) {
+      if (error.name === 'AbortError') {
+        throw new Error(`Get metrics timeout after ${QUERY_TIMEOUT}ms`);
+      }
+      throw error;
+    } finally {
+      clearTimeout(timeoutId);
     }
-
-    return await response.json();
   }
 
   /**
@@ -275,18 +348,32 @@ export class Database {
     url.searchParams.set("timestamp", `gte.${since}`);
     url.searchParams.set("order", "timestamp.desc");
 
-    const response = await fetch(url.toString(), {
-      headers: {
-        apikey: this.supabaseKey,
-        Authorization: `Bearer ${this.supabaseKey}`,
-        "Content-Type": "application/json",
-      },
-    });
+    // Set up timeout using AbortController
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), QUERY_TIMEOUT);
 
-    if (!response.ok) {
-      throw new Error(`Failed to get usage events: ${response.statusText}`);
+    try {
+      const response = await fetch(url.toString(), {
+        headers: {
+          apikey: this.supabaseKey,
+          Authorization: `Bearer ${this.supabaseKey}`,
+          "Content-Type": "application/json",
+        },
+        signal: controller.signal,
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to get usage events: ${response.statusText}`);
+      }
+
+      return await response.json();
+    } catch (error: any) {
+      if (error.name === 'AbortError') {
+        throw new Error(`Get usage events timeout after ${QUERY_TIMEOUT}ms`);
+      }
+      throw error;
+    } finally {
+      clearTimeout(timeoutId);
     }
-
-    return await response.json();
   }
 }

@@ -1,4 +1,4 @@
-import axios, { AxiosInstance } from 'axios';
+import axios, { AxiosInstance } from "axios";
 
 export interface TelemetryEvent {
   action: string;
@@ -18,27 +18,35 @@ export interface TelemetryRequest {
 
 export class APIClient {
   private client: AxiosInstance;
-  private baseUrl: string;
+  private baseUrl: string | undefined;
 
   constructor(baseUrl?: string) {
-    this.baseUrl =
-      baseUrl ||
-      process.env.API_BASE_URL ||
-      "https://guardscan-backend.ntanwir10.workers.dev";
+    // Default backend for project-wide telemetry (optional, privacy-preserving)
+    // Users can opt-out with --no-telemetry flag
+    // Or override with API_BASE_URL env var (for testing/self-hosting)
+    this.baseUrl = baseUrl || process.env.GUARDSCAN_API_URL || undefined;
+
     this.client = axios.create({
       baseURL: this.baseUrl,
       timeout: 10000,
       headers: {
-        'Content-Type': 'application/json',
+        "Content-Type": "application/json",
       },
     });
   }
 
   /**
    * Send telemetry batch (optional, privacy-preserving)
+   * Fails silently - telemetry errors never break the CLI
    */
   async sendTelemetry(request: TelemetryRequest): Promise<void> {
-    await this.client.post('/api/telemetry', request);
+    try {
+      await this.client.post("/api/telemetry", request);
+    } catch (error) {
+      // Silently fail - telemetry is optional and should never break the CLI
+      // Users can disable with --no-telemetry flag
+      // No logging in production to avoid noise
+    }
   }
 
   /**
@@ -46,11 +54,18 @@ export class APIClient {
    */
   async ping(): Promise<boolean> {
     try {
-      await this.client.get('/health', { timeout: 3000 });
+      await this.client.get("/health", { timeout: 3000 });
       return true;
     } catch {
       return false;
     }
+  }
+
+  /**
+   * Get backend URL (for display purposes)
+   */
+  getBaseUrl(): string {
+    return this.baseUrl;
   }
 }
 

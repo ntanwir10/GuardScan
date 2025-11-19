@@ -8,12 +8,16 @@
  */
 
 import { Env } from "../index";
+import { CachedDatabase } from "../db-cached";
 import { Database } from "../db";
-import {
-  rateLimiters,
-  createRateLimitResponse,
-  addRateLimitHeaders,
-} from "../utils/rate-limiter";
+import { KVRateLimiter, createRateLimitResponse, addRateLimitHeaders } from "../utils/rate-limiter-kv";
+
+// Fallback to in-memory rate limiter if KV not available
+import { rateLimiters as memoryRateLimiters } from "../utils/rate-limiter";
+
+// Constants (works on free plan)
+const MAX_REQUEST_SIZE_MB = 10; // 10MB max request size
+const MAX_REQUEST_SIZE_BYTES = MAX_REQUEST_SIZE_MB * 1024 * 1024;
 
 /**
  * Error Severity
@@ -68,9 +72,9 @@ interface UsageEvent {
  * Analytics Manager
  */
 class AnalyticsManager {
-  private db: Database;
+  private db: Database | CachedDatabase;
 
-  constructor(db: Database) {
+  constructor(db: Database | CachedDatabase) {
     this.db = db;
   }
 
@@ -266,6 +270,23 @@ export async function handleMonitoring(
   env: Env
 ): Promise<Response> {
   try {
+    // Validate Content-Length to prevent memory exhaustion attacks
+    const contentLength = parseInt(request.headers.get('Content-Length') || '0');
+    
+    if (contentLength > MAX_REQUEST_SIZE_BYTES) {
+      return new Response(
+        JSON.stringify({
+          error: 'Request too large',
+          maxSize: `${MAX_REQUEST_SIZE_MB}MB`,
+          received: `${(contentLength / 1024 / 1024).toFixed(2)}MB`
+        }),
+        {
+          status: 413,
+          headers: { 'Content-Type': 'application/json' }
+        }
+      );
+    }
+
     // Parse request body first to get client identifier
     const payload: MonitoringPayload = await request.json();
 
@@ -275,8 +296,19 @@ export async function handleMonitoring(
       request.headers.get("CF-Connecting-IP") ||
       "unknown";
 
-    // Rate limiting check
-    const rateLimitResult = rateLimiters.monitoring.check(clientId);
+    // Rate limiting check - use KV-based if available, otherwise fall back to in-memory
+    const rateLimiter = env.RATE_LIMIT_KV
+      ? new KVRateLimiter(
+          { windowMs: 60 * 1000, maxRequests: 50 },
+          env.RATE_LIMIT_KV,
+          'monitoring'
+        )
+      : memoryRateLimiters.monitoring;
+    
+    const rateLimitResult = env.RATE_LIMIT_KV
+      ? await rateLimiter.check(clientId)
+      : rateLimiter.check(clientId);
+    
     if (!rateLimitResult.allowed) {
       console.warn(`Rate limit exceeded for monitoring client: ${clientId}`);
       return createRateLimitResponse(
@@ -305,7 +337,7 @@ export async function handleMonitoring(
       });
     }
 
-    const db = new Database(env);
+    const db = new CachedDatabase(env);
     const analytics = new AnalyticsManager(db);
 
     // Store all data in parallel
@@ -379,8 +411,19 @@ export async function handleMonitoringStats(
       request.headers.get("X-Forwarded-For") ||
       "unknown";
 
-    // Rate limiting check (stricter for stats endpoint)
-    const rateLimitResult = rateLimiters.monitoringStats.check(clientId);
+    // Rate limiting check - use KV-based if available, otherwise fall back to in-memory
+    const rateLimiter = env.RATE_LIMIT_KV
+      ? new KVRateLimiter(
+          { windowMs: 60 * 1000, maxRequests: 30 },
+          env.RATE_LIMIT_KV,
+          'monitoring-stats'
+        )
+      : memoryRateLimiters.monitoringStats;
+    
+    const rateLimitResult = env.RATE_LIMIT_KV
+      ? await rateLimiter.check(clientId)
+      : rateLimiter.check(clientId);
+    
     if (!rateLimitResult.allowed) {
       console.warn(
         `Rate limit exceeded for monitoring stats client: ${clientId}`
@@ -403,7 +446,7 @@ export async function handleMonitoringStats(
     const url = new URL(request.url);
     const hours = parseInt(url.searchParams.get("hours") || "24");
 
-    const db = new Database(env);
+    const db = new CachedDatabase(env);
     const analytics = new AnalyticsManager(db);
 
     const [errorStats, perfStats, usageStats] = await Promise.all([

@@ -39,3 +39,10 @@ Thumbs.db
 coverage/
 .nyc_output/
 
+# Supabase - keep production database schema private
+# Users who want to self-host can use the public docs
+supabase/
+!supabase/migrations/.gitkeep
+
+# Scripts - deployment and secrets should stay private
+scripts/
