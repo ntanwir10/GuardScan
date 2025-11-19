@@ -18,7 +18,7 @@ workers_dev = true
 [vars]
 ENVIRONMENT = "development"
 API_VERSION = "v1"
-MAX_REQUEST_SIZE_MB = 10
+ALLOWED_ORIGINS = "http://localhost:3000,http://localhost:8787"
 
 # Secrets (NEVER commit these - set via: wrangler secret put SECRET_NAME)
 # Required secrets for telemetry backend:
@@ -29,14 +29,27 @@ MAX_REQUEST_SIZE_MB = 10
 #   wrangler secret put SUPABASE_URL
 #   wrangler secret put SUPABASE_KEY
 #
+# Or use the helper script (reads from .env.prod):
+#   ./scripts/deploy-with-secrets.sh
+#
+# Note: NEVER add actual secret values here - they would be committed to git!
 # Note: GuardScan is now 100% open source and free.
 # Backend is only used for optional, privacy-preserving telemetry.
 
 # KV Namespace for caching
-# [[kv_namespaces]]
-# binding = "CACHE"
-# id = "your-kv-namespace-id"
-# preview_id = "your-preview-kv-namespace-id"
+# To create KV namespace: wrangler kv:namespace create "CACHE"
+# Then uncomment and update IDs below:
+[[kv_namespaces]]
+binding = "CACHE"
+id = "guardscan_cache"
+preview_id = "guardscan_cache_preview"
+
+# KV Namespace for rate limiting
+# To create KV namespace: wrangler kv:namespace create "RATE_LIMIT_KV"
+[[kv_namespaces]]
+binding = "RATE_LIMIT_KV"
+id = "guardscan_ratelimit"
+preview_id = "guardscan_ratelimit_preview"
 
 # Staging environment
 [env.staging]
@@ -50,7 +63,7 @@ vars = { ENVIRONMENT = "staging", API_VERSION = "v1" }
 name = "guardscan-backend"
 # Uncomment and configure when you have a custom domain:
 # route = { pattern = "api.guardscan.com/*", zone_name = "guardscan.com" }
-vars = { ENVIRONMENT = "production", API_VERSION = "v1", MAX_REQUEST_SIZE_MB = 10 }
+vars = { ENVIRONMENT = "production", API_VERSION = "v1", ALLOWED_ORIGINS = "https://guardscan.com,https://api.guardscan.com,https://cli.guardscan.com, https://guardscan-backend.ntanwir10.workers.dev" }
 
 # Routes (if using custom domains)
 # routes = [
@@ -62,9 +75,9 @@ vars = { ENVIRONMENT = "production", API_VERSION = "v1", MAX_REQUEST_SIZE_MB = 1
 # [limits]
 # cpu_ms = 50
 
-# Triggers (for scheduled tasks if needed)
-# [triggers]
-# crons = ["0 0 * * *"]  # Daily at midnight
+# Triggers (for scheduled tasks)
+[triggers]
+crons = ["* * * * *"] # Every minute - cleanup expired rate limit records
 
 # Observability
 [observability]
