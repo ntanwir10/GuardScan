@@ -66,7 +66,7 @@ GuardScan - 100% Free & Open Source Privacy-First Security Scanning and AI Code 
 
 ---
 
-## [1.0.3] - 2025-01-XX
+## [1.0.3] - 2025-11-23
 
 ### Fixed
 
@@ -149,7 +149,7 @@ GuardScan - 100% Free & Open Source Privacy-First Security Scanning and AI Code 
 - **Error Handling**: Added centralized error handling with `handleCommandError` function for consistent error reporting
 - **Path Helper**: Added `path-helper.ts` for safe home directory resolution, especially for Docker/Alpine environments
 - **Global Options**: Added `--no-telemetry` global option to disable telemetry for any command
-- **Command Options**: 
+- **Command Options**:
   - Added `--force` option to `guardscan reset` command
   - Added `--from` and `--to` options to `guardscan migrate` command
 
