@@ -4,6 +4,12 @@ import * as path from 'path';
 import { configManager } from '../core/config';
 import { repositoryManager } from '../core/repository';
 import { ProviderFactory } from '../providers/factory';
+import { createDebugLogger } from '../utils/debug-logger';
+import { createPerformanceTracker } from '../utils/performance-tracker';
+import { handleCommandError } from '../utils/error-handler';
+
+const logger = createDebugLogger('explain');
+const perfTracker = createPerformanceTracker('guardscan explain');
 import { CodeExplainer, ExplanationLevel, ExplanationTarget } from '../features/code-explainer';
 import { CodebaseIndexer } from '../core/codebase-indexer';
 import { AICache } from '../core/ai-cache';
@@ -15,9 +21,15 @@ interface ExplainOptions {
 }
 
 export async function explainCommand(target: string, options: ExplainOptions): Promise<void> {
+  logger.debug('Explain command started', { target, options });
+  perfTracker.start('explain-total');
+  
   try {
     // Load config
+    perfTracker.start('load-config');
     const config = configManager.loadOrInit();
+    perfTracker.end('load-config');
+    logger.debug('Config loaded', { provider: config.provider });
 
     // Get repository info
     const repoInfo = repositoryManager.getRepoInfo();
@@ -26,7 +38,7 @@ export async function explainCommand(target: string, options: ExplainOptions): P
     console.log(chalk.blue(`🤖 Explaining: ${target}...`));
 
     // Check if AI provider is configured
-    if (!config.provider || !config.apiKey) {
+    if (!config.provider || config.provider === 'none' || !config.apiKey) {
       console.log(chalk.yellow('\n⚠ AI provider not configured. Run `guardscan config` to set up.'));
       return;
     }
@@ -34,15 +46,13 @@ export async function explainCommand(target: string, options: ExplainOptions): P
     // Validate level
     const level = (options.level?.toLowerCase() || 'detailed') as ExplanationLevel;
     if (!['brief', 'detailed', 'comprehensive'].includes(level)) {
-      console.error(chalk.red('\n✗ Invalid level. Must be: brief, detailed, or comprehensive'));
-      process.exit(1);
+      handleCommandError(new Error('Invalid level. Must be: brief, detailed, or comprehensive'), 'Explain');
     }
 
     // Validate type
     const type = (options.type?.toLowerCase() || 'function') as ExplanationTarget;
     if (!['function', 'class', 'file', 'module'].includes(type)) {
-      console.error(chalk.red('\n✗ Invalid type. Must be: function, class, file, or module'));
-      process.exit(1);
+      handleCommandError(new Error('Invalid type. Must be: function, class, file, or module'), 'Explain');
     }
 
     // Create AI provider
@@ -74,8 +84,7 @@ export async function explainCommand(target: string, options: ExplainOptions): P
         explanation = await explainer.explainTheme(target, level);
       }
     } catch (error: any) {
-      console.error(chalk.red(`\n✗ Failed to explain ${type}:`, error.message));
-      process.exit(1);
+      handleCommandError(error, `Explain ${type}`);
     }
 
     // Format and display explanation
@@ -111,7 +120,6 @@ export async function explainCommand(target: string, options: ExplainOptions): P
     console.log();
 
   } catch (error) {
-    console.error(chalk.red('\n✗ Failed to generate explanation:'), error);
-    process.exit(1);
+    handleCommandError(error, 'Explain');
   }
 }

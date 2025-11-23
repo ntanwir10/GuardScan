@@ -313,9 +313,12 @@ export class AICache {
   private async saveToDisk(): Promise<void> {
     const cacheDir = this.getCacheDir();
 
-    // Ensure directory exists
-    if (!fs.existsSync(cacheDir)) {
+    // Ensure directory and all parent directories exist
+    try {
       fs.mkdirSync(cacheDir, { recursive: true });
+    } catch (error) {
+      // If directory creation fails, log and continue (might already exist)
+      console.warn(`Warning: Failed to create cache directory ${cacheDir}:`, error);
     }
 
     // Convert cache to serializable format

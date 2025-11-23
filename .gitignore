@@ -10,6 +10,9 @@ coverage/
 .vscode/
 .idea/
 
+# Backend configuration with sensitive IDs
+backend/wrangler.toml
+
 # Development/Internal Documentation (not for public)
 COMPREHENSIVE_FEATURE_PLAN.md
 DEVELOPMENT_STATUS.md
@@ -55,3 +58,9 @@ docs/deployment.md
 
 # CLI test artifacts
 cli/code-review-*.md
+
+# Add to .gitignore (root level or cli/.gitignore if it exists)
+cli/__tests__/**/*.js
+cli/__tests__/**/*.d.ts
+cli/__tests__/**/*.js.map
+cli/__tests__/**/*.d.ts.map

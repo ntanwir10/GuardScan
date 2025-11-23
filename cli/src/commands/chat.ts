@@ -10,6 +10,12 @@ import * as readline from 'readline';
 import { configManager } from '../core/config';
 import { repositoryManager } from '../core/repository';
 import { ProviderFactory } from '../providers/factory';
+import { createDebugLogger } from '../utils/debug-logger';
+import { createPerformanceTracker } from '../utils/performance-tracker';
+import { handleCommandError } from '../utils/error-handler';
+
+const logger = createDebugLogger('chat');
+const perfTracker = createPerformanceTracker('guardscan chat');
 import { CodebaseIndexer } from '../core/codebase-indexer';
 import { EmbeddingChunker } from '../core/embedding-chunker';
 import { FileBasedEmbeddingStore } from '../core/embedding-store';
@@ -30,9 +36,15 @@ interface ChatCommandOptions {
 }
 
 export async function chatCommand(options: ChatCommandOptions): Promise<void> {
+  logger.debug('Chat command started', { options });
+  perfTracker.start('chat-total');
+  
   try {
     // Load config
+    perfTracker.start('load-config');
     const config = configManager.loadOrInit();
+    perfTracker.end('load-config');
+    logger.debug('Config loaded', { provider: config.provider });
 
     // Get repository info
     const repoInfo = repositoryManager.getRepoInfo();
@@ -42,10 +54,8 @@ export async function chatCommand(options: ChatCommandOptions): Promise<void> {
     console.log(chalk.blue('\n💬 GuardScan AI Chat - Interactive Codebase Assistant\n'));
 
     // Check if AI provider is configured
-    if (!config.provider || !config.apiKey) {
-      console.log(chalk.yellow('⚠ AI provider not configured.'));
-      console.log(chalk.gray('Run `guardscan config` to set up your AI provider.\n'));
-      process.exit(1);
+    if (!config.provider || config.provider === 'none' || !config.apiKey) {
+      handleCommandError(new Error('AI provider not configured. Run `guardscan config` to set up your AI provider.'), 'Chat');
     }
 
     // Initialize components
@@ -63,10 +73,9 @@ export async function chatCommand(options: ChatCommandOptions): Promise<void> {
 
     if (embeddingProviderType === 'openai') {
       if (!config.apiKey) {
-        console.log(chalk.red('✗ OpenAI API key required for OpenAI embeddings'));
-        process.exit(1);
+        handleCommandError(new Error('OpenAI API key required for OpenAI embeddings'), 'Chat');
       }
-      embeddingProvider = new OpenAIEmbeddingProvider(config.apiKey, config.apiEndpoint);
+      embeddingProvider = new OpenAIEmbeddingProvider(config.apiKey || '', config.apiEndpoint);
     } else {
       embeddingProvider = new OllamaEmbeddingProvider();
 
@@ -82,9 +91,7 @@ export async function chatCommand(options: ChatCommandOptions): Promise<void> {
       // Check if model is available
       const hasModel = await embeddingProvider.checkModelAvailable();
       if (!hasModel) {
-        console.log(chalk.yellow('\n⚠ Embedding model not found'));
-        console.log(chalk.gray(`Run: ollama pull ${embeddingProvider.getModel()}\n`));
-        process.exit(1);
+        handleCommandError(new Error(`Embedding model not found. Run: ollama pull ${embeddingProvider.getModel()}`), 'Chat');
       }
     }
 
@@ -122,7 +129,7 @@ export async function chatCommand(options: ChatCommandOptions): Promise<void> {
         result.errors.forEach(err => {
           console.log(chalk.red(`  - ${err.message}`));
         });
-        process.exit(1);
+        handleCommandError(new Error('Failed to initialize chat system'), 'Chat');
       }
     } else {
       console.log(chalk.green('✓ Using existing embedding index'));
@@ -183,8 +190,7 @@ export async function chatCommand(options: ChatCommandOptions): Promise<void> {
 
     console.log(chalk.gray('\n👋 Thanks for using GuardScan AI Chat!\n'));
   } catch (error) {
-    console.error(chalk.red('\n✗ Chat error:'), error);
-    process.exit(1);
+    handleCommandError(error, 'Chat');
   }
 }
 

@@ -190,6 +190,12 @@ export interface RefactoringReport {
     impact: string;
     estimatedHours: number;
   }[];
+  prioritizedSuggestions?: {
+    priority: 'high' | 'medium' | 'low';
+    refactoring: string;
+    impact: string;
+    estimatedHours: number;
+  }[];
 }
 
 // ============================================================================
@@ -256,7 +262,10 @@ export class RefactoringSuggestionsEngine {
     const smells: CodeSmell[] = [];
 
     // Long Method (>50 lines)
-    const lines = func.line - (func.line - (func.body?.split('\n').length || 0));
+    // Calculate actual function body lines
+    const bodyLines = func.body ? func.body.split('\n').length : 0;
+    // Also check if we have endLine info
+    const lines = func.endLine && func.endLine > func.line ? (func.endLine - func.line + 1) : bodyLines;
     if (lines > 50) {
       smells.push({
         type: 'long-method',
@@ -544,7 +553,8 @@ export class RefactoringSuggestionsEngine {
       },
       smells,
       patterns,
-      recommendations
+      recommendations,
+      prioritizedSuggestions: recommendations // Alias for backward compatibility
     };
   }
 

@@ -2,6 +2,9 @@ import chalk from 'chalk';
 import inquirer from 'inquirer';
 import { configManager, AIProvider } from '../core/config';
 import { ProviderFactory } from '../providers/factory';
+import { createDebugLogger } from '../utils/debug-logger';
+import { createPerformanceTracker } from '../utils/performance-tracker';
+import { handleCommandError } from '../utils/error-handler';
 
 interface ConfigOptions {
   provider?: AIProvider;
@@ -9,30 +12,69 @@ interface ConfigOptions {
   show?: boolean;
 }
 
+const logger = createDebugLogger('config');
+const perfTracker = createPerformanceTracker('guardscan config');
+
 export async function configCommand(options: ConfigOptions): Promise<void> {
+  logger.debug('Config command started', { options });
+  perfTracker.start('config-total');
+  
   try {
     // Show current config
     if (options.show) {
+      perfTracker.start('show-config');
       showConfig();
+      perfTracker.end('show-config');
+      perfTracker.end('config-total');
+      perfTracker.displaySummary();
       return;
     }
 
     // Direct config via flags
     if (options.provider || options.key) {
+      perfTracker.start('direct-config');
       directConfig(options);
+      perfTracker.end('direct-config');
+      perfTracker.end('config-total');
+      logger.debug('Config updated via flags');
+      perfTracker.displaySummary();
+      return;
+    }
+
+    // Check if running in non-interactive mode (no TTY)
+    const isNonInteractive = !process.stdin.isTTY;
+    if (isNonInteractive) {
+      // In non-interactive mode, just show config
+      logger.debug('Non-interactive mode detected, showing config');
+      perfTracker.start('show-config');
+      showConfig();
+      perfTracker.end('show-config');
+      perfTracker.end('config-total');
+      perfTracker.displaySummary();
       return;
     }
 
     // Interactive config
+    perfTracker.start('interactive-config');
     await interactiveConfig();
+    perfTracker.end('interactive-config');
+    perfTracker.end('config-total');
+    logger.debug('Config updated interactively');
+    perfTracker.displaySummary();
   } catch (error) {
-    console.error(chalk.red('\n✗ Configuration failed:'), error);
-    process.exit(1);
+    perfTracker.end('config-total');
+    perfTracker.displaySummary();
+    handleCommandError(error, 'Configuration');
   }
 }
 
 function showConfig(): void {
+  logger.debug('Showing current configuration');
   const config = configManager.loadOrInit();
+  logger.debug('Config loaded', { 
+    provider: config.provider, 
+    telemetryEnabled: config.telemetryEnabled 
+  });
 
   console.log(chalk.cyan.bold('\n📋 Current Configuration\n'));
 
@@ -68,19 +110,27 @@ function getModeFromProvider(provider: string): 'cloud' | 'local' | 'static' {
 }
 
 function directConfig(options: ConfigOptions): void {
+  logger.debug('Direct config update', { options });
+  perfTracker.start('load-config');
   const config = configManager.loadOrInit();
+  perfTracker.end('load-config');
 
   if (options.provider) {
     config.provider = options.provider;
+    logger.debug('Provider updated', { provider: options.provider });
     console.log(chalk.green(`✓ Provider set to: ${options.provider}`));
   }
 
   if (options.key) {
     config.apiKey = options.key;
+    logger.debug('API key updated');
     console.log(chalk.green('✓ API key updated'));
   }
 
+  perfTracker.start('save-config');
   configManager.save(config);
+  perfTracker.end('save-config');
+  logger.debug('Config saved');
   console.log();
 }
 

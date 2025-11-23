@@ -5,6 +5,12 @@ import { performanceTester, PerformanceConfig } from '../core/performance-tester
 import { createProgressBar } from '../utils/progress';
 import * as fs from 'fs';
 import * as path from 'path';
+import { createDebugLogger } from '../utils/debug-logger';
+import { createPerformanceTracker } from '../utils/performance-tracker';
+import { handleCommandError } from '../utils/error-handler';
+
+const logger = createDebugLogger('perf');
+const perfTracker = createPerformanceTracker('guardscan perf');
 
 interface PerfOptions {
   load?: boolean;
@@ -18,10 +24,14 @@ interface PerfOptions {
 }
 
 export async function perfCommand(options: PerfOptions): Promise<void> {
+  logger.debug('Perf command started', { options });
+  perfTracker.start('perf-total');
+  
   console.log(chalk.cyan.bold('\n⚡ Performance Testing\n'));
 
   try {
     const repoPath = process.cwd();
+    logger.debug('Repository path', { repoPath });
 
     // Determine test type
     let testType: 'load' | 'stress' | 'web' = 'load';
@@ -43,7 +53,7 @@ export async function perfCommand(options: PerfOptions): Promise<void> {
         console.log(chalk.gray('  brew install lighthouse'));
         console.log();
         console.log(chalk.gray('For more info: https://github.com/GoogleChrome/lighthouse\n'));
-        process.exit(1);
+        handleCommandError(new Error('Lighthouse is not installed'), 'Performance testing');
       }
     } else {
       // load or stress tests require k6
@@ -65,7 +75,7 @@ export async function perfCommand(options: PerfOptions): Promise<void> {
         console.log(chalk.gray('  sudo apt-get install k6'));
         console.log();
         console.log(chalk.gray('For more info: https://k6.io/docs/get-started/installation/\n'));
-        process.exit(1);
+        handleCommandError(new Error('k6 is not installed'), 'Performance testing');
       }
     }
 

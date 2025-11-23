@@ -4,6 +4,12 @@ import * as path from 'path';
 import { configManager } from '../core/config';
 import { repositoryManager } from '../core/repository';
 import { ProviderFactory } from '../providers/factory';
+import { createDebugLogger } from '../utils/debug-logger';
+import { createPerformanceTracker } from '../utils/performance-tracker';
+import { handleCommandError } from '../utils/error-handler';
+
+const logger = createDebugLogger('test-gen');
+const perfTracker = createPerformanceTracker('guardscan test-gen');
 import { TestGenerator, TestFramework, TestGenerationOptions } from '../features/test-generator';
 import { CodebaseIndexer } from '../core/codebase-indexer';
 import { AICache } from '../core/ai-cache';
@@ -18,9 +24,15 @@ interface TestGenOptions {
 }
 
 export async function testGenCommand(options: TestGenOptions): Promise<void> {
+  logger.debug('Test-gen command started', { options });
+  perfTracker.start('test-gen-total');
+  
   try {
     // Load config
+    perfTracker.start('load-config');
     const config = configManager.loadOrInit();
+    perfTracker.end('load-config');
+    logger.debug('Config loaded', { provider: config.provider });
 
     // Get repository info
     const repoInfo = repositoryManager.getRepoInfo();
@@ -29,15 +41,14 @@ export async function testGenCommand(options: TestGenOptions): Promise<void> {
     console.log(chalk.blue('🧪 Generating tests with AI...'));
 
     // Check if AI provider is configured
-    if (!config.provider || !config.apiKey) {
+    if (!config.provider || config.provider === 'none' || !config.apiKey) {
       console.log(chalk.yellow('\n⚠ AI provider not configured. Run `guardscan config` to set up.'));
       return;
     }
 
     // Validate target
     if (!options.function && !options.class && !options.file) {
-      console.error(chalk.red('\n✗ Must specify one of: --function, --class, or --file'));
-      process.exit(1);
+      handleCommandError(new Error('Must specify one of: --function, --class, or --file'), 'Test generation');
     }
 
     // Create AI provider
@@ -77,8 +88,7 @@ export async function testGenCommand(options: TestGenOptions): Promise<void> {
         return;
       }
     } catch (error: any) {
-      console.error(chalk.red(`\n✗ Failed to generate tests:`, error.message));
-      process.exit(1);
+      handleCommandError(error, 'Test generation');
     }
 
     if (!result) {
@@ -148,7 +158,6 @@ export async function testGenCommand(options: TestGenOptions): Promise<void> {
     console.log(chalk.gray('4. Iterate to improve coverage\n'));
 
   } catch (error) {
-    console.error(chalk.red('\n✗ Failed to generate tests:'), error);
-    process.exit(1);
+    handleCommandError(error, 'Test generation');
   }
 }

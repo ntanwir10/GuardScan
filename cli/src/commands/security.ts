@@ -21,6 +21,12 @@ import { CodebaseIndexer } from '../core/codebase-indexer';
 import { AICache } from '../core/ai-cache';
 import * as fs from 'fs';
 import * as path from 'path';
+import { createDebugLogger } from '../utils/debug-logger';
+import { createPerformanceTracker } from '../utils/performance-tracker';
+import { handleCommandError } from '../utils/error-handler';
+
+const logger = createDebugLogger('security');
+const perfTracker = createPerformanceTracker('guardscan security');
 
 interface SecurityOptions {
   files?: string[];
@@ -30,16 +36,24 @@ interface SecurityOptions {
 }
 
 export async function securityCommand(options: SecurityOptions): Promise<void> {
+  logger.debug('Security command started', { options });
+  perfTracker.start('security-total');
   const startTime = Date.now();
 
   displaySimpleBanner('security');
 
   try {
     // Load config
+    perfTracker.start('load-config');
     const config = configManager.loadOrInit();
+    perfTracker.end('load-config');
+    logger.debug('Config loaded', { provider: config.provider });
 
     // Get repository info
+    perfTracker.start('detect-repository');
     const repoInfo = repositoryManager.getRepoInfo();
+    perfTracker.end('detect-repository');
+    logger.debug('Repository detected', { name: repoInfo.name, repoId: repoInfo.repoId });
     console.log(chalk.gray(`Repository: ${repoInfo.name}\n`));
 
     // Initialize progress tracking
@@ -48,12 +62,18 @@ export async function securityCommand(options: SecurityOptions): Promise<void> {
 
     // Step 1: Count LOC
     progressBar.update(0, { status: 'Scanning files...' });
+    perfTracker.start('count-loc');
     const locResult = await locCounter.count(options.files);
+    perfTracker.end('count-loc');
+    logger.debug('LOC counted', { fileCount: locResult.fileCount, codeLines: locResult.codeLines });
     progressBar.update(1, { status: `Scanned ${locResult.fileCount} files` });
 
     // Step 2: Run security checks
     progressBar.update(1, { status: 'Running security analysis...' });
+    perfTracker.start('security-checks');
     const findings = await runSecurityChecks(locResult.fileBreakdown);
+    perfTracker.end('security-checks');
+    logger.debug('Security checks completed', { findingsCount: findings.length });
     progressBar.update(2, { status: `Found ${findings.length} findings` });
 
     // Create review result
@@ -74,13 +94,19 @@ export async function securityCommand(options: SecurityOptions): Promise<void> {
     // Step 3: Generate AI fixes if requested
     if (options.aiFix && findings.length > 0) {
       progressBar.update(2, { status: 'Generating AI fixes...' });
+      perfTracker.start('ai-fixes');
       await generateAIFixes(findings, repoInfo.path, config, options.interactive || false);
+      perfTracker.end('ai-fixes');
+      logger.debug('AI fixes generated', { findingsCount: findings.length });
       progressBar.update(2.5, { status: 'AI fixes generated' });
     }
 
     // Step 4: Generate report
     progressBar.update(2.5, { status: 'Generating report...' });
+    perfTracker.start('report-generation');
     const reportPath = reporter.saveReport(reviewResult, 'markdown', undefined, 'security');
+    perfTracker.end('report-generation');
+    logger.debug('Report generated', { reportPath });
     progressBar.update(3, { status: 'Complete' });
     progressBar.stop();
 
@@ -90,17 +116,27 @@ export async function securityCommand(options: SecurityOptions): Promise<void> {
     displaySecuritySummary(findings);
 
     // Record telemetry
+    perfTracker.start('record-telemetry');
     await telemetryManager.record({
       action: 'security',
       loc: locResult.codeLines,
       durationMs: Date.now() - startTime,
       model: 'sast',
     });
+    perfTracker.end('record-telemetry');
+
+    perfTracker.end('security-total');
+    logger.debug('Security command completed successfully', { 
+      duration: Date.now() - startTime,
+      findingsCount: findings.length
+    });
+    perfTracker.displaySummary();
 
     console.log();
   } catch (error) {
-    console.error(chalk.red('\n✗ Security scan failed:'), error);
-    process.exit(1);
+    perfTracker.end('security-total');
+    perfTracker.displaySummary();
+    handleCommandError(error, 'Security scan');
   }
 }
 
@@ -112,6 +148,7 @@ async function runSecurityChecks(files: any[]): Promise<Finding[]> {
   const repoPath = process.cwd();
 
   // 1. Basic pattern-based scanning (existing)
+  perfTracker.start('check-patterns');
   for (const file of files) {
     try {
       const content = fs.readFileSync(file.path, 'utf-8');
@@ -121,8 +158,11 @@ async function runSecurityChecks(files: any[]): Promise<Finding[]> {
       // Skip files that can't be read
     }
   }
+  const duration = perfTracker.end('check-patterns');
+  logger.performance('check-patterns', duration, { filesScanned: files.length, findings: findings.length });
 
   // 2. Dependency vulnerability scanning
+  perfTracker.start('check-dependencies');
   try {
     const depResults = await dependencyScanner.scan(repoPath);
     for (const result of depResults) {
@@ -136,11 +176,15 @@ async function runSecurityChecks(files: any[]): Promise<Finding[]> {
         });
       }
     }
-  } catch {
-    // Dependency scanning failed (tools not available)
+    const duration = perfTracker.end('check-dependencies');
+    logger.performance('check-dependencies', duration, { findings: findings.length });
+  } catch (error) {
+    perfTracker.end('check-dependencies');
+    logger.error('Dependency scanning failed', error);
   }
 
   // 3. Advanced secrets detection
+  perfTracker.start('check-secrets');
   try {
     const filePaths = files.map(f => f.path);
     const secretFindings = await secretsDetector.detectInFiles(filePaths);
@@ -167,35 +211,51 @@ async function runSecurityChecks(files: any[]): Promise<Finding[]> {
         suggestion: secret.recommendation,
       });
     }
-  } catch {
-    // Secret scanning failed
+    const duration = perfTracker.end('check-secrets');
+    logger.performance('check-secrets', duration, { findings: secretFindings.length + gitSecrets.length });
+  } catch (error) {
+    perfTracker.end('check-secrets');
+    logger.error('Secret scanning failed', error);
   }
 
   // 4. Dockerfile security scanning
+  perfTracker.start('check-dockerfile');
   try {
     const dockerFindings = await dockerfileScanner.scan(repoPath);
     findings.push(...dockerFindings);
-  } catch {
-    // Dockerfile scanning failed
+    const duration = perfTracker.end('check-dockerfile');
+    logger.performance('check-dockerfile', duration, { findings: dockerFindings.length });
+  } catch (error) {
+    perfTracker.end('check-dockerfile');
+    logger.error('Dockerfile scanning failed', error);
   }
 
   // 5. Infrastructure-as-Code security scanning
+  perfTracker.start('check-iac');
   try {
     const iacFindings = await iacScanner.scan(repoPath);
     findings.push(...iacFindings);
-  } catch {
-    // IaC scanning failed
+    const duration = perfTracker.end('check-iac');
+    logger.performance('check-iac', duration, { findings: iacFindings.length });
+  } catch (error) {
+    perfTracker.end('check-iac');
+    logger.error('IaC scanning failed', error);
   }
 
   // 6. OWASP Top 10 scanning
+  perfTracker.start('check-owasp');
   try {
     const owaspFindings = await owaspScanner.scan(repoPath);
     findings.push(...owaspFindings);
-  } catch {
-    // OWASP scanning failed
+    const duration = perfTracker.end('check-owasp');
+    logger.performance('check-owasp', duration, { findings: owaspFindings.length });
+  } catch (error) {
+    perfTracker.end('check-owasp');
+    logger.error('OWASP scanning failed', error);
   }
 
   // 7. API security scanning
+  perfTracker.start('check-api');
   try {
     const apiFindings = await apiScanner.scan(repoPath);
     for (const finding of apiFindings) {
@@ -208,11 +268,15 @@ async function runSecurityChecks(files: any[]): Promise<Finding[]> {
         suggestion: finding.recommendation,
       });
     }
-  } catch {
-    // API scanning failed
+    const duration = perfTracker.end('check-api');
+    logger.performance('check-api', duration, { findings: apiFindings.length });
+  } catch (error) {
+    perfTracker.end('check-api');
+    logger.error('API scanning failed', error);
   }
 
   // 8. Compliance checking
+  perfTracker.start('check-compliance');
   try {
     const complianceReports = await complianceChecker.check(repoPath);
     for (const report of complianceReports) {
@@ -227,11 +291,15 @@ async function runSecurityChecks(files: any[]): Promise<Finding[]> {
         });
       }
     }
-  } catch {
-    // Compliance checking failed
+    const duration = perfTracker.end('check-compliance');
+    logger.performance('check-compliance', duration, { reports: complianceReports.length });
+  } catch (error) {
+    perfTracker.end('check-compliance');
+    logger.error('Compliance checking failed', error);
   }
 
   // 9. License compliance scanning
+  perfTracker.start('check-licenses');
   try {
     const licenseReport = await licenseScanner.scan(repoPath, 'proprietary');
 
@@ -258,8 +326,11 @@ async function runSecurityChecks(files: any[]): Promise<Finding[]> {
         suggestion: issue.recommendation,
       });
     }
-  } catch {
-    // License scanning failed
+    const duration = perfTracker.end('check-licenses');
+    logger.performance('check-licenses', duration, { findings: licenseReport.findings.length });
+  } catch (error) {
+    perfTracker.end('check-licenses');
+    logger.error('License scanning failed', error);
   }
 
   return findings;
@@ -514,7 +585,7 @@ async function generateAIFixes(
   interactive: boolean
 ): Promise<void> {
   // Check if AI provider is configured
-  if (!config.provider || !config.apiKey) {
+  if (!config.provider || config.provider === 'none' || !config.apiKey) {
     console.log(chalk.yellow('\n⚠ AI provider not configured. Run `guardscan config` to set up.'));
     return;
   }
@@ -621,10 +692,12 @@ async function generateAIFixes(
   }
 }
 
+import { SECURITY_CONSTANTS } from '../constants/security-constants';
+
 /**
  * Extract code snippet around a line
  */
-function extractCodeSnippet(filePath: string, line: number, context: number = 3): string {
+function extractCodeSnippet(filePath: string, line: number, context: number = SECURITY_CONSTANTS.CODE_SNIPPET_CONTEXT_LINES): string {
   try {
     const content = fs.readFileSync(filePath, 'utf-8');
     const lines = content.split('\n');

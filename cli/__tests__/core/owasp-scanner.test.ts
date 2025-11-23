@@ -4,18 +4,20 @@
  * Tests for OWASP Top 10 vulnerability detection
  */
 
-import { OWASPScanner } from '../../src/core/owasp-scanner';
-import * as fs from 'fs';
-import * as path from 'path';
-import * as os from 'os';
+import { OwaspScanner } from "../../src/core/owasp-scanner";
+import * as fs from "fs";
+import * as path from "path";
+import * as os from "os";
 
-describe('OWASPScanner', () => {
-  let scanner: OWASPScanner;
+import { describe, expect, it, beforeEach, afterEach } from "@jest/globals";
+
+describe("OwaspScanner", () => {
+  let scanner: OwaspScanner;
   let tempDir: string;
 
   beforeEach(() => {
-    scanner = new OWASPScanner();
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'owasp-test-'));
+    scanner = new OwaspScanner();
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "owasp-test-"));
   });
 
   afterEach(() => {
@@ -24,91 +26,91 @@ describe('OWASPScanner', () => {
     }
   });
 
-  describe('SQL Injection Detection', () => {
-    it('should detect SQL injection vulnerabilities', async () => {
+  describe("SQL Injection Detection", () => {
+    it("should detect SQL injection vulnerabilities", async () => {
       const code = `
         function getUserById(id: string) {
           const query = "SELECT * FROM users WHERE id = '" + id + "'";
           return db.execute(query);
         }
       `;
-      const filePath = path.join(tempDir, 'sql-injection.ts');
+      const filePath = path.join(tempDir, "sql-injection.ts");
       fs.writeFileSync(filePath, code);
 
-      const results = await scanner.scanFile(filePath);
+      const results = await scanner.scanFile(filePath, code, "typescript");
 
-      const sqlInjection = results.find(r => r.category === 'sql-injection');
+      const sqlInjection = results.find((r) => r.category === "sql-injection");
       expect(sqlInjection).toBeDefined();
-      expect(sqlInjection?.severity).toBe('high');
+      expect(sqlInjection?.severity).toBe("high");
     });
 
-    it('should not flag parameterized queries', async () => {
+    it("should not flag parameterized queries", async () => {
       const code = `
         function getUserById(id: string) {
           const query = "SELECT * FROM users WHERE id = ?";
           return db.execute(query, [id]);
         }
       `;
-      const filePath = path.join(tempDir, 'safe-query.ts');
+      const filePath = path.join(tempDir, "safe-query.ts");
       fs.writeFileSync(filePath, code);
 
-      const results = await scanner.scanFile(filePath);
+      const results = await scanner.scanFile(filePath, code, "typescript");
 
-      const sqlInjection = results.find(r => r.category === 'sql-injection');
+      const sqlInjection = results.find((r) => r.category === "sql-injection");
       expect(sqlInjection).toBeUndefined();
     });
   });
 
-  describe('XSS Detection', () => {
-    it('should detect XSS vulnerabilities with innerHTML', async () => {
+  describe("XSS Detection", () => {
+    it("should detect XSS vulnerabilities with innerHTML", async () => {
       const code = `
         function displayMessage(msg: string) {
           document.getElementById('message').innerHTML = msg;
         }
       `;
-      const filePath = path.join(tempDir, 'xss.ts');
+      const filePath = path.join(tempDir, "xss.ts");
       fs.writeFileSync(filePath, code);
 
-      const results = await scanner.scanFile(filePath);
+      const results = await scanner.scanFile(filePath, code, "typescript");
 
-      const xss = results.find(r => r.category === 'xss');
+      const xss = results.find((r) => r.category === "xss");
       expect(xss).toBeDefined();
-      expect(xss?.severity).toBe('high');
+      expect(xss?.severity).toBe("high");
     });
 
-    it('should detect XSS in React dangerouslySetInnerHTML', async () => {
+    it("should detect XSS in React dangerouslySetInnerHTML", async () => {
       const code = `
         function Component({ html }: { html: string }) {
           return <div dangerouslySetInnerHTML={{ __html: html }} />;
         }
       `;
-      const filePath = path.join(tempDir, 'react-xss.tsx');
+      const filePath = path.join(tempDir, "react-xss.tsx");
       fs.writeFileSync(filePath, code);
 
-      const results = await scanner.scanFile(filePath);
+      const results = await scanner.scanFile(filePath, code, "typescript");
 
-      const xss = results.find(r => r.category === 'xss');
+      const xss = results.find((r) => r.category === "xss");
       expect(xss).toBeDefined();
     });
 
-    it('should not flag safe text content', async () => {
+    it("should not flag safe text content", async () => {
       const code = `
         function displayMessage(msg: string) {
           document.getElementById('message').textContent = msg;
         }
       `;
-      const filePath = path.join(tempDir, 'safe-text.ts');
+      const filePath = path.join(tempDir, "safe-text.ts");
       fs.writeFileSync(filePath, code);
 
-      const results = await scanner.scanFile(filePath);
+      const results = await scanner.scanFile(filePath, code, "typescript");
 
-      const xss = results.find(r => r.category === 'xss');
+      const xss = results.find((r) => r.category === "xss");
       expect(xss).toBeUndefined();
     });
   });
 
-  describe('Command Injection Detection', () => {
-    it('should detect command injection with exec', async () => {
+  describe("Command Injection Detection", () => {
+    it("should detect command injection with exec", async () => {
       const code = `
         import { exec } from 'child_process';
 
@@ -118,17 +120,19 @@ describe('OWASPScanner', () => {
           });
         }
       `;
-      const filePath = path.join(tempDir, 'cmd-injection.ts');
+      const filePath = path.join(tempDir, "cmd-injection.ts");
       fs.writeFileSync(filePath, code);
 
-      const results = await scanner.scanFile(filePath);
+      const results = await scanner.scanFile(filePath, code, "typescript");
 
-      const cmdInjection = results.find(r => r.category === 'command-injection');
+      const cmdInjection = results.find(
+        (r) => r.category === "command-injection"
+      );
       expect(cmdInjection).toBeDefined();
-      expect(cmdInjection?.severity).toBe('critical');
+      expect(cmdInjection?.severity).toBe("critical");
     });
 
-    it('should detect command injection with spawn', async () => {
+    it("should detect command injection with spawn", async () => {
       const code = `
         import { spawn } from 'child_process';
 
@@ -136,35 +140,39 @@ describe('OWASPScanner', () => {
           spawn('git', ['clone', repo]);
         }
       `;
-      const filePath = path.join(tempDir, 'spawn.ts');
+      const filePath = path.join(tempDir, "spawn.ts");
       fs.writeFileSync(filePath, code);
 
-      const results = await scanner.scanFile(filePath);
+      const results = await scanner.scanFile(filePath, code, "typescript");
 
       // spawn with array is safer but should still be flagged for review
-      const cmdInjection = results.find(r => r.category === 'command-injection');
+      const cmdInjection = results.find(
+        (r) => r.category === "command-injection"
+      );
       expect(cmdInjection).toBeDefined();
-      expect(cmdInjection?.severity).toBe('medium');
+      expect(cmdInjection?.severity).toBe("medium");
     });
   });
 
-  describe('Path Traversal Detection', () => {
-    it('should detect path traversal vulnerabilities', async () => {
+  describe("Path Traversal Detection", () => {
+    it("should detect path traversal vulnerabilities", async () => {
       const code = `
         function readFile(filename: string) {
           return fs.readFileSync('./uploads/' + filename);
         }
       `;
-      const filePath = path.join(tempDir, 'path-traversal.ts');
+      const filePath = path.join(tempDir, "path-traversal.ts");
       fs.writeFileSync(filePath, code);
 
-      const results = await scanner.scanFile(filePath);
+      const results = await scanner.scanFile(filePath, code, "typescript");
 
-      const pathTraversal = results.find(r => r.category === 'path-traversal');
+      const pathTraversal = results.find(
+        (r) => r.category === "path-traversal"
+      );
       expect(pathTraversal).toBeDefined();
     });
 
-    it('should not flag sanitized paths', async () => {
+    it("should not flag sanitized paths", async () => {
       const code = `
         import path from 'path';
 
@@ -173,52 +181,58 @@ describe('OWASPScanner', () => {
           return fs.readFileSync('./uploads/' + safePath);
         }
       `;
-      const filePath = path.join(tempDir, 'safe-path.ts');
+      const filePath = path.join(tempDir, "safe-path.ts");
       fs.writeFileSync(filePath, code);
 
-      const results = await scanner.scanFile(filePath);
+      const results = await scanner.scanFile(filePath, code, "typescript");
 
-      const pathTraversal = results.find(r => r.category === 'path-traversal');
+      const pathTraversal = results.find(
+        (r) => r.category === "path-traversal"
+      );
       expect(pathTraversal).toBeUndefined();
     });
   });
 
-  describe('Insecure Deserialization Detection', () => {
-    it('should detect unsafe JSON.parse usage', async () => {
+  describe("Insecure Deserialization Detection", () => {
+    it("should detect unsafe JSON.parse usage", async () => {
       const code = `
         function processData(data: string) {
           const obj = JSON.parse(data);
           eval(obj.code); // Very dangerous!
         }
       `;
-      const filePath = path.join(tempDir, 'unsafe-deserialize.ts');
+      const filePath = path.join(tempDir, "unsafe-deserialize.ts");
       fs.writeFileSync(filePath, code);
 
-      const results = await scanner.scanFile(filePath);
+      const results = await scanner.scanFile(filePath, code, "typescript");
 
-      const evalUsage = results.find(r => r.category === 'dangerous-function');
+      const evalUsage = results.find(
+        (r) => r.category === "dangerous-function"
+      );
       expect(evalUsage).toBeDefined();
     });
 
-    it('should detect eval() usage', async () => {
+    it("should detect eval() usage", async () => {
       const code = `
         function calculate(expr: string) {
           return eval(expr);
         }
       `;
-      const filePath = path.join(tempDir, 'eval.ts');
+      const filePath = path.join(tempDir, "eval.ts");
       fs.writeFileSync(filePath, code);
 
-      const results = await scanner.scanFile(filePath);
+      const results = await scanner.scanFile(filePath, code, "typescript");
 
-      const evalUsage = results.find(r => r.category === 'dangerous-function');
+      const evalUsage = results.find(
+        (r) => r.category === "dangerous-function"
+      );
       expect(evalUsage).toBeDefined();
-      expect(evalUsage?.severity).toBe('critical');
+      expect(evalUsage?.severity).toBe("critical");
     });
   });
 
-  describe('Weak Cryptography Detection', () => {
-    it('should detect MD5 usage', async () => {
+  describe("Weak Cryptography Detection", () => {
+    it("should detect MD5 usage", async () => {
       const code = `
         import crypto from 'crypto';
 
@@ -226,17 +240,19 @@ describe('OWASPScanner', () => {
           return crypto.createHash('md5').update(password).digest('hex');
         }
       `;
-      const filePath = path.join(tempDir, 'weak-crypto.ts');
+      const filePath = path.join(tempDir, "weak-crypto.ts");
       fs.writeFileSync(filePath, code);
 
-      const results = await scanner.scanFile(filePath);
+      const results = await scanner.scanFile(filePath, code, "typescript");
 
-      const weakCrypto = results.find(r => r.category === 'weak-cryptography');
+      const weakCrypto = results.find(
+        (r) => r.category === "weak-cryptography"
+      );
       expect(weakCrypto).toBeDefined();
-      expect(weakCrypto?.severity).toBe('high');
+      expect(weakCrypto?.severity).toBe("high");
     });
 
-    it('should detect SHA1 usage', async () => {
+    it("should detect SHA1 usage", async () => {
       const code = `
         import crypto from 'crypto';
 
@@ -244,16 +260,18 @@ describe('OWASPScanner', () => {
           return crypto.createHash('sha1').update(data).digest('hex');
         }
       `;
-      const filePath = path.join(tempDir, 'sha1.ts');
+      const filePath = path.join(tempDir, "sha1.ts");
       fs.writeFileSync(filePath, code);
 
-      const results = await scanner.scanFile(filePath);
+      const results = await scanner.scanFile(filePath, code, "typescript");
 
-      const weakCrypto = results.find(r => r.category === 'weak-cryptography');
+      const weakCrypto = results.find(
+        (r) => r.category === "weak-cryptography"
+      );
       expect(weakCrypto).toBeDefined();
     });
 
-    it('should not flag strong cryptography', async () => {
+    it("should not flag strong cryptography", async () => {
       const code = `
         import crypto from 'crypto';
 
@@ -261,33 +279,35 @@ describe('OWASPScanner', () => {
           return crypto.createHash('sha256').update(password).digest('hex');
         }
       `;
-      const filePath = path.join(tempDir, 'strong-crypto.ts');
+      const filePath = path.join(tempDir, "strong-crypto.ts");
       fs.writeFileSync(filePath, code);
 
-      const results = await scanner.scanFile(filePath);
+      const results = await scanner.scanFile(filePath, code, "typescript");
 
-      const weakCrypto = results.find(r => r.category === 'weak-cryptography');
+      const weakCrypto = results.find(
+        (r) => r.category === "weak-cryptography"
+      );
       expect(weakCrypto).toBeUndefined();
     });
   });
 
-  describe('Insecure Random Detection', () => {
-    it('should detect Math.random() for security purposes', async () => {
+  describe("Insecure Random Detection", () => {
+    it("should detect Math.random() for security purposes", async () => {
       const code = `
         function generateToken() {
           return Math.random().toString(36);
         }
       `;
-      const filePath = path.join(tempDir, 'weak-random.ts');
+      const filePath = path.join(tempDir, "weak-random.ts");
       fs.writeFileSync(filePath, code);
 
-      const results = await scanner.scanFile(filePath);
+      const results = await scanner.scanFile(filePath, code, "typescript");
 
-      const weakRandom = results.find(r => r.category === 'insecure-random');
+      const weakRandom = results.find((r) => r.category === "insecure-random");
       expect(weakRandom).toBeDefined();
     });
 
-    it('should not flag crypto.randomBytes', async () => {
+    it("should not flag crypto.randomBytes", async () => {
       const code = `
         import crypto from 'crypto';
 
@@ -295,82 +315,90 @@ describe('OWASPScanner', () => {
           return crypto.randomBytes(32).toString('hex');
         }
       `;
-      const filePath = path.join(tempDir, 'secure-random.ts');
+      const filePath = path.join(tempDir, "secure-random.ts");
       fs.writeFileSync(filePath, code);
 
-      const results = await scanner.scanFile(filePath);
+      const results = await scanner.scanFile(filePath, code, "typescript");
 
-      const weakRandom = results.find(r => r.category === 'insecure-random');
+      const weakRandom = results.find((r) => r.category === "insecure-random");
       expect(weakRandom).toBeUndefined();
     });
   });
 
-  describe('Authentication Issues Detection', () => {
-    it('should detect missing authentication middleware', async () => {
+  describe("Authentication Issues Detection", () => {
+    it("should detect missing authentication middleware", async () => {
       const code = `
         app.get('/admin/users', (req, res) => {
           res.json(getAllUsers());
         });
       `;
-      const filePath = path.join(tempDir, 'no-auth.ts');
+      const filePath = path.join(tempDir, "no-auth.ts");
       fs.writeFileSync(filePath, code);
 
-      const results = await scanner.scanFile(filePath);
+      const results = await scanner.scanFile(filePath, code, "typescript");
 
-      const authIssue = results.find(r => r.category === 'missing-authentication');
+      const authIssue = results.find(
+        (r) => r.category === "missing-authentication"
+      );
       expect(authIssue).toBeDefined();
     });
 
-    it('should not flag routes with authentication', async () => {
+    it("should not flag routes with authentication", async () => {
       const code = `
         app.get('/admin/users', authenticate, authorize(['admin']), (req, res) => {
           res.json(getAllUsers());
         });
       `;
-      const filePath = path.join(tempDir, 'with-auth.ts');
+      const filePath = path.join(tempDir, "with-auth.ts");
       fs.writeFileSync(filePath, code);
 
-      const results = await scanner.scanFile(filePath);
+      const results = await scanner.scanFile(filePath, code, "typescript");
 
-      const authIssue = results.find(r => r.category === 'missing-authentication');
+      const authIssue = results.find(
+        (r) => r.category === "missing-authentication"
+      );
       expect(authIssue).toBeUndefined();
     });
   });
 
-  describe('CORS Misconfiguration Detection', () => {
-    it('should detect wildcard CORS origin', async () => {
+  describe("CORS Misconfiguration Detection", () => {
+    it("should detect wildcard CORS origin", async () => {
       const code = `
         app.use(cors({
           origin: '*'
         }));
       `;
-      const filePath = path.join(tempDir, 'cors.ts');
+      const filePath = path.join(tempDir, "cors.ts");
       fs.writeFileSync(filePath, code);
 
-      const results = await scanner.scanFile(filePath);
+      const results = await scanner.scanFile(filePath, code, "typescript");
 
-      const corsIssue = results.find(r => r.category === 'cors-misconfiguration');
+      const corsIssue = results.find(
+        (r) => r.category === "cors-misconfiguration"
+      );
       expect(corsIssue).toBeDefined();
     });
 
-    it('should not flag specific CORS origins', async () => {
+    it("should not flag specific CORS origins", async () => {
       const code = `
         app.use(cors({
           origin: 'https://example.com'
         }));
       `;
-      const filePath = path.join(tempDir, 'safe-cors.ts');
+      const filePath = path.join(tempDir, "safe-cors.ts");
       fs.writeFileSync(filePath, code);
 
-      const results = await scanner.scanFile(filePath);
+      const results = await scanner.scanFile(filePath, code, "typescript");
 
-      const corsIssue = results.find(r => r.category === 'cors-misconfiguration');
+      const corsIssue = results.find(
+        (r) => r.category === "cors-misconfiguration"
+      );
       expect(corsIssue).toBeUndefined();
     });
   });
 
-  describe('Comprehensive Scan', () => {
-    it('should detect multiple vulnerability types in one file', async () => {
+  describe("Comprehensive Scan", () => {
+    it("should detect multiple vulnerability types in one file", async () => {
       const code = `
         import { exec } from 'child_process';
         import crypto from 'crypto';
@@ -391,30 +419,34 @@ describe('OWASPScanner', () => {
           return { query, hash };
         }
       `;
-      const filePath = path.join(tempDir, 'multiple-vulns.ts');
+      const filePath = path.join(tempDir, "multiple-vulns.ts");
       fs.writeFileSync(filePath, code);
 
-      const results = await scanner.scanFile(filePath);
+      const results = await scanner.scanFile(filePath, code, "typescript");
 
       expect(results.length).toBeGreaterThanOrEqual(4);
-      expect(results.some(r => r.category === 'sql-injection')).toBe(true);
-      expect(results.some(r => r.category === 'command-injection')).toBe(true);
-      expect(results.some(r => r.category === 'weak-cryptography')).toBe(true);
-      expect(results.some(r => r.category === 'xss')).toBe(true);
+      expect(results.some((r) => r.category === "sql-injection")).toBe(true);
+      expect(results.some((r) => r.category === "command-injection")).toBe(
+        true
+      );
+      expect(results.some((r) => r.category === "weak-cryptography")).toBe(
+        true
+      );
+      expect(results.some((r) => r.category === "xss")).toBe(true);
     });
   });
 
-  describe('Performance', () => {
-    it('should scan large files efficiently', async () => {
+  describe("Performance", () => {
+    it("should scan large files efficiently", async () => {
       let code = 'import fs from "fs";\n';
       for (let i = 0; i < 1000; i++) {
         code += `function func${i}() { return ${i}; }\n`;
       }
-      const filePath = path.join(tempDir, 'large.ts');
+      const filePath = path.join(tempDir, "large.ts");
       fs.writeFileSync(filePath, code);
 
       const start = Date.now();
-      await scanner.scanFile(filePath);
+      await scanner.scanFile(filePath, code, "typescript");
       const duration = Date.now() - start;
 
       expect(duration).toBeLessThan(2000); // Should complete in < 2 seconds

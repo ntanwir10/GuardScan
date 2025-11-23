@@ -25,10 +25,18 @@ import { AICache } from '../core/ai-cache';
 import { repositoryManager } from '../core/repository';
 import { ProviderFactory } from '../providers/factory';
 import { ConfigManager } from '../core/config';
+import { createDebugLogger } from '../utils/debug-logger';
+import { createPerformanceTracker } from '../utils/performance-tracker';
+import { handleCommandError } from '../utils/error-handler';
+
+const logger = createDebugLogger('migrate');
+const perfTracker = createPerformanceTracker('guardscan migrate');
 
 interface MigrateCommandOptions {
   type?: 'framework' | 'language' | 'modernization' | 'dependency';
   target?: string;
+  from?: string;
+  to?: string;
   file?: string;
   dryRun?: boolean;
   autoFix?: boolean;
@@ -41,23 +49,23 @@ interface MigrateCommandOptions {
  * Main migrate command
  */
 export async function migrateCommand(options: MigrateCommandOptions): Promise<void> {
+  logger.debug('Migrate command started', { options });
+  perfTracker.start('migrate-total');
+  
   console.log(chalk.blue('\n🔄 GuardScan Migration Assistant\n'));
 
   const spinner = ora('Initializing migration assistant...').start();
 
   try {
     // Load configuration
+    perfTracker.start('load-config');
     const configManager = new ConfigManager();
-    let config;
-    try {
-      config = configManager.load();
-    } catch {
-      spinner.warn('No configuration found. Initializing...');
-      config = configManager.init();
-    }
+    const config = configManager.loadOrInit();
+    perfTracker.end('load-config');
+    logger.debug('Config loaded', { provider: config.provider });
 
     // Check AI provider
-    if (!config.provider || !config.apiKey) {
+    if (!config.provider || config.provider === 'none' || !config.apiKey) {
       spinner.fail('No AI provider configured');
       console.log(chalk.yellow('\nMigration features require an AI provider.'));
       console.log(chalk.gray('Configure with: guardscan config\n'));
@@ -74,15 +82,20 @@ export async function migrateCommand(options: MigrateCommandOptions): Promise<vo
     const cache = new AICache(repoInfo.repoId);
     const engine = new MigrationAssistantEngine(provider, indexer, cache, repoInfo.path);
 
+    // Use --from and --to if provided, otherwise use --target
+    const migrationTarget = options.from && options.to 
+      ? `${options.from}-to-${options.to}` 
+      : options.target;
+
     // Execute migration based on type
     if (options.report) {
       await generateMigrationReport(engine, options);
-    } else if (options.type === 'framework' && options.target) {
-      await performFrameworkMigration(engine, options.target as FrameworkMigration, options);
-    } else if (options.type === 'language' && options.target === 'typescript') {
+    } else if (options.type === 'framework' && migrationTarget) {
+      await performFrameworkMigration(engine, migrationTarget as FrameworkMigration, options);
+    } else if (options.type === 'language' && (migrationTarget === 'typescript' || (options.from === 'javascript' && options.to === 'typescript'))) {
       await performJsToTsMigration(engine, options);
-    } else if (options.type === 'modernization' && options.target) {
-      await performModernization(engine, options.target as ModernizationType, options);
+    } else if (options.type === 'modernization' && migrationTarget) {
+      await performModernization(engine, migrationTarget as ModernizationType, options);
     } else if (options.type === 'dependency') {
       await performDependencyAnalysis(engine, options);
     } else {
@@ -92,8 +105,7 @@ export async function migrateCommand(options: MigrateCommandOptions): Promise<vo
 
   } catch (error: any) {
     spinner.fail('Migration failed');
-    console.error(chalk.red('\n✗ Error:'), error.message);
-    process.exit(1);
+    handleCommandError(error, 'Migration');
   }
 }
 

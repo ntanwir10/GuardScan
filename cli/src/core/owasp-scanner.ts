@@ -96,13 +96,13 @@ export class OwaspScanner {
       const lineNum = i + 1;
 
       // A01: Broken Access Control
-      findings.push(...this.checkAccessControl(line, filePath, lineNum, language));
+      findings.push(...this.checkAccessControl(line, filePath, lineNum, language, lines, i));
 
       // A02: Cryptographic Failures
-      findings.push(...this.checkCryptography(line, filePath, lineNum, language));
+      findings.push(...this.checkCryptography(line, filePath, lineNum, language, lines, i));
 
       // A03: Injection
-      findings.push(...this.checkInjection(line, filePath, lineNum, language));
+      findings.push(...this.checkInjection(line, filePath, lineNum, language, lines, i));
 
       // A04: Insecure Design
       findings.push(...this.checkInsecureDesign(line, filePath, lineNum, language));
@@ -131,18 +131,61 @@ export class OwaspScanner {
   /**
    * A01: Broken Access Control
    */
-  private checkAccessControl(line: string, file: string, lineNum: number, language: string): Finding[] {
+  private checkAccessControl(line: string, file: string, lineNum: number, language: string, lines?: string[], lineIndex?: number): Finding[] {
     const findings: Finding[] = [];
 
     // Path traversal
     if (/\.\.\/|\.\.\\/.test(line) && /file|path|dir|read|write/i.test(line)) {
       findings.push({
         severity: 'high',
-        category: 'OWASP A01 - Broken Access Control',
+        category: 'path-traversal',
         file,
         line: lineNum,
         description: 'Potential path traversal vulnerability',
         suggestion: 'Validate and sanitize file paths, use allowlist',
+      });
+    }
+    // Path concatenation with user input (filename, path variables)
+    // Match file operations with string concatenation, but exclude sanitized paths
+    // Check if path is sanitized using path.basename, path.join, path.resolve, path.normalize
+    // Look at current line and previous lines for sanitization
+    const contextLines: string[] = [];
+    if (lines && lineIndex !== undefined) {
+      // Check current line and up to 3 previous lines
+      for (let j = Math.max(0, lineIndex - 3); j <= lineIndex; j++) {
+        contextLines.push(lines[j]);
+      }
+    } else {
+      contextLines.push(line);
+    }
+    const context = contextLines.join('\n');
+    
+    const isSanitized = /path\.(basename|join|resolve|normalize)/.test(context) ||
+                        /path\.basename\(/.test(context) ||
+                        /path\.join\(/.test(context) ||
+                        /path\.resolve\(/.test(context) ||
+                        /path\.normalize\(/.test(context);
+    
+    if (!isSanitized && /(readFile|writeFile|readFileSync|writeFileSync|open|createReadStream|createWriteStream)\s*\([^)]*\+/.test(line)) {
+      findings.push({
+        severity: 'high',
+        category: 'path-traversal',
+        file,
+        line: lineNum,
+        description: 'File operation with user-controlled path - potential path traversal',
+        suggestion: 'Validate and sanitize file paths, use path.join() and restrict to allowed directories',
+      });
+    }
+    // Also check for path variables in file operations (but exclude sanitized)
+    if (!isSanitized && /(readFile|writeFile|readFileSync|writeFileSync|open|createReadStream|createWriteStream)\s*\([^)]*filename|path/i.test(line) && 
+        /\+/.test(line)) {
+      findings.push({
+        severity: 'high',
+        category: 'path-traversal',
+        file,
+        line: lineNum,
+        description: 'File operation with filename/path variable - potential path traversal',
+        suggestion: 'Validate and sanitize file paths, use path.join() and restrict to allowed directories',
       });
     }
 
@@ -178,14 +221,24 @@ export class OwaspScanner {
   /**
    * A02: Cryptographic Failures
    */
-  private checkCryptography(line: string, file: string, lineNum: number, language: string): Finding[] {
+  private checkCryptography(line: string, file: string, lineNum: number, language: string, lines?: string[], lineIndex?: number): Finding[] {
     const findings: Finding[] = [];
 
     // Weak hashing algorithms
-    if (/\bmd5\b|\bsha1\b/i.test(line)) {
+    if (/\bmd5\b/i.test(line)) {
       findings.push({
         severity: 'high',
-        category: 'OWASP A02 - Cryptographic Failures',
+        category: 'weak-cryptography',
+        file,
+        line: lineNum,
+        description: 'MD5 is cryptographically broken',
+        suggestion: 'Use SHA-256 or stronger hashing algorithm',
+      });
+    }
+    if (/\bsha1\b/i.test(line)) {
+      findings.push({
+        severity: 'high',
+        category: 'weak-cryptography',
         file,
         line: lineNum,
         description: 'Weak cryptographic algorithm (MD5/SHA1)',
@@ -206,15 +259,29 @@ export class OwaspScanner {
     }
 
     // Insecure random for security
-    if (/Math\.random\(\)/.test(line) && /(token|session|password|key)/i.test(line)) {
-      findings.push({
-        severity: 'high',
-        category: 'OWASP A02 - Cryptographic Failures',
-        file,
-        line: lineNum,
-        description: 'Insecure random used for security-sensitive operation',
-        suggestion: 'Use crypto.randomBytes() or equivalent',
-      });
+    // Check current line and next few lines for context
+    if (/Math\.random\(\)/.test(line)) {
+      const contextLines = [line];
+      if (lines && lineIndex !== undefined) {
+        if (lines[lineIndex + 1]) contextLines.push(lines[lineIndex + 1]);
+        if (lines[lineIndex + 2]) contextLines.push(lines[lineIndex + 2]);
+        // Also check previous lines for function name
+        if (lineIndex > 0 && lines[lineIndex - 1]) contextLines.push(lines[lineIndex - 1]);
+        if (lineIndex > 1 && lines[lineIndex - 2]) contextLines.push(lines[lineIndex - 2]);
+      }
+      const context = contextLines.join(' ');
+      
+      if (/(token|session|password|key|id|secret|generateToken|generateId|generateSecret)/i.test(context) ||
+          /function\s+\w*(token|id|secret|session|key)/i.test(context)) {
+        findings.push({
+          severity: 'high',
+          category: 'insecure-random',
+          file,
+          line: lineNum,
+          description: 'Insecure random used for security-sensitive operation',
+          suggestion: 'Use crypto.randomBytes() or equivalent',
+        });
+      }
     }
 
     return findings;
@@ -223,14 +290,14 @@ export class OwaspScanner {
   /**
    * A03: Injection
    */
-  private checkInjection(line: string, file: string, lineNum: number, language: string): Finding[] {
+  private checkInjection(line: string, file: string, lineNum: number, language: string, lines?: string[], lineIndex?: number): Finding[] {
     const findings: Finding[] = [];
 
     // SQL Injection
     if (/(SELECT|INSERT|UPDATE|DELETE|DROP|CREATE).*\+/.test(line) || /\$\{.*\}.*FROM/.test(line)) {
       findings.push({
-        severity: 'critical',
-        category: 'OWASP A03 - Injection',
+        severity: 'high',
+        category: 'sql-injection',
         file,
         line: lineNum,
         description: 'Potential SQL injection via string concatenation',
@@ -252,14 +319,38 @@ export class OwaspScanner {
 
     // Command Injection
     if (/(exec|spawn|system|popen)\s*\(.*\+|`.*\$\{/.test(line)) {
+      const severity = /exec\s*\(/.test(line) ? 'critical' : 'medium';
       findings.push({
-        severity: 'critical',
-        category: 'OWASP A03 - Injection',
+        severity,
+        category: 'command-injection',
         file,
         line: lineNum,
         description: 'Potential command injection',
         suggestion: 'Avoid shell execution, use safe APIs',
       });
+    }
+    // Also flag spawn/exec with user input variables (even if using array syntax)
+    // Match spawn/exec with variables in arguments
+    if (/(spawn|exec)\s*\(/.test(line)) {
+      // Check if line contains a variable (identifier) that's not a string literal
+      // Simple heuristic: if it has brackets with a variable inside, or comma-separated args with variables
+      const hasVariableArg = /\[.*[a-zA-Z_$][a-zA-Z0-9_$]*.*\]/.test(line) || // Array with variable
+                            /,\s*[a-zA-Z_$][a-zA-Z0-9_$]*/.test(line); // Comma followed by variable
+      
+      // Don't flag if it's just hardcoded strings: spawn('cmd', ['arg'])
+      const isHardcodedOnly = /(spawn|exec)\s*\(['"][^'"]*['"],\s*\[['"][^'"]*['"]\]/.test(line);
+      
+      if (hasVariableArg && !isHardcodedOnly) {
+        const severity = /exec\s*\(/.test(line) ? 'critical' : 'medium';
+        findings.push({
+          severity,
+          category: 'command-injection',
+          file,
+          line: lineNum,
+          description: 'Command execution with variable input - review for injection risk',
+          suggestion: 'Validate and sanitize input, prefer whitelisting',
+        });
+      }
     }
 
     // LDAP Injection
@@ -295,6 +386,18 @@ export class OwaspScanner {
         line: lineNum,
         description: 'XML parsing without XXE protection',
         suggestion: 'Disable external entity processing',
+      });
+    }
+
+    // XSS (Cross-Site Scripting)
+    if (/\.innerHTML\s*=/.test(line) || /dangerouslySetInnerHTML/.test(line)) {
+      findings.push({
+        severity: 'high',
+        category: 'xss',
+        file,
+        line: lineNum,
+        description: 'Potential XSS vulnerability via innerHTML or dangerouslySetInnerHTML',
+        suggestion: 'Use textContent or sanitize HTML input',
       });
     }
 
@@ -353,10 +456,10 @@ export class OwaspScanner {
     }
 
     // CORS misconfiguration
-    if (/Access-Control-Allow-Origin.*\*/.test(line)) {
+    if (/Access-Control-Allow-Origin.*\*|origin.*['"]\*['"]|cors\(.*origin.*\*/.test(line)) {
       findings.push({
         severity: 'medium',
-        category: 'OWASP A05 - Security Misconfiguration',
+        category: 'cors-misconfiguration',
         file,
         line: lineNum,
         description: 'CORS allows all origins (*)',
@@ -384,6 +487,21 @@ export class OwaspScanner {
    */
   private checkAuthentication(line: string, file: string, lineNum: number, language: string): Finding[] {
     const findings: Finding[] = [];
+
+    // Missing authentication middleware on routes
+    if (/app\.(get|post|put|delete|patch)\s*\(['"]\/admin|['"]\/api\/admin/i.test(line)) {
+      // Check if next line or same line has auth middleware
+      if (!/auth|authenticate|authorize|middleware|requireAuth/i.test(line)) {
+        findings.push({
+          severity: 'high',
+          category: 'missing-authentication',
+          file,
+          line: lineNum,
+          description: 'Admin route without authentication middleware',
+          suggestion: 'Add authentication middleware before handling requests',
+        });
+      }
+    }
 
     // Weak session management
     if (/session.*cookie.*secure.*false|httpOnly.*false/i.test(line)) {
@@ -439,6 +557,30 @@ export class OwaspScanner {
         line: lineNum,
         description: 'Insecure deserialization',
         suggestion: 'Validate data before deserialization, use safe loaders',
+      });
+    }
+
+    // Unsafe JSON.parse with user input
+    if (/JSON\.parse\s*\(.*req\.|JSON\.parse\s*\(.*input|JSON\.parse\s*\(.*params/.test(line)) {
+      findings.push({
+        severity: 'high',
+        category: 'dangerous-function',
+        file,
+        line: lineNum,
+        description: 'Unsafe JSON.parse with user input',
+        suggestion: 'Validate JSON structure before parsing',
+      });
+    }
+
+    // eval() usage
+    if (/\beval\s*\(/.test(line)) {
+      findings.push({
+        severity: 'critical',
+        category: 'dangerous-function',
+        file,
+        line: lineNum,
+        description: 'Use of eval() is dangerous',
+        suggestion: 'Avoid eval(), use safer alternatives',
       });
     }
 

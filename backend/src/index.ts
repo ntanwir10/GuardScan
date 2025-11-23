@@ -3,6 +3,7 @@ import { handleTelemetry } from "./handlers/telemetry";
 import { handleHealth } from "./handlers/health";
 import { handleMonitoring, handleMonitoringStats } from "./handlers/monitoring";
 import { rateLimiters } from "./utils/rate-limiter";
+import { REQUEST_LIMITS } from "./constants";
 
 /**
  * Get CORS headers with proper origin validation
@@ -50,9 +51,6 @@ function getCorsHeaders(request: Request, env: Env): Headers {
  * Optional telemetry for product analytics and debugging
  * Can be completely disabled with --no-telemetry flag
  */
-// Constants (hardcoded to work on free plan)
-const MAX_REQUEST_SIZE_MB = 10; // 10MB max request size
-const MAX_REQUEST_SIZE_BYTES = MAX_REQUEST_SIZE_MB * 1024 * 1024;
 
 export interface Env {
   // Database (optional - only for telemetry/monitoring)

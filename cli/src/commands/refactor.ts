@@ -10,6 +10,12 @@ import ora from 'ora';
 import { ConfigManager } from '../core/config';
 import { repositoryManager } from '../core/repository';
 import { ProviderFactory } from '../providers/factory';
+import { createDebugLogger } from '../utils/debug-logger';
+import { createPerformanceTracker } from '../utils/performance-tracker';
+import { handleCommandError } from '../utils/error-handler';
+
+const logger = createDebugLogger('refactor');
+const perfTracker = createPerformanceTracker('guardscan refactor');
 import {
   RefactoringSuggestionsEngine,
   CodeSmell,
@@ -32,24 +38,21 @@ interface RefactorOptions {
 }
 
 export async function refactorCommand(options: RefactorOptions): Promise<void> {
+  logger.debug('Refactor command started', { options });
+  perfTracker.start('refactor-total');
+  
   console.log(chalk.blue('\n🔧 GuardScan Refactoring Assistant\n'));
 
   // Load configuration
+  perfTracker.start('load-config');
   const configManager = new ConfigManager();
-  let config;
-  try {
-    config = configManager.load();
-  } catch {
-    console.log(chalk.yellow('⚠ No configuration found. Initializing...'));
-    config = configManager.init();
-  }
+  const config = configManager.loadOrInit();
+  perfTracker.end('load-config');
+  logger.debug('Config loaded', { provider: config.provider });
 
   // Check AI provider
-  if (!config.provider || !config.apiKey) {
-    console.log(chalk.yellow('\n⚠ AI provider not configured.'));
-    console.log(chalk.gray('Refactoring features require an AI provider.'));
-    console.log(chalk.gray('\nConfigure with: guardscan config\n'));
-    process.exit(1);
+  if (!config.provider || config.provider === 'none' || !config.apiKey) {
+    handleCommandError(new Error('AI provider not configured. Refactoring features require an AI provider. Configure with: guardscan config'), 'Refactor');
   }
 
   // Get repository info
@@ -171,8 +174,7 @@ async function generateFullReport(
 
   } catch (error: any) {
     spinner.fail('Analysis failed');
-    console.error(chalk.red(`\nError: ${error.message}\n`));
-    process.exit(1);
+    handleCommandError(error, 'Refactoring');
   }
 }
 
@@ -223,8 +225,7 @@ async function analyzeCodeSmells(
     console.log('\n');
   } catch (error: any) {
     spinner.fail('Analysis failed');
-    console.error(chalk.red(`\nError: ${error.message}\n`));
-    process.exit(1);
+    handleCommandError(error, 'Refactoring');
   }
 }
 
@@ -264,8 +265,7 @@ async function suggestPatterns(
 
   } catch (error: any) {
     spinner.fail('Analysis failed');
-    console.error(chalk.red(`\nError: ${error.message}\n`));
-    process.exit(1);
+    handleCommandError(error, 'Refactoring');
   }
 }
 

@@ -2,6 +2,12 @@ import chalk from 'chalk';
 import { configManager } from '../core/config';
 import { repositoryManager } from '../core/repository';
 import { ProviderFactory } from '../providers/factory';
+import { createDebugLogger } from '../utils/debug-logger';
+import { createPerformanceTracker } from '../utils/performance-tracker';
+import { handleCommandError } from '../utils/error-handler';
+
+const logger = createDebugLogger('docs');
+const perfTracker = createPerformanceTracker('guardscan docs');
 import { DocsGenerator, DocumentationType, DocumentationOptions } from '../features/docs-generator';
 import { CodebaseIndexer } from '../core/codebase-indexer';
 import { AICache } from '../core/ai-cache';
@@ -15,9 +21,15 @@ interface DocsCommandOptions {
 }
 
 export async function docsCommand(options: DocsCommandOptions): Promise<void> {
+  logger.debug('Docs command started', { options });
+  perfTracker.start('docs-total');
+  
   try {
     // Load config
+    perfTracker.start('load-config');
     const config = configManager.loadOrInit();
+    perfTracker.end('load-config');
+    logger.debug('Config loaded', { provider: config.provider });
 
     // Get repository info
     const repoInfo = repositoryManager.getRepoInfo();
@@ -25,8 +37,8 @@ export async function docsCommand(options: DocsCommandOptions): Promise<void> {
 
     console.log(chalk.blue('📚 Generating documentation with AI...'));
 
-    // Check if AI provider is configured
-    if (!config.provider || !config.apiKey) {
+    // Check if AI provider is configured (must not be 'none' and must have API key)
+    if (!config.provider || config.provider === 'none' || !config.apiKey) {
       console.log(chalk.yellow('\n⚠ AI provider not configured. Run `guardscan config` to set up.'));
       return;
     }
@@ -36,16 +48,14 @@ export async function docsCommand(options: DocsCommandOptions): Promise<void> {
     const validTypes: DocumentationType[] = ['readme', 'api', 'architecture', 'contributing', 'changelog'];
 
     if (!validTypes.includes(docType)) {
-      console.error(chalk.red(`\n✗ Invalid type. Must be one of: ${validTypes.join(', ')}`));
-      process.exit(1);
+      handleCommandError(new Error(`Invalid type. Must be one of: ${validTypes.join(', ')}`), 'Documentation');
     }
 
     // Validate target audience
     const validAudiences = ['developer', 'user', 'contributor'];
     const audience = options.audience?.toLowerCase() || 'user';
     if (!validAudiences.includes(audience)) {
-      console.error(chalk.red(`\n✗ Invalid audience. Must be one of: ${validAudiences.join(', ')}`));
-      process.exit(1);
+      handleCommandError(new Error(`Invalid audience. Must be one of: ${validAudiences.join(', ')}`), 'Documentation');
     }
 
     // Create AI provider

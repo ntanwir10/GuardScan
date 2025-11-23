@@ -9,6 +9,12 @@ import { telemetryManager } from '../core/telemetry';
 import { apiClient } from '../utils/api-client';
 import { isOnline } from '../utils/network';
 import { displaySimpleBanner } from '../utils/ascii-art';
+import { createDebugLogger } from '../utils/debug-logger';
+import { createPerformanceTracker } from '../utils/performance-tracker';
+import { handleCommandError } from '../utils/error-handler';
+
+const logger = createDebugLogger('run');
+const perfTracker = createPerformanceTracker('guardscan run');
 import { createProgressBar } from '../utils/progress';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -20,16 +26,24 @@ interface RunOptions {
 }
 
 export async function runCommand(options: RunOptions): Promise<void> {
+  logger.debug('Run command started', { options });
+  perfTracker.start('run-total');
   const startTime = Date.now();
 
   displaySimpleBanner('run');
 
   try {
     // Load config
+    perfTracker.start('load-config');
     const config = configManager.loadOrInit();
+    perfTracker.end('load-config');
+    logger.debug('Config loaded', { provider: config.provider });
 
     // Get repository info
+    perfTracker.start('detect-repository');
     const repoInfo = repositoryManager.getRepoInfo();
+    perfTracker.end('detect-repository');
+    logger.debug('Repository detected', { name: repoInfo.name, repoId: repoInfo.repoId });
     console.log(chalk.gray(`Repository: ${repoInfo.name}`));
     if (repoInfo.branch) {
       console.log(chalk.gray(`Branch: ${repoInfo.branch}`));
@@ -42,12 +56,21 @@ export async function runCommand(options: RunOptions): Promise<void> {
 
     // Step 1: Count LOC
     progressBar.update(0, { status: 'Analyzing codebase...' });
+    perfTracker.start('count-loc');
     const locResult = await locCounter.count(options.files);
+    perfTracker.end('count-loc');
+    logger.debug('LOC counted', { fileCount: locResult.fileCount, codeLines: locResult.codeLines });
     progressBar.update(1, { status: `Analyzed ${locResult.fileCount} files` });
 
     // Check if AI is available and requested
-    const provider = config.provider ? ProviderFactory.create(config.provider, config.apiKey, config.apiEndpoint) : null;
+    perfTracker.start('init-ai-provider');
+    // Only create provider if it's configured and not 'none'
+    const provider = (config.provider && config.provider !== 'none' && config.apiKey) 
+      ? ProviderFactory.create(config.provider, config.apiKey, config.apiEndpoint) 
+      : null;
     const aiAvailable = provider && provider.isAvailable();
+    perfTracker.end('init-ai-provider');
+    logger.debug('AI provider initialized', { provider: config.provider, available: !!provider, aiAvailable });
     const useAI = options.withAi !== false && aiAvailable; // Use AI by default if available
 
     // Step 2: Run review
@@ -57,8 +80,18 @@ export async function runCommand(options: RunOptions): Promise<void> {
       // AI-ENHANCED REVIEW (User brings own API key)
       progressBar.update(1, { status: 'Running AI-enhanced review...' });
 
+      perfTracker.start('prepare-context');
       const context = await prepareReviewContext(repoInfo, locResult, options.files);
+      perfTracker.end('prepare-context');
+      logger.debug('Review context prepared', { contextLength: context.length });
 
+      perfTracker.start('ai-api-call');
+      logger.debug('Sending AI request', { 
+        model: provider.getName(), 
+        contextLength: context.length,
+        provider: config.provider 
+      });
+      
       const aiResponse = await provider.chat([
         {
           role: 'system',
@@ -78,18 +111,36 @@ Provide constructive feedback with specific suggestions for improvement.`,
         },
       ]);
 
+      const aiCallDuration = perfTracker.end('ai-api-call');
+      logger.performance('ai-api-call', aiCallDuration, { 
+        model: aiResponse.model, 
+        tokensUsed: aiResponse.usage?.totalTokens,
+        provider: config.provider
+      });
+      logger.debug('AI response received', { 
+        model: aiResponse.model,
+        responseLength: aiResponse.content.length,
+        tokensUsed: aiResponse.usage?.totalTokens
+      });
+
       reviewResult = parseAIResponse(aiResponse.content, repoInfo, locResult, config.provider, aiResponse.model, Date.now() - startTime);
     } else {
       // STATIC ANALYSIS (No AI configured)
       progressBar.update(1, { status: 'Running static analysis...' });
+      perfTracker.start('static-analysis');
       reviewResult = await runStaticAnalysis(repoInfo, locResult, options.files);
+      perfTracker.end('static-analysis');
+      logger.debug('Static analysis completed', { findingsCount: reviewResult.findings.length });
     }
 
     progressBar.update(2, { status: 'Analysis complete' });
 
     // Step 3: Generate report
     progressBar.update(2, { status: 'Generating report...' });
+    perfTracker.start('generate-report');
     const reportPath = reporter.saveReport(reviewResult, 'markdown', undefined, 'ai-review');
+    perfTracker.end('generate-report');
+    logger.debug('Report generated', { reportPath });
     progressBar.update(3, { status: 'Complete' });
     progressBar.stop();
 
@@ -103,18 +154,28 @@ Provide constructive feedback with specific suggestions for improvement.`,
 
     // Record telemetry (only if enabled)
     if (config.telemetryEnabled) {
+      perfTracker.start('record-telemetry');
       await telemetryManager.record({
         action: 'review',
         loc: locResult.codeLines,
         durationMs: Date.now() - startTime,
         model: reviewResult.metadata.model,
       });
+      perfTracker.end('record-telemetry');
     }
+
+    perfTracker.end('run-total');
+    logger.debug('Run command completed successfully', { 
+      duration: Date.now() - startTime,
+      findingsCount: reviewResult.findings.length
+    });
+    perfTracker.displaySummary();
 
     console.log();
   } catch (error) {
-    console.error(chalk.red('\n✗ Code review failed:'), error);
-    process.exit(1);
+    perfTracker.end('run-total');
+    perfTracker.displaySummary();
+    handleCommandError(error, 'Code review');
   }
 }
 
@@ -383,6 +444,8 @@ This analysis includes:
  * Prepare context for AI review
  */
 async function prepareReviewContext(repoInfo: any, locResult: any, filePatterns?: string[]): Promise<string> {
+  logger.debug('Preparing review context', { fileCount: locResult.fileCount, codeLines: locResult.codeLines });
+  
   let context = `# Code Review Request\n\n`;
   context += `Repository: ${repoInfo.name}\n`;
   context += `Total Files: ${locResult.fileCount}\n`;

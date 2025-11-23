@@ -2,6 +2,12 @@ import chalk from 'chalk';
 import { configManager } from '../core/config';
 import { repositoryManager } from '../core/repository';
 import { ProviderFactory } from '../providers/factory';
+import { createDebugLogger } from '../utils/debug-logger';
+import { createPerformanceTracker } from '../utils/performance-tracker';
+import { handleCommandError } from '../utils/error-handler';
+
+const logger = createDebugLogger('commit');
+const perfTracker = createPerformanceTracker('guardscan commit');
 import { CommitMessageGenerator } from '../features/commit-generator';
 import { AICache } from '../core/ai-cache';
 import { exec } from 'child_process';
@@ -18,9 +24,15 @@ interface CommitOptions {
 }
 
 export async function commitCommand(options: CommitOptions): Promise<void> {
+  logger.debug('Commit command started', { options });
+  perfTracker.start('commit-total');
+  
   try {
     // Load config
+    perfTracker.start('load-config');
     const config = configManager.loadOrInit();
+    perfTracker.end('load-config');
+    logger.debug('Config loaded', { provider: config.provider });
 
     // Get repository info
     const repoInfo = repositoryManager.getRepoInfo();
@@ -29,7 +41,7 @@ export async function commitCommand(options: CommitOptions): Promise<void> {
     console.log(chalk.blue('🤖 Generating commit message...'));
 
     // Check if AI provider is configured
-    if (!config.provider || !config.apiKey) {
+    if (!config.provider || config.provider === 'none' || !config.apiKey) {
       console.log(chalk.yellow('\n⚠ AI provider not configured. Run `guardscan config` to set up.'));
       console.log(chalk.gray('  Falling back to standard git commit.'));
       return;
@@ -71,8 +83,7 @@ export async function commitCommand(options: CommitOptions): Promise<void> {
 
         console.log(chalk.green('\n✓ Commit created successfully'));
       } catch (error) {
-        console.error(chalk.red('\n✗ Failed to create commit:'), error);
-        process.exit(1);
+        handleCommandError(error, 'Commit creation');
       }
     } else {
       // Interactive mode - ask user to confirm
@@ -84,7 +95,6 @@ export async function commitCommand(options: CommitOptions): Promise<void> {
     }
 
   } catch (error) {
-    console.error(chalk.red('\n✗ Failed to generate commit message:'), error);
-    process.exit(1);
+    handleCommandError(error, 'Commit message generation');
   }
 }
