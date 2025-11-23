@@ -66,6 +66,34 @@ GuardScan - 100% Free & Open Source Privacy-First Security Scanning and AI Code 
 
 ---
 
+## [1.0.3] - 2025-01-XX
+
+### Fixed
+
+#### Version Checking
+
+- **Version Comparison Bug**: Fixed incorrect update notification showing "Current: 1.0.2 → Latest: 1.0.1" when current version was actually newer. Replaced string comparison with proper semantic version comparison using the `semver` library.
+- **Version Source**: Changed version check to use npm registry instead of GitHub releases, ensuring we check against what's actually published and available to users via npm.
+
+### Changed
+
+#### Version Management
+
+- **Semantic Versioning**: Now uses the `semver` library for proper version comparison, handling edge cases like pre-release versions, build metadata, and invalid versions.
+- **Update Source**: Version checks now query `https://registry.npmjs.org/guardscan/latest` instead of GitHub releases API for more accurate version information.
+
+#### Backend Configuration
+
+- **Production Deployment**: Updated deployment script to use `--env production` flag when deploying to production, ensuring the API always runs in production mode.
+
+### Technical Details
+
+- **Dependencies**: Added `semver@^7.7.3` and `@types/semver@^7.7.1` for proper semantic version comparison
+- **Breaking Changes**: None
+- **Migration**: No migration required from v1.0.2
+
+---
+
 ## [1.0.2] - 2025-11-22
 
 ### Fixed

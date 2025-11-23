@@ -2,6 +2,7 @@ import axios from "axios";
 import chalk from "chalk";
 import * as fs from "fs";
 import * as path from "path";
+import * as semver from "semver";
 import { ConfigManager } from "../core/config";
 import { API_CONSTANTS } from "../constants/api-constants";
 import { TELEMETRY_CONSTANTS } from "../constants/telemetry-constants";
@@ -12,6 +13,18 @@ const CURRENT_VERSION = packageJson.version;
 interface VersionInfo {
   latest: string;
   checkedAt: string;
+}
+
+/**
+ * Check if a version is newer than the current version
+ * Uses semver library for proper semantic version comparison
+ */
+function isNewerVersion(latest: string, current: string): boolean {
+  // Validate versions first - if invalid, don't show update
+  if (!semver.valid(latest) || !semver.valid(current)) {
+    return false;
+  }
+  return semver.gt(latest, current);
 }
 
 /**
@@ -61,18 +74,19 @@ export async function checkForUpdates(): Promise<void> {
 
       if (hoursSinceCheck < API_CONSTANTS.VERSION_CACHE_HOURS) {
         // Use cached version
-        if (cache.latest !== CURRENT_VERSION) {
+        if (isNewerVersion(cache.latest, CURRENT_VERSION)) {
           displayUpdateMessage(cache.latest);
         }
         return;
       }
     }
 
-    // Fetch latest version
+    // Fetch latest version from npm registry
     const response = await axios.get(API_CONSTANTS.VERSION_CHECK_URL, {
       timeout: API_CONSTANTS.VERSION_CHECK_TIMEOUT,
     });
-    const latestVersion = response.data.tag_name.replace("v", "");
+    // npm registry returns { version: "1.0.2" } - no "v" prefix needed
+    const latestVersion = response.data.version;
 
     // Cache the result (defensive write)
     const versionInfo: VersionInfo = {
@@ -89,8 +103,8 @@ export async function checkForUpdates(): Promise<void> {
       // Continue anyway - version check still works, just won't cache
     }
 
-    // Display message if update available
-    if (latestVersion !== CURRENT_VERSION) {
+    // Display message if update available (only if latest is actually newer)
+    if (isNewerVersion(latestVersion, CURRENT_VERSION)) {
       displayUpdateMessage(latestVersion);
     }
   } catch (error) {
