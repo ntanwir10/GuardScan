@@ -1,17 +1,12 @@
 import { apiClient, TelemetryEvent } from "../utils/api-client";
-import { Config, configManager } from "./config";
+import { AIProvider, Config, configManager } from "./config";
 import * as crypto from "crypto";
 import * as path from "path";
 import * as fs from "fs";
 import { repositoryManager } from "./repository";
+import { TELEMETRY_CONSTANTS } from "../constants/telemetry-constants";
 
-const CACHE_DIR = path.join(
-  process.env.HOME || process.env.USERPROFILE || "",
-  ".guardscan",
-  "cache"
-);
-const TELEMETRY_FILE = path.join(CACHE_DIR, "telemetry.json");
-const BATCH_SIZE = 50;
+const TELEMETRY_FILE = path.join(configManager.getCacheDir(), "telemetry.json");
 
 // Import package.json to get version
 const packageJson = require("../../package.json");
@@ -31,8 +26,8 @@ export class TelemetryManager {
   async record(event: Omit<TelemetryEvent, "timestamp">): Promise<void> {
     const config = this.config;
 
-    // Skip if telemetry disabled
-    if (!config.telemetryEnabled) {
+    // Skip if telemetry disabled or --no-telemetry flag is set
+    if (!config.telemetryEnabled || process.env.GUARDSCAN_NO_TELEMETRY === 'true') {
       return;
     }
 
@@ -49,7 +44,10 @@ export class TelemetryManager {
     this.saveBatch(batch);
 
     // Auto-sync if batch is large enough or offline mode is disabled
-    if (batch.events.length >= BATCH_SIZE && !config.offlineMode) {
+    if (
+      batch.events.length >= TELEMETRY_CONSTANTS.BATCH_SIZE &&
+      !config.offlineMode
+    ) {
       await this.sync();
     }
   }
@@ -60,8 +58,8 @@ export class TelemetryManager {
   async sync(): Promise<void> {
     const config = this.config;
 
-    // Skip if telemetry disabled or offline mode
-    if (!config.telemetryEnabled || config.offlineMode) {
+    // Skip if telemetry disabled, offline mode, or --no-telemetry flag is set
+    if (!config.telemetryEnabled || config.offlineMode || process.env.GUARDSCAN_NO_TELEMETRY === 'true') {
       return;
     }
 
@@ -94,7 +92,7 @@ export class TelemetryManager {
       batch.lastSyncAt = new Date().toISOString();
       this.saveBatch(batch);
     } catch (error) {
-      // Silent fail - don't disrupt user experience
+      // Telemetry sync failed - logged for debugging but non-blocking
       // Batch will be retried next time
       console.error("Telemetry sync failed:", error);
     }
@@ -138,4 +136,59 @@ export class TelemetryManager {
   }
 }
 
-export const telemetryManager = new TelemetryManager(configManager.load());
+// Safe initialization of telemetry manager
+// Uses loadOrInit() to handle first-time users gracefully
+function initializeTelemetryManager(): TelemetryManager {
+  const debug = process.env.GUARDSCAN_DEBUG === "true";
+
+  try {
+    if (debug) console.error("[TELEMETRY] Initializing telemetryManager...");
+
+    if (configManager.exists()) {
+      if (debug) console.error("[TELEMETRY] Config exists, loading...");
+      try {
+        const config = configManager.load();
+        if (debug) console.error("[TELEMETRY] Config loaded successfully");
+        return new TelemetryManager(config);
+      } catch (error) {
+        if (debug)
+          console.error(
+            "[TELEMETRY] Config load failed, using defaults:",
+            error
+          );
+        // Fall through to default config
+      }
+    } else {
+      if (debug)
+        console.error("[TELEMETRY] Config does not exist, using defaults");
+    }
+
+    // Use default config if no config exists or load failed
+    return new TelemetryManager({
+      clientId: "uninitialized",
+      provider: "none" as AIProvider,
+      telemetryEnabled: false,
+      offlineMode: true,
+      createdAt: new Date().toISOString(),
+      lastUsed: new Date().toISOString(),
+    });
+  } catch (error) {
+    if (debug)
+      console.error(
+        "[TELEMETRY] Initialization failed, using fallback:",
+        error
+      );
+
+    // Absolute fallback
+    return new TelemetryManager({
+      clientId: "uninitialized",
+      provider: "none" as AIProvider,
+      telemetryEnabled: false,
+      offlineMode: true,
+      createdAt: new Date().toISOString(),
+      lastUsed: new Date().toISOString(),
+    });
+  }
+}
+
+export const telemetryManager = initializeTelemetryManager();

@@ -53,6 +53,30 @@ guardscan run
 guardscan status
 ```
 
+### 🐳 Docker / Alpine Linux
+
+For Docker environments, especially Alpine Linux:
+
+```bash
+# Install dependencies first
+apk add --no-cache python3 make g++ pkgconfig cairo-dev pango-dev \
+  libjpeg-turbo-dev giflib-dev pixman-dev freetype-dev build-base git
+
+# Install GuardScan
+npm install -g guardscan
+
+# Set home directory (important for Docker)
+export GUARDSCAN_HOME=/app/.guardscan
+
+# Initialize
+guardscan init
+```
+
+**Documentation:**
+
+- 📖 [Comprehensive Docker Guide](./docs/DOCKER_GUIDE.md) - Complete guide for Linux, macOS, and Windows
+- 🐧 [Docker & Alpine Quick Reference](./docs/DOCKER_ALPINE_GUIDE.md) - Alpine Linux-specific quick reference
+
 ---
 
 ## 📋 Core Features
@@ -80,9 +104,11 @@ GuardScan includes **comprehensive security scanners**:
 ### 🧪 Testing & Performance (FREE, Offline)
 
 13. **Test Runner** - Execute and analyze Jest, pytest, JUnit tests
-14. **Mutation Testing** - Validate test suite effectiveness
-15. **Performance Testing** - Load testing and benchmarking
+14. **Mutation Testing** - Validate test suite effectiveness (requires Stryker - optional)
+15. **Performance Testing** - Load testing and benchmarking (requires k6 - optional)
 16. **SBOM Generation** - Software Bill of Materials (CycloneDX, SPDX)
+
+**Note**: Performance and mutation testing require optional external tools. See [Testing Tools Guide](./cli/docs/TESTING_TOOLS.md) for details.
 
 ### 🤖 AI-Enhanced Features (BYOK - Bring Your Own Key)
 
@@ -149,11 +175,13 @@ All commands are **100% FREE** with no limits!
 
 ### Testing & Quality Commands
 
-| Command              | Description                        |
-| -------------------- | ---------------------------------- |
-| `guardscan test`     | Run tests & code quality analysis  |
-| `guardscan perf`     | Performance testing & load testing |
-| `guardscan mutation` | Mutation testing for test quality  |
+| Command              | Description                                                     |
+| -------------------- | --------------------------------------------------------------- |
+| `guardscan test`     | Run tests & code quality analysis                               |
+| `guardscan perf`     | Performance testing & load testing (requires k6 - optional)     |
+| `guardscan mutation` | Mutation testing for test quality (requires Stryker - optional) |
+
+**Note**: `perf` and `mutation` commands require optional external tools. See [Testing Tools Guide](./cli/docs/TESTING_TOOLS.md) for installation and usage details.
 
 ### Utility Commands
 

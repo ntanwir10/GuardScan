@@ -1,8 +1,13 @@
-import * as fs from 'fs';
-import * as path from 'path';
-import * as crypto from 'crypto';
-import { ASTParser, ParsedFile, ParsedFunction, ParsedClass } from './ast-parser';
-import { configManager } from './config';
+import * as fs from "fs";
+import * as path from "path";
+import * as crypto from "crypto";
+import {
+  ASTParser,
+  ParsedFile,
+  ParsedFunction,
+  ParsedClass,
+} from "./ast-parser";
+import { configManager } from "./config";
 
 /**
  * Symbol information in the codebase
@@ -10,7 +15,7 @@ import { configManager } from './config';
 export interface Symbol {
   id: string;
   name: string;
-  type: 'function' | 'class' | 'variable' | 'interface' | 'type';
+  type: "function" | "class" | "variable" | "interface" | "type";
   file: string;
   line: number;
   exported: boolean;
@@ -31,9 +36,9 @@ export interface Reference {
  * Dependency graph edge
  */
 export interface Dependency {
-  from: string;  // File or symbol
-  to: string;    // File or symbol
-  type: 'import' | 'call' | 'extends' | 'implements';
+  from: string; // File or symbol
+  to: string; // File or symbol
+  type: "import" | "call" | "extends" | "implements";
 }
 
 /**
@@ -42,7 +47,7 @@ export interface Dependency {
 export interface DependencyGraph {
   nodes: Set<string>;
   edges: Map<string, Set<string>>;
-  reverseEdges: Map<string, Set<string>>;  // For "who depends on me"
+  reverseEdges: Map<string, Set<string>>; // For "who depends on me"
 }
 
 /**
@@ -51,15 +56,15 @@ export interface DependencyGraph {
 export interface FileIndex {
   path: string;
   relativePath: string;
-  hash: string;  // SHA-256 hash for change detection
+  hash: string; // SHA-256 hash for change detection
   language: string;
   loc: number;
   lastModified: Date;
-  functions: string[];  // Symbol IDs
-  classes: string[];    // Symbol IDs
+  functions: string[]; // Symbol IDs
+  classes: string[]; // Symbol IDs
   imports: string[];
   exports: string[];
-  parsed?: ParsedFile;  // Optional: full parsed data (lazy loaded)
+  parsed?: ParsedFile; // Optional: full parsed data (lazy loaded)
 }
 
 /**
@@ -78,11 +83,11 @@ export interface CodebaseIndex {
   symbols: Map<string, Symbol>;
   dependencies: DependencyGraph;
   metadata: {
-    languages: Map<string, number>;  // language -> file count
+    languages: Map<string, number>; // language -> file count
     complexity: {
       average: number;
       max: number;
-      distribution: Map<number, number>;  // complexity -> count
+      distribution: Map<number, number>; // complexity -> count
     };
   };
 }
@@ -105,7 +110,7 @@ class LRUCache<K, V> {
     const value = this.cache.get(key);
     if (value !== undefined) {
       // Move to end (most recently used)
-      this.accessOrder = this.accessOrder.filter(k => k !== key);
+      this.accessOrder = this.accessOrder.filter((k) => k !== key);
       this.accessOrder.push(key);
     }
     return value;
@@ -115,7 +120,7 @@ class LRUCache<K, V> {
     if (this.cache.has(key)) {
       // Update existing
       this.cache.set(key, value);
-      this.accessOrder = this.accessOrder.filter(k => k !== key);
+      this.accessOrder = this.accessOrder.filter((k) => k !== key);
       this.accessOrder.push(key);
     } else {
       // Add new
@@ -147,6 +152,7 @@ export class CodebaseIndexer {
   private parsedFilesCache: LRUCache<string, ParsedFile>;
   private repoRoot: string;
   private repoId: string;
+  private cachedIndex: CodebaseIndex | null = null;
 
   constructor(repoRoot: string, repoId: string) {
     this.parser = new ASTParser();
@@ -162,7 +168,7 @@ export class CodebaseIndexer {
     const files = await this.findCodeFiles(this.repoRoot);
 
     const index: CodebaseIndex = {
-      version: '1.0.0',
+      version: "1.0.0",
       repoId: this.repoId,
       rootPath: this.repoRoot,
       lastUpdated: new Date(),
@@ -205,6 +211,9 @@ export class CodebaseIndexer {
 
     // Save to disk
     await this.saveIndex(index);
+
+    // Cache in memory
+    this.cachedIndex = index;
 
     return index;
   }
@@ -249,6 +258,9 @@ export class CodebaseIndexer {
 
     // Save to disk
     await this.saveIndex(index);
+
+    // Update cached index
+    this.cachedIndex = index;
 
     return index;
   }
@@ -370,7 +382,10 @@ export class CodebaseIndexer {
   /**
    * Index a single file
    */
-  private async indexFile(filePath: string, index: CodebaseIndex): Promise<void> {
+  private async indexFile(
+    filePath: string,
+    index: CodebaseIndex
+  ): Promise<void> {
     const relativePath = path.relative(this.repoRoot, filePath);
 
     // Parse file
@@ -378,13 +393,17 @@ export class CodebaseIndexer {
     if (!parsed) return;
 
     // Calculate file hash
-    const content = fs.readFileSync(filePath, 'utf-8');
-    const hash = crypto.createHash('sha256').update(content).digest('hex');
+    const content = fs.readFileSync(filePath, "utf-8");
+    const hash = crypto.createHash("sha256").update(content).digest("hex");
 
     // Count LOC (non-empty, non-comment lines)
-    const loc = content.split('\n').filter(line => {
+    const loc = content.split("\n").filter((line) => {
       const trimmed = line.trim();
-      return trimmed.length > 0 && !trimmed.startsWith('//') && !trimmed.startsWith('/*');
+      return (
+        trimmed.length > 0 &&
+        !trimmed.startsWith("//") &&
+        !trimmed.startsWith("/*")
+      );
     }).length;
 
     // Create file index
@@ -397,8 +416,8 @@ export class CodebaseIndexer {
       lastModified: fs.statSync(filePath).mtime,
       functions: [],
       classes: [],
-      imports: parsed.imports.map(imp => imp.module),
-      exports: parsed.exports.map(exp => exp.name),
+      imports: parsed.imports.map((imp) => imp.module),
+      exports: parsed.exports.map((exp) => exp.name),
     };
 
     // Add functions to index
@@ -411,7 +430,7 @@ export class CodebaseIndexer {
       index.symbols.set(funcId, {
         id: funcId,
         name: func.name,
-        type: 'function',
+        type: "function",
         file: relativePath,
         line: func.line,
         exported: func.isExported,
@@ -429,7 +448,7 @@ export class CodebaseIndexer {
       index.symbols.set(classId, {
         id: classId,
         name: cls.name,
-        type: 'class',
+        type: "class",
         file: relativePath,
         line: cls.line,
         exported: cls.isExported,
@@ -442,7 +461,7 @@ export class CodebaseIndexer {
         index.symbols.set(methodId, {
           id: methodId,
           name: `${cls.name}.${method.name}`,
-          type: 'function',
+          type: "function",
           file: relativePath,
           line: method.line,
           exported: cls.isExported,
@@ -520,7 +539,11 @@ export class CodebaseIndexer {
         // Resolve import to file path
         const resolvedPath = this.resolveImport(importPath, relativePath);
         if (resolvedPath && index.files.has(resolvedPath)) {
-          this.addDependencyEdge(index.dependencies, relativePath, resolvedPath);
+          this.addDependencyEdge(
+            index.dependencies,
+            relativePath,
+            resolvedPath
+          );
         }
       }
     }
@@ -561,7 +584,11 @@ export class CodebaseIndexer {
   /**
    * Add edge to dependency graph (both forward and reverse)
    */
-  private addDependencyEdge(graph: DependencyGraph, from: string, to: string): void {
+  private addDependencyEdge(
+    graph: DependencyGraph,
+    from: string,
+    to: string
+  ): void {
     graph.nodes.add(from);
     graph.nodes.add(to);
 
@@ -583,12 +610,19 @@ export class CodebaseIndexer {
    */
   private resolveImport(importPath: string, fromFile: string): string | null {
     // Handle relative imports
-    if (importPath.startsWith('.')) {
+    if (importPath.startsWith(".")) {
       const dir = path.dirname(fromFile);
       const resolved = path.normalize(path.join(dir, importPath));
 
       // Try with common extensions
-      const extensions = ['.ts', '.tsx', '.js', '.jsx', '/index.ts', '/index.js'];
+      const extensions = [
+        ".ts",
+        ".tsx",
+        ".js",
+        ".jsx",
+        "/index.ts",
+        "/index.js",
+      ];
       for (const ext of extensions) {
         const fullPath = resolved + ext;
         if (fs.existsSync(path.join(this.repoRoot, fullPath))) {
@@ -597,8 +631,9 @@ export class CodebaseIndexer {
       }
     }
 
-    // TODO: Handle node_modules and path aliases
-    // For now, return null for non-relative imports
+    // Note: node_modules and path aliases are not currently resolved
+    // This is intentional to keep the indexer focused on user code
+    // Non-relative imports return null
     return null;
   }
 
@@ -631,7 +666,10 @@ export class CodebaseIndexer {
 
       // Track distribution (bucket by ranges)
       const bucket = Math.floor(func.complexity / 5) * 5;
-      complexityDistribution.set(bucket, (complexityDistribution.get(bucket) || 0) + 1);
+      complexityDistribution.set(
+        bucket,
+        (complexityDistribution.get(bucket) || 0) + 1
+      );
     }
 
     index.metadata.complexity = {
@@ -646,7 +684,7 @@ export class CodebaseIndexer {
    */
   private async findCodeFiles(dir: string): Promise<string[]> {
     const files: string[] = [];
-    const extensions = ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs'];
+    const extensions = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"];
 
     const walk = (currentDir: string): void => {
       const entries = fs.readdirSync(currentDir, { withFileTypes: true });
@@ -657,7 +695,16 @@ export class CodebaseIndexer {
         // Skip node_modules, .git, dist, build directories
         if (entry.isDirectory()) {
           const dirName = entry.name;
-          if (!['node_modules', '.git', 'dist', 'build', '.next', 'coverage'].includes(dirName)) {
+          if (
+            ![
+              "node_modules",
+              ".git",
+              "dist",
+              "build",
+              ".next",
+              "coverage",
+            ].includes(dirName)
+          ) {
             walk(fullPath);
           }
         } else if (entry.isFile()) {
@@ -679,9 +726,15 @@ export class CodebaseIndexer {
   private async saveIndex(index: CodebaseIndex): Promise<void> {
     const cacheDir = this.getCacheDir();
 
-    // Ensure cache directory exists
-    if (!fs.existsSync(cacheDir)) {
+    // Ensure cache directory and all parent directories exist
+    try {
       fs.mkdirSync(cacheDir, { recursive: true });
+    } catch (error) {
+      // If directory creation fails, log and continue (might already exist)
+      console.warn(
+        `Warning: Failed to create cache directory ${cacheDir}:`,
+        error
+      );
     }
 
     // Convert Maps to arrays for JSON serialization
@@ -693,36 +746,48 @@ export class CodebaseIndexer {
       symbols: Array.from(index.symbols.entries()),
       dependencies: {
         nodes: Array.from(index.dependencies.nodes),
-        edges: Array.from(index.dependencies.edges.entries()).map(([k, v]) => [k, Array.from(v)]),
-        reverseEdges: Array.from(index.dependencies.reverseEdges.entries()).map(([k, v]) => [k, Array.from(v)]),
+        edges: Array.from(index.dependencies.edges.entries()).map(([k, v]) => [
+          k,
+          Array.from(v),
+        ]),
+        reverseEdges: Array.from(index.dependencies.reverseEdges.entries()).map(
+          ([k, v]) => [k, Array.from(v)]
+        ),
       },
       metadata: {
         ...index.metadata,
         languages: Array.from(index.metadata.languages.entries()),
         complexity: {
           ...index.metadata.complexity,
-          distribution: Array.from(index.metadata.complexity.distribution.entries()),
+          distribution: Array.from(
+            index.metadata.complexity.distribution.entries()
+          ),
         },
       },
     };
 
-    const indexPath = path.join(cacheDir, 'index.json');
-    fs.writeFileSync(indexPath, JSON.stringify(serializable, null, 2), 'utf-8');
+    const indexPath = path.join(cacheDir, "index.json");
+    fs.writeFileSync(indexPath, JSON.stringify(serializable, null, 2), "utf-8");
   }
 
   /**
    * Load index from disk
    */
   private async loadIndex(): Promise<CodebaseIndex | null> {
+    // Use cached index if available
+    if (this.cachedIndex) {
+      return this.cachedIndex;
+    }
+
     const cacheDir = this.getCacheDir();
-    const indexPath = path.join(cacheDir, 'index.json');
+    const indexPath = path.join(cacheDir, "index.json");
 
     if (!fs.existsSync(indexPath)) {
       return null;
     }
 
     try {
-      const content = fs.readFileSync(indexPath, 'utf-8');
+      const content = fs.readFileSync(indexPath, "utf-8");
       const data = JSON.parse(content);
 
       // Convert arrays back to Maps
@@ -734,8 +799,18 @@ export class CodebaseIndexer {
         symbols: new Map(data.symbols),
         dependencies: {
           nodes: new Set(data.dependencies.nodes),
-          edges: new Map(data.dependencies.edges.map(([k, v]: [string, string[]]) => [k, new Set(v)])),
-          reverseEdges: new Map(data.dependencies.reverseEdges.map(([k, v]: [string, string[]]) => [k, new Set(v)])),
+          edges: new Map(
+            data.dependencies.edges.map(([k, v]: [string, string[]]) => [
+              k,
+              new Set(v),
+            ])
+          ),
+          reverseEdges: new Map(
+            data.dependencies.reverseEdges.map(([k, v]: [string, string[]]) => [
+              k,
+              new Set(v),
+            ])
+          ),
         },
         metadata: {
           ...data.metadata,
@@ -748,9 +823,12 @@ export class CodebaseIndexer {
         lastUpdated: new Date(data.lastUpdated),
       };
 
+      // Cache the loaded index
+      this.cachedIndex = index;
+
       return index;
     } catch (error) {
-      console.warn('Failed to load index:', error);
+      console.warn("Failed to load index:", error);
       return null;
     }
   }
@@ -772,5 +850,6 @@ export class CodebaseIndexer {
       fs.rmSync(cacheDir, { recursive: true, force: true });
     }
     this.parsedFilesCache.clear();
+    this.cachedIndex = null; // Clear in-memory cache
   }
 }

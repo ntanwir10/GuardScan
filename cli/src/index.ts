@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 
 import { Command } from 'commander';
-import chalk from 'chalk';
 import { initCommand } from './commands/init';
 import { runCommand } from './commands/run';
 import { scanCommand } from './commands/scan';
@@ -27,11 +26,13 @@ import { checkForUpdates } from './utils/version';
 import { displayLogo } from './utils/ascii-art';
 
 const program = new Command();
+const packageJson = require("../package.json");
 
 program
   .name('guardscan')
   .description('GuardScan - Privacy-first AI Code Review CLI with comprehensive security scanning')
-  .version('1.0.0');
+  .version(packageJson.version)
+  .option('--no-telemetry', 'Disable telemetry for this command');
 
 program
   .command('init')
@@ -136,6 +137,7 @@ program
   .command('reset')
   .description('Clear local context and cache')
   .option('--all', 'Reset all configuration including client_id')
+  .option('--force', 'Skip confirmation prompts')
   .action(resetCommand);
 
 program
@@ -221,6 +223,8 @@ program
   .description('AI-powered code migration assistant (Phase 5 feature)')
   .option('-t, --type <type>', 'Migration type: framework, language, modernization, dependency')
   .option('--target <target>', 'Migration target (e.g., react-class-to-hooks, typescript, es5-to-es6)')
+  .option('--from <source>', 'Source framework/language (e.g., react, es5)')
+  .option('--to <target>', 'Target framework/language (e.g., vue, es6)')
   .option('-f, --file <path>', 'Specific file to migrate')
   .option('--dry-run', 'Preview changes without applying them', true)
   .option('--auto-fix', 'Automatically apply fixes')
@@ -252,4 +256,10 @@ checkForUpdates().catch(() => {
   // Silent fail
 });
 
+// Parse arguments and set global telemetry flag
 program.parse();
+const globalOpts = program.opts();
+if (globalOpts.noTelemetry) {
+  // Set environment variable so telemetry can check it
+  process.env.GUARDSCAN_NO_TELEMETRY = 'true';
+}

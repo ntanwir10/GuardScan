@@ -8,6 +8,12 @@ import { reporter, ReviewResult } from '../utils/reporter';
 import { telemetryManager } from '../core/telemetry';
 import { repositoryManager } from '../core/repository';
 import { createProgressBar } from '../utils/progress';
+import { createDebugLogger } from '../utils/debug-logger';
+import { createPerformanceTracker } from '../utils/performance-tracker';
+import { handleCommandError } from '../utils/error-handler';
+
+const logger = createDebugLogger('test');
+const perfTracker = createPerformanceTracker('guardscan test');
 
 interface TestOptions {
   coverage?: boolean;
@@ -18,12 +24,17 @@ interface TestOptions {
 }
 
 export async function testCommand(options: TestOptions): Promise<void> {
+  logger.debug('Test command started', { options });
+  perfTracker.start('test-total');
   const startTime = Date.now();
 
   console.log(chalk.cyan.bold('\n🧪 Test & Quality Analysis\n'));
 
   try {
+    perfTracker.start('detect-repository');
     const repoInfo = repositoryManager.getRepoInfo();
+    perfTracker.end('detect-repository');
+    logger.debug('Repository detected', { name: repoInfo.name });
     console.log(chalk.gray(`Repository: ${repoInfo.name}\n`));
 
     // Calculate total steps for progress tracking
@@ -147,8 +158,7 @@ export async function testCommand(options: TestOptions): Promise<void> {
 
     console.log();
   } catch (error) {
-    console.error(chalk.red('\n✗ Test command failed:'), error);
-    process.exit(1);
+    handleCommandError(error, 'Test command');
   }
 }
 

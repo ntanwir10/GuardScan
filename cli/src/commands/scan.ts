@@ -21,6 +21,12 @@ import { reporter, ReviewResult } from '../utils/reporter';
 import { telemetryManager } from '../core/telemetry';
 import { ConfigManager } from '../core/config';
 import { createProgressBar } from '../utils/progress';
+import { createDebugLogger } from '../utils/debug-logger';
+import { createPerformanceTracker } from '../utils/performance-tracker';
+import { handleCommandError } from '../utils/error-handler';
+
+const logger = createDebugLogger('scan');
+const perfTracker = createPerformanceTracker('guardscan scan');
 
 interface ScanOptions {
   skipTests?: boolean;
@@ -42,11 +48,16 @@ interface ScanResults {
 }
 
 export async function scanCommand(options: ScanOptions): Promise<void> {
+  logger.debug('Scan command started', { options });
+  perfTracker.start('scan-total');
   const startTime = Date.now();
 
   console.log(chalk.cyan.bold('\n🛡️  GuardScan - Comprehensive Security & Quality Analysis\n'));
 
+  perfTracker.start('detect-repository');
   const repoInfo = repositoryManager.getRepoInfo();
+  perfTracker.end('detect-repository');
+  logger.debug('Repository detected', { name: repoInfo.name, repoId: repoInfo.repoId });
   console.log(chalk.gray(`Repository: ${repoInfo.name}\n`));
 
   const results: ScanResults = {
@@ -67,6 +78,8 @@ export async function scanCommand(options: ScanOptions): Promise<void> {
     const overallProgress = createProgressBar(totalTasks, 'Overall Progress');
 
     // Run all scans in parallel with progress tracking
+    logger.debug('Starting parallel scans', { totalTasks, securityTasks, qualityTasks });
+    perfTracker.start('security-scans');
     const scanPromises: Promise<any>[] = [];
 
     // 1. Security Scans (run in parallel)
@@ -95,14 +108,19 @@ export async function scanCommand(options: ScanOptions): Promise<void> {
 
     // Wait for all scans to complete
     const allResults = await Promise.allSettled(scanPromises);
+    perfTracker.end('security-scans'); // Complete security-scans timing after all scans finish
     overallProgress.stop();
+    logger.debug('All scans completed', { totalResults: allResults.length });
 
     // Process results
     processResults(allResults, results);
 
     // 4. Optional: AI Code Review
     if (!options.skipAi) {
+      perfTracker.start('ai-review');
       await runAIReview(results, options);
+      perfTracker.end('ai-review');
+      logger.debug('AI review completed');
     }
 
     // Calculate total duration
@@ -110,26 +128,36 @@ export async function scanCommand(options: ScanOptions): Promise<void> {
 
     // Generate comprehensive report
     console.log(chalk.gray('\nGenerating comprehensive report...'));
+    perfTracker.start('report-generation');
     const report = generateComprehensiveReport(results, repoInfo);
     const reportPath = reporter.saveReport(report, 'markdown', undefined, 'comprehensive');
+    perfTracker.end('report-generation');
+    logger.debug('Report generated', { reportPath });
     console.log(chalk.green(`✓ Report saved: ${reportPath}`));
 
     // Display summary
     displaySummary(results);
 
     // Record telemetry
+    perfTracker.start('record-telemetry');
     await telemetryManager.record({
       action: 'scan',
       loc: 0,
       durationMs: results.duration,
       model: 'comprehensive-scan',
     });
+    perfTracker.end('record-telemetry');
+
+    perfTracker.end('scan-total');
+    logger.debug('Scan command completed successfully', { duration: results.duration });
+    perfTracker.displaySummary();
 
     console.log(chalk.cyan('\n✨ Scan complete!\n'));
 
   } catch (error: any) {
-    console.error(chalk.red('\n✗ Scan failed:'), error.message);
-    process.exit(1);
+    perfTracker.end('scan-total');
+    perfTracker.displaySummary();
+    handleCommandError(error, 'Scan');
   }
 }
 
@@ -157,15 +185,20 @@ function runSecurityScans(
   const secretsSpinner = ora('Scanning for secrets...').start();
   promises.push(
     (async () => {
+      perfTracker.start('scanner-secrets');
       try {
         const filePaths = await getFilePaths();
         const results = await secretsDetector.detectInFiles(filePaths);
         const gitResults = await secretsDetector.scanGitHistory(repoPath);
         const allResults = [...results, ...gitResults];
+        const duration = perfTracker.end('scanner-secrets');
+        logger.performance('scanner-secrets', duration, { findings: allResults.length });
         secretsSpinner.succeed(`Secrets scan complete (${allResults.length} findings)`);
         if (onProgress) onProgress();
         return { type: 'secrets', results: allResults };
       } catch (error: any) {
+        perfTracker.end('scanner-secrets');
+        logger.error('Secrets scan failed', error);
         secretsSpinner.fail('Secrets scan failed');
         if (onProgress) onProgress();
         return { type: 'secrets', results: [], error };
@@ -177,12 +210,17 @@ function runSecurityScans(
   const depsSpinner = ora('Scanning dependencies...').start();
   promises.push(
     (async () => {
+      perfTracker.start('scanner-dependencies');
       try {
         const results = await dependencyScanner.scan(repoPath);
+        const duration = perfTracker.end('scanner-dependencies');
+        logger.performance('scanner-dependencies', duration, { findings: results.length });
         depsSpinner.succeed(`Dependency scan complete (${results.length} findings)`);
         if (onProgress) onProgress();
         return { type: 'dependencies', results };
       } catch (error: any) {
+        perfTracker.end('scanner-dependencies');
+        logger.error('Dependency scan failed', error);
         depsSpinner.fail('Dependency scan failed');
         if (onProgress) onProgress();
         return { type: 'dependencies', results: [], error };
@@ -194,12 +232,17 @@ function runSecurityScans(
   const dockerSpinner = ora('Scanning Dockerfiles...').start();
   promises.push(
     (async () => {
+      perfTracker.start('scanner-dockerfile');
       try {
         const results = await dockerfileScanner.scan(repoPath);
+        const duration = perfTracker.end('scanner-dockerfile');
+        logger.performance('scanner-dockerfile', duration, { findings: results.length });
         dockerSpinner.succeed(`Dockerfile scan complete (${results.length} findings)`);
         if (onProgress) onProgress();
         return { type: 'dockerfile', results };
       } catch (error: any) {
+        perfTracker.end('scanner-dockerfile');
+        logger.error('Dockerfile scan failed', error);
         dockerSpinner.fail('Dockerfile scan failed');
         if (onProgress) onProgress();
         return { type: 'dockerfile', results: [], error };
@@ -211,12 +254,17 @@ function runSecurityScans(
   const iacSpinner = ora('Scanning IaC files...').start();
   promises.push(
     (async () => {
+      perfTracker.start('scanner-iac');
       try {
         const results = await iacScanner.scan(repoPath);
+        const duration = perfTracker.end('scanner-iac');
+        logger.performance('scanner-iac', duration, { findings: results.length });
         iacSpinner.succeed(`IaC scan complete (${results.length} findings)`);
         if (onProgress) onProgress();
         return { type: 'iac', results };
       } catch (error: any) {
+        perfTracker.end('scanner-iac');
+        logger.error('IaC scan failed', error);
         iacSpinner.fail('IaC scan failed');
         if (onProgress) onProgress();
         return { type: 'iac', results: [], error };
@@ -228,12 +276,17 @@ function runSecurityScans(
   const owaspSpinner = ora('Checking OWASP Top 10...').start();
   promises.push(
     (async () => {
+      perfTracker.start('scanner-owasp');
       try {
         const results = await owaspScanner.scan(repoPath);
+        const duration = perfTracker.end('scanner-owasp');
+        logger.performance('scanner-owasp', duration, { findings: results.length });
         owaspSpinner.succeed(`OWASP scan complete (${results.length} findings)`);
         if (onProgress) onProgress();
         return { type: 'owasp', results };
       } catch (error: any) {
+        perfTracker.end('scanner-owasp');
+        logger.error('OWASP scan failed', error);
         owaspSpinner.fail('OWASP scan failed');
         if (onProgress) onProgress();
         return { type: 'owasp', results: [], error };
@@ -245,12 +298,17 @@ function runSecurityScans(
   const apiSpinner = ora('Scanning API endpoints...').start();
   promises.push(
     (async () => {
+      perfTracker.start('scanner-api');
       try {
         const results = await apiScanner.scan(repoPath);
+        const duration = perfTracker.end('scanner-api');
+        logger.performance('scanner-api', duration, { findings: results.length });
         apiSpinner.succeed(`API scan complete (${results.length} findings)`);
         if (onProgress) onProgress();
         return { type: 'api', results };
       } catch (error: any) {
+        perfTracker.end('scanner-api');
+        logger.error('API scan failed', error);
         apiSpinner.fail('API scan failed');
         if (onProgress) onProgress();
         return { type: 'api', results: [], error };
@@ -263,12 +321,17 @@ function runSecurityScans(
     const licenseSpinner = ora('Scanning licenses...').start();
     promises.push(
       (async () => {
+        perfTracker.start('scanner-licenses');
         try {
           const results = await licenseScanner.scan(repoPath, 'proprietary');
+          const duration = perfTracker.end('scanner-licenses');
+          logger.performance('scanner-licenses', duration, { packages: results.totalDependencies });
           licenseSpinner.succeed(`License scan complete (${results.totalDependencies} packages)`);
           if (onProgress) onProgress();
           return { type: 'licenses', results };
         } catch (error: any) {
+          perfTracker.end('scanner-licenses');
+          logger.error('License scan failed', error);
           licenseSpinner.fail('License scan failed');
           if (onProgress) onProgress();
           return { type: 'licenses', results: null, error };
@@ -281,12 +344,17 @@ function runSecurityScans(
   const complianceSpinner = ora('Checking compliance...').start();
   promises.push(
     (async () => {
+      perfTracker.start('scanner-compliance');
       try {
         const results = await complianceChecker.check(repoPath);
+        const duration = perfTracker.end('scanner-compliance');
+        logger.performance('scanner-compliance', duration, { reports: results.length });
         complianceSpinner.succeed(`Compliance check complete`);
         if (onProgress) onProgress();
         return { type: 'compliance', results };
       } catch (error: any) {
+        perfTracker.end('scanner-compliance');
+        logger.error('Compliance check failed', error);
         complianceSpinner.fail('Compliance check failed');
         if (onProgress) onProgress();
         return { type: 'compliance', results: [], error };
@@ -311,8 +379,11 @@ function runQualityAnalysis(
   const testSpinner = ora('Running tests...').start();
   promises.push(
     (async () => {
+      perfTracker.start('scanner-tests');
       try {
         const results = await testRunner.runTests(repoPath, options.coverage || false);
+        const duration = perfTracker.end('scanner-tests');
+        logger.performance('scanner-tests', duration, { frameworks: results.length });
         if (results.length > 0) {
           testSpinner.succeed(`Tests complete (${results.length} framework(s))`);
         } else {
@@ -321,6 +392,8 @@ function runQualityAnalysis(
         if (onProgress) onProgress();
         return { type: 'tests', results };
       } catch (error: any) {
+        perfTracker.end('scanner-tests');
+        logger.error('Test execution failed', error);
         testSpinner.fail('Test execution failed');
         if (onProgress) onProgress();
         return { type: 'tests', results: [], error };
@@ -332,12 +405,17 @@ function runQualityAnalysis(
   const metricsSpinner = ora('Analyzing code metrics...').start();
   promises.push(
     (async () => {
+      perfTracker.start('scanner-metrics');
       try {
         const results = await codeMetricsAnalyzer.analyze(repoPath);
+        const duration = perfTracker.end('scanner-metrics');
+        logger.performance('scanner-metrics', duration, { files: results.length });
         metricsSpinner.succeed(`Metrics analyzed (${results.length} files)`);
         if (onProgress) onProgress();
         return { type: 'metrics', results };
       } catch (error: any) {
+        perfTracker.end('scanner-metrics');
+        logger.error('Metrics analysis failed', error);
         metricsSpinner.fail('Metrics analysis failed');
         if (onProgress) onProgress();
         return { type: 'metrics', results: [], error };
@@ -349,12 +427,17 @@ function runQualityAnalysis(
   const smellSpinner = ora('Detecting code smells...').start();
   promises.push(
     (async () => {
+      perfTracker.start('scanner-smells');
       try {
         const results = await codeSmellDetector.detect(repoPath);
+        const duration = perfTracker.end('scanner-smells');
+        logger.performance('scanner-smells', duration, { issues: results.length });
         smellSpinner.succeed(`Code smells detected (${results.length} issues)`);
         if (onProgress) onProgress();
         return { type: 'smells', results };
       } catch (error: any) {
+        perfTracker.end('scanner-smells');
+        logger.error('Code smell detection failed', error);
         smellSpinner.fail('Code smell detection failed');
         if (onProgress) onProgress();
         return { type: 'smells', results: [], error };
@@ -366,8 +449,11 @@ function runQualityAnalysis(
   const lintSpinner = ora('Running linters...').start();
   promises.push(
     (async () => {
+      perfTracker.start('scanner-linting');
       try {
         const results = await linterIntegration.runAll(repoPath);
+        const duration = perfTracker.end('scanner-linting');
+        logger.performance('scanner-linting', duration, { linters: results.length });
         if (results.length > 0) {
           lintSpinner.succeed(`Linting complete (${results.length} linter(s))`);
         } else {
@@ -376,6 +462,8 @@ function runQualityAnalysis(
         if (onProgress) onProgress();
         return { type: 'linting', results };
       } catch (error: any) {
+        perfTracker.end('scanner-linting');
+        logger.error('Linting failed', error);
         lintSpinner.fail('Linting failed');
         if (onProgress) onProgress();
         return { type: 'linting', results: [], error };
@@ -390,14 +478,19 @@ function runQualityAnalysis(
  * Generate SBOM
  */
 async function runSBOMGeneration(repoPath: string): Promise<any> {
+  perfTracker.start('sbom-generation');
   const sbomSpinner = ora('Generating SBOM...').start();
 
   try {
     const licenseReport = await licenseScanner.scan(repoPath, 'proprietary');
     const sbom = licenseScanner.generateSBOM(licenseReport.findings, 'spdx', 'repository');
+    const duration = perfTracker.end('sbom-generation');
+    logger.performance('sbom-generation', duration);
     sbomSpinner.succeed('SBOM generated');
     return { type: 'sbom', results: sbom };
   } catch (error: any) {
+    perfTracker.end('sbom-generation');
+    logger.error('SBOM generation failed', error);
     sbomSpinner.fail('SBOM generation failed');
     return { type: 'sbom', results: null, error };
   }

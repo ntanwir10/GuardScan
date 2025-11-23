@@ -1,0 +1,107 @@
+# Cloudflare Workers Configuration for GuardScan Backend
+# Documentation: https://developers.cloudflare.com/workers/wrangler/configuration/
+#
+# SETUP INSTRUCTIONS:
+# 1. Copy this file to wrangler.toml: cp wrangler.toml.example wrangler.toml
+# 2. Create KV namespaces: 
+#    wrangler kv:namespace create "CACHE"
+#    wrangler kv:namespace create "RATE_LIMIT_KV"
+# 3. Update the KV namespace IDs below with the ones created
+# 4. Set up secrets:
+#    wrangler secret put SUPABASE_URL
+#    wrangler secret put SUPABASE_KEY
+
+name = "guardscan-backend"
+main = "src/index.ts"
+compatibility_date = "2024-11-13"
+workers_dev = true
+
+# Account details (set via wrangler CLI or environment variables)
+# Get your account_id from: https://dash.cloudflare.com/
+# account_id = "your-account-id"
+
+# Build configuration
+# Wrangler will automatically compile TypeScript
+# No need for custom build command during development
+
+# Environment variables (non-sensitive)
+[vars]
+ENVIRONMENT = "development"
+API_VERSION = "v1"
+ALLOWED_ORIGINS = "http://localhost:3000,http://localhost:8787"
+
+# Secrets (NEVER commit these - set via: wrangler secret put SECRET_NAME)
+# Required secrets for telemetry backend:
+# - SUPABASE_URL          (from Supabase dashboard → Settings → API)
+# - SUPABASE_KEY          (service_role key from Supabase)
+#
+# Setup commands:
+#   wrangler secret put SUPABASE_URL
+#   wrangler secret put SUPABASE_KEY
+#
+# Or use the helper script (reads from .env.prod):
+#   ./scripts/deploy-with-secrets.sh
+#
+# Note: NEVER add actual secret values here - they would be committed to git!
+# Note: GuardScan is now 100% open source and free.
+# Backend is only used for optional, privacy-preserving telemetry.
+
+# KV Namespace for caching
+# Replace with your actual KV namespace ID after running: wrangler kv:namespace create "CACHE"
+[[kv_namespaces]]
+binding = "CACHE"
+id = "your-cache-kv-namespace-id"
+preview_id = "your-cache-kv-preview-namespace-id"
+
+# KV Namespace for rate limiting
+# Replace with your actual KV namespace ID after running: wrangler kv:namespace create "RATE_LIMIT_KV"
+[[kv_namespaces]]
+binding = "RATE_LIMIT_KV"
+id = "your-rate-limit-kv-namespace-id"
+preview_id = "your-rate-limit-kv-preview-namespace-id"
+
+# Staging environment
+[env.staging]
+name = "guardscan-backend-staging"
+# Uncomment and configure when you have a custom domain:
+# route = { pattern = "api-staging.guardscan.com/*", zone_name = "guardscan.com" }
+vars = { ENVIRONMENT = "staging", API_VERSION = "v1" }
+
+# Production environment
+[env.production]
+name = "guardscan-backend"
+# Custom domain route (configure after setting up DNS)
+route = { pattern = "api.guardscancli.com/*", zone_name = "guardscancli.com" }
+vars = { ENVIRONMENT = "production", API_VERSION = "v1", ALLOWED_ORIGINS = "https://guardscan.dev,https://api.guardscan.dev,https://guardscan-backend.ntanwir10.workers.dev" }
+
+# KV Namespaces for production (use same IDs or create separate ones)
+[[env.production.kv_namespaces]]
+binding = "CACHE"
+id = "your-cache-kv-namespace-id"
+
+[[env.production.kv_namespaces]]
+binding = "RATE_LIMIT_KV"
+id = "your-rate-limit-kv-namespace-id"
+
+# Routes (if using custom domains)
+# routes = [
+#   { pattern = "api.guardscancli.com/*", zone_name = "guardscancli.com" }
+# ]
+
+# Limits and configuration
+# Note: CPU limits require a paid Cloudflare Workers plan
+# [limits]
+# cpu_ms = 50
+
+# Triggers (for scheduled tasks)
+[triggers]
+crons = ["* * * * *"] # Every minute - cleanup expired rate limit records
+
+# Observability
+[observability]
+[observability.logs]
+enabled = true
+head_sampling_rate = 1
+invocation_logs = true
+persist = true
+

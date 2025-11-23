@@ -5,6 +5,12 @@ import { repositoryManager } from '../core/repository';
 import { createProgressBar } from '../utils/progress';
 import * as fs from 'fs';
 import * as path from 'path';
+import { createDebugLogger } from '../utils/debug-logger';
+import { createPerformanceTracker } from '../utils/performance-tracker';
+import { handleCommandError } from '../utils/error-handler';
+
+const logger = createDebugLogger('rules');
+const perfTracker = createPerformanceTracker('guardscan rules');
 
 interface RulesOptions {
   list?: boolean;
@@ -17,11 +23,17 @@ interface RulesOptions {
 }
 
 export async function rulesCommand(options: RulesOptions): Promise<void> {
+  logger.debug('Rules command started', { options });
+  perfTracker.start('rules-total');
+  
   console.log(chalk.cyan.bold('\n📜 Custom Rules Engine\n'));
 
   try {
+    perfTracker.start('detect-repository');
     const repoPath = process.cwd();
     const repoInfo = repositoryManager.getRepoInfo();
+    perfTracker.end('detect-repository');
+    logger.debug('Repository detected', { name: repoInfo.name });
 
     // List rules
     if (options.list) {
@@ -141,14 +153,12 @@ export async function rulesCommand(options: RulesOptions): Promise<void> {
       // Exit with error if violations found
       if (result.totalViolations > 0 && (result.severitySummary.critical > 0 || result.severitySummary.high > 0)) {
         console.log(chalk.red('  ✗ Critical or high severity violations found\n'));
-        process.exit(1);
+        handleCommandError(new Error('Critical or high severity violations found'), 'Rules');
       }
     }
 
   } catch (error: any) {
-    console.error(chalk.red('\n✗ Rules engine failed:'), error.message);
-    console.log();
-    process.exit(1);
+    handleCommandError(error, 'Rules engine');
   }
 }
 

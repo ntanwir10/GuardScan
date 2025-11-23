@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as crypto from 'crypto';
 import { execSync } from 'child_process';
+import { SECURITY_CONSTANTS } from '../constants/security-constants';
 
 export interface SecretFinding {
   type: string;
@@ -13,9 +14,6 @@ export interface SecretFinding {
 }
 
 export class SecretsDetector {
-  private readonly HIGH_ENTROPY_THRESHOLD = 4.5;
-  private readonly MEDIUM_ENTROPY_THRESHOLD = 3.5;
-
   /**
    * Detect secrets in files
    */
@@ -46,7 +44,7 @@ export class SecretsDetector {
       const commits = execSync('git log --all --format=%H', {
         cwd: repoPath,
         encoding: 'utf-8',
-      }).split('\n').filter(Boolean).slice(0, 100); // Limit to last 100 commits
+      }).split('\n').filter(Boolean).slice(0, SECURITY_CONSTANTS.GIT_HISTORY_COMMIT_LIMIT);
 
       for (const commit of commits) {
         try {
@@ -246,7 +244,7 @@ export class SecretsDetector {
         const string = match[1];
         const entropy = this.calculateEntropy(string);
 
-        if (entropy > this.HIGH_ENTROPY_THRESHOLD) {
+        if (entropy > SECURITY_CONSTANTS.HIGH_ENTROPY_THRESHOLD) {
           // Skip if it looks like a hash or known safe pattern
           if (this.isSafePattern(string)) continue;
 
@@ -259,7 +257,7 @@ export class SecretsDetector {
             severity: 'high',
             recommendation: 'Review if this is a secret - high entropy detected',
           });
-        } else if (entropy > this.MEDIUM_ENTROPY_THRESHOLD && string.length > 32) {
+        } else if (entropy > SECURITY_CONSTANTS.MEDIUM_ENTROPY_THRESHOLD && string.length > 32) {
           if (this.isSafePattern(string)) continue;
 
           findings.push({
@@ -328,7 +326,7 @@ export class SecretsDetector {
    */
   private maskSecret(secret: string): string {
     if (secret.length <= 8) return '***';
-    return secret.substring(0, 4) + '***' + secret.substring(secret.length - 4);
+    return secret.substring(0, SECURITY_CONSTANTS.SECRET_MASK_PREFIX_LENGTH) + '***' + secret.substring(secret.length - SECURITY_CONSTANTS.SECRET_MASK_SUFFIX_LENGTH);
   }
 }
 

@@ -5,6 +5,12 @@ import { repositoryManager } from '../core/repository';
 import { createProgressBar } from '../utils/progress';
 import * as fs from 'fs';
 import * as path from 'path';
+import { createDebugLogger } from '../utils/debug-logger';
+import { createPerformanceTracker } from '../utils/performance-tracker';
+import { handleCommandError } from '../utils/error-handler';
+
+const logger = createDebugLogger('mutation');
+const perfTracker = createPerformanceTracker('guardscan mutation');
 
 interface MutationOptions {
   framework?: 'stryker' | 'mutmut' | 'pitest' | 'auto';
@@ -15,11 +21,17 @@ interface MutationOptions {
 }
 
 export async function mutationCommand(options: MutationOptions): Promise<void> {
+  logger.debug('Mutation command started', { options });
+  perfTracker.start('mutation-total');
+  
   console.log(chalk.cyan.bold('\n🧬 Mutation Testing\n'));
 
   try {
+    perfTracker.start('detect-repository');
     const repoPath = process.cwd();
     const repoInfo = repositoryManager.getRepoInfo();
+    perfTracker.end('detect-repository');
+    logger.debug('Repository detected', { name: repoInfo.name });
 
     console.log(chalk.gray(`Repository: ${repoInfo.name}`));
     console.log(chalk.gray(`Framework: ${options.framework || 'auto-detect'}`));
@@ -111,7 +123,7 @@ export async function mutationCommand(options: MutationOptions): Promise<void> {
     // Exit with error if threshold not met
     if (!result.passed) {
       console.log(chalk.red(`  ✗ Mutation score ${result.mutationScore.toFixed(1)}% is below threshold ${options.threshold || 80}%\n`));
-      process.exit(1);
+      handleCommandError(new Error(`Mutation score ${result.mutationScore.toFixed(1)}% is below threshold ${options.threshold || 80}%`), 'Mutation testing');
     } else {
       console.log(chalk.green(`  ✓ Mutation score ${result.mutationScore.toFixed(1)}% meets threshold ${options.threshold || 80}%\n`));
     }
@@ -149,7 +161,7 @@ export async function mutationCommand(options: MutationOptions): Promise<void> {
       console.log();
     }
 
-    process.exit(1);
+    handleCommandError(error, 'Mutation testing');
   }
 }
 

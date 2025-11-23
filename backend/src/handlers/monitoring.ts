@@ -10,14 +10,17 @@
 import { Env } from "../index";
 import { CachedDatabase } from "../db-cached";
 import { Database } from "../db";
-import { KVRateLimiter, createRateLimitResponse, addRateLimitHeaders } from "../utils/rate-limiter-kv";
+import {
+  KVRateLimiter,
+  createRateLimitResponse,
+  addRateLimitHeaders,
+} from "../utils/rate-limiter-kv";
+import { REQUEST_LIMITS, RATE_LIMITS } from "../constants";
+import { logError } from "../utils/error-handler";
+import { createDebugLogger } from "../utils/debug-logger";
 
 // Fallback to in-memory rate limiter if KV not available
 import { rateLimiters as memoryRateLimiters } from "../utils/rate-limiter";
-
-// Constants (works on free plan)
-const MAX_REQUEST_SIZE_MB = 10; // 10MB max request size
-const MAX_REQUEST_SIZE_BYTES = MAX_REQUEST_SIZE_MB * 1024 * 1024;
 
 /**
  * Error Severity
@@ -96,8 +99,8 @@ class AnalyticsManager {
 
     try {
       await this.db.insertErrors(records);
-    } catch (err) {
-      console.error("Failed to store errors:", err);
+    } catch (err: unknown) {
+      logError({ handler: "monitoring" }, err);
     }
   }
 
@@ -118,8 +121,8 @@ class AnalyticsManager {
 
     try {
       await this.db.insertMetrics(records);
-    } catch (err) {
-      console.error("Failed to store metrics:", err);
+    } catch (err: unknown) {
+      logError({ handler: "monitoring" }, err);
     }
   }
 
@@ -141,8 +144,8 @@ class AnalyticsManager {
 
     try {
       await this.db.insertUsageEvents(records);
-    } catch (err) {
-      console.error("Failed to store usage events:", err);
+    } catch (err: unknown) {
+      logError({ handler: "monitoring" }, err);
     }
   }
 
@@ -166,8 +169,8 @@ class AnalyticsManager {
         bySeverity: stats,
         period: `${hours}h`,
       };
-    } catch (err) {
-      console.error("Failed to get error stats:", err);
+    } catch (err: unknown) {
+      logError({ handler: "monitoring" }, err);
       return null;
     }
   }
@@ -210,8 +213,8 @@ class AnalyticsManager {
         byMetric: byName,
         period: `${hours}h`,
       };
-    } catch (err) {
-      console.error("Failed to get performance stats:", err);
+    } catch (err: unknown) {
+      logError({ handler: "monitoring" }, err);
       return null;
     }
   }
@@ -255,8 +258,8 @@ class AnalyticsManager {
         byCommand,
         period: `${hours}h`,
       };
-    } catch (err) {
-      console.error("Failed to get usage stats:", err);
+    } catch (err: unknown) {
+      logError({ handler: "monitoring" }, err);
       return null;
     }
   }
@@ -269,20 +272,27 @@ export async function handleMonitoring(
   request: Request,
   env: Env
 ): Promise<Response> {
+  const logger = createDebugLogger("monitoring", env.ENVIRONMENT);
+  const startTime = Date.now();
+  logger.debug("Monitoring request received");
+
   try {
     // Validate Content-Length to prevent memory exhaustion attacks
-    const contentLength = parseInt(request.headers.get('Content-Length') || '0');
-    
-    if (contentLength > MAX_REQUEST_SIZE_BYTES) {
+    const contentLength = parseInt(
+      request.headers.get("Content-Length") || "0"
+    );
+    logger.debug("Request size check", { contentLength });
+
+    if (contentLength > REQUEST_LIMITS.MAX_REQUEST_SIZE_BYTES) {
       return new Response(
         JSON.stringify({
-          error: 'Request too large',
-          maxSize: `${MAX_REQUEST_SIZE_MB}MB`,
-          received: `${(contentLength / 1024 / 1024).toFixed(2)}MB`
+          error: "Request too large",
+          maxSize: `${REQUEST_LIMITS.MAX_REQUEST_SIZE_MB}MB`,
+          received: `${(contentLength / 1024 / 1024).toFixed(2)}MB`,
         }),
         {
           status: 413,
-          headers: { 'Content-Type': 'application/json' }
+          headers: { "Content-Type": "application/json" },
         }
       );
     }
@@ -299,22 +309,24 @@ export async function handleMonitoring(
     // Rate limiting check - use KV-based if available, otherwise fall back to in-memory
     const rateLimiter = env.RATE_LIMIT_KV
       ? new KVRateLimiter(
-          { windowMs: 60 * 1000, maxRequests: 50 },
+          {
+            windowMs: RATE_LIMITS.MONITORING_WINDOW_MS,
+            maxRequests: RATE_LIMITS.MONITORING_MAX_REQUESTS,
+          },
           env.RATE_LIMIT_KV,
-          'monitoring'
+          "monitoring"
         )
       : memoryRateLimiters.monitoring;
-    
+
     const rateLimitResult = env.RATE_LIMIT_KV
       ? await rateLimiter.check(clientId)
-      : rateLimiter.check(clientId);
-    
-    if (!rateLimitResult.allowed) {
-      console.warn(`Rate limit exceeded for monitoring client: ${clientId}`);
-      return createRateLimitResponse(
-        rateLimitResult.resetAt,
-        rateLimitResult.limit
-      );
+      : Promise.resolve(rateLimiter.check(clientId));
+
+    const result = await rateLimitResult;
+
+    if (!result.allowed) {
+      logger.warn("Rate limit exceeded", { clientId });
+      return createRateLimitResponse(result.resetAt, result.limit);
     }
 
     // If Supabase not configured, accept but don't store (graceful degradation)
@@ -326,7 +338,7 @@ export async function handleMonitoring(
         }),
         { status: 200, headers: { "Content-Type": "application/json" } }
       );
-      return addRateLimitHeaders(response, rateLimitResult);
+      return addRateLimitHeaders(response, result);
     }
 
     // Validate payload
@@ -341,15 +353,52 @@ export async function handleMonitoring(
     const analytics = new AnalyticsManager(db);
 
     // Store all data in parallel
+    const batchStart = Date.now();
+    logger.debug("Starting batch processing", {
+      errors: payload.errors?.length || 0,
+      metrics: payload.metrics?.length || 0,
+      usage: payload.usage?.length || 0,
+    });
+
     await Promise.all([
-      payload.errors
-        ? analytics.storeErrors(payload.errors)
+      payload.errors && payload.errors.length > 0
+        ? (async () => {
+            const start = Date.now();
+            await analytics.storeErrors(payload.errors!);
+            const duration = Date.now() - start;
+            logger.performance("store-errors", duration, {
+              count: payload.errors!.length,
+            });
+          })()
         : Promise.resolve(),
-      payload.metrics
-        ? analytics.storeMetrics(payload.metrics)
+      payload.metrics && payload.metrics.length > 0
+        ? (async () => {
+            const start = Date.now();
+            await analytics.storeMetrics(payload.metrics!);
+            const duration = Date.now() - start;
+            logger.performance("store-metrics", duration, {
+              count: payload.metrics!.length,
+            });
+          })()
         : Promise.resolve(),
-      payload.usage ? analytics.storeUsage(payload.usage) : Promise.resolve(),
+      payload.usage && payload.usage.length > 0
+        ? (async () => {
+            const start = Date.now();
+            await analytics.storeUsage(payload.usage!);
+            const duration = Date.now() - start;
+            logger.performance("store-usage", duration, {
+              count: payload.usage!.length,
+            });
+          })()
+        : Promise.resolve(),
     ]);
+
+    const batchDuration = Date.now() - batchStart;
+    logger.performance("batch-processing", batchDuration, {
+      errors: payload.errors?.length || 0,
+      metrics: payload.metrics?.length || 0,
+      usage: payload.usage?.length || 0,
+    });
 
     // Log critical errors
     if (payload.errors) {
@@ -357,14 +406,30 @@ export async function handleMonitoring(
         (e) => e.severity === ErrorSeverity.CRITICAL
       );
       if (criticalErrors.length > 0) {
-        console.warn(
+        logger.warn(
           `[CRITICAL] Received ${criticalErrors.length} critical errors`
         );
         criticalErrors.forEach((e) => {
-          console.warn(`  - ${e.message}`, e.stack);
+          logger.warn(`  - ${e.message}`, { stack: e.stack });
         });
       }
     }
+
+    const totalDuration = Date.now() - startTime;
+    const totalItems =
+      (payload.errors?.length || 0) +
+      (payload.metrics?.length || 0) +
+      (payload.usage?.length || 0);
+    logger.performance("monitoring-request-total", totalDuration, {
+      errors: payload.errors?.length || 0,
+      metrics: payload.metrics?.length || 0,
+      usage: payload.usage?.length || 0,
+    });
+    logger.debug("Monitoring request completed", {
+      success: true,
+      itemsProcessed: totalItems,
+      duration: totalDuration,
+    });
 
     const response = new Response(
       JSON.stringify({
@@ -382,9 +447,9 @@ export async function handleMonitoring(
     );
 
     // Add rate limit headers to response
-    return addRateLimitHeaders(response, rateLimitResult);
-  } catch (error: any) {
-    console.error("Error handling monitoring data:", error);
+    return addRateLimitHeaders(response, result);
+  } catch (error: unknown) {
+    logError({ handler: "monitoring" }, error);
 
     // Don't fail hard - monitoring is optional
     return new Response(
@@ -416,22 +481,21 @@ export async function handleMonitoringStats(
       ? new KVRateLimiter(
           { windowMs: 60 * 1000, maxRequests: 30 },
           env.RATE_LIMIT_KV,
-          'monitoring-stats'
+          "monitoring-stats"
         )
       : memoryRateLimiters.monitoringStats;
-    
+
     const rateLimitResult = env.RATE_LIMIT_KV
       ? await rateLimiter.check(clientId)
-      : rateLimiter.check(clientId);
-    
-    if (!rateLimitResult.allowed) {
+      : Promise.resolve(rateLimiter.check(clientId));
+
+    const result = await rateLimitResult;
+
+    if (!result.allowed) {
       console.warn(
         `Rate limit exceeded for monitoring stats client: ${clientId}`
       );
-      return createRateLimitResponse(
-        rateLimitResult.resetAt,
-        rateLimitResult.limit
-      );
+      return createRateLimitResponse(result.resetAt, result.limit);
     }
 
     // If Supabase not configured, return empty stats
@@ -440,7 +504,7 @@ export async function handleMonitoringStats(
         JSON.stringify({ error: "Monitoring not configured" }),
         { status: 503, headers: { "Content-Type": "application/json" } }
       );
-      return addRateLimitHeaders(response, rateLimitResult);
+      return addRateLimitHeaders(response, result);
     }
 
     const url = new URL(request.url);
@@ -468,9 +532,9 @@ export async function handleMonitoringStats(
     );
 
     // Add rate limit headers to response
-    return addRateLimitHeaders(response, rateLimitResult);
-  } catch (error: any) {
-    console.error("Error getting monitoring stats:", error);
+    return addRateLimitHeaders(response, result);
+  } catch (error: unknown) {
+    logError({ handler: "monitoring-stats" }, error);
 
     return new Response(JSON.stringify({ error: "Internal server error" }), {
       status: 500,

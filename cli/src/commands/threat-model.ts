@@ -21,6 +21,12 @@ import { AICache } from '../core/ai-cache';
 import { repositoryManager } from '../core/repository';
 import { ProviderFactory } from '../providers/factory';
 import { ConfigManager } from '../core/config';
+import { createDebugLogger } from '../utils/debug-logger';
+import { createPerformanceTracker } from '../utils/performance-tracker';
+import { handleCommandError } from '../utils/error-handler';
+
+const logger = createDebugLogger('threat-model');
+const perfTracker = createPerformanceTracker('guardscan threat-model');
 
 interface ThreatModelCommandOptions {
   file?: string;
@@ -37,21 +43,21 @@ interface ThreatModelCommandOptions {
  * Main threat model command
  */
 export async function threatModelCommand(options: ThreatModelCommandOptions): Promise<void> {
+  logger.debug('Threat model command started', { options });
+  perfTracker.start('threat-model-total');
+  
   const spinner = ora('Initializing threat modeling...').start();
 
   try {
     // Load configuration
+    perfTracker.start('load-config');
     const configManager = new ConfigManager();
-    let config;
-    try {
-      config = configManager.load();
-    } catch {
-      spinner.warn('No configuration found. Initializing...');
-      config = configManager.init();
-    }
+    const config = configManager.loadOrInit();
+    perfTracker.end('load-config');
+    logger.debug('Config loaded', { provider: config.provider });
 
     // Check AI provider
-    if (!config.provider || !config.apiKey) {
+    if (!config.provider || config.provider === 'none' || !config.apiKey) {
       spinner.fail('No AI provider configured');
       console.log(chalk.yellow('\nRun `guardscan config` to set up an AI provider.'));
       return;
@@ -97,8 +103,7 @@ export async function threatModelCommand(options: ThreatModelCommandOptions): Pr
 
   } catch (error: any) {
     spinner.fail('Threat modeling failed');
-    console.error(chalk.red('\n Error:'), error.message);
-    process.exit(1);
+    handleCommandError(error, 'Threat modeling');
   }
 }
 

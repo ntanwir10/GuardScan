@@ -5,6 +5,12 @@ import { repositoryManager } from '../core/repository';
 import { createProgressBar } from '../utils/progress';
 import * as fs from 'fs';
 import * as path from 'path';
+import { createDebugLogger } from '../utils/debug-logger';
+import { createPerformanceTracker } from '../utils/performance-tracker';
+import { handleCommandError } from '../utils/error-handler';
+
+const logger = createDebugLogger('sbom');
+const perfTracker = createPerformanceTracker('guardscan sbom');
 
 interface SBOMOptions {
   output?: string;
@@ -12,11 +18,17 @@ interface SBOMOptions {
 }
 
 export async function sbomCommand(options: SBOMOptions): Promise<void> {
+  logger.debug('SBOM command started', { options });
+  perfTracker.start('sbom-total');
+  
   console.log(chalk.cyan.bold('\n📋 SBOM Generation\n'));
 
   try {
+    perfTracker.start('detect-repository');
     const repoPath = process.cwd();
     const repoInfo = repositoryManager.getRepoInfo();
+    perfTracker.end('detect-repository');
+    logger.debug('Repository detected', { name: repoInfo.name });
 
     console.log(chalk.gray(`Repository: ${repoInfo.name}`));
     console.log(chalk.gray(`Format: ${options.format || 'spdx'}\n`));
@@ -99,7 +111,6 @@ export async function sbomCommand(options: SBOMOptions): Promise<void> {
     console.log();
 
   } catch (error) {
-    console.error(chalk.red('\n✗ SBOM generation failed:'), error);
-    process.exit(1);
+    handleCommandError(error, 'SBOM generation');
   }
 }

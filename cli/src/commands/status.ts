@@ -5,13 +5,25 @@ import { apiClient } from '../utils/api-client';
 import { isOnline } from '../utils/network';
 import { displaySimpleBanner } from '../utils/ascii-art';
 import ora from 'ora';
+import { createDebugLogger } from '../utils/debug-logger';
+import { createPerformanceTracker } from '../utils/performance-tracker';
+import { handleCommandError } from '../utils/error-handler';
+
+const logger = createDebugLogger('status');
+const perfTracker = createPerformanceTracker('guardscan status');
 
 export async function statusCommand(): Promise<void> {
+  logger.debug('Status command started');
+  perfTracker.start('status-total');
+  
   displaySimpleBanner('status');
 
   try {
     // Load config
+    perfTracker.start('load-config');
     const config = configManager.loadOrInit();
+    perfTracker.end('load-config');
+    logger.debug('Config loaded', { provider: config.provider });
 
     // Get repository info
     let repoInfo;
@@ -54,7 +66,6 @@ export async function statusCommand(): Promise<void> {
 
     console.log();
   } catch (error) {
-    console.error(chalk.red('\n✗ Status check failed:'), error);
-    process.exit(1);
+    handleCommandError(error, 'Status check');
   }
 }

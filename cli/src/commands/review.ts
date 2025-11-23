@@ -23,6 +23,12 @@ import { AICache } from '../core/ai-cache';
 import { repositoryManager } from '../core/repository';
 import { ProviderFactory } from '../providers/factory';
 import { ConfigManager } from '../core/config';
+import { createDebugLogger } from '../utils/debug-logger';
+import { createPerformanceTracker } from '../utils/performance-tracker';
+import { handleCommandError } from '../utils/error-handler';
+
+const logger = createDebugLogger('review');
+const perfTracker = createPerformanceTracker('guardscan review');
 
 interface ReviewCommandOptions {
   base?: string;
@@ -38,23 +44,23 @@ interface ReviewCommandOptions {
  * Main review command
  */
 export async function reviewCommand(options: ReviewCommandOptions): Promise<void> {
+  logger.debug('Review command started', { options });
+  perfTracker.start('review-total');
+  
   console.log(chalk.blue('\n📝 GuardScan Code Review\n'));
 
   const spinner = ora('Initializing code review...').start();
 
   try {
     // Load configuration
+    perfTracker.start('load-config');
     const configManager = new ConfigManager();
-    let config;
-    try {
-      config = configManager.load();
-    } catch {
-      spinner.warn('No configuration found. Initializing...');
-      config = configManager.init();
-    }
+    const config = configManager.loadOrInit();
+    perfTracker.end('load-config');
+    logger.debug('Config loaded', { provider: config.provider });
 
     // Check AI provider
-    if (!config.provider || !config.apiKey) {
+    if (!config.provider || config.provider === 'none' || !config.apiKey) {
       spinner.fail('No AI provider configured');
       console.log(chalk.yellow('\nCode review requires an AI provider.'));
       console.log(chalk.gray('Configure with: guardscan config\n'));
@@ -100,8 +106,7 @@ export async function reviewCommand(options: ReviewCommandOptions): Promise<void
 
   } catch (error: any) {
     spinner.fail('Review failed');
-    console.error(chalk.red('\n✗ Error:'), error.message);
-    process.exit(1);
+    handleCommandError(error, 'Code review');
   }
 }
 

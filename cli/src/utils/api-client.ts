@@ -1,4 +1,5 @@
 import axios, { AxiosInstance } from "axios";
+import { API_CONSTANTS } from "../constants/api-constants";
 
 export interface TelemetryEvent {
   action: string;
@@ -27,11 +28,11 @@ export class APIClient {
     this.baseUrl =
       baseUrl ||
       process.env.GUARDSCAN_API_URL ||
-      "https://api.guardscancli.com"; // Production backend
+      API_CONSTANTS.DEFAULT_API_BASE_URL;
 
     this.client = axios.create({
       baseURL: this.baseUrl,
-      timeout: 10000,
+      timeout: API_CONSTANTS.API_CLIENT_TIMEOUT,
       headers: {
         "Content-Type": "application/json",
       },

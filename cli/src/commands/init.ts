@@ -4,12 +4,27 @@ import { configManager, AIProvider } from '../core/config';
 import { repositoryManager } from '../core/repository';
 import { displayWelcomeBanner } from '../utils/ascii-art';
 import { ProviderFactory } from '../providers/factory';
+import { createDebugLogger } from '../utils/debug-logger';
+import { createPerformanceTracker } from '../utils/performance-tracker';
+import { handleCommandError } from '../utils/error-handler';
 
 type SetupMode = 'cloud' | 'local' | 'static';
 
+const logger = createDebugLogger('init');
+const perfTracker = createPerformanceTracker('guardscan init');
+
 export async function initCommand(): Promise<void> {
+  logger.debug('Init command started');
+  perfTracker.start('init-total');
+  
   // Display welcome banner for first-time users
-  if (!configManager.exists()) {
+  perfTracker.start('check-existing-config');
+  const configExists = configManager.exists();
+  perfTracker.end('check-existing-config');
+  
+  logger.debug('Config exists', { configExists });
+  
+  if (!configExists) {
     displayWelcomeBanner();
   } else {
     console.log(chalk.cyan.bold('\n🚀 Initializing GuardScan\n'));
@@ -17,25 +32,53 @@ export async function initCommand(): Promise<void> {
 
   try {
     // Check if already initialized
-    if (configManager.exists()) {
+    if (configExists) {
+      perfTracker.start('load-existing-config');
       const config = configManager.load();
+      perfTracker.end('load-existing-config');
+      
+      logger.debug('Already initialized', { 
+        clientId: config.clientId,
+        provider: config.provider 
+      });
+      
       console.log(chalk.yellow('Already initialized!'));
       console.log(chalk.gray(`Client ID: ${config.clientId}`));
       console.log(chalk.gray(`Provider: ${config.provider}`));
       console.log(chalk.gray('\nRun "guardscan config" to modify settings\n'));
+      
+      perfTracker.end('init-total');
+      perfTracker.displaySummary();
       return;
     }
 
     // Initialize config with defaults
+    perfTracker.start('create-config');
     const config = configManager.init();
+    perfTracker.end('create-config');
+    
+    logger.debug('Config created', {
+      clientId: config.clientId,
+      configDir: configManager.getConfigDir()
+    });
 
     console.log(chalk.green('✓ Configuration initialized'));
     console.log(chalk.gray(`  Config directory: ${configManager.getConfigDir()}`));
     console.log(chalk.gray(`  Client ID: ${config.clientId}`));
 
     // Detect repository
+    perfTracker.start('detect-repository');
     try {
       const repoInfo = repositoryManager.getRepoInfo();
+      perfTracker.end('detect-repository');
+      
+      logger.debug('Repository detected', {
+        name: repoInfo.name,
+        isGit: repoInfo.isGit,
+        branch: repoInfo.branch,
+        repoId: repoInfo.repoId
+      });
+      
       console.log(chalk.green('\n✓ Repository detected'));
       console.log(chalk.gray(`  Name: ${repoInfo.name}`));
       console.log(chalk.gray(`  Type: ${repoInfo.isGit ? 'Git' : 'Standard'}`));
@@ -44,13 +87,28 @@ export async function initCommand(): Promise<void> {
       }
       console.log(chalk.gray(`  Repo ID: ${repoInfo.repoId}`));
     } catch (error) {
+      perfTracker.end('detect-repository');
+      logger.warn('Repository detection failed', { error });
       console.log(chalk.yellow('\n⚠ Could not detect repository'));
     }
 
     // Interactive setup
     console.log(chalk.cyan.bold('\n📝 Setup GuardScan\n'));
 
-    const setupMode = await selectSetupMode();
+    perfTracker.start('interactive-setup');
+    
+    // Check if running in non-interactive mode (no TTY)
+    const isNonInteractive = !process.stdin.isTTY;
+    let setupMode: SetupMode;
+    
+    if (isNonInteractive) {
+      // In non-interactive mode, default to static analysis
+      logger.debug('Non-interactive mode detected, using static analysis');
+      setupMode = 'static';
+    } else {
+      setupMode = await selectSetupMode();
+    }
+    logger.debug('Setup mode selected', { setupMode });
 
     switch (setupMode) {
       case 'cloud':
@@ -63,9 +121,18 @@ export async function initCommand(): Promise<void> {
         await setupStaticOnly(config);
         break;
     }
+    perfTracker.end('interactive-setup');
 
     // Save config
+    perfTracker.start('save-config');
     configManager.save(config);
+    perfTracker.end('save-config');
+    
+    logger.debug('Config saved', {
+      provider: config.provider,
+      telemetryEnabled: config.telemetryEnabled,
+      offlineMode: config.offlineMode
+    });
 
     // Show next steps
     console.log(chalk.cyan('\n📝 Next Steps:'));
@@ -84,9 +151,14 @@ export async function initCommand(): Promise<void> {
     console.log(chalk.gray('  - No source code is ever transmitted'));
     console.log(chalk.gray('  - Only anonymized metadata is collected'));
     console.log(chalk.gray('  - Telemetry can be disabled via config\n'));
+    
+    perfTracker.end('init-total');
+    logger.debug('Init command completed successfully');
+    perfTracker.displaySummary();
   } catch (error) {
-    console.error(chalk.red('\n✗ Initialization failed:'), error);
-    process.exit(1);
+    perfTracker.end('init-total');
+    perfTracker.displaySummary();
+    handleCommandError(error, 'Initialization');
   }
 }
 
@@ -180,9 +252,16 @@ async function setupCloudAI(config: any): Promise<void> {
   // Test connection if API key provided
   if (answers.apiKey) {
     console.log(chalk.gray('\nTesting connection...'));
+    perfTracker.start('test-ai-connection');
     try {
       const provider = ProviderFactory.create(config.provider, config.apiKey);
       const isAvailable = await provider.testConnection();
+      perfTracker.end('test-ai-connection');
+
+      logger.debug('AI connection test result', { 
+        provider: provider.getName(), 
+        isAvailable 
+      });
 
       if (isAvailable) {
         console.log(chalk.green(`✓ Successfully connected to ${provider.getName()}`));
@@ -191,10 +270,13 @@ async function setupCloudAI(config: any): Promise<void> {
         console.log(chalk.gray('Please check your API key and internet connection'));
       }
     } catch (error) {
+      perfTracker.end('test-ai-connection');
+      logger.warn('AI connection test failed', { error });
       console.log(chalk.yellow('⚠ Connection test failed'));
       console.log(chalk.gray('You can still proceed, but reviews may fail'));
     }
   } else {
+    logger.debug('No API key provided, will use environment variable');
     console.log(chalk.gray('\nℹ  Using environment variable for API key'));
     console.log(chalk.gray(`   Set ${getEnvVarName(config.provider)} in your environment`));
   }
@@ -244,17 +326,27 @@ async function setupLocalAI(config: any): Promise<void> {
 async function setupStaticOnly(config: any): Promise<void> {
   console.log(chalk.cyan.bold('\n🛡️  Setting up Static Analysis\n'));
 
-  const answers = await inquirer.prompt([
-    {
-      type: 'confirm',
-      name: 'telemetry',
-      message: 'Enable telemetry? (helps improve GuardScan)',
-      default: true,
-    },
-  ]);
+  // Check if running in non-interactive mode
+  const isNonInteractive = !process.stdin.isTTY;
+  let telemetryEnabled = true; // Default to enabled
+  
+  if (isNonInteractive) {
+    // In non-interactive mode, use defaults
+    logger.debug('Non-interactive mode: using default telemetry setting');
+  } else {
+    const answers = await inquirer.prompt([
+      {
+        type: 'confirm',
+        name: 'telemetry',
+        message: 'Enable telemetry? (helps improve GuardScan)',
+        default: true,
+      },
+    ]);
+    telemetryEnabled = answers.telemetry;
+  }
 
   config.provider = 'none' as AIProvider;
-  config.telemetryEnabled = answers.telemetry;
+  config.telemetryEnabled = telemetryEnabled;
   config.offlineMode = true; // Always offline for static only
 
   console.log(chalk.green('\n✓ Configuration saved'));

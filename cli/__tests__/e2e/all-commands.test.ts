@@ -67,7 +67,7 @@ const API_KEY = "sk-1234567890abcdef";
     });
     
     it('2. guardscan config - View configuration', () => {
-      const output = runCommand('config --no-telemetry');
+      const output = runCommand('config --show --no-telemetry');
       expect(output).toBeDefined();
     });
     
