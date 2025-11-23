@@ -319,7 +319,7 @@ export async function handleMonitoring(
       : memoryRateLimiters.monitoring;
 
     const rateLimitResult = env.RATE_LIMIT_KV
-      ? await rateLimiter.check(clientId)
+      ? rateLimiter.check(clientId)
       : Promise.resolve(rateLimiter.check(clientId));
 
     const result = await rateLimitResult;
@@ -486,7 +486,7 @@ export async function handleMonitoringStats(
       : memoryRateLimiters.monitoringStats;
 
     const rateLimitResult = env.RATE_LIMIT_KV
-      ? await rateLimiter.check(clientId)
+      ? rateLimiter.check(clientId)
       : Promise.resolve(rateLimiter.check(clientId));
 
     const result = await rateLimitResult;

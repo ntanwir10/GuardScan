@@ -15,7 +15,11 @@
 import { Env } from "../index";
 import { CachedDatabase } from "../db-cached";
 import { TelemetryEvent as DbTelemetryEvent } from "../db";
-import { KVRateLimiter, createRateLimitResponse, addRateLimitHeaders } from "../utils/rate-limiter-kv";
+import {
+  KVRateLimiter,
+  createRateLimitResponse,
+  addRateLimitHeaders,
+} from "../utils/rate-limiter-kv";
 import { REQUEST_LIMITS, RATE_LIMITS } from "../constants";
 import { logError } from "../utils/error-handler";
 import { createDebugLogger } from "../utils/debug-logger";
@@ -43,28 +47,33 @@ export async function handleTelemetry(
   request: Request,
   env: Env
 ): Promise<Response> {
-  const logger = createDebugLogger('telemetry', env.ENVIRONMENT);
+  const logger = createDebugLogger("telemetry", env.ENVIRONMENT);
   const startTime = Date.now();
-  logger.debug('Telemetry request received');
-  
-  let clientId = 'unknown';
-  
+  logger.debug("Telemetry request received");
+
+  let clientId = "unknown";
+
   try {
     // Validate Content-Length to prevent memory exhaustion attacks
-    const contentLength = parseInt(request.headers.get('Content-Length') || '0');
-    logger.debug('Request size check', { contentLength });
-    
+    const contentLength = parseInt(
+      request.headers.get("Content-Length") || "0"
+    );
+    logger.debug("Request size check", { contentLength });
+
     if (contentLength > REQUEST_LIMITS.MAX_REQUEST_SIZE_BYTES) {
-      logger.warn('Request too large', { contentLength, maxSize: REQUEST_LIMITS.MAX_REQUEST_SIZE_BYTES });
+      logger.warn("Request too large", {
+        contentLength,
+        maxSize: REQUEST_LIMITS.MAX_REQUEST_SIZE_BYTES,
+      });
       return new Response(
         JSON.stringify({
-          error: 'Request too large',
+          error: "Request too large",
           maxSize: `${REQUEST_LIMITS.MAX_REQUEST_SIZE_MB}MB`,
-          received: `${(contentLength / 1024 / 1024).toFixed(2)}MB`
+          received: `${(contentLength / 1024 / 1024).toFixed(2)}MB`,
         }),
         {
           status: 413,
-          headers: { 'Content-Type': 'application/json' }
+          headers: { "Content-Type": "application/json" },
         }
       );
     }
@@ -86,24 +95,27 @@ export async function handleTelemetry(
     // Rate limiting check - use KV-based if available, otherwise fall back to in-memory
     const rateLimiter = env.RATE_LIMIT_KV
       ? new KVRateLimiter(
-          { windowMs: RATE_LIMITS.TELEMETRY_WINDOW_MS, maxRequests: RATE_LIMITS.TELEMETRY_MAX_REQUESTS },
+          {
+            windowMs: RATE_LIMITS.TELEMETRY_WINDOW_MS,
+            maxRequests: RATE_LIMITS.TELEMETRY_MAX_REQUESTS,
+          },
           env.RATE_LIMIT_KV,
-          'telemetry'
+          "telemetry"
         )
       : memoryRateLimiters.telemetry;
-    
+
     const rateLimitResult = env.RATE_LIMIT_KV
-      ? await rateLimiter.check(clientId)
+      ? rateLimiter.check(clientId)
       : Promise.resolve(rateLimiter.check(clientId));
-    
+
     const result = await rateLimitResult;
-    
+
     if (!result.allowed) {
-      logger.warn(`Rate limit exceeded for client: ${clientId}`, { remaining: result.remaining, resetAt: result.resetAt });
-      return createRateLimitResponse(
-        result.resetAt,
-        result.limit
-      );
+      logger.warn(`Rate limit exceeded for client: ${clientId}`, {
+        remaining: result.remaining,
+        resetAt: result.resetAt,
+      });
+      return createRateLimitResponse(result.resetAt, result.limit);
     }
 
     // If Supabase not configured, accept but don't store (graceful degradation)
@@ -129,25 +141,30 @@ export async function handleTelemetry(
 
       if (!existingClient) {
         // New client - create record
-        logger.debug('New client detected, creating record');
+        logger.debug("New client detected, creating record");
         await db.createClient(clientId, cliVersion);
       } else {
         // Existing client - update last seen
-        logger.debug('Existing client, updating activity');
+        logger.debug("Existing client, updating activity");
         await db.updateClientActivity(clientId, cliVersion);
       }
       const clientTrackingDuration = Date.now() - clientTrackingStart;
-      logger.performance('db-client-tracking', clientTrackingDuration, { clientId, isNew: !existingClient });
+      logger.performance("db-client-tracking", clientTrackingDuration, {
+        clientId,
+        isNew: !existingClient,
+      });
     } catch (clientError) {
       const clientTrackingDuration = Date.now() - clientTrackingStart;
-      logger.performance('db-client-tracking', clientTrackingDuration, { success: false });
-      logger.error('Client tracking failed', clientError);
+      logger.performance("db-client-tracking", clientTrackingDuration, {
+        success: false,
+      });
+      logger.error("Client tracking failed", clientError);
       // Don't fail if client tracking fails - telemetry is more important
-      logError({ handler: 'telemetry', clientId }, clientError);
+      logError({ handler: "telemetry", clientId }, clientError);
     }
 
     // Transform events for database
-    logger.debug('Transforming telemetry events for database insertion');
+    logger.debug("Transforming telemetry events for database insertion");
     const dbEvents = events.map((event) => ({
       client_id: clientId,
       repo_id: repoId,
@@ -164,18 +181,20 @@ export async function handleTelemetry(
     logger.debug(`Inserting ${dbEvents.length} telemetry events`);
     await db.insertTelemetry(dbEvents as Omit<DbTelemetryEvent, "event_id">[]);
     const insertDuration = Date.now() - insertStart;
-    logger.performance('db-insert-telemetry', insertDuration, { eventCount: dbEvents.length });
+    logger.performance("db-insert-telemetry", insertDuration, {
+      eventCount: dbEvents.length,
+    });
 
     const totalDuration = Date.now() - startTime;
-    logger.performance('telemetry-request-total', totalDuration, {
+    logger.performance("telemetry-request-total", totalDuration, {
       eventCount: events.length,
       clientId,
-      repoId
+      repoId,
     });
-    logger.debug('Telemetry request completed', {
+    logger.debug("Telemetry request completed", {
       success: true,
       eventsProcessed: events.length,
-      duration: totalDuration
+      duration: totalDuration,
     });
 
     const response = new Response(JSON.stringify({ status: "ok" }), {
@@ -186,7 +205,7 @@ export async function handleTelemetry(
     // Add rate limit headers to response
     return addRateLimitHeaders(response, result);
   } catch (error: unknown) {
-    logError({ handler: 'telemetry', clientId }, error);
+    logError({ handler: "telemetry", clientId }, error);
     // Don't fail hard - telemetry is optional
     return new Response(
       JSON.stringify({
