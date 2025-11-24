@@ -9,7 +9,6 @@ dist/
 *.d.ts.map
 
 # Except the root config files
-!wrangler.toml
 !package.json
 
 # Wrangler
@@ -46,3 +45,4 @@ supabase/
 
 # Scripts - deployment and secrets should stay private
 scripts/
+# wrangler.toml is ignored via root .gitignore (backend/wrangler.toml)
