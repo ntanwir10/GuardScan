@@ -1,7 +1,8 @@
 node_modules/
 dist/
-.env
-.env.local
+# Environment files - comprehensive pattern
+.env*
+!.env.example
 *.log
 .DS_Store
 .ai-review/
