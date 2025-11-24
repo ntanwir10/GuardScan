@@ -55,6 +55,8 @@ docs/PHASE_4_5_IMPLEMENTATION_PLAN.md
 docs/CLOUDFLARE_DOMAIN_SETUP.md
 docs/database-schema.md
 docs/deployment.md
+docs/API.md
+docs/RATE_LIMITING.md
 
 # CLI test artifacts
 cli/code-review-*.md
