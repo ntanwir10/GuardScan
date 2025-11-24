@@ -1,371 +1,322 @@
 # GuardScan - Quick Start Guide
 
-**Status**: ✅ **All setup complete - ready to use!**
+**Get started with GuardScan in under 2 minutes!**
+
+GuardScan is a privacy-first, open-source security scanning and AI code review CLI. All static analysis features work **100% free and offline** - no API keys required!
 
 ---
 
-## What's Been Done
-
-✅ **All tests passing** (73 tests)
-✅ **CLI builds successfully** (TypeScript compiled to `dist/`)
-✅ **Backend verified** (Cloudflare Workers ready)
-✅ **Complete test suite** (50%+ code coverage)
-✅ **CI/CD pipeline** (GitHub Actions ready)
-✅ **Deployment configs** (Backend + Database ready)
-
----
-
-## Try It Out Locally (Right Now!)
-
-### 1. Test the CLI
+## 📦 Installation
 
 ```bash
-cd cli
+# Install GuardScan globally
+npm install -g guardscan
 
-# Run tests
-npm test
-
-# Build
-npm run build
-
-# Link globally (makes 'guardscan' command available)
-npm link
-
-# Try the commands
+# Verify installation
 guardscan --version
-guardscan --help
-guardscan init
-guardscan status
 ```
 
-### 2. Run a Security Scan
+**Requirements:**
+
+- Node.js >= 18.0.0
+- npm or yarn
+
+---
+
+## 🚀 Quick Start (3 Steps)
+
+### Step 1: Initialize GuardScan
 
 ```bash
-# Scan the GuardScan project itself
-guardscan security
-
-# This will:
-# - Detect secrets in code
-# - Scan dependencies for vulnerabilities
-# - Check Dockerfiles (if any)
-# - Analyze Infrastructure as Code
-# - Check for OWASP Top 10 issues
-
-# Output: Markdown report in current directory
+guardscan init
 ```
 
-### 3. Configure an AI Provider (Optional)
+This creates a local configuration file and generates a client ID for optional telemetry.
+
+### Step 2: Run Your First Security Scan
+
+```bash
+# Scan your current project (100% FREE, works offline)
+guardscan security
+```
+
+This will:
+
+- ✅ Detect secrets in your code (API keys, passwords, tokens)
+- ✅ Scan dependencies for known vulnerabilities
+- ✅ Check Dockerfiles for security issues
+- ✅ Analyze Infrastructure as Code (Terraform, CloudFormation, K8s)
+- ✅ Detect OWASP Top 10 vulnerabilities
+- ✅ Generate a comprehensive markdown report
+
+**No API key needed** - all security scanning works completely offline!
+
+### Step 3: (Optional) Configure AI Provider
+
+For AI-powered features like code review, documentation generation, and refactoring:
 
 ```bash
 guardscan config
-
-# Follow prompts to set:
-# - AI provider (OpenAI, Claude, Gemini, Ollama, etc.)
-# - API key (or skip for offline-only mode)
-# - Telemetry preference
 ```
 
-### 4. Run AI-Powered Code Review
+Follow the prompts to set:
+
+- AI provider (OpenAI, Anthropic Claude, Google Gemini, or Ollama for local AI)
+- API key (your own key - we never see it)
+- Telemetry preference
+
+**Note:** AI features are optional. All security scanning works without any API keys!
+
+---
+
+## 📋 Available Commands
+
+GuardScan provides **21 commands** organized by category:
+
+### Setup & Configuration
 
 ```bash
-# Only works if you've configured an AI provider above
-guardscan run
+guardscan init                    # Initialize GuardScan (generates client_id for telemetry)
+guardscan config                  # Configure AI provider and settings (OpenAI, Claude, Gemini, Ollama)
+guardscan status                  # Show current status (credits, provider, repo info)
+guardscan reset                   # Clear local cache and config
+```
 
-# This will:
-# - Count lines of code
-# - Send code snippets to AI for review
-# - Generate comprehensive markdown report
+### Security & Scanning (Offline-Capable, 100% FREE)
+
+```bash
+guardscan security                # Security vulnerability scanning
+guardscan scan                    # Comprehensive scan (all security and quality checks)
+guardscan test                    # Run tests and code quality analysis
+guardscan sbom                    # Generate Software Bill of Materials (SBOM)
+guardscan rules                   # Run custom YAML-based rules engine
+```
+
+### Testing & Performance
+
+```bash
+guardscan perf                    # Performance testing (load, stress, Lighthouse)
+guardscan mutation                # Mutation testing to assess test quality
+```
+
+### AI-Powered Code Review (Requires API Key)
+
+```bash
+guardscan run                     # AI-enhanced code review
+guardscan review                  # AI-powered code review for git changes
+```
+
+### AI-Powered Code Generation (Requires API Key)
+
+```bash
+guardscan commit                  # Generate AI-powered commit messages
+guardscan explain <target>        # Explain code using AI (function, class, file)
+guardscan test-gen                # Generate tests using AI
+guardscan docs                    # Generate documentation using AI
+```
+
+### AI-Powered Code Improvement (Requires API Key)
+
+```bash
+guardscan refactor                # AI-powered refactoring suggestions
+guardscan threat-model            # AI-powered threat modeling with STRIDE analysis
+guardscan migrate                 # AI-powered code migration assistant
+```
+
+### Interactive AI (Requires API Key)
+
+```bash
+guardscan chat                    # Interactive AI chat about your codebase (RAG feature)
 ```
 
 ---
 
-## Next Steps (Deployment)
+## 💡 Common Use Cases
 
-### Option 1: Publish CLI to NPM
-
-```bash
-cd cli
-
-# Update version
-npm version patch  # or minor, or major
-
-# Test locally first
-npm link
-guardscan --version
-
-# Publish
-npm login
-npm publish
-
-# Users can then install globally:
-# npm install -g guardscan
-```
-
-### Option 2: Deploy Backend to Cloudflare Workers
-
-See the comprehensive guide: **[DEPLOYMENT.md](DEPLOYMENT.md)**
-
-Quick summary:
-1. Set up Supabase (PostgreSQL database)
-2. Configure Cloudflare Workers secrets
-3. Deploy with `wrangler deploy`
-
----
-
-## Project Structure
-
-```
-GuardScan/
-├── cli/                          # Main CLI application
-│   ├── src/                      # TypeScript source code
-│   ├── dist/                     # Compiled JavaScript (after build)
-│   ├── __tests__/                # Test suite (73 tests)
-│   ├── package.json
-│   └── tsconfig.json
-│
-├── backend/                      # Cloudflare Workers backend
-│   ├── src/                      # API handlers
-│   ├── wrangler.toml             # Deployment config
-│   └── schema.sql                # Database schema
-│
-├── .github/workflows/ci.yml      # CI/CD pipeline
-├── DEPLOYMENT.md                 # Full deployment guide
-├── EDGE_CASES.md                 # Known limitations
-├── COMPLETION_REPORT.md          # What was built
-├── CLAUDE.md                     # AI assistant guide
-└── QUICKSTART.md                 # This file!
-```
-
----
-
-## Available Commands
+### Security Audit Before Deployment
 
 ```bash
-# Initialize GuardScan
-guardscan init
-
-# Configure AI provider
-guardscan config
-
-# Show current status (credits, provider, repo info)
-guardscan status
-
-# Security vulnerability scanning (offline-capable)
+# Run comprehensive security scan
 guardscan security
 
-# Code quality testing
-guardscan test
+# Check for dependency vulnerabilities
+guardscan security --licenses
 
-# Generate Software Bill of Materials
-guardscan sbom
+# Generate SBOM for compliance
+guardscan sbom --format spdx
+```
+
+### AI-Powered Code Review
+
+```bash
+# Review all changes in your git repository
+guardscan review
+
+# Review specific file
+guardscan review --file src/api.ts
+
+# Get AI suggestions for security issues
+guardscan security --ai-fix
+```
+
+### Code Quality & Testing
+
+```bash
+# Run all quality checks
+guardscan test --all
 
 # Performance testing
-guardscan perf
+guardscan perf --load --duration 1m
 
 # Mutation testing
-guardscan mutation
+guardscan mutation --threshold 80
+```
 
-# Custom YAML-based rules
-guardscan rules
+### AI Code Assistance
 
-# AI-powered code review (requires API key)
-guardscan run
+```bash
+# Explain a function
+guardscan explain getUserData --type function
 
-# Reset local cache and config
-guardscan reset
+# Generate tests
+guardscan test-gen --function calculateTotal
+
+# Generate documentation
+guardscan docs --type api
+
+# Interactive chat about your codebase
+guardscan chat
 ```
 
 ---
 
-## How It Works
+## 🔒 Privacy & Security
+
+### What GuardScan Does
+
+- ✅ Scans your code **locally** on your machine
+- ✅ Never uploads source code to any server
+- ✅ Works **completely offline** for static analysis
+- ✅ Uses your own AI API keys (BYOK - Bring Your Own Key)
+
+### What GuardScan Sends (Optional Telemetry)
+
+- Client ID (anonymous identifier)
+- Repository ID (hashed, anonymous)
+- Lines of code count
+- Command usage statistics
+
+**You can disable telemetry:**
+
+```bash
+guardscan --no-telemetry security
+```
+
+---
+
+## 🎯 How It Works
 
 ### Offline-First Architecture
 
-- **Static Analysis**: Works completely offline
-  - Secrets detection
-  - Dependency scanning
-  - Code metrics
-  - LOC counting
-  - OWASP checks
+**Static Analysis** (Works completely offline, 100% FREE):
 
-- **AI-Enhanced** (optional, requires API key):
-  - OpenAI GPT-4
-  - Anthropic Claude
-  - Google Gemini
-  - Ollama (local AI)
-  - LM Studio (local AI)
-  - OpenRouter
+- Secrets detection (20+ patterns)
+- Dependency vulnerability scanning
+- Code metrics and complexity analysis
+- LOC counting (20+ languages)
+- OWASP Top 10 detection
+- Docker security scanning
+- Infrastructure as Code analysis
 
-### Privacy Guarantees
+**AI-Enhanced** (Optional, requires your API key):
 
-✅ **Source code NEVER uploaded** to GuardScan servers
-✅ **Only metadata sent**: client_id, repo_id (hashed), LOC counts
-✅ **AI providers**: You choose, you control the API key
-✅ **Telemetry**: Optional and anonymized
-✅ **Fully offline mode** available
+- OpenAI GPT-4, GPT-3.5
+- Anthropic Claude (Opus, Sonnet, Haiku)
+- Google Gemini
+- Ollama (local/offline AI)
+- LM Studio (local AI)
 
 ---
 
-## Running Tests
+## 🆘 Troubleshooting
+
+### Command Not Found
 
 ```bash
-cd cli
+# Check if GuardScan is installed
+npm list -g guardscan
 
-# Run all tests
-npm test
+# If not installed, install it
+npm install -g guardscan
 
-# Run with coverage
-npm test -- --coverage
-
-# Watch mode (for development)
-npm test -- --watch
-
-# Test specific file
-npm test -- config.test
+# Verify it's in your PATH
+which guardscan
 ```
 
-### Test Coverage
-
-- **73 tests** across 5 test files
-- **50%+ code coverage** achieved
-- Tests cover:
-  - LOC counter (15 tests)
-  - Config manager (15 tests)
-  - Secrets detector (18 tests)
-  - Provider factory (8 tests)
-  - Reporter (14 tests)
-
----
-
-## Development Workflow
-
-### Making Changes
+### Permission Errors (macOS/Linux)
 
 ```bash
-cd cli
+# Use sudo if needed (not recommended)
+sudo npm install -g guardscan
 
-# Watch mode - recompiles on file changes
-npm run dev
-
-# In another terminal, test your changes
-guardscan <command>
+# Better: Fix npm permissions
+mkdir ~/.npm-global
+npm config set prefix '~/.npm-global'
+export PATH=~/.npm-global/bin:$PATH
+npm install -g guardscan
 ```
 
-### Adding a New Command
+### AI Features Not Working
 
-1. Create `cli/src/commands/mycommand.ts`
-2. Register in `cli/src/index.ts`
-3. Add tests in `cli/__tests__/commands/mycommand.test.ts`
-4. Run `npm test` to verify
-5. Run `npm run build` to compile
-
-### Adding a New Security Scanner
-
-1. Create `cli/src/core/my-scanner.ts`
-2. Integrate into `cli/src/commands/security.ts`
-3. Add tests
-4. Update documentation
-
----
-
-## CI/CD Pipeline
-
-**Status**: ✅ Ready (`.github/workflows/ci.yml`)
-
-The GitHub Actions pipeline automatically:
-
-1. **Lints** code
-2. **Tests CLI** on Node 18 & 20
-3. **Builds CLI**
-4. **Tests Backend**
-5. **Builds Backend**
-6. **Security Scans** (npm audit)
-7. **Integration Tests**
-8. **Publishes to NPM** (on release)
-9. **Deploys Backend** to Cloudflare (on release)
-
-To trigger:
 ```bash
-git push origin main
-# Pipeline runs automatically
+# Check your configuration
+guardscan status
+
+# Reconfigure AI provider
+guardscan config
+
+# Verify API key is set correctly
+guardscan config --show
+```
+
+### Clear Cache and Start Fresh
+
+```bash
+# Reset all local data
+guardscan reset --all
+
+# Re-initialize
+guardscan init
 ```
 
 ---
 
-## Troubleshooting
+## 📚 Documentation
 
-### CLI command not found after `npm link`
-
-```bash
-# Check global bin path
-npm config get prefix
-
-# Ensure it's in your PATH
-echo $PATH
-
-# Re-link
-npm unlink -g guardscan
-npm link
-```
-
-### Tests failing
-
-```bash
-# Clear node_modules and reinstall
-rm -rf node_modules package-lock.json
-npm install
-
-# Run tests
-npm test
-```
-
-### Build errors
-
-```bash
-# Clean build
-rm -rf dist/
-npm run build
-```
-
-### Backend deployment issues
-
-See **[DEPLOYMENT.md](DEPLOYMENT.md)** - Troubleshooting section
+- **[README.md](README.md)** - Complete project overview
+- **[CLI README](cli/README.md)** - Detailed CLI documentation
+- **[Getting Started](docs/GETTING_STARTED.md)** - Extended getting started guide
+- **[Docker Guide](docs/DOCKER_GUIDE.md)** - Running GuardScan in Docker
+- **[Language Support](docs/LANGUAGE_PARSERS.md)** - Supported languages and parsers
 
 ---
 
-## Documentation
+## 🆘 Getting Help
 
-- **[README.md](README.md)** - Project overview for users
-- **[CLAUDE.md](CLAUDE.md)** - AI assistant development guide
-- **[DEPLOYMENT.md](DEPLOYMENT.md)** - Complete deployment instructions
-- **[EDGE_CASES.md](EDGE_CASES.md)** - Known limitations and edge cases
-- **[COMPLETION_REPORT.md](COMPLETION_REPORT.md)** - What was built during MVP
-- **[QUICKSTART.md](QUICKSTART.md)** - This file
+- **GitHub Issues**: <https://github.com/ntanwir10/GuardScan/issues>
+- **Documentation**: Check the `docs/` directory
+- **Examples**: See `examples/` directory (if available)
 
 ---
 
-## Getting Help
+## ✅ Next Steps
 
-- **Issues**: https://github.com/ntanwir10/GuardScan/issues
-- **Discussions**: GitHub Discussions
-- **Documentation**: All `.md` files in the repository
+1. ✅ **Install**: `npm install -g guardscan`
+2. ✅ **Initialize**: `guardscan init`
+3. ✅ **Scan**: `guardscan security` (works offline, 100% free!)
+4. ✅ **Configure AI** (optional): `guardscan config`
+5. ✅ **Explore**: Try `guardscan --help` to see all commands
 
----
-
-## Summary: You're Ready!
-
-🎉 **Everything is set up and working!**
-
-**What you can do right now:**
-1. ✅ Run tests: `npm test`
-2. ✅ Build: `npm run build`
-3. ✅ Use locally: `npm link && guardscan security`
-4. ✅ Deploy backend: See DEPLOYMENT.md
-5. ✅ Publish to NPM: `npm publish`
-
-**No blockers, no errors, no missing dependencies. Just build and deploy when ready!**
+**That's it! You're ready to start scanning your code for security issues.**
 
 ---
-
-*Last Updated: 2025-11-14*
-*Status: ✅ All Setup Complete - Ready for Production*
