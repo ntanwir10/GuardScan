@@ -1,6 +1,6 @@
 {
   "name": "guardscan",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "GuardScan - Privacy-first AI Code Review CLI with comprehensive security scanning",
   "main": "dist/index.js",
   "bin": {
@@ -47,6 +47,7 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.68.0",
     "@google/generative-ai": "^0.1.3",
+    "typescript": "^5.3.3",
     "axios": "^1.6.2",
     "chalk": "^4.1.2",
     "chart.js": "^4.5.1",
@@ -74,8 +75,7 @@
     "@types/semver": "^7.7.1",
     "@types/uuid": "^9.0.8",
     "jest": "^29.7.0",
-    "ts-jest": "^29.4.5",
-    "typescript": "^5.3.3"
+    "ts-jest": "^29.4.5"
   },
   "engines": {
     "node": ">=18.0.0"

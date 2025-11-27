@@ -1,0 +1,31 @@
+version: '3.8'
+
+services:
+  alpine-test:
+    build:
+      context: ../..
+      dockerfile: cli/__tests__/docker/Dockerfile.test
+    image: guardscan-test:alpine
+    volumes:
+      - ../../cli:/workspace/cli:ro
+      - test-data:/workspace/test-data
+    environment:
+      - GUARDSCAN_HOME=/tmp/guardscan
+      - GUARDSCAN_DEBUG=true
+    working_dir: /workspace
+    command: sh -c "cd cli && npm install && npm run build && node dist/index.js --version"
+
+  debian-test:
+    image: node:lts
+    volumes:
+      - ../../cli:/workspace/cli:ro
+      - test-data:/workspace/test-data
+    environment:
+      - GUARDSCAN_HOME=/tmp/guardscan
+      - GUARDSCAN_DEBUG=true
+    working_dir: /workspace
+    command: sh -c "cd cli && npm install && npm run build && node dist/index.js --version"
+
+volumes:
+  test-data:
+

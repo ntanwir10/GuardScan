@@ -81,6 +81,10 @@ export class CodeExplainer {
     cache: AICache,
     repoRoot: string
   ) {
+    // Validate TypeScript is available before creating ASTParser
+    const { ensureTypeScript } = require("../utils/dependency-checker");
+    ensureTypeScript();
+    
     this.provider = provider;
     this.parser = new ASTParser();
     this.contextBuilder = new ContextBuilder(indexer, repoRoot, provider);

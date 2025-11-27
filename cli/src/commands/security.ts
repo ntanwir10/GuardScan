@@ -33,9 +33,15 @@ interface SecurityOptions {
   licenses?: boolean;
   aiFix?: boolean;
   interactive?: boolean;
+  debug?: boolean;
 }
 
 export async function securityCommand(options: SecurityOptions): Promise<void> {
+  // Log debug mode activation if enabled
+  if (options.debug || process.env.GUARDSCAN_DEBUG === 'true') {
+    logger.info('Debug mode enabled - verbose logging active');
+  }
+  
   logger.debug('Security command started', { options });
   perfTracker.start('security-total');
   const startTime = Date.now();

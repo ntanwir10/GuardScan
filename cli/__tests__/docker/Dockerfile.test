@@ -1,0 +1,30 @@
+# Test Dockerfile for GuardScan CLI
+# Used for testing GuardScan in various Docker environments
+
+FROM node:lts-alpine
+
+# Install build dependencies required for native modules
+RUN apk add --no-cache \
+    python3 \
+    make \
+    g++ \
+    pkgconfig \
+    cairo-dev \
+    pango-dev \
+    libjpeg-turbo-dev \
+    giflib-dev \
+    pixman-dev \
+    freetype-dev \
+    build-base \
+    git
+
+# Set working directory
+WORKDIR /workspace
+
+# Set environment variables for GuardScan
+ENV GUARDSCAN_HOME=/tmp/guardscan
+ENV NODE_ENV=test
+
+# Default command (can be overridden)
+CMD ["sh"]
+

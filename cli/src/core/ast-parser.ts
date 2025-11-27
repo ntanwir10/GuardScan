@@ -1,9 +1,42 @@
 // AST Parser for TypeScript/JavaScript
 // Parses code into structured format for AI analysis
 
-import * as ts from "typescript";
 import * as fs from "fs";
 import * as path from "path";
+import { createDebugLogger } from "../utils/debug-logger";
+import { isTypeScriptAvailable } from "../utils/dependency-checker";
+import type * as ts from "typescript";
+
+const logger = createDebugLogger("ast-parser");
+
+// Lazy loading for TypeScript - only load when needed
+let typescriptModule: typeof import("typescript") | null = null;
+
+/**
+ * Get TypeScript module, loading it lazily on first access
+ * @throws Error with installation instructions if TypeScript is not available
+ */
+function getTypeScript(): typeof import("typescript") {
+  if (typescriptModule) {
+    return typescriptModule;
+  }
+
+  try {
+    const ts = require("typescript") as typeof import("typescript");
+    typescriptModule = ts;
+    logger.debug("TypeScript module loaded successfully");
+    return ts;
+  } catch (error: any) {
+    const errorMessage =
+      "TypeScript is required for AST parsing but not installed.\n" +
+      "Install it with: npm install typescript\n" +
+      "Or ensure it is listed in your package.json dependencies.\n" +
+      `Original error: ${error.message || String(error)}`;
+
+    logger.error("Failed to load TypeScript module", error);
+    throw new Error(errorMessage);
+  }
+}
 
 /**
  * Represents a parsed function
@@ -106,41 +139,66 @@ export class ASTParser {
    * Parse a TypeScript/JavaScript file
    */
   async parseFile(filePath: string): Promise<ParsedFile> {
-    const sourceCode = fs.readFileSync(filePath, "utf-8");
-    const language = this.detectLanguage(filePath);
+    // Validate TypeScript is available before attempting to parse
+    if (!isTypeScriptAvailable()) {
+      throw new Error(
+        "TypeScript is required for AST parsing but not installed.\n" +
+          "Install it with: npm install typescript\n" +
+          "Or ensure it is listed in your package.json dependencies."
+      );
+    }
 
-    // Create TypeScript source file
-    const sourceFile = ts.createSourceFile(
-      filePath,
-      sourceCode,
-      ts.ScriptTarget.Latest,
-      true
-    );
+    try {
+      const sourceCode = fs.readFileSync(filePath, "utf-8");
+      const language = this.detectLanguage(filePath);
+      const ts = getTypeScript();
 
-    // Extract all elements
-    const functions = this.extractFunctions(sourceFile, filePath);
-    const classes = this.extractClasses(sourceFile, filePath);
-    const imports = this.extractImports(sourceFile);
-    const exports = this.extractExports(sourceFile);
+      // Create TypeScript source file
+      const sourceFile = ts.createSourceFile(
+        filePath,
+        sourceCode,
+        ts.ScriptTarget.Latest,
+        true
+      );
 
-    // Calculate metrics
-    const loc = this.countLOC(sourceCode);
-    const complexity = this.calculateFileComplexity(functions, classes);
-    const hash = this.hashContent(sourceCode);
+      // Extract all elements
+      const functions = this.extractFunctions(sourceFile, filePath);
+      const classes = this.extractClasses(sourceFile, filePath);
+      const imports = this.extractImports(sourceFile);
+      const exports = this.extractExports(sourceFile);
 
-    return {
-      path: filePath,
-      language,
-      sourceCode,
-      hash,
-      loc,
-      functions,
-      classes,
-      imports,
-      exports,
-      complexity,
-      lastModified: fs.statSync(filePath).mtime,
-    };
+      // Calculate metrics
+      const loc = this.countLOC(sourceCode);
+      const complexity = this.calculateFileComplexity(functions, classes);
+      const hash = this.hashContent(sourceCode);
+
+      return {
+        path: filePath,
+        language,
+        sourceCode,
+        hash,
+        loc,
+        functions,
+        classes,
+        imports,
+        exports,
+        complexity,
+        lastModified: fs.statSync(filePath).mtime,
+      };
+    } catch (error: any) {
+      // Provide user-friendly error messages
+      if (error.message && error.message.includes("TypeScript is required")) {
+        throw error; // Re-throw dependency errors as-is
+      }
+
+      logger.error(`Failed to parse file: ${filePath}`, error);
+      throw new Error(
+        `Failed to parse file "${filePath}": ${
+          error.message || String(error)
+        }\n` +
+          "If this is a TypeScript/JavaScript file, ensure TypeScript is installed."
+      );
+    }
   }
 
   /**
@@ -159,6 +217,7 @@ export class ASTParser {
     filePath: string
   ): ParsedFunction[] {
     const functions: ParsedFunction[] = [];
+    const ts = getTypeScript();
 
     const visit = (node: ts.Node) => {
       // Function declarations
@@ -170,17 +229,19 @@ export class ASTParser {
 
       // Arrow functions assigned to variables
       else if (ts.isVariableStatement(node)) {
-        node.declarationList.declarations.forEach((declaration) => {
-          if (
-            declaration.initializer &&
-            (ts.isArrowFunction(declaration.initializer) ||
-              ts.isFunctionExpression(declaration.initializer))
-          ) {
-            functions.push(
-              this.parseVariableFunction(declaration, sourceFile, filePath)
-            );
+        node.declarationList.declarations.forEach(
+          (declaration: ts.VariableDeclaration) => {
+            if (
+              declaration.initializer &&
+              (ts.isArrowFunction(declaration.initializer) ||
+                ts.isFunctionExpression(declaration.initializer))
+            ) {
+              functions.push(
+                this.parseVariableFunction(declaration, sourceFile, filePath)
+              );
+            }
           }
-        });
+        );
       }
 
       // Method declarations (handled in class extraction)
@@ -200,6 +261,7 @@ export class ASTParser {
     sourceFile: ts.SourceFile,
     filePath: string
   ): ParsedFunction {
+    const ts = getTypeScript();
     const name = node.name?.getText(sourceFile) || "anonymous";
     const { line, character } = sourceFile.getLineAndCharacterOfPosition(
       node.getStart()
@@ -213,7 +275,8 @@ export class ASTParser {
     const body = node.body?.getText(sourceFile) || "";
     const complexity = this.calculateComplexity(node);
     const isAsync = !!node.modifiers?.some(
-      (m) => m.kind === ts.SyntaxKind.AsyncKeyword
+      (m: ts.ModifierLike) =>
+        ts.isModifier(m) && m.kind === ts.SyntaxKind.AsyncKeyword
     );
     const isExported = this.isExported(node);
     const documentation = this.extractDocumentation(node, sourceFile);
@@ -243,6 +306,7 @@ export class ASTParser {
     sourceFile: ts.SourceFile,
     filePath: string
   ): ParsedFunction {
+    const ts = getTypeScript();
     const name = declaration.name.getText(sourceFile);
     const { line } = sourceFile.getLineAndCharacterOfPosition(
       declaration.getStart()
@@ -259,7 +323,8 @@ export class ASTParser {
     const body = func.body.getText(sourceFile);
     const complexity = this.calculateComplexity(func);
     const isAsync = !!func.modifiers?.some(
-      (m) => m.kind === ts.SyntaxKind.AsyncKeyword
+      (m: ts.ModifierLike) =>
+        ts.isModifier(m) && m.kind === ts.SyntaxKind.AsyncKeyword
     );
     const isExported = this.isExported(declaration.parent.parent as ts.Node);
     const documentation = this.extractDocumentation(
@@ -292,6 +357,7 @@ export class ASTParser {
     filePath: string
   ): ParsedClass[] {
     const classes: ParsedClass[] = [];
+    const ts = getTypeScript();
 
     const visit = (node: ts.Node) => {
       if (ts.isClassDeclaration(node) && node.name) {
@@ -312,6 +378,7 @@ export class ASTParser {
     sourceFile: ts.SourceFile,
     filePath: string
   ): ParsedClass {
+    const ts = getTypeScript();
     const name = node.name?.getText(sourceFile) || "anonymous";
     const { line } = sourceFile.getLineAndCharacterOfPosition(node.getStart());
     const endLine = sourceFile.getLineAndCharacterOfPosition(
@@ -319,29 +386,30 @@ export class ASTParser {
     ).line;
     const isExported = this.isExported(node);
     const isAbstract = !!node.modifiers?.some(
-      (m) => m.kind === ts.SyntaxKind.AbstractKeyword
+      (m: ts.ModifierLike) =>
+        ts.isModifier(m) && m.kind === ts.SyntaxKind.AbstractKeyword
     );
 
     // Extract inheritance
     const extendsClause = node.heritageClauses?.find(
-      (c) => c.token === ts.SyntaxKind.ExtendsKeyword
+      (c: ts.HeritageClause) => c.token === ts.SyntaxKind.ExtendsKeyword
     );
     const implementsClause = node.heritageClauses?.find(
-      (c) => c.token === ts.SyntaxKind.ImplementsKeyword
+      (c: ts.HeritageClause) => c.token === ts.SyntaxKind.ImplementsKeyword
     );
 
-    const extendsList = extendsClause?.types.map((t) =>
-      t.expression.getText(sourceFile)
+    const extendsList = extendsClause?.types.map(
+      (t: ts.ExpressionWithTypeArguments) => t.expression.getText(sourceFile)
     );
-    const implementsList = implementsClause?.types.map((t) =>
-      t.expression.getText(sourceFile)
+    const implementsList = implementsClause?.types.map(
+      (t: ts.ExpressionWithTypeArguments) => t.expression.getText(sourceFile)
     );
 
     // Extract members
     const properties: Property[] = [];
     const methods: ParsedFunction[] = [];
 
-    node.members.forEach((member) => {
+    node.members.forEach((member: ts.ClassElement) => {
       if (ts.isPropertyDeclaration(member)) {
         properties.push(this.parseProperty(member, sourceFile));
       } else if (ts.isMethodDeclaration(member)) {
@@ -373,14 +441,17 @@ export class ASTParser {
     member: ts.PropertyDeclaration,
     sourceFile: ts.SourceFile
   ): Property {
+    const ts = getTypeScript();
     const name = member.name.getText(sourceFile);
     const type = member.type?.getText(sourceFile) || "any";
     const visibility = this.getVisibility(member);
     const isStatic = !!member.modifiers?.some(
-      (m) => m.kind === ts.SyntaxKind.StaticKeyword
+      (m: ts.ModifierLike) =>
+        ts.isModifier(m) && m.kind === ts.SyntaxKind.StaticKeyword
     );
     const isReadonly = !!member.modifiers?.some(
-      (m) => m.kind === ts.SyntaxKind.ReadonlyKeyword
+      (m: ts.ModifierLike) =>
+        ts.isModifier(m) && m.kind === ts.SyntaxKind.ReadonlyKeyword
     );
 
     return { name, type, visibility, isStatic, isReadonly };
@@ -394,6 +465,7 @@ export class ASTParser {
     sourceFile: ts.SourceFile,
     filePath: string
   ): ParsedFunction {
+    const ts = getTypeScript();
     const name = member.name.getText(sourceFile);
     const { line } = sourceFile.getLineAndCharacterOfPosition(
       member.getStart()
@@ -406,10 +478,12 @@ export class ASTParser {
     const body = member.body?.getText(sourceFile) || "";
     const complexity = this.calculateComplexity(member);
     const isAsync = !!member.modifiers?.some(
-      (m) => m.kind === ts.SyntaxKind.AsyncKeyword
+      (m: ts.ModifierLike) =>
+        ts.isModifier(m) && m.kind === ts.SyntaxKind.AsyncKeyword
     );
     const isStatic = !!member.modifiers?.some(
-      (m) => m.kind === ts.SyntaxKind.StaticKeyword
+      (m: ts.ModifierLike) =>
+        ts.isModifier(m) && m.kind === ts.SyntaxKind.StaticKeyword
     );
     const documentation = this.extractDocumentation(member, sourceFile);
     const dependencies = this.extractDependencies(member, sourceFile);
@@ -438,7 +512,7 @@ export class ASTParser {
     node: ts.FunctionDeclaration | ts.MethodDeclaration,
     sourceFile: ts.SourceFile
   ): Parameter[] {
-    return node.parameters.map((param) => ({
+    return node.parameters.map((param: ts.ParameterDeclaration) => ({
       name: param.name.getText(sourceFile),
       type: param.type?.getText(sourceFile) || "any",
       optional: !!param.questionToken,
@@ -453,7 +527,7 @@ export class ASTParser {
     node: ts.ArrowFunction | ts.FunctionExpression,
     sourceFile: ts.SourceFile
   ): Parameter[] {
-    return node.parameters.map((param) => ({
+    return node.parameters.map((param: ts.ParameterDeclaration) => ({
       name: param.name.getText(sourceFile),
       type: param.type?.getText(sourceFile) || "any",
       optional: !!param.questionToken,
@@ -476,8 +550,9 @@ export class ASTParser {
    */
   private extractImports(sourceFile: ts.SourceFile): Import[] {
     const imports: Import[] = [];
+    const ts = getTypeScript();
 
-    sourceFile.statements.forEach((statement) => {
+    sourceFile.statements.forEach((statement: ts.Statement) => {
       if (ts.isImportDeclaration(statement)) {
         const module = (statement.moduleSpecifier as ts.StringLiteral).text;
         const importClause = statement.importClause;
@@ -497,9 +572,11 @@ export class ASTParser {
         // Named imports
         if (importClause.namedBindings) {
           if (ts.isNamedImports(importClause.namedBindings)) {
-            importClause.namedBindings.elements.forEach((element) => {
-              importNames.push(element.name.text);
-            });
+            importClause.namedBindings.elements.forEach(
+              (element: ts.ImportSpecifier) => {
+                importNames.push(element.name.text);
+              }
+            );
           } else if (ts.isNamespaceImport(importClause.namedBindings)) {
             importNames.push(importClause.namedBindings.name.text);
             isNamespace = true;
@@ -518,8 +595,9 @@ export class ASTParser {
    */
   private extractExports(sourceFile: ts.SourceFile): Export[] {
     const exports: Export[] = [];
+    const ts = getTypeScript();
 
-    sourceFile.statements.forEach((statement) => {
+    sourceFile.statements.forEach((statement: ts.Statement) => {
       // Export declarations (export function/class/const)
       if (
         ts.isFunctionDeclaration(statement) ||
@@ -568,15 +646,17 @@ export class ASTParser {
           statement.exportClause &&
           ts.isNamedExports(statement.exportClause)
         ) {
-          statement.exportClause.elements.forEach((element) => {
-            const name = element.name.text;
-            const alias = element.propertyName?.text;
-            exports.push({
-              name: alias || name,
-              type: "variable",
-              isDefault: false,
-            });
-          });
+          statement.exportClause.elements.forEach(
+            (element: ts.ExportSpecifier) => {
+              const name = element.name.text;
+              const alias = element.propertyName?.text;
+              exports.push({
+                name: alias || name,
+                type: "variable",
+                isDefault: false,
+              });
+            }
+          );
         }
       }
     });
@@ -589,6 +669,7 @@ export class ASTParser {
    */
   private calculateComplexity(node: ts.Node): number {
     let complexity = 1; // Base complexity
+    const ts = getTypeScript();
 
     const visit = (n: ts.Node) => {
       // Decision points add to complexity
@@ -632,12 +713,12 @@ export class ASTParser {
   ): number {
     let total = 0;
 
-    functions.forEach((f) => {
+    functions.forEach((f: ParsedFunction) => {
       total += f.complexity;
     });
 
-    classes.forEach((c) => {
-      c.methods.forEach((m) => {
+    classes.forEach((c: ParsedClass) => {
+      c.methods.forEach((m: ParsedFunction) => {
         total += m.complexity;
       });
     });
@@ -652,6 +733,7 @@ export class ASTParser {
     node: ts.Node,
     sourceFile: ts.SourceFile
   ): string | undefined {
+    const ts = getTypeScript();
     // Get both the main comment text and tags
     const jsDocComments = ts.getJSDocCommentsAndTags(node);
     if (jsDocComments.length === 0) return undefined;
@@ -659,7 +741,7 @@ export class ASTParser {
     const parts: string[] = [];
 
     // Extract main comment text and tags
-    jsDocComments.forEach((comment) => {
+    jsDocComments.forEach((comment: ts.JSDoc | ts.JSDocTag) => {
       if (ts.isJSDoc(comment)) {
         // Main JSDoc comment text
         const commentText = comment.comment;
@@ -668,7 +750,9 @@ export class ASTParser {
         } else if (Array.isArray(commentText)) {
           // Multi-line comment
           const text = commentText
-            .map((c) => (typeof c === "string" ? c : c.text))
+            .map((c: string | { text: string }) =>
+              typeof c === "string" ? c : c.text
+            )
             .join(" ")
             .trim();
           if (text) parts.push(text);
@@ -676,14 +760,16 @@ export class ASTParser {
 
         // Also extract tags from the JSDoc node
         if (comment.tags) {
-          comment.tags.forEach((tag) => {
+          comment.tags.forEach((tag: ts.JSDocTag) => {
             if (tag.comment) {
               const tagComment =
                 typeof tag.comment === "string"
                   ? tag.comment
                   : Array.isArray(tag.comment)
                   ? tag.comment
-                      .map((c) => (typeof c === "string" ? c : c.text))
+                      .map((c: string | { text: string }) =>
+                        typeof c === "string" ? c : c.text
+                      )
                       .join(" ")
                   : "";
               if (tagComment) {
@@ -705,7 +791,9 @@ export class ASTParser {
               ? tag.comment
               : Array.isArray(tag.comment)
               ? tag.comment
-                  .map((c) => (typeof c === "string" ? c : c.text))
+                  .map((c: string | { text: string }) =>
+                    typeof c === "string" ? c : c.text
+                  )
                   .join(" ")
               : "";
           if (tagComment) {
@@ -726,6 +814,7 @@ export class ASTParser {
     sourceFile: ts.SourceFile
   ): string[] {
     const dependencies = new Set<string>();
+    const ts = getTypeScript();
 
     const visit = (n: ts.Node) => {
       // Function calls
@@ -749,6 +838,7 @@ export class ASTParser {
    * Check if node is exported
    */
   private isExported(node: ts.Node): boolean {
+    const ts = getTypeScript();
     if (!ts.canHaveModifiers(node)) return false;
     const modifiers = ts.getModifiers(node);
     return !!modifiers?.some(
@@ -760,6 +850,7 @@ export class ASTParser {
    * Check if node is default export
    */
   private isDefaultExport(node: ts.Node): boolean {
+    const ts = getTypeScript();
     if (!ts.canHaveModifiers(node)) return false;
     const modifiers = ts.getModifiers(node);
     return !!modifiers?.some(
@@ -773,13 +864,20 @@ export class ASTParser {
   private getVisibility(
     member: ts.PropertyDeclaration
   ): "public" | "private" | "protected" {
+    const ts = getTypeScript();
     if (
-      member.modifiers?.some((m) => m.kind === ts.SyntaxKind.PrivateKeyword)
+      member.modifiers?.some(
+        (m: ts.ModifierLike) =>
+          ts.isModifier(m) && m.kind === ts.SyntaxKind.PrivateKeyword
+      )
     ) {
       return "private";
     }
     if (
-      member.modifiers?.some((m) => m.kind === ts.SyntaxKind.ProtectedKeyword)
+      member.modifiers?.some(
+        (m: ts.ModifierLike) =>
+          ts.isModifier(m) && m.kind === ts.SyntaxKind.ProtectedKeyword
+      )
     ) {
       return "protected";
     }

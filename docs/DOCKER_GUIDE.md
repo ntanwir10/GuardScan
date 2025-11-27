@@ -489,6 +489,43 @@ apk add --no-cache \
   git
 ```
 
+### Issue #4: TypeScript Module Not Found
+
+**Symptoms:**
+
+```
+Error: Cannot find module 'typescript'
+TypeScript is required for AST parsing but not installed
+```
+
+**Cause:** TypeScript is a runtime dependency but may not be installed in Docker environments.
+
+**Solutions:**
+
+1. **Verify TypeScript is installed after npm install:**
+
+   ```bash
+   docker run --rm node:lts-alpine sh -c "
+     npm install -g guardscan
+     node -e \"require('typescript'); console.log('TypeScript available')\"
+   "
+   ```
+
+2. **If TypeScript is missing, install it explicitly:**
+
+   ```bash
+   docker run --rm node:lts-alpine sh -c "
+     npm install -g guardscan typescript
+     guardscan --version
+   "
+   ```
+
+3. **Check package.json dependencies:**
+   - TypeScript should be listed in `dependencies` (not `devDependencies`)
+   - If using a custom build, ensure `npm install` includes all dependencies
+
+**Note:** GuardScan now includes lazy loading and better error messages for missing dependencies. If you see a helpful error message with installation instructions, follow those instructions.
+
 **Docker Examples:**
 
 #### Example 1: Basic Alpine Container
@@ -2160,7 +2197,11 @@ If you're still experiencing issues:
 1. **Enable debug mode:**
 
    ```bash
+   # Using environment variable
    GUARDSCAN_DEBUG=true guardscan init 2>&1 | tee debug.log
+   
+   # Or using --debug flag (for security command)
+   guardscan security --debug
    ```
 
 2. **Check home directory:**

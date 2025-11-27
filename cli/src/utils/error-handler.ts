@@ -40,7 +40,10 @@ export function handleCommandError(
   exitCode: number = 1
 ): never {
   // Log error with debug logger
-  logger.error(`Command error in ${context}`, error);
+  const errorData = error instanceof Error 
+    ? { message: error.message, code: (error as any).code, stack: error.stack }
+    : { error: String(error) };
+  logger.error(`Command error in ${context}`, errorData);
 
   // Determine error type and provide appropriate message
   let userMessage: string;
@@ -55,9 +58,37 @@ export function handleCommandError(
   } else if (error instanceof Error) {
     // Standard JavaScript errors
     const errorMessage = error.message.toLowerCase();
+    const errorCode = (error as any).code;
 
-    // Network errors
+    // Module not found / dependency errors
     if (
+      errorCode === 'MODULE_NOT_FOUND' ||
+      errorMessage.includes('cannot find module') ||
+      errorMessage.includes('required dependency') ||
+      errorMessage.includes('not installed') ||
+      errorMessage.includes('typescript is required')
+    ) {
+      // Check if it's TypeScript specifically
+      if (
+        errorMessage.includes('typescript') ||
+        error.message.includes('typescript')
+      ) {
+        userMessage =
+          'TypeScript is required but not installed.\n' +
+          'Install it with: npm install typescript\n' +
+          'Or ensure it is listed in your package.json dependencies.';
+      } else {
+        // Generic module not found
+        userMessage =
+          'Required dependency is missing.\n' +
+          error.message +
+          '\n\n' +
+          'Install the missing dependency or ensure it is listed in your package.json dependencies.';
+      }
+      details = error.message;
+    }
+    // Network errors
+    else if (
       errorMessage.includes('network') ||
       errorMessage.includes('timeout') ||
       errorMessage.includes('econnrefused') ||

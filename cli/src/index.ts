@@ -66,7 +66,14 @@ program
   .option('--licenses', 'Include license compliance scanning')
   .option('--ai-fix', 'Generate AI-powered fix suggestions')
   .option('--interactive', 'Interactively review and apply fixes')
-  .action(securityCommand);
+  .option('--debug', 'Enable verbose debug logging')
+  .action((options) => {
+    // Set GUARDSCAN_DEBUG environment variable if --debug flag is present
+    if (options.debug) {
+      process.env.GUARDSCAN_DEBUG = 'true';
+    }
+    securityCommand(options);
+  });
 
 program
   .command('test')

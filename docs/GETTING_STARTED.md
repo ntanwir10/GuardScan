@@ -3,6 +3,7 @@
 ## What is GuardScan?
 
 GuardScan is a privacy-first CLI tool that uses AI to automatically review your code for:
+
 - Code quality issues
 - Potential bugs
 - Security vulnerabilities
@@ -53,6 +54,7 @@ guardscan config
 ```
 
 Choose your AI provider and enter API key:
+
 - **OpenAI** (GPT-4): Get key from [platform.openai.com](https://platform.openai.com)
 - **Claude**: Get key from [console.anthropic.com](https://console.anthropic.com)
 - **Gemini**: Get key from [makersuite.google.com](https://makersuite.google.com)
@@ -65,6 +67,7 @@ guardscan run
 ```
 
 This will:
+
 1. Count lines of code
 2. Validate credits (if online)
 3. Analyze your codebase with AI
@@ -82,7 +85,7 @@ View your configuration, repository info, and remaining credits.
 
 ### With Ollama
 
-1. Install Ollama: https://ollama.ai
+1. Install Ollama: <https://ollama.ai>
 2. Pull a model:
 
 ```bash
@@ -105,7 +108,7 @@ guardscan run --no-cloud
 
 ### With LM Studio
 
-1. Install LM Studio: https://lmstudio.ai
+1. Install LM Studio: <https://lmstudio.ai>
 2. Start server (default port 1234)
 3. Configure:
 
@@ -123,7 +126,14 @@ Run a free security scan:
 guardscan security
 ```
 
+For verbose debug output, use the `--debug` flag:
+
+```bash
+guardscan security --debug
+```
+
 This performs SAST-like scanning for:
+
 - Hardcoded secrets
 - SQL injection vulnerabilities
 - XSS vulnerabilities
@@ -148,24 +158,29 @@ guardscan security -f src/auth/**/*.js
 Reports are saved as Markdown files with:
 
 ### 1. Overview
+
 - Repository information
 - Branch name
 - AI provider used
 - Processing time
 
 ### 2. Code Statistics
+
 - Total lines analyzed
 - Code vs. comment vs. blank lines
 - File count
 
 ### 3. Findings
+
 Categorized by severity:
+
 - 🔴 **Critical**: Urgent security or functional issues
 - 🟠 **High**: Important issues affecting security or reliability
 - 🟡 **Medium**: Quality or maintainability concerns
 - 🔵 **Low**: Minor improvements or style issues
 
 ### 4. Recommendations
+
 Actionable suggestions for improving your codebase.
 
 ## Common Workflows
@@ -206,6 +221,73 @@ fi
     guardscan run --no-cloud
 ```
 
+## Command Flags and Options
+
+GuardScan commands support various flags to customize behavior. Flags use kebab-case in the CLI (e.g., `--with-ai`, `--no-body`) and are automatically converted to camelCase in the code.
+
+### Common Flags
+
+- **File Selection**: `-f, --files <patterns...>` - Specify files or patterns to analyze
+- **Debug Mode**: `--debug` - Enable verbose debug logging (available for `security` command)
+- **Output**: `-o, --output <path>` - Specify output file path
+- **Negated Flags**: Flags like `--no-body` or `--no-cloud` disable features
+
+### Examples
+
+```bash
+# Security scan with debug output
+guardscan security --debug
+
+# Scan specific files
+guardscan security -f src/**/*.ts
+
+# Generate commit message without body
+guardscan commit --no-body
+
+# Run with AI enhancement disabled
+guardscan run --no-with-ai
+```
+
+### Flag Naming Convention
+
+- CLI flags use **kebab-case**: `--with-ai`, `--test-command`, `--embedding-provider`
+- Code properties use **camelCase**: `withAi`, `testCommand`, `embeddingProvider`
+- Negated flags (`--no-*`) are converted to boolean properties: `--no-body` → `body: false`
+
+## Troubleshooting
+
+### Missing Dependencies
+
+If you encounter errors like "Cannot find module 'typescript'", this means a required runtime dependency is missing.
+
+**Solution:**
+
+```bash
+# Install missing dependency
+npm install typescript
+
+# Or reinstall GuardScan globally
+npm install -g guardscan
+```
+
+**Common Issues:**
+
+- **"TypeScript is required but not installed"**: Run `npm install typescript` or reinstall GuardScan
+- **"Cannot find module 'typescript'"**: Ensure TypeScript is in your `package.json` dependencies
+- **Docker/Alpine errors**: See [Docker Guide](DOCKER_GUIDE.md) for Alpine-specific setup
+
+### Debug Mode
+
+Enable verbose logging to troubleshoot issues:
+
+```bash
+# Using environment variable
+GUARDSCAN_DEBUG=true guardscan <command>
+
+# Or using --debug flag (for security command)
+guardscan security --debug
+```
+
 ## Configuration Options
 
 Edit `~/.guardscan/config.yml`:
@@ -225,6 +307,7 @@ lastUsed: '2024-01-15T15:30:00Z'
 ### What is Collected?
 
 Only anonymized metadata:
+
 - Hashed repository ID
 - Lines of code count
 - AI provider used
@@ -252,21 +335,6 @@ Or edit config:
 telemetryEnabled: false
 ```
 
-## Purchasing Credits
-
-If you run out of free credits:
-
-1. Visit: https://guardscancli.com/pricing
-2. Select LOC package
-3. Complete Stripe checkout
-4. Credits added automatically to your `client_id`
-
-### Pricing
-
-- 500–999 LOC: $0.010/LOC
-- 1000–4999 LOC: $0.009/LOC
-- 5000+ LOC: $0.008/LOC
-
 ## Troubleshooting
 
 ### "Configuration not found"
@@ -280,6 +348,7 @@ Run `guardscan config` and set up your provider.
 ### "Insufficient credits"
 
 Either:
+
 - Purchase more credits online
 - Use `--no-cloud` flag
 - Switch to local AI provider (Ollama)
@@ -324,14 +393,10 @@ done
 
 ## Getting Help
 
-- Documentation: https://docs.guardscancli.com
-- Issues: https://github.com/ntanwir10/GuardScan/issues
-- Discord: https://discord.gg/guardscan
-- Email: support@guardscancli.com
+- Documentation: <https://guardscancli.com/docs>
+- Issues: <https://github.com/ntanwir10/GuardScan/issues>
 
 ## Next Steps
 
 - Read the [API Documentation](./API.md)
-- Learn about [Deployment](./deployment.md)
 - Check [Contributing Guide](./CONTRIBUTING.md)
-- Explore [Database Schema](./database-schema.md)

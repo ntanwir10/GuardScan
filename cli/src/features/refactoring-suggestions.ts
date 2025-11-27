@@ -212,6 +212,10 @@ export class RefactoringSuggestionsEngine {
     private repoRoot: string,
     private repoId: string
   ) {
+    // Validate TypeScript is available before creating ASTParser
+    const { ensureTypeScript } = require("../utils/dependency-checker");
+    ensureTypeScript();
+    
     this.parser = new ASTParser();
     this.indexer = new CodebaseIndexer(repoRoot, repoId);
     this.cache = new AICache(repoId);

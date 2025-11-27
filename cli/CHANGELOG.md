@@ -5,6 +5,85 @@ All notable changes to GuardScan will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.4] - 2025-11-26
+
+### Fixed
+
+#### TypeScript Compilation Errors
+
+- **Fixed 65 TypeScript Build Errors**: Resolved all TypeScript compilation errors in `ast-parser.ts`:
+  - Added proper type imports (`import type * as ts from "typescript"`) for type annotations without runtime dependency
+  - Fixed lazy loading return type handling in `getTypeScript()` function
+  - Added explicit type annotations to 20+ arrow function parameters (`.some()`, `.forEach()`, `.map()`, `.find()` callbacks)
+  - Fixed `ModifierLike` vs `Modifier` type issues by using `ts.isModifier()` checks to handle both `Modifier` and `Decorator` types
+  - Fixed JSDoc type from `ts.JSDocComment` to `ts.JSDoc` to match actual return types
+  - All methods now properly call `getTypeScript()` before using TypeScript runtime APIs
+
+#### Docker Testing
+
+- **Alpine Docker Installation**: Fixed Alpine Docker tests by automatically installing build dependencies (python3, make, g++, cairo-dev, pango-dev, libjpeg-turbo-dev, giflib-dev, pixman-dev, freetype-dev, build-base, git) before `npm install`. This resolves native module compilation issues with `canvas` dependency from `chartjs-node-canvas`.
+- **Docker Path Handling**: Fixed Docker volume mount path issues in test scripts by ensuring proper absolute path resolution and log output redirection to stderr.
+
+#### CLI Options
+
+- **Unknown Option Error**: Fixed "unknown option '--debug'" error when using `guardscan security --debug`. The command now properly accepts and processes the debug flag.
+- **Commit Command Flag Mismatch**: Fixed `--no-body` flag not working in `guardscan commit` command. Commander.js converts `--no-body` to `body: false`, but the handler was checking for `includeBody` property. The command now correctly handles both the `body` property (from `--no-body`) and maintains backward compatibility with `includeBody`.
+
+### Added
+
+#### Comprehensive Testing Infrastructure
+
+- **Test All Commands Script**: Created `cli/scripts/test-all-commands.sh` - comprehensive test script that:
+  - Tests all 21 CLI commands with various flag combinations locally (37 tests)
+  - Tests commands in Docker (Alpine and Debian environments, 14 tests)
+  - Generates JSON test reports (`test-all-commands-results.json`)
+  - Supports `--verbose`, `--local-only`, and `--docker-only` flags
+  - Validates 51+ test scenarios across all environments
+  - Properly handles Alpine build dependencies and path resolution
+
+#### Docker Testing Infrastructure
+
+- **Enhanced Docker Test Scripts**: Improved Docker test infrastructure:
+  - Automatic build dependency detection and installation for Alpine
+  - Support for both Alpine (`node:lts-alpine`) and Debian (`node:lts`) Linux distributions
+  - Proper error handling and binary path resolution
+  - Comprehensive test coverage for all major commands
+
+#### Documentation
+
+- **Docker Testing Guide**: Added `cli/scripts/DOCKER_TESTING_GUIDE.md` with:
+  - Step-by-step instructions for testing in Alpine and Debian
+  - Troubleshooting guide for common Docker issues (path errors, build dependencies)
+  - Quick test scripts for manual testing
+  - Comparison table (Alpine vs Debian characteristics)
+  - Examples for both environments
+- **WSL/SSH Testing Documentation**: Added comprehensive testing documentation for:
+  - WSL (Windows Subsystem for Linux) environments
+  - SSH into Docker containers/VMs (simulated via `docker exec`)
+  - Remote server testing scenarios
+- Updated `DOCKER_GUIDE.md` to document the new `--debug` flag option alongside the existing `GUARDSCAN_DEBUG` environment variable
+- Updated `GETTING_STARTED.md` to mention the `--debug` flag for security scans
+- Added troubleshooting section with both environment variable and flag-based debug options
+- Added comprehensive "Command Flags and Options" section to `GETTING_STARTED.md` documenting flag naming conventions (kebab-case in CLI, camelCase in code) and negated flag behavior
+
+#### Debug Flag Support
+
+- **Security Command Debug Flag**: Added `--debug` flag to `guardscan security` command for verbose debug logging. This provides an alternative to setting the `GUARDSCAN_DEBUG` environment variable.
+  - Usage: `guardscan security --debug`
+  - Automatically sets `GUARDSCAN_DEBUG=true` when the flag is used
+  - Provides user confirmation when debug mode is enabled
+
+### Technical Details
+
+- **Breaking Changes**: None
+- **Migration**: No migration required from v1.0.3
+- **Dependencies**: No new dependencies added
+- **Build**: All TypeScript compilation errors resolved, `npm run build` and `npm pack` now succeed without errors
+- **Test Coverage**: 51+ tests passing (37 local + 14 Docker) across all environments
+- **Docker Support**: Full support for Alpine and Debian Linux distributions with automatic build dependency handling
+
+---
+
 ## [1.0.0] - 2024-11-17
 
 ### Initial Release

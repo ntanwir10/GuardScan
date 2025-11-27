@@ -84,6 +84,50 @@ function complexFunction(x) {
         expect(output).toBeDefined();
       }
     }, 60000);
+
+    it("should accept --debug flag without error", () => {
+      // Store original env
+      const originalDebug = process.env.GUARDSCAN_DEBUG;
+      
+      try {
+        // Clear any existing debug env var
+        delete process.env.GUARDSCAN_DEBUG;
+        
+        const output = execSync(
+          `node ${path.join(
+            __dirname,
+            "../../dist/index.js"
+          )} security --debug --no-telemetry`,
+          {
+            cwd: tempDir,
+            encoding: "utf-8",
+            timeout: 30000,
+            env: { ...process.env },
+          }
+        );
+
+        expect(output).toBeDefined();
+        // Should not throw "unknown option" error
+        expect(output).not.toContain("unknown option");
+        // Debug mode should be enabled (GUARDSCAN_DEBUG should be set)
+        expect(process.env.GUARDSCAN_DEBUG).toBe("true");
+      } catch (error: any) {
+        // Security scan may exit with non-zero if issues found
+        // But should not fail with "unknown option" error
+        const errorMessage = error.message || error.stdout || "";
+        expect(errorMessage).not.toContain("unknown option");
+        expect(errorMessage).not.toContain("--debug");
+        // Debug mode should still be enabled
+        expect(process.env.GUARDSCAN_DEBUG).toBe("true");
+      } finally {
+        // Restore original env
+        if (originalDebug !== undefined) {
+          process.env.GUARDSCAN_DEBUG = originalDebug;
+        } else {
+          delete process.env.GUARDSCAN_DEBUG;
+        }
+      }
+    }, 60000);
   });
 
   describe("SBOM Generation", () => {
@@ -199,6 +243,46 @@ function complexFunction(x) {
       } catch (error: any) {
         const output = error.stdout || "";
         expect(output).toBeDefined();
+      }
+    }, 60000);
+  });
+
+  describe("Commit Command Flags", () => {
+    it("should accept --no-body flag without error", () => {
+      try {
+        // Initialize git repo for commit command
+        try {
+          execSync("git init", { cwd: tempDir, stdio: "ignore" });
+          execSync('git config user.email "test@example.com"', { cwd: tempDir, stdio: "ignore" });
+          execSync('git config user.name "Test User"', { cwd: tempDir, stdio: "ignore" });
+        } catch {
+          // Git might not be available, skip test
+          return;
+        }
+
+        const output = execSync(
+          `node ${path.join(
+            __dirname,
+            "../../dist/index.js"
+          )} commit --no-body --no-telemetry`,
+          {
+            cwd: tempDir,
+            encoding: "utf-8",
+            timeout: 30000,
+          }
+        );
+
+        expect(output).toBeDefined();
+        // Should not throw "unknown option" error
+        expect(output).not.toContain("unknown option");
+      } catch (error: any) {
+        // Commit command may fail due to missing AI config or other reasons
+        // But should not fail with "unknown option" error for --no-body
+        const errorMessage = error.message || error.stdout || "";
+        expect(errorMessage).not.toContain("unknown option");
+        expect(errorMessage).not.toContain("--no-body");
+        // Should fail for other reasons (like missing AI config), not flag parsing
+        expect(errorMessage).toBeDefined();
       }
     }, 60000);
   });

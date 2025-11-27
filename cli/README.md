@@ -336,6 +336,8 @@ GuardScan follows a **privacy-first, client-side architecture** where all code a
 npm install -g guardscan
 ```
 
+This will automatically install all required runtime dependencies, including TypeScript which is needed for AST parsing.
+
 ### Via Source
 
 ```bash
@@ -355,6 +357,20 @@ npm link
 # Verify
 guardscan --help
 ```
+
+### Runtime Dependencies
+
+GuardScan requires the following runtime dependencies (automatically installed with npm):
+
+- **TypeScript** (`typescript`) - Required for AST parsing of TypeScript/JavaScript files
+  - Automatically included when installing via `npm install -g guardscan`
+  - If you encounter "Cannot find module 'typescript'" errors, ensure it's installed:
+
+    ```bash
+    npm install typescript
+    ```
+
+All other dependencies are automatically managed by npm during installation.
 
 ---
 

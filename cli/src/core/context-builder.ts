@@ -68,6 +68,10 @@ export class ContextBuilder {
     repoRoot: string,
     provider?: AIProvider
   ) {
+    // Validate TypeScript is available before creating ASTParser
+    const { ensureTypeScript } = require("../utils/dependency-checker");
+    ensureTypeScript();
+    
     this.indexer = indexer;
     this.parser = new ASTParser();
     this.repoRoot = repoRoot;

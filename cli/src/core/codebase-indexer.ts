@@ -155,6 +155,10 @@ export class CodebaseIndexer {
   private cachedIndex: CodebaseIndex | null = null;
 
   constructor(repoRoot: string, repoId: string) {
+    // Validate TypeScript is available before creating ASTParser
+    const { ensureTypeScript } = require("../utils/dependency-checker");
+    ensureTypeScript();
+    
     this.parser = new ASTParser();
     this.parsedFilesCache = new LRUCache(100);
     this.repoRoot = repoRoot;

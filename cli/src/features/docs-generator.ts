@@ -135,6 +135,11 @@ export class DocsGenerator {
 
     // Parse and extract API entries
     const apiEntries: APIDocEntry[] = [];
+    
+    // Validate TypeScript is available before creating ASTParser
+    const { ensureTypeScript } = require("../utils/dependency-checker");
+    ensureTypeScript();
+    
     const parser = new ASTParser();
 
     for (const [filePath, fileIndex] of index.files) {

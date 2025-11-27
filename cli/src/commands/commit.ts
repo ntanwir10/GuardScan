@@ -20,7 +20,8 @@ interface CommitOptions {
   auto?: boolean;
   scope?: string;
   type?: string;
-  includeBody?: boolean;
+  body?: boolean; // Commander.js converts --no-body to body: false
+  includeBody?: boolean; // Keep for backward compatibility
 }
 
 export async function commitCommand(options: CommitOptions): Promise<void> {
@@ -57,10 +58,20 @@ export async function commitCommand(options: CommitOptions): Promise<void> {
     const commitGenerator = new CommitMessageGenerator(provider, cache, repoRoot);
 
     // Generate commit message
+    // Handle --no-body flag: Commander.js converts it to body: false
+    // Check both body (from --no-body) and includeBody (for backward compatibility)
+    const includeBody = options.body !== false && options.includeBody !== false;
+    
+    logger.debug('Commit options', { 
+      body: options.body, 
+      includeBody: options.includeBody, 
+      resolvedIncludeBody: includeBody 
+    });
+    
     const message = await commitGenerator.generateCommitMessage({
       scope: options.scope,
       type: options.type,
-      includeBody: options.includeBody !== false,
+      includeBody,
     });
 
     // Format message
@@ -86,7 +97,7 @@ export async function commitCommand(options: CommitOptions): Promise<void> {
         handleCommandError(error, 'Commit creation');
       }
     } else {
-      // Interactive mode - ask user to confirm
+      // Interactive mode - set to confirm
       console.log(chalk.yellow('\n💡 To commit with this message, run:'));
       console.log(chalk.gray(`   git commit -m "${formattedMessage.replace(/\n/g, '\\n')}"`));
 
