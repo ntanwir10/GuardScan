@@ -227,7 +227,7 @@ jobs:
       name: npm-publish
       url: https://www.npmjs.com/package/guardscan
     permissions:
-      id-token: write  # Required for Trusted Publishing (OIDC)
+      id-token: write # Required for Trusted Publishing (OIDC)
       contents: read
     steps:
       - uses: actions/checkout@v4
@@ -281,9 +281,9 @@ jobs:
         run: |
           PACKAGE_NAME=$(node -p "require('./package.json').name")
           PACKAGE_VERSION=$(node -p "require('./package.json').version")
-          
+
           echo "Using Trusted Publishing with environment: npm-publish"
-          
+
           # Check if using Trusted Publishing (no token needed) or Granular Access Token
           if [ -n "${{ secrets.NPM_TOKEN }}" ]; then
             echo "Using NPM_TOKEN (Granular Access Token method) as fallback"
