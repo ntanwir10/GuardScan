@@ -67,3 +67,10 @@ cli/__tests__/**/*.js
 cli/__tests__/**/*.d.ts
 cli/__tests__/**/*.js.map
 cli/__tests__/**/*.d.ts.map
+
+act.env
+ci-gitconfig
+ci-netrc
+cli/scripts/*
+cli/scripts/update-act-cache.sh
+cli/scripts/ACT_USAGE.md
