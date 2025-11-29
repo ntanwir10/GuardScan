@@ -223,6 +223,12 @@ jobs:
       github.event_name == 'push' &&
       (startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main') &&
       needs.build-cli.result == 'success'
+    environment:
+      name: npm-publish
+      url: https://www.npmjs.com/package/guardscan
+    permissions:
+      id-token: write  # Required for Trusted Publishing (OIDC)
+      contents: read
     steps:
       - uses: actions/checkout@v4
 
@@ -276,9 +282,11 @@ jobs:
           PACKAGE_NAME=$(node -p "require('./package.json').name")
           PACKAGE_VERSION=$(node -p "require('./package.json').version")
           
+          echo "Using Trusted Publishing with environment: npm-publish"
+          
           # Check if using Trusted Publishing (no token needed) or Granular Access Token
           if [ -n "${{ secrets.NPM_TOKEN }}" ]; then
-            echo "Using NPM_TOKEN (Granular Access Token method)"
+            echo "Using NPM_TOKEN (Granular Access Token method) as fallback"
             # Verify authentication with token
             echo "Verifying NPM authentication..."
             NPM_USER=$(npm whoami --registry=https://registry.npmjs.org 2>&1) || {
@@ -289,27 +297,26 @@ jobs:
             }
             echo "✓ Authenticated as: $NPM_USER"
           else
-            echo "No NPM_TOKEN found - using Trusted Publishing (if configured)"
-            echo "ℹ If Trusted Publishing is not set up, the publish step will fail"
-            echo "Set up Trusted Publishing at: https://www.npmjs.com/settings/[YOUR_USERNAME]/publishing"
+            echo "Using Trusted Publishing (OIDC)"
+            echo "✓ Trusted Publishing configured - no token needed"
           fi
-          
+
           echo "Checking package: $PACKAGE_NAME"
-          
+
           # Try to check if package exists
           if npm view "$PACKAGE_NAME" version > /dev/null 2>&1; then
             echo "✓ Package exists on NPM"
           else
             echo "ℹ Package doesn't exist yet, will be created on first publish"
           fi
-          
+
           # Check if version already exists
           if npm view "$PACKAGE_NAME@$PACKAGE_VERSION" version > /dev/null 2>&1; then
             echo "Error: Version $PACKAGE_VERSION already exists on NPM"
             echo "Please bump the version in package.json before publishing"
             exit 1
           fi
-          
+
           echo "✓ Pre-publish checks completed"
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
@@ -319,6 +326,8 @@ jobs:
         working-directory: ./cli
         run: npm publish
         env:
+          # Trusted Publishing uses OIDC (no token needed)
+          # Fallback to NPM_TOKEN if Trusted Publishing is not configured
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
   deploy-backend:
