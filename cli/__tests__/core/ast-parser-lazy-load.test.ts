@@ -49,10 +49,16 @@ export class Greeter {
       expect(result).toBeDefined();
       expect(result.path).toBe(testFile);
       expect(result.language).toBe("typescript");
-      expect(result.functions).toHaveLength(2); // hello function + greet method
-      expect(result.classes).toHaveLength(1); // Greeter class
+
+      // Top-level functions array should contain the exported function
+      expect(result.functions).toHaveLength(1);
       expect(result.functions[0].name).toBe("hello");
+
+      // Class and its methods are tracked separately
+      expect(result.classes).toHaveLength(1);
       expect(result.classes[0].name).toBe("Greeter");
+      expect(result.classes[0].methods).toHaveLength(1);
+      expect(result.classes[0].methods[0].name).toBe("greet");
     });
 
     it("should extract functions correctly", async () => {

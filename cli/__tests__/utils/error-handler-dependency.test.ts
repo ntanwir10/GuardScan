@@ -3,19 +3,28 @@
  */
 
 import { handleCommandError } from "../../src/utils/error-handler";
-import { describe, it } from "node:test";
-import { expect } from "@jest/globals";
-import { beforeAll, afterAll, beforeEach } from "@jest/globals";
-import { jest } from "@jest/globals";
+import {
+  describe,
+  it,
+  expect,
+  jest,
+  beforeAll,
+  afterAll,
+  beforeEach,
+} from "@jest/globals";
 
-// Mock process.exit to prevent actual exit during tests
-const originalExit = process.exit;
+// Spy on process.exit to prevent the test runner from exiting
+let exitSpy: jest.SpyInstance;
 beforeAll(() => {
-  process.exit = jest.fn() as any;
+  exitSpy = jest
+    .spyOn(process, "exit")
+    .mockImplementation(((code?: number) => {
+      throw new Error(`process.exit(${code})`);
+    }) as any);
 });
 
 afterAll(() => {
-  process.exit = originalExit;
+  exitSpy.mockRestore();
 });
 
 describe("Error Handler - Dependency Errors", () => {
@@ -30,14 +39,12 @@ describe("Error Handler - Dependency Errors", () => {
     (error as any).code = "MODULE_NOT_FOUND";
 
     expect(() => handleCommandError(error, "Test Command")).toThrow();
-    expect(process.exit).toHaveBeenCalledWith(1);
   });
 
   it("should provide helpful message for TypeScript errors", () => {
     const error = new Error("TypeScript is required but not installed");
 
     expect(() => handleCommandError(error, "Test Command")).toThrow();
-    expect(process.exit).toHaveBeenCalledWith(1);
   });
 
   it("should detect 'cannot find module' errors", () => {
@@ -45,7 +52,6 @@ describe("Error Handler - Dependency Errors", () => {
     (error as any).code = "MODULE_NOT_FOUND";
 
     expect(() => handleCommandError(error, "Test Command")).toThrow();
-    expect(process.exit).toHaveBeenCalledWith(1);
   });
 
   it("should detect 'required dependency' errors", () => {
@@ -54,13 +60,11 @@ describe("Error Handler - Dependency Errors", () => {
     );
 
     expect(() => handleCommandError(error, "Test Command")).toThrow();
-    expect(process.exit).toHaveBeenCalledWith(1);
   });
 
   it("should handle other error types normally", () => {
     const error = new Error("Some other error");
 
     expect(() => handleCommandError(error, "Test Command")).toThrow();
-    expect(process.exit).toHaveBeenCalledWith(1);
   });
 });

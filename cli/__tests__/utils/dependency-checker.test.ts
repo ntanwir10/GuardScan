@@ -2,8 +2,7 @@
  * Tests for dependency-checker utility
  */
 
-import { describe, it } from "node:test";
-import { expect } from "@jest/globals";
+import { describe, it, expect } from "@jest/globals";
 import {
   checkDependency,
   ensureDependency,
