@@ -12,15 +12,13 @@ import {
   afterAll,
   beforeEach,
 } from "@jest/globals";
-
+ 
 // Spy on process.exit to prevent the test runner from exiting
-let exitSpy: jest.SpyInstance;
+let exitSpy: ReturnType<typeof jest.spyOn>;
 beforeAll(() => {
-  exitSpy = jest
-    .spyOn(process, "exit")
-    .mockImplementation(((code?: number) => {
-      throw new Error(`process.exit(${code})`);
-    }) as any);
+  exitSpy = jest.spyOn(process, "exit").mockImplementation(((code?: number) => {
+    throw new Error(`process.exit(${code})`);
+  }) as any);
 });
 
 afterAll(() => {

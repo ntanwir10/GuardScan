@@ -7,6 +7,14 @@ import { configManager } from "../../src/core/config";
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
+import {
+  describe,
+  it,
+  expect,
+  beforeEach,
+  afterEach,
+  jest,
+} from "@jest/globals";
 
 // Mock dependencies
 jest.mock("inquirer");
@@ -48,7 +56,9 @@ describe("config command", () => {
       configManager.init();
     }
 
-    const consoleSpy = jest.spyOn(console, "log").mockImplementation();
+    const consoleSpy = jest.spyOn(console, "log").mockImplementation(() => {
+      return;
+    });
 
     await configCommand({ show: true });
 
@@ -76,10 +86,14 @@ describe("config command", () => {
     // Mock ProviderFactory to avoid actual connection test
     const ProviderFactory =
       require("../../src/providers/factory").ProviderFactory;
-    jest.spyOn(ProviderFactory, "create").mockReturnValue({
-      isAvailable: jest.fn().mockReturnValue(true),
-      testConnection: jest.fn().mockResolvedValue(true),
-    });
+    const providerFactorySpy = jest
+      .spyOn(ProviderFactory, "create")
+      .mockReturnValue({
+        isAvailable: jest.fn().mockReturnValue(true),
+        testConnection: jest
+          .fn()
+          .mockImplementation(() => Promise.resolve(true)),
+      } as any);
 
     // Suppress console output during test
     const consoleLogSpy = jest
@@ -98,6 +112,8 @@ describe("config command", () => {
       await configCommand({ provider: initialProvider });
     }
 
+    // Restore all mocks
+    providerFactorySpy.mockRestore();
     consoleLogSpy.mockRestore();
   });
 
