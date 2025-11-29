@@ -99,7 +99,7 @@ jobs:
           test -f dist/index.js
 
       - name: Upload build artifacts
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: cli-dist
           path: cli/dist/
