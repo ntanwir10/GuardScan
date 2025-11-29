@@ -67,6 +67,7 @@ jobs:
           flags: cli
           name: cli-coverage
           fail_ci_if_error: false
+          token: ${{ secrets.CODECOV_TOKEN }}
         if: matrix.node-version == 18 && always()
         continue-on-error: true
 
