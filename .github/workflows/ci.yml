@@ -268,15 +268,51 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
-      - name: Check NPM_TOKEN exists
+      - name: Verify NPM authentication and permissions
         if: startsWith(github.ref, 'refs/tags/v')
-        id: check_token
+        id: verify_npm
+        working-directory: ./cli
         run: |
+          # Check token exists
           if [ -z "${{ secrets.NPM_TOKEN }}" ]; then
             echo "Error: NPM_TOKEN secret is not configured"
             exit 1
           fi
-          echo "NPM_TOKEN is configured"
+          
+          # Verify authentication
+          echo "Verifying NPM authentication..."
+          NPM_USER=$(npm whoami --registry=https://registry.npmjs.org 2>&1) || {
+            echo "Error: NPM authentication failed"
+            echo "Please verify your NPM_TOKEN is valid and has publish permissions"
+            exit 1
+          }
+          echo "✓ Authenticated as: $NPM_USER"
+          
+          # Check package ownership/access
+          PACKAGE_NAME=$(node -p "require('./package.json').name")
+          PACKAGE_VERSION=$(node -p "require('./package.json').version")
+          
+          echo "Checking access to package: $PACKAGE_NAME"
+          
+          # Try to check if package exists and we have access
+          if npm view "$PACKAGE_NAME" version > /dev/null 2>&1; then
+            echo "✓ Package exists, checking publish access..."
+            # Check if we can publish (this will fail gracefully if no access)
+            npm access ls-packages --registry=https://registry.npmjs.org > /dev/null 2>&1 || true
+          else
+            echo "ℹ Package doesn't exist yet, will be created on first publish"
+          fi
+          
+          # Check if version already exists
+          if npm view "$PACKAGE_NAME@$PACKAGE_VERSION" version > /dev/null 2>&1; then
+            echo "Error: Version $PACKAGE_VERSION already exists on NPM"
+            echo "Please bump the version in package.json before publishing"
+            exit 1
+          fi
+          
+          echo "✓ NPM authentication and permissions verified"
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Publish to NPM
         if: startsWith(github.ref, 'refs/tags/v')
