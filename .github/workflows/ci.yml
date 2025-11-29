@@ -273,32 +273,32 @@ jobs:
         id: verify_npm
         working-directory: ./cli
         run: |
-          # Check token exists
-          if [ -z "${{ secrets.NPM_TOKEN }}" ]; then
-            echo "Error: NPM_TOKEN secret is not configured"
-            exit 1
-          fi
-          
-          # Verify authentication
-          echo "Verifying NPM authentication..."
-          NPM_USER=$(npm whoami --registry=https://registry.npmjs.org 2>&1) || {
-            echo "Error: NPM authentication failed"
-            echo "Please verify your NPM_TOKEN is valid and has publish permissions"
-            exit 1
-          }
-          echo "✓ Authenticated as: $NPM_USER"
-          
-          # Check package ownership/access
           PACKAGE_NAME=$(node -p "require('./package.json').name")
           PACKAGE_VERSION=$(node -p "require('./package.json').version")
           
-          echo "Checking access to package: $PACKAGE_NAME"
+          # Check if using Trusted Publishing (no token needed) or Granular Access Token
+          if [ -n "${{ secrets.NPM_TOKEN }}" ]; then
+            echo "Using NPM_TOKEN (Granular Access Token method)"
+            # Verify authentication with token
+            echo "Verifying NPM authentication..."
+            NPM_USER=$(npm whoami --registry=https://registry.npmjs.org 2>&1) || {
+              echo "Error: NPM authentication failed"
+              echo "Please verify your NPM_TOKEN is a valid Granular Access Token with 'Publish' permissions"
+              echo "Create one at: https://www.npmjs.com/settings/[YOUR_USERNAME]/tokens"
+              exit 1
+            }
+            echo "✓ Authenticated as: $NPM_USER"
+          else
+            echo "No NPM_TOKEN found - using Trusted Publishing (if configured)"
+            echo "ℹ If Trusted Publishing is not set up, the publish step will fail"
+            echo "Set up Trusted Publishing at: https://www.npmjs.com/settings/[YOUR_USERNAME]/publishing"
+          fi
           
-          # Try to check if package exists and we have access
+          echo "Checking package: $PACKAGE_NAME"
+          
+          # Try to check if package exists
           if npm view "$PACKAGE_NAME" version > /dev/null 2>&1; then
-            echo "✓ Package exists, checking publish access..."
-            # Check if we can publish (this will fail gracefully if no access)
-            npm access ls-packages --registry=https://registry.npmjs.org > /dev/null 2>&1 || true
+            echo "✓ Package exists on NPM"
           else
             echo "ℹ Package doesn't exist yet, will be created on first publish"
           fi
@@ -310,7 +310,7 @@ jobs:
             exit 1
           fi
           
-          echo "✓ NPM authentication and permissions verified"
+          echo "✓ Pre-publish checks completed"
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
