@@ -5,6 +5,125 @@ All notable changes to GuardScan will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.5] - 2025-12-09
+
+### Added
+
+#### AI Model Selection
+- **Model Selection in Configuration**: Added ability to select specific AI models during `guardscan config`:
+  - **OpenAI**: Choose from `gpt-5.1`, `gpt-4o`, `gpt-4.1-mini`, `gpt-3.5-turbo`
+  - **Claude**: Choose from `claude-opus-4.5`, `claude-sonnet-4.5`, `claude-haiku-4.5`
+  - **Gemini**: Choose from `gemini-3-pro`, `gemini-2.5-pro`, `gemini-2.5-flash`, `gemini-2.5-flash-lite`
+- **Model Override**: Added `--model` flag to override AI model for individual commands
+
+#### Enhanced Chat Experience
+- **Improved Chat Output Formatting**: Enhanced `guardscan chat` with rich terminal formatting:
+  - Colored file paths (cyan) for better visibility
+  - Highlighted inline code snippets (yellow)
+  - Formatted code blocks with language labels and borders
+  - Bold text styling for emphasis
+  - Word wrapping for better readability
+  - Structured statistics display with clear formatting
+- **Chat Export Functionality**: Added `/export` command to save conversations:
+  - Exports to markdown format with full conversation history
+  - Automatically saves to parent directory with timestamped filename
+  - Includes session metadata and relevant files referenced
+  - Format: `guardscan-chat-{sessionId}-{timestamp}.md`
+- **Interactive Chat Commands**: Enhanced chat interface with commands:
+  - `/help` - Display available commands and example questions
+  - `/clear` - Clear conversation history
+  - `/stats` - Show session statistics (messages, tokens, duration)
+  - `/export` - Export conversation to markdown
+  - `/exit` or `/quit` - Exit chat session
+
+#### Documentation
+- **Comprehensive Chat Guide**: Added detailed `docs/CHAT_GUIDE.md` covering:
+  - RAG (Retrieval-Augmented Generation) explanation
+  - Interactive commands and usage
+  - CLI options and customization
+  - Example use cases and best practices
+  - Troubleshooting guide
+  - Privacy and security information
+- **Updated Getting Started Guide**: Enhanced `docs/GETTING_STARTED.md` with interactive chat section
+- **Updated Quick Start**: Added chat commands and export functionality to `QUICKSTART.md`
+- **Updated README**: Added references to chat features and new documentation
+
+### Changed
+
+#### AI Provider Updates
+- **Updated OpenAI Models**: 
+  - Added `gpt-5.1`, `gpt-4o`, `gpt-4.1-mini`
+  - Removed deprecated models (`gpt-4-turbo-preview`, `gpt-4-vision-preview`, `gpt-4-32k`)
+  - Updated default model to `gpt-4o`
+  - Updated pricing for current models
+- **Updated Claude Models**:
+  - Added `claude-opus-4.5`, `claude-sonnet-4.5`, `claude-haiku-4.5`
+  - Removed deprecated models (`claude-3-opus`, `claude-3-sonnet`, `claude-3-haiku`, `claude-2.1`)
+  - Updated default model to `claude-sonnet-4.5`
+  - Updated pricing for current models
+- **Updated Gemini Models**:
+  - Added `gemini-3-pro`, `gemini-2.5-pro`, `gemini-2.5-flash`, `gemini-2.5-flash-lite`
+  - Removed deprecated models (`gemini-1.5-pro`, `gemini-1.5-flash`, `gemini-pro`)
+  - Updated `testConnection()` to try multiple models in priority order
+  - Enhanced error handling with specific error messages for API key validation
+  - Updated pricing for current models
+
+#### Configuration Improvements
+- **Enhanced Config Display**: Improved `guardscan config` output with:
+  - Numbered section headings for better organization
+  - Detailed descriptions for each configuration option
+  - Clear status indicators for enabled/disabled features
+  - Better visual hierarchy and readability
+- **Better Error Messages**: Enhanced error reporting for AI provider connection issues:
+  - Specific error messages for invalid API keys
+  - Model availability checking with fallback logic
+  - Clear instructions for troubleshooting
+
+#### CI/CD Improvements
+- **Simplified NPM Publishing**: Updated GitHub Actions workflow:
+  - Publish job now only runs on version tags (not on every main branch push)
+  - Removed unnecessary dry-run step
+  - Simplified conditional logic for better maintainability
+- **Updated Node.js Testing**: Changed test matrix to only test on Node.js 20 (removed Node.js 18)
+
+### Fixed
+
+#### Test Suite
+- **Fixed Embedding Search Tests**: Resolved TypeScript errors in `embedding-search.test.ts`:
+  - Added missing `loadIndex()` method to `MockEmbeddingStore`
+  - Added missing `checkCompatibility()` method to `MockEmbeddingStore`
+  - Updated `saveEmbeddings()` signature to match interface
+- **Fixed Empty Store Handling**: Improved `embedding-search.ts` to properly handle empty embedding stores:
+  - Returns empty results instead of throwing error for empty stores
+  - Only throws error when embeddings exist but have incompatible dimensions
+  - Better error messages for dimension mismatch scenarios
+
+#### Embedding Provider Factory
+- **Fixed TypeScript Compilation**: Resolved type error in `embedding-factory.ts`:
+  - Fixed `embeddingFallback` type checking logic
+  - Improved fallback selection for Claude provider
+
+#### Chat Engine
+- **Fixed Model Parameter Passing**: Ensured model selection is properly passed through the entire call chain:
+  - Updated `ChatOptions` to include `model` parameter
+  - Modified `callAI()` to pass model to AI provider
+  - Updated all command files to pass `config.model` to provider factory
+  - Fixed `assistantMsg.metadata.modelUsed` to use actual model from API response
+
+### Technical Improvements
+
+#### Code Quality
+- All 327 tests passing across 25 test suites
+- Improved type safety with proper TypeScript interfaces
+- Enhanced error handling throughout the codebase
+- Better separation of concerns in provider implementations
+
+#### Architecture
+- Consistent model parameter handling across all AI providers
+- Improved factory pattern for provider instantiation
+- Better metadata tracking for AI responses
+- Enhanced session management for chat feature
+
 ## [1.0.4] - 2025-11-26
 
 ### Fixed
