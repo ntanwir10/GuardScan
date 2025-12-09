@@ -36,7 +36,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        node-version: [18, 20]
+        node-version: [20]
     steps:
       - uses: actions/checkout@v4
 
@@ -68,7 +68,7 @@ jobs:
           name: cli-coverage
           fail_ci_if_error: false
           token: ${{ secrets.CODECOV_TOKEN }}
-        if: matrix.node-version == 18 && always()
+        if: matrix.node-version == 20 && always()
         continue-on-error: true
 
   build-cli:
@@ -221,7 +221,7 @@ jobs:
     needs: [build-cli, integration-test]
     if: |
       github.event_name == 'push' &&
-      (startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main') &&
+      startsWith(github.ref, 'refs/tags/v') &&
       needs.build-cli.result == 'success'
     environment:
       name: npm-publish
@@ -255,8 +255,7 @@ jobs:
           echo "tag=v$VERSION" >> $GITHUB_OUTPUT
           echo "Package version: $VERSION"
 
-      - name: Verify tag matches package version (if tag push)
-        if: startsWith(github.ref, 'refs/tags/v')
+      - name: Verify tag matches package version
         working-directory: ./cli
         run: |
           PACKAGE_VERSION=$(node -p "require('./package.json').version")
@@ -267,15 +266,7 @@ jobs:
           fi
           echo "✓ Tag version matches package version: $PACKAGE_VERSION"
 
-      - name: Publish to NPM (dry-run)
-        if: github.ref == 'refs/heads/main'
-        working-directory: ./cli
-        run: npm publish --dry-run
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-
       - name: Verify NPM authentication and permissions
-        if: startsWith(github.ref, 'refs/tags/v')
         id: verify_npm
         working-directory: ./cli
         run: |
@@ -322,7 +313,6 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Publish to NPM
-        if: startsWith(github.ref, 'refs/tags/v')
         working-directory: ./cli
         run: npm publish
         env:
