@@ -54,6 +54,7 @@ export interface ChatOptions {
   includeHistory?: boolean;    // Include conversation history (default: true)
   maxHistoryTurns?: number;    // Max conversation turns to include (default: 5)
   systemPrompt?: string;       // Custom system prompt
+  model?: string;              // Override AI model for this chat session
 }
 
 export interface ChatResponse {
@@ -164,29 +165,41 @@ export class ChatbotEngine {
     // Call AI provider
     const aiResponse = await this.callAI(prompt, opts);
 
+    // Get accurate token count - prefer API response, fallback to estimation
+    const actualTokensUsed = aiResponse.tokensUsed ?? 
+      (this.tokenManager.estimateTokens(prompt) + 
+       this.tokenManager.estimateTokens(aiResponse.content));
+
+    // Get actual model name from API response, fallback to provider name
+    const actualModelName = aiResponse.model || this.aiProvider.getName();
+
     // Create assistant message
     const assistantMsg: ChatMessage = {
       role: 'assistant',
       content: aiResponse.content,
       timestamp: new Date(),
       metadata: {
-        tokensUsed: aiResponse.tokensUsed,
+        tokensUsed: actualTokensUsed,
         relevantFiles: this.extractRelevantFiles(ragContext),
         searchTimeMs: ragContext.metadata.searchTimeMs,
-        modelUsed: this.aiProvider.getName(),
+        modelUsed: actualModelName, // Use actual model name from API
         temperature: opts.temperature,
       },
     };
 
     session.messages.push(assistantMsg);
     session.lastActiveAt = new Date();
-    session.totalTokens += aiResponse.tokensUsed || 0;
+    session.totalTokens += actualTokensUsed;
 
-    // Calculate stats
+    // Calculate stats with accurate values
     const stats: ChatStats = {
-      totalTokens: aiResponse.tokensUsed || 0,
-      promptTokens: this.tokenManager.estimateTokens(prompt),
-      completionTokens: this.tokenManager.estimateTokens(aiResponse.content),
+      totalTokens: actualTokensUsed,
+      promptTokens: aiResponse.tokensUsed 
+        ? (this.tokenManager.estimateTokens(prompt)) // If we have total, estimate prompt
+        : this.tokenManager.estimateTokens(prompt),
+      completionTokens: aiResponse.tokensUsed
+        ? (actualTokensUsed - this.tokenManager.estimateTokens(prompt)) // Estimate completion
+        : this.tokenManager.estimateTokens(aiResponse.content),
       searchTimeMs: ragContext.metadata.searchTimeMs,
       responseTimeMs: Date.now() - startTime,
       relevantSnippets: ragContext.relevantCode.length + ragContext.relevantDocs.length,
@@ -383,8 +396,18 @@ Guidelines:
    */
   private async callAI(
     prompt: string,
-    options: Required<ChatOptions>
-  ): Promise<{ content: string; tokensUsed?: number }> {
+    options: Required<Omit<ChatOptions, 'model'>> & { model?: string }
+  ): Promise<{ content: string; tokensUsed?: number; model?: string }> {
+    const chatOptions: any = {
+      temperature: options.temperature,
+      maxTokens: options.maxTokens,
+    };
+    
+    // Only include model if provided
+    if (options.model) {
+      chatOptions.model = options.model;
+    }
+    
     const response = await this.aiProvider.chat(
       [
         {
@@ -392,15 +415,13 @@ Guidelines:
           content: prompt,
         },
       ],
-      {
-        temperature: options.temperature,
-        maxTokens: options.maxTokens,
-      }
+      chatOptions
     );
 
     return {
       content: response.content,
       tokensUsed: response.usage?.totalTokens,
+      model: response.model, // Include actual model name from API response
     };
   }
 
@@ -433,7 +454,7 @@ Guidelines:
   /**
    * Normalize chat options with defaults
    */
-  private normalizeOptions(options: ChatOptions): Required<ChatOptions> {
+  private normalizeOptions(options: ChatOptions): Required<Omit<ChatOptions, 'model'>> & { model?: string } {
     return {
       temperature: options.temperature ?? 0.7,
       maxTokens: options.maxTokens ?? 1000,
@@ -442,6 +463,7 @@ Guidelines:
       includeHistory: options.includeHistory !== false,
       maxHistoryTurns: options.maxHistoryTurns ?? 5,
       systemPrompt: options.systemPrompt ?? '',
+      model: options.model, // Pass through model if provided
     };
   }
 

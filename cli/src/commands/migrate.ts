@@ -77,7 +77,7 @@ export async function migrateCommand(options: MigrateCommandOptions): Promise<vo
     spinner.succeed(`Repository: ${repoInfo.path}`);
 
     // Initialize components
-    const provider = ProviderFactory.create(config.provider, config.apiKey, config.apiEndpoint);
+    const provider = ProviderFactory.create(config.provider, config.apiKey, config.apiEndpoint, config.model);
     const indexer = new CodebaseIndexer(repoInfo.path, repoInfo.repoId);
     const cache = new AICache(repoInfo.repoId);
     const engine = new MigrationAssistantEngine(provider, indexer, cache, repoInfo.path);

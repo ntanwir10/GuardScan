@@ -13,11 +13,14 @@ export class OpenAIProvider extends AIProvider {
   private defaultModel = 'gpt-4o';
   private defaultEmbeddingModel = 'text-embedding-3-small';
 
-  constructor(apiKey?: string) {
+  constructor(apiKey?: string, model?: string) {
     super(apiKey);
     this.client = new OpenAI({
       apiKey: apiKey || process.env.OPENAI_API_KEY,
     });
+    if (model) {
+      this.defaultModel = model;
+    }
   }
 
   async chat(messages: AIMessage[], options?: ChatOptions): Promise<AIResponse> {
@@ -76,7 +79,7 @@ export class OpenAIProvider extends AIProvider {
       supportsChat: true,
       supportsEmbeddings: true,
       supportsStreaming: true,
-      maxContextTokens: 128000, // gpt-4o context window
+      maxContextTokens: 128000, // gpt-4o/gpt-5.1 context window
       embeddingDimensions: 1536, // text-embedding-3-small
     };
   }
@@ -186,11 +189,10 @@ export class OpenAIProvider extends AIProvider {
    */
   private getModelPricing(model: string): { input: number; output: number } {
     const pricing: Record<string, { input: number; output: number }> = {
-      'gpt-4o': { input: 0.0025, output: 0.01 },
-      'gpt-4o-mini': { input: 0.00015, output: 0.0006 },
-      'gpt-4-turbo': { input: 0.01, output: 0.03 },
-      'gpt-4': { input: 0.03, output: 0.06 },
-      'gpt-3.5-turbo': { input: 0.0005, output: 0.0015 },
+      'gpt-5.1': { input: 0.005, output: 0.02 }, // Newest, coding and agentic tasks (estimated)
+      'gpt-4o': { input: 0.0025, output: 0.01 }, // Multimodal, low-latency
+      'gpt-4.1-mini': { input: 0.00015, output: 0.0006 }, // Fast, efficient, improvement over gpt-4o-mini
+      'gpt-3.5-turbo': { input: 0.0005, output: 0.0015 }, // Faster, lighter, basic tasks
     };
 
     return pricing[model] || pricing['gpt-4o'];

@@ -254,7 +254,7 @@ async function setupCloudAI(config: any): Promise<void> {
     console.log(chalk.gray('\nTesting connection...'));
     perfTracker.start('test-ai-connection');
     try {
-      const provider = ProviderFactory.create(config.provider, config.apiKey);
+      const provider = ProviderFactory.create(config.provider, config.apiKey, undefined, config.model);
       const isAvailable = await provider.testConnection();
       perfTracker.end('test-ai-connection');
 

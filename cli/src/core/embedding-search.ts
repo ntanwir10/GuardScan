@@ -66,6 +66,7 @@ export class EmbeddingSearchEngine {
 
     // 1. Generate query embedding
     const queryEmbedding = await this.embeddingProvider.generateEmbedding(query);
+    const queryDimensions = queryEmbedding.length;
 
     // 2. Load embeddings (with optional filters)
     let embeddings: CodeEmbedding[];
@@ -77,8 +78,32 @@ export class EmbeddingSearchEngine {
 
     const totalEmbeddings = embeddings.length;
 
-    // 3. Calculate similarities
-    const similarities = embeddings.map(emb => {
+    // 3. Filter compatible embeddings (same dimensions)
+    const compatibleEmbeddings = embeddings.filter(emb => {
+      return emb.embedding.length === queryDimensions;
+    });
+
+    const incompatibleCount = totalEmbeddings - compatibleEmbeddings.length;
+
+    if (incompatibleCount > 0) {
+      console.warn(
+        `⚠️  Warning: ${incompatibleCount} embeddings have incompatible dimensions ` +
+        `(${queryDimensions} expected). These will be skipped. ` +
+        `Use --rebuild to regenerate embeddings with the current provider.`
+      );
+    }
+
+    if (compatibleEmbeddings.length === 0) {
+      throw new Error(
+        `No compatible embeddings found. ` +
+        `Query embedding dimensions: ${queryDimensions}, ` +
+        `but all stored embeddings have different dimensions. ` +
+        `Use --rebuild to regenerate embeddings.`
+      );
+    }
+
+    // 4. Calculate similarities
+    const similarities = compatibleEmbeddings.map(emb => {
       const score = cosineSimilarity(queryEmbedding, emb.embedding);
       return {
         embedding: emb,
@@ -86,10 +111,10 @@ export class EmbeddingSearchEngine {
       };
     });
 
-    // 4. Filter by minimum similarity
+    // 5. Filter by minimum similarity
     const filtered = similarities.filter(s => s.similarityScore >= minSimilarity);
 
-    // 5. Apply multi-factor ranking if enabled
+    // 6. Apply multi-factor ranking if enabled
     let results: SearchResult[];
     if (enableRanking) {
       results = this.applyRanking(filtered, rankingWeights, query);
@@ -97,17 +122,17 @@ export class EmbeddingSearchEngine {
       results = filtered;
     }
 
-    // 6. Sort by final score (relevanceScore if ranked, similarityScore otherwise)
+    // 7. Sort by final score (relevanceScore if ranked, similarityScore otherwise)
     results.sort((a, b) => {
       const scoreA = a.relevanceScore ?? a.similarityScore;
       const scoreB = b.relevanceScore ?? b.similarityScore;
       return scoreB - scoreA;
     });
 
-    // 7. Take top K
+    // 8. Take top K
     const topK = results.slice(0, k);
 
-    // 8. Calculate stats
+    // 9. Calculate stats
     const searchTimeMs = Date.now() - startTime;
     const averageSimilarity =
       topK.length > 0
@@ -115,7 +140,7 @@ export class EmbeddingSearchEngine {
         : 0;
 
     const stats: SearchStats = {
-      totalEmbeddings,
+      totalEmbeddings: compatibleEmbeddings.length,
       filteredCount: filtered.length,
       searchTimeMs,
       averageSimilarity,

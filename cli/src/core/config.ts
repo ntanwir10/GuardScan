@@ -10,6 +10,8 @@ export interface Config {
   provider: AIProvider;
   apiKey?: string;
   apiEndpoint?: string;
+  model?: string; // AI model name (e.g., "gemini-2.5-flash", "gpt-4o", "claude-sonnet-4.5")
+  embeddingFallback?: 'ollama' | 'lmstudio' | 'none';
   telemetryEnabled: boolean;
   offlineMode: boolean;
   createdAt: string;
@@ -124,6 +126,11 @@ export class ConfigManager {
       }
 
       this.log("Config parsed successfully");
+
+      // Migration: Handle old configs without embeddingFallback field
+      if (config.embeddingFallback === undefined) {
+        config.embeddingFallback = undefined; // Default to undefined for backward compatibility
+      }
 
       // Update last used
       config.lastUsed = new Date().toISOString();

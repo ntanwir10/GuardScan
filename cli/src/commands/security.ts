@@ -598,7 +598,7 @@ async function generateAIFixes(
 
   try {
     // Create AI provider
-    const provider = ProviderFactory.create(config.provider, config.apiKey, config.apiEndpoint);
+    const provider = ProviderFactory.create(config.provider, config.apiKey, config.apiEndpoint, config.model);
 
     // Get repo ID for cache
     const repoInfo = repositoryManager.getRepoInfo();

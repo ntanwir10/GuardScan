@@ -108,7 +108,7 @@ GuardScan includes **comprehensive security scanners**:
 15. **Performance Testing** - Load testing and benchmarking (requires k6 - optional)
 16. **SBOM Generation** - Software Bill of Materials (CycloneDX, SPDX)
 
-**Note**: Performance and mutation testing require optional external tools. See [Testing Tools Guide](./cli/docs/TESTING_TOOLS.md) for details.
+**Note**: Performance and mutation testing require optional external tools.
 
 ### 🤖 AI-Enhanced Features (BYOK - Bring Your Own Key)
 
@@ -400,6 +400,7 @@ GuardScan is **open source** and we welcome contributions!
 
 - [Installation Guide](docs/GETTING_STARTED.md)
 - [Configuration Guide](docs/CONFIGURATION.md)
+- [Chat Guide](docs/CHAT_GUIDE.md)
 - [API Documentation](docs/API.md)
 - [Security Scanners](docs/SECURITY_SCANNERS.md)
 - [Contributing Guidelines](docs/CONTRIBUTING.md)

@@ -78,7 +78,7 @@ export async function reviewCommand(options: ReviewCommandOptions): Promise<void
     spinner.succeed(`Repository: ${repoInfo.path}`);
 
     // Initialize components
-    const provider = ProviderFactory.create(config.provider, config.apiKey, config.apiEndpoint);
+    const provider = ProviderFactory.create(config.provider, config.apiKey, config.apiEndpoint, config.model);
     const cache = new AICache(repoInfo.repoId);
     const engine = new CodeReviewEngine(provider, cache, repoInfo.path);
 

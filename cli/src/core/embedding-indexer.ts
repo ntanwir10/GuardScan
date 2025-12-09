@@ -91,6 +91,22 @@ export class EmbeddingIndexer {
     };
 
     try {
+      // Phase 0: Check compatibility with existing embeddings
+      const existingIndex = await this.store.loadIndex();
+      if (existingIndex) {
+        const compatibility = this.store.checkCompatibility(this.embeddingProvider, existingIndex);
+        if (!compatibility.compatible && compatibility.requiresRebuild) {
+          throw new Error(
+            `Embedding compatibility error: ${compatibility.reason}\n` +
+            `Use --rebuild to regenerate embeddings with the current provider.`
+          );
+        }
+        if (!compatibility.compatible) {
+          // Warn but continue (provider mismatch with same dimensions)
+          console.log(chalk.yellow(`\n⚠️  ${compatibility.reason}`));
+        }
+      }
+
       // Phase 1: Analyze codebase
       if (opts.showProgress) {
         console.log(chalk.blue('\n📊 Analyzing codebase...'));
@@ -136,6 +152,10 @@ export class EmbeddingIndexer {
         }
 
         const existingEmbeddings = await this.store.loadEmbeddings();
+        const existingIndex = await this.store.loadIndex?.();
+        const currentProvider = this.embeddingProvider.getName();
+        const existingProvider = existingIndex?.metadata.provider;
+
         const existingHashes = new Map(
           existingEmbeddings.map(emb => [emb.id, emb.hash])
         );
@@ -145,9 +165,15 @@ export class EmbeddingIndexer {
           const currentHash = hashContent(chunk.content);
           const existingHash = existingHashes.get(id);
 
+          // Check if content hash matches
           if (existingHash === currentHash) {
+            // Also check if provider matches (if provider info available)
+            if (existingProvider && existingProvider !== currentProvider) {
+              // Provider changed, regenerate even if content same
+              return true;
+            }
             stats.chunksCached++;
-            return false; // Skip unchanged chunks
+            return false; // Skip unchanged chunks with same provider
           }
 
           return true;
@@ -196,7 +222,7 @@ export class EmbeddingIndexer {
           console.log(chalk.blue('\n💾 Storing embeddings...'));
         }
 
-        await this.store.saveEmbeddings(embeddings);
+        await this.store.saveEmbeddings(embeddings, this.embeddingProvider);
 
         if (this.progressBar) {
           this.progressBar.stop();
@@ -363,6 +389,7 @@ export class EmbeddingIndexer {
   private validateEmbeddings(embeddings: CodeEmbedding[]): CodeEmbedding[] {
     const invalid: CodeEmbedding[] = [];
     const expectedDimensions = this.embeddingProvider.getDimensions();
+    const currentProvider = this.embeddingProvider.getName();
 
     for (const emb of embeddings) {
       // Check dimensions
@@ -383,7 +410,11 @@ export class EmbeddingIndexer {
       );
       if (magnitude === 0 || magnitude > 100) {
         invalid.push(emb);
+        continue;
       }
+
+      // Provider match is checked at compatibility level, not here
+      // This validation is for technical correctness only
     }
 
     return invalid;

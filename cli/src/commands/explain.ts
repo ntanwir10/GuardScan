@@ -56,7 +56,7 @@ export async function explainCommand(target: string, options: ExplainOptions): P
     }
 
     // Create AI provider
-    const provider = ProviderFactory.create(config.provider, config.apiKey, config.apiEndpoint);
+    const provider = ProviderFactory.create(config.provider, config.apiKey, config.apiEndpoint, config.model);
 
     // Create AI cache
     const cache = new AICache(repoInfo.repoId, 100); // 100MB cache

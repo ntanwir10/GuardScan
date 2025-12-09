@@ -22,7 +22,7 @@ export interface CodeEmbedding {
   endLine: number;
   content: string;               // Original code/text
   contentSummary: string;        // AI-generated summary (for context)
-  embedding: number[];           // Vector (1536 or 768 dimensions)
+  embedding: number[];           // Vector (1536 for OpenAI/OpenRouter, 768 for Gemini/Ollama/LM Studio/Claude)
   metadata: EmbeddingMetadata;
   hash: string;                  // Content hash for change detection
 }
@@ -52,6 +52,8 @@ export interface EmbeddingIndex {
   metadata: {
     model: string;               // 'text-embedding-3-small', 'nomic-embed-text'
     dimensions: number;          // 1536, 768, etc.
+    provider?: string;           // Store provider name (e.g., 'openai', 'gemini', 'ollama')
+    providerVersion?: string;    // For version tracking
     costUSD?: number;            // Total cost to generate
   };
 }
@@ -207,8 +209,10 @@ export interface EmbeddingStore {
 
   /**
    * Save embeddings to storage
+   * @param embeddings - Embeddings to save
+   * @param embeddingProvider - Optional provider for compatibility checking and metadata
    */
-  saveEmbeddings(embeddings: CodeEmbedding[]): Promise<void>;
+  saveEmbeddings(embeddings: CodeEmbedding[], embeddingProvider?: EmbeddingProvider): Promise<void>;
 
   /**
    * Load all embeddings from storage
@@ -249,6 +253,25 @@ export interface EmbeddingStore {
    * Get total number of embeddings
    */
   count(): Promise<number>;
+
+  /**
+   * Load the embedding index from storage (for compatibility checking)
+   */
+  loadIndex(): Promise<EmbeddingIndex | null>;
+
+  /**
+   * Check compatibility between current provider and existing index
+   */
+  checkCompatibility(
+    embeddingProvider: EmbeddingProvider,
+    existingIndex?: EmbeddingIndex | null
+  ): {
+    compatible: boolean;
+    reason: string;
+    requiresRebuild: boolean;
+    existingProvider?: string;
+    existingDimensions?: number;
+  };
 }
 
 // ============================================================================

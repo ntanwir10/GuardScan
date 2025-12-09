@@ -10,13 +10,16 @@ import {
 
 export class ClaudeProvider extends AIProvider {
   private client: Anthropic;
-  private defaultModel = 'claude-3-5-sonnet-20241022';
+  private defaultModel = 'claude-sonnet-4.5'; // Will be overridden by config if user selects different model
 
-  constructor(apiKey?: string) {
+  constructor(apiKey?: string, model?: string) {
     super(apiKey);
     this.client = new Anthropic({
       apiKey: apiKey || process.env.ANTHROPIC_API_KEY,
     });
+    if (model) {
+      this.defaultModel = model;
+    }
   }
 
   async chat(messages: AIMessage[], options?: ChatOptions): Promise<AIResponse> {
@@ -72,9 +75,9 @@ export class ClaudeProvider extends AIProvider {
   getCapabilities(): ProviderCapabilities {
     return {
       supportsChat: true,
-      supportsEmbeddings: false, // Claude doesn't support embeddings
+      supportsEmbeddings: false, // Claude doesn't support embeddings natively - uses ClaudeEmbeddingProvider with Ollama/LM Studio fallback
       supportsStreaming: true,
-      maxContextTokens: 200000, // Claude 3.5 Sonnet context window
+      maxContextTokens: 200000, // Claude 4.5 models context window
     };
   }
 
@@ -105,8 +108,8 @@ export class ClaudeProvider extends AIProvider {
   getPricing() {
     return {
       chat: {
-        input: 3.0,   // $3 per 1M tokens for Claude 3.5 Sonnet input
-        output: 15.0, // $15 per 1M tokens for Claude 3.5 Sonnet output
+        input: 3.0,   // $3 per 1M tokens for Claude Sonnet 4.5 input
+        output: 15.0, // $15 per 1M tokens for Claude Sonnet 4.5 output
       },
     };
   }
@@ -115,13 +118,17 @@ export class ClaudeProvider extends AIProvider {
    * Get pricing for specific model
    */
   private getModelPricing(model: string): { input: number; output: number } {
+    // Claude API uses format: claude-{tier}-{version} or claude-{tier}-{version}-{date}
     const pricing: Record<string, { input: number; output: number }> = {
-      'claude-3-5-sonnet-20241022': { input: 3.0, output: 15.0 },
-      'claude-3-opus-20240229': { input: 15.0, output: 75.0 },
-      'claude-3-sonnet-20240229': { input: 3.0, output: 15.0 },
-      'claude-3-haiku-20240307': { input: 0.25, output: 1.25 },
+      'claude-opus-4.5': { input: 15.0, output: 75.0 }, // Most intelligent and capable
+      'claude-sonnet-4.5': { input: 3.0, output: 15.0 }, // Balanced performance and practicality
+      'claude-haiku-4.5': { input: 0.25, output: 1.25 }, // Fastest and most cost-effective
+      // Fallback to API format if needed
+      'claude-4-opus': { input: 15.0, output: 75.0 },
+      'claude-4-sonnet': { input: 3.0, output: 15.0 },
+      'claude-4-haiku': { input: 0.25, output: 1.25 },
     };
 
-    return pricing[model] || pricing['claude-3-5-sonnet-20241022'];
+    return pricing[model] || pricing['claude-sonnet-4.5'];
   }
 }

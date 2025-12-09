@@ -14,6 +14,7 @@ import {
   EmbeddingStore,
   SearchFilters,
   formatBytes,
+  EmbeddingProvider,
 } from './embeddings';
 
 export interface StoreStats {
@@ -55,7 +56,7 @@ export class FileBasedEmbeddingStore implements EmbeddingStore {
   /**
    * Save embeddings to storage
    */
-  async saveEmbeddings(embeddings: CodeEmbedding[]): Promise<void> {
+  async saveEmbeddings(embeddings: CodeEmbedding[], embeddingProvider?: EmbeddingProvider): Promise<void> {
     if (embeddings.length === 0) return;
 
     await this.initialize();
@@ -65,6 +66,8 @@ export class FileBasedEmbeddingStore implements EmbeddingStore {
 
     if (!existingIndex) {
       // Create new index
+      const providerName = embeddingProvider?.getName();
+      const dimensions = embeddings[0]?.embedding.length || 0;
       existingIndex = {
         version: '1.0.0',
         repoId: this.repoId,
@@ -72,10 +75,34 @@ export class FileBasedEmbeddingStore implements EmbeddingStore {
         totalEmbeddings: 0,
         embeddings: [],
         metadata: {
-          model: embeddings[0]?.embedding ? this.inferModel(embeddings[0].embedding.length) : 'unknown',
-          dimensions: embeddings[0]?.embedding.length || 0,
+          model: embeddings[0]?.embedding ? this.inferModel(dimensions, providerName) : 'unknown',
+          dimensions: dimensions,
+          provider: providerName,
         },
       };
+    } else {
+      // Check compatibility before saving
+      if (embeddingProvider) {
+        const compatibility = this.checkCompatibility(embeddingProvider, existingIndex);
+        if (!compatibility.compatible && compatibility.requiresRebuild) {
+          throw new Error(
+            `Embedding compatibility error: ${compatibility.reason}\n` +
+            `Existing embeddings: ${compatibility.existingProvider || 'unknown'} (${compatibility.existingDimensions} dims)\n` +
+            `New embeddings: ${embeddingProvider.getName()} (${embeddingProvider.getDimensions()} dims)\n` +
+            `Use --rebuild to regenerate embeddings.`
+          );
+        }
+      }
+    }
+
+    // Store provider name in each embedding if available
+    const providerName = embeddingProvider?.getName();
+    if (providerName) {
+      embeddings.forEach(emb => {
+        if (!emb.metadata) {
+          emb.metadata = {} as any;
+        }
+      });
     }
 
     // Merge new embeddings (replace duplicates)
@@ -86,6 +113,16 @@ export class FileBasedEmbeddingStore implements EmbeddingStore {
 
     // Add new (overwrites duplicates)
     embeddings.forEach(emb => embeddingMap.set(emb.id, emb));
+
+    // Update index metadata with provider info
+    if (embeddingProvider) {
+      existingIndex.metadata.provider = embeddingProvider.getName();
+      existingIndex.metadata.model = this.inferModel(
+        embeddingProvider.getDimensions(),
+        embeddingProvider.getName()
+      );
+      existingIndex.metadata.dimensions = embeddingProvider.getDimensions();
+    }
 
     // Update index
     existingIndex.embeddings = Array.from(embeddingMap.values());
@@ -268,9 +305,9 @@ export class FileBasedEmbeddingStore implements EmbeddingStore {
   // ========================================================================
 
   /**
-   * Load index from disk
+   * Load index from disk (public method for compatibility checking)
    */
-  private async loadIndex(): Promise<EmbeddingIndex | null> {
+  async loadIndex(): Promise<EmbeddingIndex | null> {
     try {
       if (!fs.existsSync(this.indexPath)) {
         return null;
@@ -347,9 +384,90 @@ export class FileBasedEmbeddingStore implements EmbeddingStore {
   }
 
   /**
-   * Infer model name from dimensions
+   * Check compatibility between current provider and existing index
    */
-  private inferModel(dimensions: number): string {
+  checkCompatibility(
+    embeddingProvider: EmbeddingProvider,
+    existingIndex?: EmbeddingIndex | null
+  ): {
+    compatible: boolean;
+    reason: string;
+    requiresRebuild: boolean;
+    existingProvider?: string;
+    existingDimensions?: number;
+  } {
+    if (!existingIndex) {
+      return {
+        compatible: true,
+        reason: 'No existing embeddings',
+        requiresRebuild: false,
+      };
+    }
+
+    const currentDimensions = embeddingProvider.getDimensions();
+    const currentProvider = embeddingProvider.getName();
+    const existingDimensions = existingIndex.metadata.dimensions;
+    const existingProvider = existingIndex.metadata.provider;
+
+    // Dimension mismatch - always incompatible
+    if (currentDimensions !== existingDimensions) {
+      return {
+        compatible: false,
+        reason: `Dimension mismatch: existing embeddings use ${existingDimensions} dimensions, but current provider uses ${currentDimensions} dimensions`,
+        requiresRebuild: true,
+        existingProvider,
+        existingDimensions,
+      };
+    }
+
+    // Same dimensions but different providers - technically compatible but semantically different
+    if (existingProvider && existingProvider !== currentProvider) {
+      return {
+        compatible: true, // Technically compatible (same dimensions)
+        reason: `Provider mismatch: existing embeddings from '${existingProvider}', current provider is '${currentProvider}'. Results may vary.`,
+        requiresRebuild: false, // Not required, but recommended
+        existingProvider,
+        existingDimensions,
+      };
+    }
+
+    // Fully compatible
+    return {
+      compatible: true,
+      reason: 'Compatible',
+      requiresRebuild: false,
+      existingProvider,
+      existingDimensions,
+    };
+  }
+
+  /**
+   * Infer model name from dimensions and provider
+   */
+  private inferModel(dimensions: number, provider?: string): string {
+    // If provider is known, use it
+    if (provider) {
+      if (provider.includes('openai')) {
+        return 'text-embedding-3-small (OpenAI)';
+      }
+      if (provider.includes('gemini')) {
+        return 'text-embedding-004 (Gemini)';
+      }
+      if (provider.includes('ollama')) {
+        return 'nomic-embed-text (Ollama)';
+      }
+      if (provider.includes('lmstudio')) {
+        return 'nomic-embed-text (LM Studio)';
+      }
+      if (provider.includes('claude')) {
+        return 'nomic-embed-text (Claude via fallback)';
+      }
+      if (provider.includes('openrouter')) {
+        return 'text-embedding-3-small (OpenRouter)';
+      }
+    }
+
+    // Fallback to dimension-based inference (for backward compatibility)
     if (dimensions === 1536) return 'text-embedding-3-small (OpenAI)';
     if (dimensions === 768) return 'nomic-embed-text (Ollama)';
     return `unknown-${dimensions}d`;

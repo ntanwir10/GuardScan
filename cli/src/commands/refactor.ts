@@ -65,7 +65,7 @@ export async function refactorCommand(options: RefactorOptions): Promise<void> {
   }
 
   // Initialize AI provider
-  const aiProvider = ProviderFactory.create(config.provider, config.apiKey, config.apiEndpoint);
+  const aiProvider = ProviderFactory.create(config.provider, config.apiKey, config.apiEndpoint, config.model);
   const refactoringEngine = new RefactoringSuggestionsEngine(
     aiProvider,
     repoInfo.path,
