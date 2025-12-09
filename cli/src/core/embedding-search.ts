@@ -78,7 +78,20 @@ export class EmbeddingSearchEngine {
 
     const totalEmbeddings = embeddings.length;
 
-    // 3. Filter compatible embeddings (same dimensions)
+    // 3. Handle empty store
+    if (totalEmbeddings === 0) {
+      return {
+        results: [],
+        stats: {
+          totalEmbeddings: 0,
+          filteredCount: 0,
+          searchTimeMs: Date.now() - startTime,
+          averageSimilarity: 0,
+        },
+      };
+    }
+
+    // 4. Filter compatible embeddings (same dimensions)
     const compatibleEmbeddings = embeddings.filter(emb => {
       return emb.embedding.length === queryDimensions;
     });
@@ -102,7 +115,7 @@ export class EmbeddingSearchEngine {
       );
     }
 
-    // 4. Calculate similarities
+    // 5. Calculate similarities
     const similarities = compatibleEmbeddings.map(emb => {
       const score = cosineSimilarity(queryEmbedding, emb.embedding);
       return {
@@ -111,10 +124,10 @@ export class EmbeddingSearchEngine {
       };
     });
 
-    // 5. Filter by minimum similarity
+    // 6. Filter by minimum similarity
     const filtered = similarities.filter(s => s.similarityScore >= minSimilarity);
 
-    // 6. Apply multi-factor ranking if enabled
+    // 7. Apply multi-factor ranking if enabled
     let results: SearchResult[];
     if (enableRanking) {
       results = this.applyRanking(filtered, rankingWeights, query);

@@ -67,8 +67,37 @@ class MockEmbeddingStore implements EmbeddingStore {
     return filtered;
   }
 
-  async saveEmbeddings(embeddings: CodeEmbedding[]): Promise<void> {
+  async saveEmbeddings(embeddings: CodeEmbedding[], embeddingProvider?: any): Promise<void> {
     this.embeddings = embeddings;
+  }
+
+  async loadIndex(): Promise<any> {
+    return {
+      version: '1.0',
+      repoId: 'test-repo',
+      generatedAt: new Date(),
+      totalEmbeddings: this.embeddings.length,
+      embeddings: this.embeddings,
+      metadata: {
+        model: 'mock',
+        dimensions: 3,
+        provider: 'mock',
+      },
+    };
+  }
+
+  checkCompatibility(embeddingProvider: any, existingIndex?: any): {
+    compatible: boolean;
+    reason: string;
+    requiresRebuild: boolean;
+    existingProvider?: string;
+    existingDimensions?: number;
+  } {
+    return {
+      compatible: true,
+      reason: 'Mock store always compatible',
+      requiresRebuild: false,
+    };
   }
 
   async updateEmbedding(embedding: CodeEmbedding): Promise<void> {
