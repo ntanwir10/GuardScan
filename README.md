@@ -347,12 +347,12 @@ GuardScan follows a **privacy-first, client-side architecture** where all code a
 - Testing: Jest (70%+ coverage)
 - Build: TypeScript Compiler (tsc)
 
-**Backend (913 LOC - Optional):**
+**Monitoring service (separate repo, optional):**
 
-- Platform: Cloudflare Workers (serverless)
-- Database: Supabase PostgreSQL (optional)
-- Purpose: Anonymous telemetry only
-- Cost: $0-5/month (Cloudflare free tier)
+- Lives in [ntanwir10/GuardScan-Monitoring](https://github.com/ntanwir10/GuardScan-Monitoring)
+- Platform: Cloudflare Workers + Supabase PostgreSQL
+- Purpose: Anonymous telemetry and error/usage analytics
+- The CLI talks to it over HTTP only; override the URL with `GUARDSCAN_API_URL`
 
 ---
 

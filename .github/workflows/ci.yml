@@ -26,10 +26,9 @@ jobs:
         working-directory: ./cli
         run: npm ci
 
-      - name: Run ESLint (if configured)
+      - name: Run ESLint on CLI
         working-directory: ./cli
-        run: npm run lint || echo "No lint script configured"
-        continue-on-error: true
+        run: npm run lint
 
   test-cli:
     name: Test CLI
@@ -57,8 +56,8 @@ jobs:
 
       - name: Run tests with coverage
         working-directory: ./cli
-        run: npm test -- --coverage --coverageThreshold='{}'
-        # Remove --coverageThreshold='{}' once coverage meets 70% threshold
+        run: npm test -- --coverage
+        # Coverage threshold enforced via jest.config.js (70%)
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v3
@@ -105,61 +104,6 @@ jobs:
           name: cli-dist
           path: cli/dist/
 
-  test-backend:
-    name: Test Backend
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "18"
-          cache: "npm"
-          cache-dependency-path: "backend/package-lock.json"
-
-      - name: Check if backend exists
-        run: test -d backend || (echo "Backend directory not found, skipping" && exit 0)
-
-      - name: Install dependencies
-        working-directory: ./backend
-        run: npm ci
-        continue-on-error: true
-
-      - name: Run backend tests (when available)
-        working-directory: ./backend
-        run: npm test || echo "No tests configured yet"
-        continue-on-error: true
-
-  build-backend:
-    name: Build Backend
-    runs-on: ubuntu-latest
-    needs: [test-backend]
-    if: always()
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "18"
-          cache: "npm"
-          cache-dependency-path: "backend/package-lock.json"
-
-      - name: Check if backend exists
-        run: test -d backend || (echo "Backend directory not found, skipping" && exit 0)
-
-      - name: Install dependencies
-        working-directory: ./backend
-        run: npm ci
-        continue-on-error: true
-
-      - name: Validate wrangler.toml exists
-        working-directory: ./backend
-        run: |
-          test -f wrangler.toml || echo "Warning: wrangler.toml not found"
-        continue-on-error: true
-
   security-scan:
     name: Security Scan
     runs-on: ubuntu-latest
@@ -168,11 +112,6 @@ jobs:
 
       - name: Run npm audit (CLI)
         working-directory: ./cli
-        run: npm audit --audit-level=moderate || true
-        continue-on-error: true
-
-      - name: Run npm audit (Backend)
-        working-directory: ./backend
         run: npm audit --audit-level=moderate || true
         continue-on-error: true
 
@@ -320,38 +259,7 @@ jobs:
           # Fallback to NPM_TOKEN if Trusted Publishing is not configured
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
-  deploy-backend:
-    name: Deploy Backend to Cloudflare
-    runs-on: ubuntu-latest
-    needs: [build-backend]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.build-backend.result == 'success'
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "18"
-
-      - name: Install dependencies
-        working-directory: ./backend
-        run: npm ci
-
-      - name: Deploy to Cloudflare Workers (staging)
-        working-directory: ./backend
-        run: echo "Deployment would happen here with wrangler deploy"
-        # Uncomment when ready:
-        # run: npx wrangler deploy --env staging
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-        # Note: CLOUDFLARE_API_TOKEN secret warning is expected if secret is not configured
-
-      # Production deployment (manual approval recommended)
-      # - name: Deploy to production
-      #   working-directory: ./backend
-      #   run: npx wrangler deploy --env production
-      #   env:
-      #     CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+  # Worker deployment lives in https://github.com/ntanwir10/GuardScan-Monitoring.
 
   create-release:
     name: Create GitHub Release

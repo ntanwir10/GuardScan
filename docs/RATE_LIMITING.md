@@ -76,7 +76,8 @@ X-RateLimit-Reset: 2024-11-17...
 
 ## Configuration
 
-Rate limits can be adjusted in `/backend/src/utils/rate-limiter.ts`:
+Rate limits can be adjusted in the monitoring repo at
+[`worker/src/utils/rate-limiter.ts`](https://github.com/ntanwir10/GuardScan-Monitoring/blob/main/worker/src/utils/rate-limiter.ts):
 
 ```typescript
 export const rateLimiters = {

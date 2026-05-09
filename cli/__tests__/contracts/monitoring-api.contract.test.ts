@@ -1,15 +1,12 @@
 /**
- * Backend API Contract Tests
- * 
- * Tests the backend API contracts to ensure they work as expected
+ * Monitoring API contract tests.
+ *
+ * Pins the request/response shapes the CLI sends to the GuardScan-Monitoring
+ * service (see https://github.com/ntanwir10/GuardScan-Monitoring). These are
+ * pure shape checks; no live server is exercised.
  */
 
-describe('Backend API Contracts', () => {
-  // Note: These tests would normally require a running backend
-  // For now, we'll test the contract structure and validation logic
-  
-  const BASE_URL = 'http://localhost:8787';
-  
+describe('Monitoring API contracts', () => {
   describe('Telemetry Payload Structure', () => {
     it('should validate required fields', () => {
       const validPayload = {

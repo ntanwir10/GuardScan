@@ -11,9 +11,6 @@ coverage/
 .vscode/
 .idea/
 
-# Backend configuration with sensitive IDs
-backend/wrangler.toml
-
 # Development/Internal Documentation (not for public)
 COMPREHENSIVE_FEATURE_PLAN.md
 DEVELOPMENT_STATUS.md
@@ -40,13 +37,6 @@ COMPLETION_REPORT.md
 DEPLOYMENT.md
 EDGE_CASES.md
 PRD.md
-
-# Backend internal docs
-backend/DATABASE_SCHEMA.md
-backend/DEPLOYMENT_CHECKLIST.md
-backend/README.md
-backend/SETUP_SUMMARY.md
-backend/SUPABASE_SETUP.md
 
 # Docs folder internal planning
 docs/AI_ARCHITECTURE.md

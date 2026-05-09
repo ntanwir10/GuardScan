@@ -6,6 +6,13 @@ Accepted
 ## Date
 2024-11-19
 
+> **Note (2026-05):** The Worker implementation has moved out of this
+> repository to [ntanwir10/GuardScan-Monitoring](https://github.com/ntanwir10/GuardScan-Monitoring)
+> (private). This ADR still captures the original platform decision; current
+> code, deployment scripts, and the Supabase schema live in that repo under
+> `worker/`. The CLI continues to integrate via HTTP only, configurable through
+> the `GUARDSCAN_API_URL` env var.
+
 ## Context
 GuardScan needed a backend infrastructure for optional telemetry and monitoring. The backend requirements were:
 
