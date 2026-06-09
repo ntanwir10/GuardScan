@@ -298,7 +298,7 @@ export class CodeReviewEngine {
     const files = diffOutput.split('diff --git');
 
     for (const fileContent of files) {
-      if (!fileContent.trim()) continue;
+      if (!fileContent.trim()) {continue;}
 
       const diff = this.parseFileDiff(fileContent);
       if (diff) {
@@ -317,16 +317,16 @@ export class CodeReviewEngine {
 
     // Extract file paths
     const fileMatch = lines[0]?.match(/a\/(.+) b\/(.+)/);
-    if (!fileMatch) return null;
+    if (!fileMatch) {return null;}
 
     const oldPath = fileMatch[1];
     const newPath = fileMatch[2];
 
     // Determine status
     let status: GitDiff['status'] = 'modified';
-    if (content.includes('new file mode')) status = 'added';
-    if (content.includes('deleted file mode')) status = 'deleted';
-    if (oldPath !== newPath) status = 'renamed';
+    if (content.includes('new file mode')) {status = 'added';}
+    if (content.includes('deleted file mode')) {status = 'deleted';}
+    if (oldPath !== newPath) {status = 'renamed';}
 
     // Parse hunks
     const hunks: DiffHunk[] = [];
@@ -338,7 +338,7 @@ export class CodeReviewEngine {
       // Hunk header: @@ -oldStart,oldLines +newStart,newLines @@
       const hunkMatch = line.match(/^@@ -(\d+),(\d+) \+(\d+),(\d+) @@/);
       if (hunkMatch) {
-        if (currentHunk) hunks.push(currentHunk);
+        if (currentHunk) {hunks.push(currentHunk);}
         currentHunk = {
           oldStart: parseInt(hunkMatch[1]),
           oldLines: parseInt(hunkMatch[2]),
@@ -364,7 +364,7 @@ export class CodeReviewEngine {
       }
     }
 
-    if (currentHunk) hunks.push(currentHunk);
+    if (currentHunk) {hunks.push(currentHunk);}
 
     // Count additions/deletions
     const additions = hunks.reduce((sum, h) =>
@@ -532,10 +532,10 @@ Return JSON format:
     score = Math.max(0, Math.min(100, score));
 
     let verdict: 'approved' | 'approved-with-comments' | 'changes-requested' | 'rejected';
-    if (criticalCount > 0) verdict = 'rejected';
-    else if (highCount > 2) verdict = 'changes-requested';
-    else if (comments.length > 0) verdict = 'approved-with-comments';
-    else verdict = 'approved';
+    if (criticalCount > 0) {verdict = 'rejected';}
+    else if (highCount > 2) {verdict = 'changes-requested';}
+    else if (comments.length > 0) {verdict = 'approved-with-comments';}
+    else {verdict = 'approved';}
 
     return {
       score,

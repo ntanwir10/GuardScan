@@ -413,21 +413,21 @@ export class EmbeddingChunker {
     // Add based on name patterns
     const name = func.name.toLowerCase();
 
-    if (name.includes('auth') || name.includes('login')) tags.push('authentication');
-    if (name.includes('db') || name.includes('database')) tags.push('database');
-    if (name.includes('api') || name.includes('fetch')) tags.push('api');
-    if (name.includes('test')) tags.push('test');
-    if (name.includes('util') || name.includes('helper')) tags.push('utility');
-    if (name.includes('validate') || name.includes('check')) tags.push('validation');
-    if (name.includes('encrypt') || name.includes('decrypt')) tags.push('security');
-    if (name.includes('parse') || name.includes('format')) tags.push('parsing');
+    if (name.includes('auth') || name.includes('login')) {tags.push('authentication');}
+    if (name.includes('db') || name.includes('database')) {tags.push('database');}
+    if (name.includes('api') || name.includes('fetch')) {tags.push('api');}
+    if (name.includes('test')) {tags.push('test');}
+    if (name.includes('util') || name.includes('helper')) {tags.push('utility');}
+    if (name.includes('validate') || name.includes('check')) {tags.push('validation');}
+    if (name.includes('encrypt') || name.includes('decrypt')) {tags.push('security');}
+    if (name.includes('parse') || name.includes('format')) {tags.push('parsing');}
 
     // Add based on complexity
-    if (func.complexity > 10) tags.push('complex');
-    if (func.complexity <= 3) tags.push('simple');
+    if (func.complexity > 10) {tags.push('complex');}
+    if (func.complexity <= 3) {tags.push('simple');}
 
     // Add based on async
-    if (func.isAsync) tags.push('async');
+    if (func.isAsync) {tags.push('async');}
 
     return tags;
   }
@@ -439,14 +439,14 @@ export class EmbeddingChunker {
     const tags: string[] = [];
     const name = cls.name.toLowerCase();
 
-    if (name.includes('service')) tags.push('service');
-    if (name.includes('controller')) tags.push('controller');
-    if (name.includes('model')) tags.push('model');
-    if (name.includes('util') || name.includes('helper')) tags.push('utility');
-    if (name.includes('test')) tags.push('test');
-    if (name.includes('manager')) tags.push('manager');
-    if (name.includes('provider')) tags.push('provider');
-    if (name.includes('handler')) tags.push('handler');
+    if (name.includes('service')) {tags.push('service');}
+    if (name.includes('controller')) {tags.push('controller');}
+    if (name.includes('model')) {tags.push('model');}
+    if (name.includes('util') || name.includes('helper')) {tags.push('utility');}
+    if (name.includes('test')) {tags.push('test');}
+    if (name.includes('manager')) {tags.push('manager');}
+    if (name.includes('provider')) {tags.push('provider');}
+    if (name.includes('handler')) {tags.push('handler');}
 
     return tags;
   }
@@ -457,14 +457,14 @@ export class EmbeddingChunker {
   private generateFileTags(filePath: string, content: string): string[] {
     const tags: string[] = [];
 
-    if (filePath.includes('test')) tags.push('test');
-    if (filePath.includes('config')) tags.push('configuration');
-    if (filePath.includes('util')) tags.push('utility');
-    if (filePath.includes('types') || filePath.includes('.d.ts')) tags.push('types');
-    if (filePath.includes('constant')) tags.push('constants');
+    if (filePath.includes('test')) {tags.push('test');}
+    if (filePath.includes('config')) {tags.push('configuration');}
+    if (filePath.includes('util')) {tags.push('utility');}
+    if (filePath.includes('types') || filePath.includes('.d.ts')) {tags.push('types');}
+    if (filePath.includes('constant')) {tags.push('constants');}
 
     // Content-based tags
-    if (content.includes('import') || content.includes('require')) tags.push('module');
+    if (content.includes('import') || content.includes('require')) {tags.push('module');}
 
     return tags;
   }
@@ -473,11 +473,11 @@ export class EmbeddingChunker {
    * Infer documentation type from path
    */
   private inferDocType(docPath: string): string {
-    if (docPath.includes('README')) return 'readme';
-    if (docPath.includes('CONTRIBUTING')) return 'contributing';
-    if (docPath.includes('ARCHITECTURE')) return 'architecture';
-    if (docPath.includes('API')) return 'api';
-    if (docPath.includes('CHANGELOG')) return 'changelog';
+    if (docPath.includes('README')) {return 'readme';}
+    if (docPath.includes('CONTRIBUTING')) {return 'contributing';}
+    if (docPath.includes('ARCHITECTURE')) {return 'architecture';}
+    if (docPath.includes('API')) {return 'api';}
+    if (docPath.includes('CHANGELOG')) {return 'changelog';}
     return 'general';
   }
 

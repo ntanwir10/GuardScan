@@ -237,10 +237,10 @@ export class RefactoringSuggestionsEngine {
     }
 
     for (const file of files) {
-      if (!file.endsWith('.ts') && !file.endsWith('.js')) continue;
+      if (!file.endsWith('.ts') && !file.endsWith('.js')) {continue;}
 
       const parsed = await this.parser.parseFile(file);
-      if (!parsed) continue;
+      if (!parsed) {continue;}
 
       // Check each function for smells
       for (const func of parsed.functions) {
@@ -388,7 +388,7 @@ export class RefactoringSuggestionsEngine {
    */
   async suggestPatterns(targetPath: string): Promise<PatternSuggestion[]> {
     const parsed = await this.parser.parseFile(targetPath);
-    if (!parsed) return [];
+    if (!parsed) {return [];}
 
     const suggestions: PatternSuggestion[] = [];
 
@@ -486,7 +486,7 @@ export class RefactoringSuggestionsEngine {
     const affectedTests: string[] = [];
 
     for (const [file, fileIndex] of index.files.entries()) {
-      if (file === targetPath) continue;
+      if (file === targetPath) {continue;}
 
       // Check if this file imports the target
       const hasImport = fileIndex.imports.some(imp =>
@@ -685,10 +685,10 @@ Provide refactored code in JSON format:
     const totalHours = baseHours + fileHours + breakingHours;
 
     let complexity: 'low' | 'medium' | 'high' | 'very-high';
-    if (totalHours < 4) complexity = 'low';
-    else if (totalHours < 8) complexity = 'medium';
-    else if (totalHours < 16) complexity = 'high';
-    else complexity = 'very-high';
+    if (totalHours < 4) {complexity = 'low';}
+    else if (totalHours < 8) {complexity = 'medium';}
+    else if (totalHours < 16) {complexity = 'high';}
+    else {complexity = 'very-high';}
 
     return { hours: Math.round(totalHours), complexity };
   }

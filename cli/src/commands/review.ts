@@ -78,7 +78,7 @@ export async function reviewCommand(options: ReviewCommandOptions): Promise<void
     spinner.succeed(`Repository: ${repoInfo.path}`);
 
     // Initialize components
-    const provider = ProviderFactory.create(config.provider, config.apiKey, config.apiEndpoint, config.model);
+    const provider = ProviderFactory.createForCli(config, { task: 'code-review' });
     const cache = new AICache(repoInfo.repoId);
     const engine = new CodeReviewEngine(provider, cache, repoInfo.path);
 
@@ -232,7 +232,7 @@ async function generateFullReport(report: any, outputPath?: string): Promise<voi
 
   for (const severity of severities) {
     const comments = report.comments.filter((c: any) => c.severity === severity);
-    if (comments.length === 0) continue;
+    if (comments.length === 0) {continue;}
 
     markdown += `## ${severity.charAt(0).toUpperCase() + severity.slice(1)} Issues\n\n`;
 
@@ -273,9 +273,9 @@ async function generateFullReport(report: any, outputPath?: string): Promise<voi
  * Get score display with color
  */
 function getScoreDisplay(score: number): string {
-  if (score >= 90) return chalk.green.bold(`${score}/100`);
-  if (score >= 75) return chalk.green(`${score}/100`);
-  if (score >= 60) return chalk.yellow(`${score}/100`);
+  if (score >= 90) {return chalk.green.bold(`${score}/100`);}
+  if (score >= 75) {return chalk.green(`${score}/100`);}
+  if (score >= 60) {return chalk.yellow(`${score}/100`);}
   return chalk.red(`${score}/100`);
 }
 

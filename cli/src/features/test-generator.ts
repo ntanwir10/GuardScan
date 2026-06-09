@@ -245,9 +245,9 @@ export class TestGenerator {
         const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf-8'));
         const deps = { ...packageJson.dependencies, ...packageJson.devDependencies };
 
-        if (deps.jest) return 'jest';
-        if (deps.vitest) return 'vitest';
-        if (deps.mocha) return 'mocha';
+        if (deps.jest) {return 'jest';}
+        if (deps.vitest) {return 'vitest';}
+        if (deps.mocha) {return 'mocha';}
       } catch {
         // Continue
       }
@@ -257,7 +257,7 @@ export class TestGenerator {
     const reqPath = path.join(this.repoRoot, 'requirements.txt');
     if (fs.existsSync(reqPath)) {
       const content = fs.readFileSync(reqPath, 'utf-8');
-      if (content.includes('pytest')) return 'pytest';
+      if (content.includes('pytest')) {return 'pytest';}
     }
 
     // Check for existing test files
@@ -267,7 +267,7 @@ export class TestGenerator {
       if (firstTest.includes('describe(') && firstTest.includes('it(')) {
         return firstTest.includes('vitest') ? 'vitest' : 'jest';
       }
-      if (firstTest.includes('def test_')) return 'pytest';
+      if (firstTest.includes('def test_')) {return 'pytest';}
     }
 
     // Default to jest for JS/TS projects
@@ -642,10 +642,10 @@ def test_example_function_edge_cases():
     // Rough estimate: more scenarios relative to complexity = higher coverage
     const ratio = testScenarios / Math.max(complexity, 1);
 
-    if (ratio >= 2) return 90;
-    if (ratio >= 1.5) return 80;
-    if (ratio >= 1) return 70;
-    if (ratio >= 0.5) return 60;
+    if (ratio >= 2) {return 90;}
+    if (ratio >= 1.5) {return 80;}
+    if (ratio >= 1) {return 70;}
+    if (ratio >= 0.5) {return 60;}
     return 50;
   }
 
@@ -658,9 +658,9 @@ def test_example_function_edge_cases():
 
     const ratio = testScenarios / Math.max(methodCount, 1);
 
-    if (ratio >= 3) return 85;
-    if (ratio >= 2) return 75;
-    if (ratio >= 1) return 65;
+    if (ratio >= 3) {return 85;}
+    if (ratio >= 2) {return 75;}
+    if (ratio >= 1) {return 65;}
     return 50;
   }
 

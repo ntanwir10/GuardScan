@@ -160,7 +160,7 @@ export class DocsGenerator {
 
     // Sort by type and name
     apiEntries.sort((a, b) => {
-      if (a.type !== b.type) return a.type.localeCompare(b.type);
+      if (a.type !== b.type) {return a.type.localeCompare(b.type);}
       return a.name.localeCompare(b.name);
     });
 
@@ -442,9 +442,9 @@ export class DocsGenerator {
     const params = func.parameters
       .map(p => {
         let param = p.name;
-        if (p.optional) param += '?';
-        if (p.type) param += `: ${p.type}`;
-        if (p.defaultValue) param += ` = ${p.defaultValue}`;
+        if (p.optional) {param += '?';}
+        if (p.type) {param += `: ${p.type}`;}
+        if (p.defaultValue) {param += ` = ${p.defaultValue}`;}
         return param;
       })
       .join(', ');
@@ -494,12 +494,12 @@ export class DocsGenerator {
         ...packageJson.devDependencies,
       };
 
-      if (allDeps.jest) testFramework = 'jest';
-      else if (allDeps.mocha) testFramework = 'mocha';
-      else if (allDeps.vitest) testFramework = 'vitest';
+      if (allDeps.jest) {testFramework = 'jest';}
+      else if (allDeps.mocha) {testFramework = 'mocha';}
+      else if (allDeps.vitest) {testFramework = 'vitest';}
 
-      if (allDeps.eslint) linter = 'eslint';
-      if (allDeps.prettier) formatter = 'prettier';
+      if (allDeps.eslint) {linter = 'eslint';}
+      if (allDeps.prettier) {formatter = 'prettier';}
     }
 
     return {
@@ -613,7 +613,7 @@ Make it engaging and easy to follow for ${options.targetAudience || 'users'}.`,
     // Group by type
     const byType: Record<string, APIDocEntry[]> = {};
     for (const entry of apiEntries) {
-      if (!byType[entry.type]) byType[entry.type] = [];
+      if (!byType[entry.type]) {byType[entry.type] = [];}
       byType[entry.type].push(entry);
     }
 

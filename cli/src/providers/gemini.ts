@@ -1,4 +1,5 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
+import { tokenCounter } from './token-counter';
 import {
   AIProvider,
   AIMessage,
@@ -7,6 +8,9 @@ import {
   ProviderCapabilities,
   CostEstimate,
 } from "./base";
+import { createDebugLogger } from "../utils/debug-logger";
+
+const logger = createDebugLogger("gemini");
 
 export class GeminiProvider extends AIProvider {
   private client: GoogleGenerativeAI;
@@ -63,6 +67,36 @@ export class GeminiProvider extends AIProvider {
     };
   }
 
+  /**
+   * Stream chat completion
+   */
+  async *stream(
+    messages: AIMessage[],
+    options?: ChatOptions
+  ): AsyncGenerator<string, void, unknown> {
+    const model = this.client.getGenerativeModel({
+      model: options?.model || this.defaultModel,
+    });
+
+    // Convert messages to Gemini format
+    const history = messages.slice(0, -1).map((msg) => ({
+      role: msg.role === "assistant" ? "model" : "user",
+      parts: [{ text: msg.content }],
+    }));
+
+    const lastMessage = messages[messages.length - 1];
+
+    const chat = model.startChat({ history });
+    const result = await chat.sendMessageStream(lastMessage.content);
+
+    for await (const chunk of result.stream) {
+      const text = chunk.text();
+      if (text) {
+        yield text;
+      }
+    }
+  }
+
   isAvailable(): boolean {
     return !!(this.apiKey || process.env.GOOGLE_API_KEY);
   }
@@ -72,20 +106,20 @@ export class GeminiProvider extends AIProvider {
   }
 
   async testConnection(): Promise<boolean> {
-    console.error(`[Gemini] Starting connection test with model: ${this.defaultModel}...`);
+    logger.debug(`Starting connection test with model: ${this.defaultModel}`);
     
     try {
-      console.error(`[Gemini] Trying model: ${this.defaultModel}...`);
+      logger.debug(`Trying model: ${this.defaultModel}`);
       const model = this.client.getGenerativeModel({ model: this.defaultModel });
       const result = await model.generateContent("test");
       if (result.response) {
-        console.error(`[Gemini] Connection successful with ${this.defaultModel}`);
+        logger.debug(`Connection successful with ${this.defaultModel}`);
         return true;
       }
       throw new Error('No response from Gemini API.');
     } catch (error: any) {
-      // Log the full error for debugging (always log, not just in debug mode)
-      console.error('[Gemini Connection Error] Full error object:', {
+      // Log the full error for debugging
+      logger.error('Connection test failed', {
         error,
         message: error?.message,
         code: error?.code,
@@ -93,8 +127,7 @@ export class GeminiProvider extends AIProvider {
         statusCode: error?.statusCode,
         errorMessage: error?.error?.message,
         errorCode: error?.error?.code,
-        stack: error?.stack,
-        stringified: JSON.stringify(error, null, 2)
+        stack: error?.stack
       });
       
       // Extract error information from various possible structures
@@ -167,6 +200,14 @@ export class GeminiProvider extends AIProvider {
       supportsStreaming: true,
       maxContextTokens: 32000, // Gemini Pro context window
     };
+  }
+
+  /**
+   * Count tokens accurately using tiktoken (similar to GPT models)
+   */
+  countTokens(text: string): number {
+    const result = tokenCounter.countTokens(text, this.defaultModel);
+    return result.count;
   }
 
   /**

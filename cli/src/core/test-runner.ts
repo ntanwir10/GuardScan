@@ -37,25 +37,25 @@ export class TestRunner {
     // Detect and run Jest (JavaScript/TypeScript)
     if (this.hasJest(repoPath)) {
       const jestResult = await this.runJest(repoPath, withCoverage);
-      if (jestResult) results.push(jestResult);
+      if (jestResult) {results.push(jestResult);}
     }
 
     // Detect and run pytest (Python)
     if (this.hasPytest(repoPath)) {
       const pytestResult = await this.runPytest(repoPath, withCoverage);
-      if (pytestResult) results.push(pytestResult);
+      if (pytestResult) {results.push(pytestResult);}
     }
 
     // Detect and run go test (Go)
     if (this.hasGoTest(repoPath)) {
       const goResult = await this.runGoTest(repoPath, withCoverage);
-      if (goResult) results.push(goResult);
+      if (goResult) {results.push(goResult);}
     }
 
     // Detect and run cargo test (Rust)
     if (this.hasCargoTest(repoPath)) {
       const cargoResult = await this.runCargoTest(repoPath);
-      if (cargoResult) results.push(cargoResult);
+      if (cargoResult) {results.push(cargoResult);}
     }
 
     return results;
@@ -111,7 +111,7 @@ export class TestRunner {
 
       // Parse Jest JSON output
       const jsonMatch = output.match(/\{[\s\S]*"testResults"[\s\S]*\}/);
-      if (!jsonMatch) return null;
+      if (!jsonMatch) {return null;}
 
       const result = JSON.parse(jsonMatch[0]);
 
@@ -124,7 +124,7 @@ export class TestRunner {
       for (const testFile of result.testResults || []) {
         for (const testCase of testFile.assertionResults || []) {
           totalTests++;
-          if (testCase.status === 'passed') passed++;
+          if (testCase.status === 'passed') {passed++;}
           else if (testCase.status === 'failed') {
             failed++;
             failures.push({
@@ -132,7 +132,7 @@ export class TestRunner {
               error: testCase.failureMessages?.join('\n') || 'Unknown error',
               file: testFile.name,
             });
-          } else if (testCase.status === 'skipped') skipped++;
+          } else if (testCase.status === 'skipped') {skipped++;}
         }
       }
 
@@ -156,7 +156,7 @@ export class TestRunner {
    */
   private parseJestCoverage(repoPath: string): CoverageResult | undefined {
     const coveragePath = path.join(repoPath, 'coverage', 'coverage-summary.json');
-    if (!fs.existsSync(coveragePath)) return undefined;
+    if (!fs.existsSync(coveragePath)) {return undefined;}
 
     try {
       const coverage = JSON.parse(fs.readFileSync(coveragePath, 'utf-8'));
@@ -249,7 +249,7 @@ export class TestRunner {
     const failedMatch = output.match(/(\d+) failed/);
     const skippedMatch = output.match(/(\d+) skipped/);
 
-    if (!passedMatch && !failedMatch) return null;
+    if (!passedMatch && !failedMatch) {return null;}
 
     const passed = passedMatch ? parseInt(passedMatch[1]) : 0;
     const failed = failedMatch ? parseInt(failedMatch[1]) : 0;
@@ -271,7 +271,7 @@ export class TestRunner {
    */
   private parsePytestCoverage(repoPath: string): CoverageResult | undefined {
     const coveragePath = path.join(repoPath, 'coverage.json');
-    if (!fs.existsSync(coveragePath)) return undefined;
+    if (!fs.existsSync(coveragePath)) {return undefined;}
 
     try {
       const coverage = JSON.parse(fs.readFileSync(coveragePath, 'utf-8'));
@@ -359,7 +359,7 @@ export class TestRunner {
    */
   private parseGoCoverage(repoPath: string): CoverageResult | undefined {
     const coveragePath = path.join(repoPath, 'coverage.out');
-    if (!fs.existsSync(coveragePath)) return undefined;
+    if (!fs.existsSync(coveragePath)) {return undefined;}
 
     try {
       const output = execSync('go tool cover -func=coverage.out', {
@@ -403,7 +403,7 @@ export class TestRunner {
       const passedMatch = output.match(/test result:.*?(\d+) passed/);
       const failedMatch = output.match(/(\d+) failed/);
 
-      if (!passedMatch) return null;
+      if (!passedMatch) {return null;}
 
       const passed = parseInt(passedMatch[1]);
       const failed = failedMatch ? parseInt(failedMatch[1]) : 0;
@@ -429,7 +429,7 @@ export class TestRunner {
     const files: string[] = [];
 
     const search = (currentDir: string, depth: number) => {
-      if (depth > maxDepth) return;
+      if (depth > maxDepth) {return;}
 
       try {
         const items = fs.readdirSync(currentDir);

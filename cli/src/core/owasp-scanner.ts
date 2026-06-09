@@ -34,12 +34,12 @@ export class OwaspScanner {
     const files: string[] = [];
 
     const search = (currentDir: string, depth: number) => {
-      if (depth > 5) return;
+      if (depth > 5) {return;}
 
       try {
         const items = fs.readdirSync(currentDir);
         for (const item of items) {
-          if (item === 'node_modules' || item === '.git' || item === 'vendor') continue;
+          if (item === 'node_modules' || item === '.git' || item === 'vendor') {continue;}
 
           const fullPath = path.join(currentDir, item);
           const stat = fs.statSync(fullPath);
@@ -263,11 +263,11 @@ export class OwaspScanner {
     if (/Math\.random\(\)/.test(line)) {
       const contextLines = [line];
       if (lines && lineIndex !== undefined) {
-        if (lines[lineIndex + 1]) contextLines.push(lines[lineIndex + 1]);
-        if (lines[lineIndex + 2]) contextLines.push(lines[lineIndex + 2]);
+        if (lines[lineIndex + 1]) {contextLines.push(lines[lineIndex + 1]);}
+        if (lines[lineIndex + 2]) {contextLines.push(lines[lineIndex + 2]);}
         // Also check previous lines for function name
-        if (lineIndex > 0 && lines[lineIndex - 1]) contextLines.push(lines[lineIndex - 1]);
-        if (lineIndex > 1 && lines[lineIndex - 2]) contextLines.push(lines[lineIndex - 2]);
+        if (lineIndex > 0 && lines[lineIndex - 1]) {contextLines.push(lines[lineIndex - 1]);}
+        if (lineIndex > 1 && lines[lineIndex - 2]) {contextLines.push(lines[lineIndex - 2]);}
       }
       const context = contextLines.join(' ');
       

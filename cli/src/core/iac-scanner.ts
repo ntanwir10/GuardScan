@@ -132,7 +132,7 @@ export class IaCScanner {
         const docs = yaml.loadAll(content) as any[];
 
         for (const doc of docs) {
-          if (!doc || typeof doc !== 'object') continue;
+          if (!doc || typeof doc !== 'object') {continue;}
 
           // Check if it's a Kubernetes resource
           if (doc.apiVersion && doc.kind) {
@@ -274,7 +274,7 @@ export class IaCScanner {
         const compose = yaml.load(content) as any;
 
         if (compose.services) {
-          for (const [serviceName, serviceConfig] of Object.entries(compose.services as any)) {
+          for (const [serviceName, serviceConfig] of Object.entries(compose.services)) {
             const service = serviceConfig as any;
 
             // Check for privileged containers
@@ -346,14 +346,14 @@ export class IaCScanner {
     const files: string[] = [];
 
     const search = (currentDir: string, depth: number) => {
-      if (depth > maxDepth) return;
+      if (depth > maxDepth) {return;}
 
       try {
         const items = fs.readdirSync(currentDir);
 
         for (const item of items) {
           // Skip node_modules, .git, etc.
-          if (item === 'node_modules' || item === '.git' || item === 'vendor') continue;
+          if (item === 'node_modules' || item === '.git' || item === 'vendor') {continue;}
 
           const fullPath = path.join(currentDir, item);
           const stat = fs.statSync(fullPath);

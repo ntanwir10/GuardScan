@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { tokenCounter } from './token-counter';
 import {
   AIProvider,
   AIMessage,
@@ -24,13 +25,53 @@ export class OllamaProvider extends AIProvider {
         role: msg.role,
         content: msg.content,
       })),
-      stream: options?.stream || false,
+      stream: false,
     });
 
     return {
       content: response.data.message.content,
       model: options?.model || this.defaultModel,
     };
+  }
+
+  /**
+   * Stream chat completion
+   */
+  async *stream(
+    messages: AIMessage[],
+    options?: ChatOptions
+  ): AsyncGenerator<string, void, unknown> {
+    const response = await axios.post(
+      `${this.endpoint}/api/chat`,
+      {
+        model: options?.model || this.defaultModel,
+        messages: messages.map(msg => ({
+          role: msg.role,
+          content: msg.content,
+        })),
+        stream: true,
+      },
+      {
+        responseType: 'stream',
+      }
+    );
+
+    const stream = response.data;
+    
+    for await (const chunk of stream) {
+      const lines = chunk.toString().split('\n').filter((line: string) => line.trim());
+      
+      for (const line of lines) {
+        try {
+          const json = JSON.parse(line);
+          if (json.message && json.message.content) {
+            yield json.message.content;
+          }
+        } catch (error) {
+          // Skip invalid JSON lines
+        }
+      }
+    }
   }
 
   isAvailable(): boolean {
@@ -58,6 +99,14 @@ export class OllamaProvider extends AIProvider {
       maxContextTokens: 4096, // Varies by model, codellama default
       embeddingDimensions: 768, // Varies by model
     };
+  }
+
+  /**
+   * Count tokens (uses estimation for Ollama models)
+   */
+  countTokens(text: string): number {
+    const result = tokenCounter.countTokens(text, 'ollama');
+    return result.count;
   }
 
   /**

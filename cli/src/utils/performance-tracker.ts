@@ -45,7 +45,7 @@ export class PerformanceTracker {
    * Start tracking an operation
    */
   start(label: string, metadata?: Record<string, any>): void {
-    if (!this.enabled) return;
+    if (!this.enabled) {return;}
 
     const startTime = Date.now();
     this.activeTimers.set(label, startTime);
@@ -60,7 +60,7 @@ export class PerformanceTracker {
    * End tracking an operation
    */
   end(label: string): number {
-    if (!this.enabled) return 0;
+    if (!this.enabled) {return 0;}
 
     const startTime = this.activeTimers.get(label);
     if (!startTime) {
@@ -139,7 +139,7 @@ export class PerformanceTracker {
    * Display performance summary in console
    */
   displaySummary(): void {
-    if (!this.enabled || this.entries.length === 0) return;
+    if (!this.enabled || this.entries.length === 0) {return;}
 
     const summary = this.getSummary();
     const totalSeconds = (summary.totalDurationMs / 1000).toFixed(2);
@@ -188,7 +188,7 @@ export class PerformanceTracker {
    * Export performance data to file
    */
   async exportToFile(filePath: string): Promise<void> {
-    if (!this.enabled) return;
+    if (!this.enabled) {return;}
 
     const fs = await import('fs');
     const json = this.toJSON();

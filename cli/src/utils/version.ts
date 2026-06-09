@@ -34,25 +34,25 @@ export async function checkForUpdates(): Promise<void> {
   const debug = process.env.GUARDSCAN_DEBUG === "true";
 
   try {
-    if (debug) console.error("[VERSION] Checking for updates...");
+    if (debug) {console.error("[VERSION] Checking for updates...");}
 
     // Check cache first (only check once per day)
     const configManager = new ConfigManager();
     const cacheDir = configManager.getCacheDir();
 
-    if (debug) console.error(`[VERSION] Cache dir: ${cacheDir}`);
+    if (debug) {console.error(`[VERSION] Cache dir: ${cacheDir}`);}
 
     // Defensive: ensure cache directory exists before accessing files
     if (!fs.existsSync(cacheDir)) {
       if (debug)
-        console.error("[VERSION] Cache dir does not exist, creating...");
+        {console.error("[VERSION] Cache dir does not exist, creating...");}
       try {
         fs.mkdirSync(cacheDir, { recursive: true });
       } catch (dirError) {
         if (debug)
-          console.error(
+          {console.error(
             "[VERSION] Failed to create cache dir, skipping version check"
-          );
+          );}
         return; // Can't create cache dir, skip version check silently
       }
     }
@@ -62,7 +62,7 @@ export async function checkForUpdates(): Promise<void> {
       TELEMETRY_CONSTANTS.VERSION_CACHE_FILE
     );
 
-    if (debug) console.error(`[VERSION] Cache file: ${cacheFile}`);
+    if (debug) {console.error(`[VERSION] Cache file: ${cacheFile}`);}
     if (fs.existsSync(cacheFile)) {
       const cache: VersionInfo = JSON.parse(
         fs.readFileSync(cacheFile, "utf-8")
@@ -96,10 +96,10 @@ export async function checkForUpdates(): Promise<void> {
 
     try {
       fs.writeFileSync(cacheFile, JSON.stringify(versionInfo, null, 2));
-      if (debug) console.error("[VERSION] Cache file written successfully");
+      if (debug) {console.error("[VERSION] Cache file written successfully");}
     } catch (writeError) {
       if (debug)
-        console.error("[VERSION] Failed to write cache file:", writeError);
+        {console.error("[VERSION] Failed to write cache file:", writeError);}
       // Continue anyway - version check still works, just won't cache
     }
 
@@ -108,7 +108,7 @@ export async function checkForUpdates(): Promise<void> {
       displayUpdateMessage(latestVersion);
     }
   } catch (error) {
-    if (debug) console.error("[VERSION] Check failed:", error);
+    if (debug) {console.error("[VERSION] Check failed:", error);}
     // Silent fail - don't disrupt user experience
   }
 }

@@ -153,7 +153,7 @@ export class LicenseScanner {
 
       const licenses = JSON.parse(output);
 
-      for (const [pkg, data] of Object.entries(licenses as any)) {
+      for (const [pkg, data] of Object.entries(licenses)) {
         const [name, version] = pkg.split('@').filter(Boolean);
         const license = (data as any).licenses || 'Unknown';
 
@@ -236,7 +236,7 @@ export class LicenseScanner {
 
         for (const line of lines) {
           const trimmed = line.trim();
-          if (!trimmed || trimmed.startsWith('#')) continue;
+          if (!trimmed || trimmed.startsWith('#')) {continue;}
 
           const match = trimmed.match(/^([a-zA-Z0-9\-_]+)([>=<~!].+)?$/);
           if (match) {
@@ -407,7 +407,7 @@ export class LicenseScanner {
    * Normalize license identifier to SPDX format
    */
   private normalizeLicense(license: string): string {
-    if (!license || license === 'UNKNOWN') return 'Unknown';
+    if (!license || license === 'UNKNOWN') {return 'Unknown';}
 
     // Common variations
     const normalizations: Record<string, string> = {
@@ -443,10 +443,10 @@ export class LicenseScanner {
     const weakCopyleft = ['LGPL-2.0', 'LGPL-2.1', 'LGPL-3.0', 'MPL-2.0', 'EPL-1.0', 'EPL-2.0'];
     const strongCopyleft = ['GPL-2.0', 'GPL-3.0', 'AGPL-3.0', 'OSL-3.0'];
 
-    if (permissive.some(p => normalized.includes(p))) return 'permissive';
-    if (weakCopyleft.some(w => normalized.includes(w))) return 'weak-copyleft';
-    if (strongCopyleft.some(s => normalized.includes(s))) return 'strong-copyleft';
-    if (normalized === 'UNLICENSED' || normalized === 'proprietary') return 'proprietary';
+    if (permissive.some(p => normalized.includes(p))) {return 'permissive';}
+    if (weakCopyleft.some(w => normalized.includes(w))) {return 'weak-copyleft';}
+    if (strongCopyleft.some(s => normalized.includes(s))) {return 'strong-copyleft';}
+    if (normalized === 'UNLICENSED' || normalized === 'proprietary') {return 'proprietary';}
 
     return 'unknown';
   }
@@ -530,7 +530,7 @@ export class LicenseScanner {
     const compat1 = this.COMPATIBILITY_MATRIX[l1];
     const compat2 = this.COMPATIBILITY_MATRIX[l2];
 
-    if (!compat1 || !compat2) return null;
+    if (!compat1 || !compat2) {return null;}
 
     // Check if explicitly incompatible
     if (compat1.incompatible) {

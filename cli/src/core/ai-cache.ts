@@ -3,6 +3,9 @@ import * as path from 'path';
 import * as crypto from 'crypto';
 import { configManager } from './config';
 
+// Maximum size for a single cache entry (1MB)
+const MAX_CACHE_ENTRY_SIZE = 1024 * 1024;
+
 /**
  * Cache entry structure
  */
@@ -106,6 +109,18 @@ export class AICache {
   ): Promise<void> {
     const key = this.generateKey(prompt, model);
 
+    // Calculate entry size first
+    const size = Buffer.byteLength(prompt) + Buffer.byteLength(response);
+
+    // Check size limit
+    if (size > MAX_CACHE_ENTRY_SIZE) {
+      console.warn(
+        `Cache entry too large (${(size / 1024 / 1024).toFixed(2)}MB), ` +
+        `skipping cache (max: 1MB)`
+      );
+      return; // Don't cache oversized entries
+    }
+
     // Calculate file hashes
     const fileHashes = new Map<string, string>();
     if (files && files.length > 0) {
@@ -116,9 +131,6 @@ export class AICache {
         }
       }
     }
-
-    // Calculate entry size
-    const size = Buffer.byteLength(prompt) + Buffer.byteLength(response);
 
     const entry: CacheEntry = {
       key,
@@ -224,7 +236,7 @@ export class AICache {
    * Evict least recently used entry
    */
   private evictLRU(): void {
-    if (this.accessOrder.length === 0) return;
+    if (this.accessOrder.length === 0) {return;}
 
     const lruKey = this.accessOrder.shift()!;
     const entry = this.cache.get(lruKey);
@@ -333,7 +345,13 @@ export class AICache {
     };
 
     const cachePath = path.join(cacheDir, 'cache.json');
-    fs.writeFileSync(cachePath, JSON.stringify(serializable, null, 2), 'utf-8');
+    
+    try {
+      fs.writeFileSync(cachePath, JSON.stringify(serializable, null, 2), 'utf-8');
+    } catch (error: any) {
+      console.warn('Failed to save cache to disk:', error.message);
+      // Continue without crashing - cache just won't persist
+    }
   }
 
   /**

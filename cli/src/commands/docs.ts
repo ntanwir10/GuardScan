@@ -59,7 +59,7 @@ export async function docsCommand(options: DocsCommandOptions): Promise<void> {
     }
 
     // Create AI provider
-    const provider = ProviderFactory.create(config.provider, config.apiKey, config.apiEndpoint, config.model);
+    const provider = ProviderFactory.createForCli(config, { task: 'code-generation' });
 
     // Create AI cache
     const cache = new AICache(repoInfo.repoId, 100); // 100MB cache
@@ -106,8 +106,7 @@ export async function docsCommand(options: DocsCommandOptions): Promise<void> {
           process.exit(1);
       }
     } catch (error: any) {
-      console.error(chalk.red(`\n✗ Failed to generate ${docType} documentation:`, error.message));
-      process.exit(1);
+      handleCommandError(error, `Generate ${docType} documentation`);
     }
 
     if (!result) {
@@ -170,7 +169,6 @@ export async function docsCommand(options: DocsCommandOptions): Promise<void> {
     console.log();
 
   } catch (error) {
-    console.error(chalk.red('\n✗ Failed to generate documentation:'), error);
-    process.exit(1);
+    handleCommandError(error, 'Documentation Generation');
   }
 }

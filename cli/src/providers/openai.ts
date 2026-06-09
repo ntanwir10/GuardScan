@@ -1,4 +1,5 @@
 import OpenAI from 'openai';
+import { tokenCounter } from './token-counter';
 import {
   AIProvider,
   AIMessage,
@@ -32,13 +33,8 @@ export class OpenAIProvider extends AIProvider {
       })),
       temperature: options?.temperature || 0.7,
       max_tokens: options?.maxTokens || 4000,
-      stream: options?.stream || false,
+      stream: false,
     });
-
-    // Type narrowing: check if response is not a stream
-    if (Symbol.asyncIterator in response) {
-      throw new Error('Streaming responses are not supported in this method');
-    }
 
     const chatCompletion = response as OpenAI.Chat.Completions.ChatCompletion;
     const choice = chatCompletion.choices[0];
@@ -55,6 +51,32 @@ export class OpenAIProvider extends AIProvider {
       } : undefined,
       model: chatCompletion.model,
     };
+  }
+
+  /**
+   * Stream chat completion
+   */
+  async *stream(
+    messages: AIMessage[],
+    options?: ChatOptions
+  ): AsyncGenerator<string, void, unknown> {
+    const stream = await this.client.chat.completions.create({
+      model: options?.model || this.defaultModel,
+      messages: messages.map(msg => ({
+        role: msg.role,
+        content: msg.content,
+      })),
+      temperature: options?.temperature || 0.7,
+      max_tokens: options?.maxTokens || 4000,
+      stream: true,
+    });
+
+    for await (const chunk of stream) {
+      const content = chunk.choices[0]?.delta?.content;
+      if (content) {
+        yield content;
+      }
+    }
   }
 
   isAvailable(): boolean {
@@ -113,21 +135,11 @@ export class OpenAIProvider extends AIProvider {
   }
 
   /**
-   * Count tokens accurately (rough estimate without tiktoken dependency)
+   * Count tokens accurately using tiktoken (if available)
    */
   countTokens(text: string): number {
-    // More accurate estimate based on OpenAI's tokenization
-    // Average: ~4 characters per token for English text
-    // Add slight overhead for special characters and formatting
-    const charCount = text.length;
-    const wordCount = text.split(/\s+/).length;
-
-    // Heuristic: use word count if available, otherwise char count
-    if (wordCount > 0) {
-      return Math.ceil(wordCount * 1.3); // ~1.3 tokens per word
-    }
-
-    return Math.ceil(charCount / 4);
+    const result = tokenCounter.countTokens(text, this.defaultModel);
+    return result.count;
   }
 
   /**

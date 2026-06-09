@@ -72,7 +72,7 @@ export async function threatModelCommand(options: ThreatModelCommandOptions): Pr
     }
 
     // Initialize components
-    const provider = ProviderFactory.create(config.provider, config.apiKey, config.apiEndpoint, config.model);
+    const provider = ProviderFactory.createForCli(config, { task: 'code-review' });
     const indexer = new CodebaseIndexer(repoInfo.path, repoInfo.repoId);
     const cache = new AICache(repoInfo.repoId);
     const engine = new ThreatModelingEngine(provider, indexer, cache, repoInfo.path);

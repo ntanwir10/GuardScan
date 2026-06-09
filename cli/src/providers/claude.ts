@@ -1,4 +1,5 @@
 import Anthropic from '@anthropic-ai/sdk';
+import { tokenCounter } from './token-counter';
 import {
   AIProvider,
   AIMessage,
@@ -36,7 +37,7 @@ export class ClaudeProvider extends AIProvider {
         role: msg.role as 'user' | 'assistant',
         content: msg.content,
       })),
-      stream: options?.stream || false,
+      stream: false,
     });
 
     const content = response.content[0];
@@ -53,6 +54,36 @@ export class ClaudeProvider extends AIProvider {
       },
       model: response.model,
     };
+  }
+
+  /**
+   * Stream chat completion
+   */
+  async *stream(
+    messages: AIMessage[],
+    options?: ChatOptions
+  ): AsyncGenerator<string, void, unknown> {
+    // Separate system messages from user/assistant messages
+    const systemMessages = messages.filter(m => m.role === 'system');
+    const conversationMessages = messages.filter(m => m.role !== 'system');
+
+    const stream = await (this.client as any).messages.create({
+      model: options?.model || this.defaultModel,
+      max_tokens: options?.maxTokens || 4000,
+      temperature: options?.temperature || 0.7,
+      system: systemMessages.map(m => m.content).join('\n'),
+      messages: conversationMessages.map(msg => ({
+        role: msg.role as 'user' | 'assistant',
+        content: msg.content,
+      })),
+      stream: true,
+    });
+
+    for await (const chunk of stream) {
+      if (chunk.type === 'content_block_delta' && chunk.delta?.type === 'text_delta') {
+        yield chunk.delta.text;
+      }
+    }
   }
 
   isAvailable(): boolean {
@@ -79,6 +110,14 @@ export class ClaudeProvider extends AIProvider {
       supportsStreaming: true,
       maxContextTokens: 200000, // Claude 4.5 models context window
     };
+  }
+
+  /**
+   * Count tokens accurately using Anthropic tokenizer (if available)
+   */
+  countTokens(text: string): number {
+    const result = tokenCounter.countTokens(text, this.defaultModel);
+    return result.count;
   }
 
   /**

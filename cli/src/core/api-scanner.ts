@@ -42,12 +42,12 @@ export class APIScanner {
     const files: string[] = [];
 
     const search = (currentDir: string, depth: number) => {
-      if (depth > 5) return;
+      if (depth > 5) {return;}
 
       try {
         const items = fs.readdirSync(currentDir);
         for (const item of items) {
-          if (item === 'node_modules' || item === '.git' || item === 'vendor') continue;
+          if (item === 'node_modules' || item === '.git' || item === 'vendor') {continue;}
 
           const fullPath = path.join(currentDir, item);
           const stat = fs.statSync(fullPath);
@@ -390,7 +390,7 @@ export class APIScanner {
   private isMissingAuth(line: string, lines: string[], index: number): boolean {
     // Look for route definitions
     const routePattern = /(app\.|router\.|@(Get|Post|Put|Delete|Patch))/i;
-    if (!routePattern.test(line)) return false;
+    if (!routePattern.test(line)) {return false;}
 
     // Check surrounding lines for auth middleware/decorators
     const contextLines = lines.slice(Math.max(0, index - 3), index + 1).join('\n');
@@ -404,7 +404,7 @@ export class APIScanner {
    */
   private isMissingRateLimit(line: string, lines: string[], index: number): boolean {
     const routePattern = /(app\.|router\.|@(Get|Post|Put|Delete|Patch))/i;
-    if (!routePattern.test(line)) return false;
+    if (!routePattern.test(line)) {return false;}
 
     const contextLines = lines.slice(Math.max(0, index - 3), index + 1).join('\n');
     const hasRateLimit = /(rateLimit|limiter|throttle|@RateLimit)/i.test(contextLines);
@@ -426,7 +426,7 @@ export class APIScanner {
   private isMissingInputValidation(line: string, language: string): boolean {
     // Route handler that accepts parameters
     const hasParams = /(req\.body|req\.params|req\.query|request\.json|@Body|@Param|@Query)/i.test(line);
-    if (!hasParams) return false;
+    if (!hasParams) {return false;}
 
     // Check for validation libraries
     const hasValidation = /(joi|yup|validator|pydantic|validate|schema|@Valid|@Validated)/i.test(line);

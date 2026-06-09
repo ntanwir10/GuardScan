@@ -665,10 +665,10 @@ export class ThreatModelingEngine {
 
   private inferDataTypes(endpoint: string): string[] {
     const types: string[] = [];
-    if (endpoint.includes('user')) types.push('user-data');
-    if (endpoint.includes('auth') || endpoint.includes('login')) types.push('credentials');
-    if (endpoint.includes('payment')) types.push('financial-data');
-    if (endpoint.includes('admin')) types.push('administrative-data');
+    if (endpoint.includes('user')) {types.push('user-data');}
+    if (endpoint.includes('auth') || endpoint.includes('login')) {types.push('credentials');}
+    if (endpoint.includes('payment')) {types.push('financial-data');}
+    if (endpoint.includes('admin')) {types.push('administrative-data');}
     return types.length > 0 ? types : ['general-data'];
   }
 

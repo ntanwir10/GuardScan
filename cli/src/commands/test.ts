@@ -39,15 +39,20 @@ export async function testCommand(options: TestOptions): Promise<void> {
 
     // Calculate total steps for progress tracking
     let totalSteps = 1; // Report generation
-    if (options.all || !options.metrics && !options.smells && !options.lint) totalSteps++;
-    if (options.all || options.metrics) totalSteps++;
-    if (options.all || options.smells) totalSteps++;
-    if (options.all || options.lint) totalSteps++;
+    if (options.all || !options.metrics && !options.smells && !options.lint) {totalSteps++;}
+    if (options.all || options.metrics) {totalSteps++;}
+    if (options.all || options.smells) {totalSteps++;}
+    if (options.all || options.lint) {totalSteps++;}
 
     const progressBar = createProgressBar(totalSteps, 'Quality Analysis');
     let completedSteps = 0;
 
-    const results: any = {
+    const results: {
+      tests: any[] | null;
+      metrics: any | null;
+      smells: any[] | null;
+      linting: any[] | null;
+    } = {
       tests: null,
       metrics: null,
       smells: null,

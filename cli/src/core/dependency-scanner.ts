@@ -32,32 +32,32 @@ export class DependencyScanner {
     // Scan npm dependencies
     if (fs.existsSync(path.join(repoPath, 'package.json'))) {
       const npmResult = await this.scanNpm(repoPath);
-      if (npmResult) results.push(npmResult);
+      if (npmResult) {results.push(npmResult);}
     }
 
     // Scan Python dependencies
     if (fs.existsSync(path.join(repoPath, 'requirements.txt')) ||
         fs.existsSync(path.join(repoPath, 'Pipfile'))) {
       const pipResult = await this.scanPip(repoPath);
-      if (pipResult) results.push(pipResult);
+      if (pipResult) {results.push(pipResult);}
     }
 
     // Scan Go dependencies
     if (fs.existsSync(path.join(repoPath, 'go.mod'))) {
       const goResult = await this.scanGo(repoPath);
-      if (goResult) results.push(goResult);
+      if (goResult) {results.push(goResult);}
     }
 
     // Scan Ruby dependencies
     if (fs.existsSync(path.join(repoPath, 'Gemfile'))) {
       const rubyResult = await this.scanRuby(repoPath);
-      if (rubyResult) results.push(rubyResult);
+      if (rubyResult) {results.push(rubyResult);}
     }
 
     // Scan Rust dependencies
     if (fs.existsSync(path.join(repoPath, 'Cargo.toml'))) {
       const cargoResult = await this.scanCargo(repoPath);
-      if (cargoResult) results.push(cargoResult);
+      if (cargoResult) {results.push(cargoResult);}
     }
 
     return results;
@@ -78,7 +78,7 @@ export class DependencyScanner {
       const vulnerabilities: DependencyVulnerability[] = [];
 
       if (auditData.vulnerabilities) {
-        for (const [pkgName, vuln] of Object.entries(auditData.vulnerabilities as any)) {
+        for (const [pkgName, vuln] of Object.entries(auditData.vulnerabilities)) {
           const v = vuln as any;
           vulnerabilities.push({
             package: pkgName,
@@ -110,7 +110,7 @@ export class DependencyScanner {
           const vulnerabilities: DependencyVulnerability[] = [];
 
           if (auditData.vulnerabilities) {
-            for (const [pkgName, vuln] of Object.entries(auditData.vulnerabilities as any)) {
+            for (const [pkgName, vuln] of Object.entries(auditData.vulnerabilities)) {
               const v = vuln as any;
               vulnerabilities.push({
                 package: pkgName,
@@ -321,9 +321,9 @@ export class DependencyScanner {
    */
   private mapSeverity(severity: string): 'critical' | 'high' | 'medium' | 'low' {
     const s = severity.toLowerCase();
-    if (s.includes('critical')) return 'critical';
-    if (s.includes('high')) return 'high';
-    if (s.includes('medium') || s.includes('moderate')) return 'medium';
+    if (s.includes('critical')) {return 'critical';}
+    if (s.includes('high')) {return 'high';}
+    if (s.includes('medium') || s.includes('moderate')) {return 'medium';}
     return 'low';
   }
 }

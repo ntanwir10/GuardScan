@@ -324,7 +324,7 @@ export class GoParser {
 
     for (const line of lines) {
       const trimmed = line.trim();
-      if (!trimmed || trimmed === '}') continue;
+      if (!trimmed || trimmed === '}') {continue;}
 
       // name type `tag`
       const fieldMatch = trimmed.match(/^(\w+)\s+([\w\[\].*]+)(?:\s+`(.+?)`)?/);
@@ -386,7 +386,7 @@ export class GoParser {
 
     for (const line of lines) {
       const trimmed = line.trim();
-      if (!trimmed || trimmed === '}') continue;
+      if (!trimmed || trimmed === '}') {continue;}
 
       // Embedded interface
       if (/^[A-Z]\w+$/.test(trimmed)) {
@@ -454,7 +454,7 @@ export class GoParser {
    * Parse function parameters
    */
   private parseParameters(params: string): GoParameter[] {
-    if (!params.trim()) return [];
+    if (!params.trim()) {return [];}
 
     const result: GoParameter[] = [];
     const parts = params.split(',').map(p => p.trim());
@@ -541,10 +541,10 @@ export class GoParser {
       const line = lines[i];
 
       for (const char of line) {
-        if (char === '{') depth++;
+        if (char === '{') {depth++;}
         if (char === '}') {
           depth--;
-          if (depth === 0) return i;
+          if (depth === 0) {return i;}
         }
       }
     }

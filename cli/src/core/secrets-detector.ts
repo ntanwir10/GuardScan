@@ -246,7 +246,7 @@ export class SecretsDetector {
 
         if (entropy > SECURITY_CONSTANTS.HIGH_ENTROPY_THRESHOLD) {
           // Skip if it looks like a hash or known safe pattern
-          if (this.isSafePattern(string)) continue;
+          if (this.isSafePattern(string)) {continue;}
 
           findings.push({
             type: 'High Entropy String',
@@ -258,7 +258,7 @@ export class SecretsDetector {
             recommendation: 'Review if this is a secret - high entropy detected',
           });
         } else if (entropy > SECURITY_CONSTANTS.MEDIUM_ENTROPY_THRESHOLD && string.length > 32) {
-          if (this.isSafePattern(string)) continue;
+          if (this.isSafePattern(string)) {continue;}
 
           findings.push({
             type: 'Medium Entropy String',
@@ -303,20 +303,20 @@ export class SecretsDetector {
    */
   private isSafePattern(str: string): boolean {
     // UUID
-    if (/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(str)) return true;
+    if (/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(str)) {return true;}
 
     // SHA-256 hash
-    if (/^[a-f0-9]{64}$/i.test(str)) return true;
+    if (/^[a-f0-9]{64}$/i.test(str)) {return true;}
 
     // SHA-1 hash
-    if (/^[a-f0-9]{40}$/i.test(str)) return true;
+    if (/^[a-f0-9]{40}$/i.test(str)) {return true;}
 
     // MD5 hash
-    if (/^[a-f0-9]{32}$/i.test(str)) return true;
+    if (/^[a-f0-9]{32}$/i.test(str)) {return true;}
 
     // Common safe strings
     const safeKeywords = ['localhost', 'example', 'test', 'demo', 'sample', 'placeholder'];
-    if (safeKeywords.some(keyword => str.toLowerCase().includes(keyword))) return true;
+    if (safeKeywords.some(keyword => str.toLowerCase().includes(keyword))) {return true;}
 
     return false;
   }
@@ -325,7 +325,7 @@ export class SecretsDetector {
    * Mask secret for display
    */
   private maskSecret(secret: string): string {
-    if (secret.length <= 8) return '***';
+    if (secret.length <= 8) {return '***';}
     return secret.substring(0, SECURITY_CONSTANTS.SECRET_MASK_PREFIX_LENGTH) + '***' + secret.substring(secret.length - SECURITY_CONSTANTS.SECRET_MASK_SUFFIX_LENGTH);
   }
 }

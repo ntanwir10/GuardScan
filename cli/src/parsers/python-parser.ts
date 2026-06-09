@@ -218,7 +218,7 @@ except Exception as e:
       return this.formatPythonASTResult(result, filePath, code);
     } catch (error) {
       // Clean up on error
-      if (fs.existsSync(tempFile)) fs.unlinkSync(tempFile);
+      if (fs.existsSync(tempFile)) {fs.unlinkSync(tempFile);}
       throw error;
     }
   }
@@ -458,7 +458,7 @@ except Exception as e:
    * Parse function parameters
    */
   private parseParameters(paramsStr: string): PythonParameter[] {
-    if (!paramsStr.trim()) return [];
+    if (!paramsStr.trim()) {return [];}
 
     const params = paramsStr.split(',').map(p => p.trim());
     return params.map(param => {

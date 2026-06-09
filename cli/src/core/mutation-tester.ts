@@ -312,19 +312,19 @@ export class MutationTester {
       }
       if (line.includes('Killed:')) {
         const match = line.match(/Killed:\s*(\d+)/);
-        if (match) killed = parseInt(match[1]);
+        if (match) {killed = parseInt(match[1]);}
       }
       if (line.includes('Survived:')) {
         const match = line.match(/Survived:\s*(\d+)/);
-        if (match) survived = parseInt(match[1]);
+        if (match) {survived = parseInt(match[1]);}
       }
       if (line.includes('No coverage:')) {
         const match = line.match(/No coverage:\s*(\d+)/);
-        if (match) noCoverage = parseInt(match[1]);
+        if (match) {noCoverage = parseInt(match[1]);}
       }
       if (line.includes('Timeout:')) {
         const match = line.match(/Timeout:\s*(\d+)/);
-        if (match) timeout = parseInt(match[1]);
+        if (match) {timeout = parseInt(match[1]);}
       }
     }
 
@@ -359,19 +359,19 @@ export class MutationTester {
     for (const line of lines) {
       if (line.includes('Killed mutants:')) {
         const match = line.match(/(\d+)/);
-        if (match) killed = parseInt(match[1]);
+        if (match) {killed = parseInt(match[1]);}
       }
       if (line.includes('Survived mutants:')) {
         const match = line.match(/(\d+)/);
-        if (match) survived = parseInt(match[1]);
+        if (match) {survived = parseInt(match[1]);}
       }
       if (line.includes('Suspicious mutants:')) {
         const match = line.match(/(\d+)/);
-        if (match) suspicious = parseInt(match[1]);
+        if (match) {suspicious = parseInt(match[1]);}
       }
       if (line.includes('Timeout mutants:')) {
         const match = line.match(/(\d+)/);
-        if (match) timeout = parseInt(match[1]);
+        if (match) {timeout = parseInt(match[1]);}
       }
     }
 

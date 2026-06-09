@@ -264,8 +264,8 @@ function showConfig(): void {
 }
 
 function getModeFromProvider(provider: string): "cloud" | "local" | "static" {
-  if (provider === "none") return "static";
-  if (provider === "ollama" || provider === "lmstudio") return "local";
+  if (provider === "none") {return "static";}
+  if (provider === "ollama" || provider === "lmstudio") {return "local";}
   return "cloud";
 }
 
@@ -556,12 +556,7 @@ async function configureModeSettings(
         config.model || "default"
       );
       try {
-        const provider = ProviderFactory.create(
-          config.provider,
-          config.apiKey,
-          undefined,
-          config.model
-        );
+        const provider = ProviderFactory.createForCli(config, { raw: true });
         console.error("[Config] Provider created, calling testConnection()...");
         const isAvailable = await provider.testConnection();
         console.error("[Config] testConnection() returned:", isAvailable);

@@ -24,12 +24,12 @@ export class DockerfileScanner {
     const dockerfiles: string[] = [];
 
     const search = (currentDir: string, depth: number) => {
-      if (depth > 5) return;
+      if (depth > 5) {return;}
 
       try {
         const items = fs.readdirSync(currentDir);
         for (const item of items) {
-          if (item === 'node_modules' || item === '.git' || item === 'vendor') continue;
+          if (item === 'node_modules' || item === '.git' || item === 'vendor') {continue;}
 
           const fullPath = path.join(currentDir, item);
           const stat = fs.statSync(fullPath);

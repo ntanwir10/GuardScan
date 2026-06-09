@@ -290,7 +290,7 @@ export function hashContent(content: string): string {
  */
 export function generateEmbeddingId(type: CodeEmbedding['type'], source: string, name?: string): string {
   const components = [type, source];
-  if (name) components.push(name);
+  if (name) {components.push(name);}
   const hash = hashContent(components.join(':'));
   return `${type}-${hash}`;
 }
@@ -299,9 +299,9 @@ export function generateEmbeddingId(type: CodeEmbedding['type'], source: string,
  * Validate embedding dimensions
  */
 export function validateEmbedding(embedding: number[], expectedDimensions: number): boolean {
-  if (!Array.isArray(embedding)) return false;
-  if (embedding.length !== expectedDimensions) return false;
-  if (embedding.some(v => typeof v !== 'number' || !isFinite(v))) return false;
+  if (!Array.isArray(embedding)) {return false;}
+  if (embedding.length !== expectedDimensions) {return false;}
+  if (embedding.some(v => typeof v !== 'number' || !isFinite(v))) {return false;}
   return true;
 }
 
@@ -310,7 +310,7 @@ export function validateEmbedding(embedding: number[], expectedDimensions: numbe
  */
 export function normalizeEmbedding(embedding: number[]): number[] {
   const magnitude = Math.sqrt(embedding.reduce((sum, val) => sum + val * val, 0));
-  if (magnitude === 0) return embedding; // Avoid division by zero
+  if (magnitude === 0) {return embedding;} // Avoid division by zero
   return embedding.map(v => v / magnitude);
 }
 
@@ -326,7 +326,7 @@ export function cosineSimilarity(a: number[], b: number[]): number {
   const magnitudeA = Math.sqrt(a.reduce((sum, val) => sum + val * val, 0));
   const magnitudeB = Math.sqrt(b.reduce((sum, val) => sum + val * val, 0));
 
-  if (magnitudeA === 0 || magnitudeB === 0) return 0;
+  if (magnitudeA === 0 || magnitudeB === 0) {return 0;}
 
   return dotProduct / (magnitudeA * magnitudeB);
 }
@@ -351,7 +351,7 @@ export function euclideanDistance(a: number[], b: number[]): number {
  * Format file size for display
  */
 export function formatBytes(bytes: number): string {
-  if (bytes === 0) return '0 B';
+  if (bytes === 0) {return '0 B';}
   const k = 1024;
   const sizes = ['B', 'KB', 'MB', 'GB'];
   const i = Math.floor(Math.log(bytes) / Math.log(k));

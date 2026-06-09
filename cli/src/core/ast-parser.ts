@@ -557,7 +557,7 @@ export class ASTParser {
         const module = (statement.moduleSpecifier as ts.StringLiteral).text;
         const importClause = statement.importClause;
 
-        if (!importClause) return;
+        if (!importClause) {return;}
 
         const importNames: string[] = [];
         let isDefault = false;
@@ -736,7 +736,7 @@ export class ASTParser {
     const ts = getTypeScript();
     // Get both the main comment text and tags
     const jsDocComments = ts.getJSDocCommentsAndTags(node);
-    if (jsDocComments.length === 0) return undefined;
+    if (jsDocComments.length === 0) {return undefined;}
 
     const parts: string[] = [];
 
@@ -755,7 +755,7 @@ export class ASTParser {
             )
             .join(" ")
             .trim();
-          if (text) parts.push(text);
+          if (text) {parts.push(text);}
         }
 
         // Also extract tags from the JSDoc node
@@ -784,7 +784,7 @@ export class ASTParser {
         comment.kind === ts.SyntaxKind.JSDocReturnTag
       ) {
         // Standalone JSDoc tags (@param, @returns, etc.)
-        const tag = comment as ts.JSDocTag;
+        const tag = comment;
         if (tag.comment) {
           const tagComment =
             typeof tag.comment === "string"
@@ -839,7 +839,7 @@ export class ASTParser {
    */
   private isExported(node: ts.Node): boolean {
     const ts = getTypeScript();
-    if (!ts.canHaveModifiers(node)) return false;
+    if (!ts.canHaveModifiers(node)) {return false;}
     const modifiers = ts.getModifiers(node);
     return !!modifiers?.some(
       (m: ts.Modifier) => m.kind === ts.SyntaxKind.ExportKeyword
@@ -851,7 +851,7 @@ export class ASTParser {
    */
   private isDefaultExport(node: ts.Node): boolean {
     const ts = getTypeScript();
-    if (!ts.canHaveModifiers(node)) return false;
+    if (!ts.canHaveModifiers(node)) {return false;}
     const modifiers = ts.getModifiers(node);
     return !!modifiers?.some(
       (m: ts.Modifier) => m.kind === ts.SyntaxKind.DefaultKeyword
@@ -896,7 +896,7 @@ export class ASTParser {
       const trimmed = line.trim();
 
       // Skip empty lines
-      if (trimmed.length === 0) continue;
+      if (trimmed.length === 0) {continue;}
 
       // Handle multi-line comments
       if (inMultiLineComment) {
@@ -928,7 +928,7 @@ export class ASTParser {
       }
 
       // Skip single-line comments
-      if (trimmed.startsWith("//")) continue;
+      if (trimmed.startsWith("//")) {continue;}
 
       // Count non-comment, non-empty lines
       count++;

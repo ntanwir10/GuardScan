@@ -35,7 +35,7 @@ export class OpenAIEmbeddingProvider extends BaseEmbeddingProvider {
   }
 
   async generateBulkEmbeddings(texts: string[]): Promise<number[][]> {
-    if (texts.length === 0) return [];
+    if (texts.length === 0) {return [];}
 
     // OpenAI allows up to 2048 inputs per request, but we'll use 100 for safety
     const batches = this.chunk(texts, 100);

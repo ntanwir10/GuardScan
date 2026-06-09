@@ -61,7 +61,7 @@ export class OllamaEmbeddingProvider extends BaseEmbeddingProvider {
   }
 
   async generateBulkEmbeddings(texts: string[]): Promise<number[][]> {
-    if (texts.length === 0) return [];
+    if (texts.length === 0) {return [];}
 
     // Ollama doesn't support bulk requests, so we process in parallel
     // Limit concurrency to avoid overwhelming the local server

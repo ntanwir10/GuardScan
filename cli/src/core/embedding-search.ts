@@ -219,7 +219,7 @@ export class EmbeddingSearchEngine {
 
     return embeddings.filter((emb: CodeEmbedding) => {
       const complexity = emb.metadata.complexity;
-      if (complexity === undefined) return false;
+      if (complexity === undefined) {return false;}
       return complexity >= min && complexity <= max;
     });
   }
@@ -307,11 +307,11 @@ export class EmbeddingSearchEngine {
     }
 
     // Factor 5: Type priority (functions > classes > files)
-    if (emb.type === 'function') score += 0.1;
-    else if (emb.type === 'class') score += 0.05;
+    if (emb.type === 'function') {score += 0.1;}
+    else if (emb.type === 'class') {score += 0.05;}
 
     // Factor 6: Documentation chunks are often important
-    if (emb.type === 'documentation') score += 0.15;
+    if (emb.type === 'documentation') {score += 0.15;}
 
     // Normalize to 0-1 range
     return Math.min(1, score);
@@ -452,8 +452,8 @@ export class EmbeddingSearchEngine {
 
       // Track dates
       const modified = new Date(emb.metadata.lastModified);
-      if (modified < oldest) oldest = modified;
-      if (modified > newest) newest = modified;
+      if (modified < oldest) {oldest = modified;}
+      if (modified > newest) {newest = modified;}
     });
 
     return {

@@ -80,12 +80,12 @@ export class CodeMetricsAnalyzer {
     const files: string[] = [];
 
     const search = (currentDir: string, depth: number) => {
-      if (depth > 5) return;
+      if (depth > 5) {return;}
 
       try {
         const items = fs.readdirSync(currentDir);
         for (const item of items) {
-          if (item === 'node_modules' || item === '.git' || item === 'vendor' || item === 'dist' || item === 'build') continue;
+          if (item === 'node_modules' || item === '.git' || item === 'vendor' || item === 'dist' || item === 'build') {continue;}
 
           const fullPath = path.join(currentDir, item);
           const stat = fs.statSync(fullPath);
@@ -314,8 +314,8 @@ export class CodeMetricsAnalyzer {
 
     for (const line of lines) {
       // Track nesting
-      if (/{/.test(line)) nestingLevel++;
-      if (/}/.test(line)) nestingLevel = Math.max(0, nestingLevel - 1);
+      if (/{/.test(line)) {nestingLevel++;}
+      if (/}/.test(line)) {nestingLevel = Math.max(0, nestingLevel - 1);}
 
       // Add complexity for control structures
       if (/\b(if|for|while|switch|catch)\b/.test(line)) {
@@ -413,7 +413,7 @@ export class CodeMetricsAnalyzer {
     };
 
     const pattern = patterns[language];
-    if (!pattern) return functions;
+    if (!pattern) {return functions;}
 
     let currentFunction: { name: string; startLine: number; braceCount: number } | null = null;
 

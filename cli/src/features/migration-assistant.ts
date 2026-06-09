@@ -262,7 +262,7 @@ export class MigrationAssistantEngine {
     const targetPackages = packages || Object.keys(dependencies);
 
     for (const pkg of targetPackages) {
-      if (!dependencies[pkg]) continue;
+      if (!dependencies[pkg]) {continue;}
 
       const upgrade = await this.analyzeSingleDependencyUpgrade(
         pkg,
@@ -424,7 +424,7 @@ export class MigrationAssistantEngine {
     const allFiles = Array.from(index.files.keys());
 
     return allFiles.filter(file => {
-      if (targetPath && !file.startsWith(targetPath)) return false;
+      if (targetPath && !file.startsWith(targetPath)) {return false;}
       return patterns.some(pattern => file.match(pattern));
     });
   }

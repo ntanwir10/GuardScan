@@ -514,10 +514,10 @@ function generateSecuritySummary(findings: Finding[]): string {
     summary += 'No security issues detected.';
   } else {
     summary += `Found ${findings.length} potential security issue(s):\n`;
-    if (critical > 0) summary += `- ${critical} Critical\n`;
-    if (high > 0) summary += `- ${high} High\n`;
-    if (medium > 0) summary += `- ${medium} Medium\n`;
-    if (low > 0) summary += `- ${low} Low\n`;
+    if (critical > 0) {summary += `- ${critical} Critical\n`;}
+    if (high > 0) {summary += `- ${high} High\n`;}
+    if (medium > 0) {summary += `- ${medium} Medium\n`;}
+    if (low > 0) {summary += `- ${low} Low\n`;}
   }
 
   return summary;
@@ -598,7 +598,7 @@ async function generateAIFixes(
 
   try {
     // Create AI provider
-    const provider = ProviderFactory.create(config.provider, config.apiKey, config.apiEndpoint, config.model);
+    const provider = ProviderFactory.createForCli(config, { task: 'code-review' });
 
     // Get repo ID for cache
     const repoInfo = repositoryManager.getRepoInfo();
@@ -618,9 +618,9 @@ async function generateAIFixes(
       .map(f => ({
         severity: f.severity as 'high' | 'medium' | 'low',
         category: f.category,
-        file: f.file!,
+        file: f.file,
         line: f.line!,
-        codeSnippet: extractCodeSnippet(f.file!, f.line!),
+        codeSnippet: extractCodeSnippet(f.file, f.line!),
         description: f.description,
       }));
 
@@ -641,7 +641,7 @@ async function generateAIFixes(
     for (const [key, fix] of fixes) {
       fixCount++;
       const issue = issues.find(i => `${i.file}:${i.line}` === key);
-      if (!issue) continue;
+      if (!issue) {continue;}
 
       console.log(chalk.cyan(`\n[${fixCount}] ${issue.file}:${issue.line}`));
       console.log(chalk.white(`   Issue: ${issue.description}`));

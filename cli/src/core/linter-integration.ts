@@ -31,36 +31,36 @@ export class LinterIntegration {
     // Detect and run JavaScript/TypeScript linters
     if (this.hasESLint(repoPath)) {
       const eslintReport = await this.runESLint(repoPath);
-      if (eslintReport) reports.push(eslintReport);
+      if (eslintReport) {reports.push(eslintReport);}
     }
 
     // Detect and run Python linters
     if (this.hasFlake8(repoPath)) {
       const flake8Report = await this.runFlake8(repoPath);
-      if (flake8Report) reports.push(flake8Report);
+      if (flake8Report) {reports.push(flake8Report);}
     }
 
     if (this.hasPylint(repoPath)) {
       const pylintReport = await this.runPylint(repoPath);
-      if (pylintReport) reports.push(pylintReport);
+      if (pylintReport) {reports.push(pylintReport);}
     }
 
     // Detect and run Go linters
     if (this.hasGoLint(repoPath)) {
       const golintReport = await this.runGoLint(repoPath);
-      if (golintReport) reports.push(golintReport);
+      if (golintReport) {reports.push(golintReport);}
     }
 
     // Detect and run Ruby linters
     if (this.hasRubocop(repoPath)) {
       const rubocopReport = await this.runRubocop(repoPath);
-      if (rubocopReport) reports.push(rubocopReport);
+      if (rubocopReport) {reports.push(rubocopReport);}
     }
 
     // Detect and run PHP linters
     if (this.hasPhpCS(repoPath)) {
       const phpcsReport = await this.runPhpCS(repoPath);
-      if (phpcsReport) reports.push(phpcsReport);
+      if (phpcsReport) {reports.push(phpcsReport);}
     }
 
     return reports;
@@ -71,7 +71,7 @@ export class LinterIntegration {
    */
   private hasESLint(repoPath: string): boolean {
     const packageJsonPath = path.join(repoPath, 'package.json');
-    if (!fs.existsSync(packageJsonPath)) return false;
+    if (!fs.existsSync(packageJsonPath)) {return false;}
 
     try {
       const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf-8'));
@@ -94,7 +94,7 @@ export class LinterIntegration {
 
       // Parse ESLint JSON output
       const jsonMatch = output.match(/\[[\s\S]*\]/);
-      if (!jsonMatch) return null;
+      if (!jsonMatch) {return null;}
 
       const eslintResults = JSON.parse(jsonMatch[0]);
       const results: LintResult[] = [];
@@ -215,7 +215,7 @@ export class LinterIntegration {
 
       // Parse Pylint JSON output
       const jsonMatch = output.match(/\[[\s\S]*\]/);
-      if (!jsonMatch) return null;
+      if (!jsonMatch) {return null;}
 
       const pylintResults = JSON.parse(jsonMatch[0]);
       const results: LintResult[] = [];
@@ -338,7 +338,7 @@ export class LinterIntegration {
       });
 
       const jsonMatch = output.match(/\{[\s\S]*\}/);
-      if (!jsonMatch) return null;
+      if (!jsonMatch) {return null;}
 
       const rubocopResult = JSON.parse(jsonMatch[0]);
       const results: LintResult[] = [];
@@ -396,7 +396,7 @@ export class LinterIntegration {
       });
 
       const jsonMatch = output.match(/\{[\s\S]*\}/);
-      if (!jsonMatch) return null;
+      if (!jsonMatch) {return null;}
 
       const phpcsResult = JSON.parse(jsonMatch[0]);
       const results: LintResult[] = [];
@@ -436,12 +436,12 @@ export class LinterIntegration {
     const files: string[] = [];
 
     const search = (currentDir: string, depth: number) => {
-      if (depth > 3) return;
+      if (depth > 3) {return;}
 
       try {
         const items = fs.readdirSync(currentDir);
         for (const item of items) {
-          if (item === 'node_modules' || item === '.git' || item === 'vendor') continue;
+          if (item === 'node_modules' || item === '.git' || item === 'vendor') {continue;}
 
           const fullPath = path.join(currentDir, item);
           const stat = fs.statSync(fullPath);
