@@ -64,3 +64,8 @@ ci-netrc
 cli/scripts/*
 cli/scripts/update-act-cache.sh
 cli/scripts/ACT_USAGE.md
+
+# Local GuardScan scan output and agent plan copies
+.guardscan/
+*.plan.md
+cli/test_results.txt
