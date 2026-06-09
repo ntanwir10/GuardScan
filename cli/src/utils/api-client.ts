@@ -1,5 +1,6 @@
 import axios, { AxiosInstance } from "axios";
 import { API_CONSTANTS } from "../constants/api-constants";
+import { getGuardscanMonitoringBaseUrl } from "./monitoring-base-url";
 
 export interface TelemetryEvent {
   action: string;
@@ -25,10 +26,7 @@ export class APIClient {
     // Default backend for project-wide telemetry (optional, privacy-preserving)
     // Users can opt-out with --no-telemetry flag
     // Or override with GUARDSCAN_API_URL env var (for testing/self-hosting)
-    this.baseUrl =
-      baseUrl ||
-      process.env.GUARDSCAN_API_URL ||
-      API_CONSTANTS.DEFAULT_API_BASE_URL;
+    this.baseUrl = baseUrl || getGuardscanMonitoringBaseUrl();
 
     this.client = axios.create({
       baseURL: this.baseUrl,

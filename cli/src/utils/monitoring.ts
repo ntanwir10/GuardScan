@@ -1,19 +1,17 @@
 /**
  * Monitoring & Analytics Module
  *
- * Integrates with Cloudflare Analytics and provides error tracking
- * P0: Critical Before Launch
- *
- * Features:
- * - Error tracking and reporting
- * - Performance monitoring
- * - Usage analytics
- * - Health checks
+ * Remote payloads are POSTed to the GuardScan-Monitoring Worker
+ * (`GUARDSCAN_API_URL` / default `api.guardscancli.com`): `/api/monitoring` and
+ * health checks `/api/health`. Same host as anonymized telemetry batching via
+ * `api-client` → `/api/telemetry`.
  */
 
 import axios from 'axios';
 import * as os from 'os';
+import type { Config } from '../core/config';
 import { ConfigManager } from '../core/config';
+import { getGuardscanMonitoringBaseUrl } from './monitoring-base-url';
 
 /**
  * Error Severity Levels
@@ -113,16 +111,34 @@ export class MonitoringManager {
   private usageBuffer: UsageEvent[] = [];
   private flushInterval: NodeJS.Timeout | null = null;
 
-  constructor(config?: MonitoringConfig) {
+  constructor(custom?: MonitoringConfig) {
     this.configManager = new ConfigManager();
 
-    this.config = config || {
-      enabled: true,
+    let yaml: Config | null = null;
+    try {
+      if (this.configManager.exists()) yaml = this.configManager.load();
+    } catch {
+      yaml = null;
+    }
+
+    const noTelemetryCli = process.env.GUARDSCAN_NO_TELEMETRY === 'true';
+    const telemetryOn = Boolean(yaml?.telemetryEnabled && !noTelemetryCli);
+    const offline = Boolean(yaml?.offlineMode);
+    const remoteAllowed = telemetryOn && !offline;
+    const inferredEndpoint = remoteAllowed ? getGuardscanMonitoringBaseUrl() : undefined;
+
+    const merged: MonitoringConfig = {
+      enabled: telemetryOn,
+      endpoint: inferredEndpoint,
       errorReportingEnabled: true,
       performanceMonitoringEnabled: true,
       usageAnalyticsEnabled: true,
-      sampleRate: 1.0
+      sampleRate: 1.0,
+      ...custom,
     };
+    merged.endpoint = custom?.endpoint ?? inferredEndpoint;
+
+    this.config = merged;
 
     // Auto-flush every 30 seconds
     this.startAutoFlush();
