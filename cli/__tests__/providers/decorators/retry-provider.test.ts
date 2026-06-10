@@ -111,7 +111,9 @@ describe('RetryProvider', () => {
 
     it('should not retry on non-retryable errors', async () => {
       const mock = new MockProvider(0);
-      mock.chat = async () => {
+      const originalChat = mock.chat.bind(mock);
+      mock.chat = async (messages) => {
+        await originalChat(messages);
         const error: any = new Error('Bad request');
         error.status = 400; // Non-retryable
         throw error;
@@ -123,7 +125,7 @@ describe('RetryProvider', () => {
         retry.chat([{ role: 'user', content: 'test' }])
       ).rejects.toThrow('Bad request');
 
-      expect(mock.getCallCount()).toBe(0); // Mock's chat was overridden
+      expect(mock.getCallCount()).toBe(1); // Initial attempt, no retry
     });
   });
 
