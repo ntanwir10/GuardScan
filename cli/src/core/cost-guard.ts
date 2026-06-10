@@ -234,7 +234,7 @@ export class CostGuard {
   /**
    * Export usage data
    */
-  async exportUsage(outputPath: string, days: number = 30): Promise<void> {
+  exportUsage(outputPath: string, days: number = 30): void {
     this.usage.exportToCSV(outputPath, days);
   }
 
