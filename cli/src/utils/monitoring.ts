@@ -123,7 +123,7 @@ export class MonitoringManager {
 
     const noTelemetryCli = process.env.GUARDSCAN_NO_TELEMETRY === 'true';
     const telemetryOn = Boolean(yaml?.telemetryEnabled && !noTelemetryCli);
-    const offline = Boolean(yaml?.offlineMode);
+    const offline = yaml?.offlineMode ?? true;
     const remoteAllowed = telemetryOn && !offline;
     const inferredEndpoint = remoteAllowed ? getGuardscanMonitoringBaseUrl() : undefined;
 
