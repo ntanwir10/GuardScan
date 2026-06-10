@@ -19,41 +19,48 @@ export function createCacheCommand(): Command {
     .command('stats')
     .description('Show cache statistics')
     .action(async () => {
-      const repo = new Repository(process.cwd());
-      const repoId = repo.getId();
-      const config = configManager.loadOrInit();
+      try {
+        const repo = new Repository(process.cwd());
+        const repoId = repo.getId();
+        const config = configManager.loadOrInit();
 
-      const cache = new AICache(repoId, config.cache?.maxSizeMB || 100);
-      const stats = cache.getStats();
+        const cache = new AICache(repoId, config.cache?.maxSizeMB || 100);
+        const stats = cache.getStats();
+        const sizeMB = cache.getSizeMB();
+        const utilization = cache.getUtilization();
 
-      console.log(chalk.bold('\n💾 Cache Statistics\n'));
-      console.log('─'.repeat(60));
+        console.log(chalk.bold('\n💾 Cache Statistics\n'));
+        console.log('─'.repeat(60));
 
-      console.log(chalk.bold('Usage:'));
-      console.log(`  Total Entries:  ${stats.totalEntries}`);
-      console.log(`  Cache Size:     ${cache.getSizeMB().toFixed(2)} MB`);
-      console.log(`  Max Size:       ${config.cache?.maxSizeMB || 100} MB`);
-      console.log(`  Utilization:    ${cache.getUtilization().toFixed(1)}%`);
+        console.log(chalk.bold('Usage:'));
+        console.log(`  Total Entries:  ${stats.totalEntries}`);
+        console.log(`  Cache Size:     ${sizeMB.toFixed(2)} MB`);
+        console.log(`  Max Size:       ${config.cache?.maxSizeMB || 100} MB`);
+        console.log(`  Utilization:    ${utilization.toFixed(1)}%`);
 
-      const utilizationBar = createProgressBar(cache.getUtilization());
-      console.log(`  Progress:       ${utilizationBar}`);
+        const utilizationBar = createProgressBar(utilization);
+        console.log(`  Progress:       ${utilizationBar}`);
 
-      console.log(chalk.bold('\nPerformance:'));
-      console.log(`  Cache Hits:     ${stats.hits}`);
-      console.log(`  Cache Misses:   ${stats.misses}`);
-      console.log(`  Hit Rate:       ${stats.hitRate.toFixed(1)}%`);
+        console.log(chalk.bold('\nPerformance:'));
+        console.log(`  Cache Hits:     ${stats.hits}`);
+        console.log(`  Cache Misses:   ${stats.misses}`);
+        console.log(`  Hit Rate:       ${stats.hitRate.toFixed(1)}%`);
 
-      if (stats.hitRate > 0) {
-        const savingsPercent = stats.hitRate;
-        console.log(chalk.green(`  💰 Estimated savings: ~${savingsPercent.toFixed(0)}% of API costs`));
+        if (stats.hitRate > 0) {
+          const savingsPercent = stats.hitRate;
+          console.log(chalk.green(`  💰 Estimated savings: ~${savingsPercent.toFixed(0)}% of API costs`));
+        }
+
+        console.log(chalk.bold('\nConfiguration:'));
+        console.log(`  Enabled:            ${config.cache?.enabled !== false ? '✅' : '❌'}`);
+        console.log(`  Semantic Threshold: ${config.cache?.semanticThreshold || 0.95}`);
+        console.log(`  TTL:                ${config.cache?.ttlSeconds || 3600}s`);
+
+        console.log('\n');
+      } catch (error) {
+        console.error(chalk.red(`Failed to read cache stats: ${getErrorMessage(error)}`));
+        process.exitCode = 1;
       }
-
-      console.log(chalk.bold('\nConfiguration:'));
-      console.log(`  Enabled:            ${config.cache?.enabled !== false ? '✅' : '❌'}`);
-      console.log(`  Semantic Threshold: ${config.cache?.semanticThreshold || 0.95}`);
-      console.log(`  TTL:                ${config.cache?.ttlSeconds || 3600}s`);
-
-      console.log('\n');
     });
 
   // Cache info
@@ -93,14 +100,19 @@ export function createCacheCommand(): Command {
         return;
       }
 
-      const repo = new Repository(process.cwd());
-      const repoId = repo.getId();
-      const config = configManager.loadOrInit();
+      try {
+        const repo = new Repository(process.cwd());
+        const repoId = repo.getId();
+        const config = configManager.loadOrInit();
 
-      const cache = new AICache(repoId, config.cache?.maxSizeMB || 100);
-      await cache.clear();
+        const cache = new AICache(repoId, config.cache?.maxSizeMB || 100);
+        await cache.clear();
 
-      console.log(chalk.green('✅ Cache cleared\n'));
+        console.log(chalk.green('✅ Cache cleared\n'));
+      } catch (error) {
+        console.error(chalk.red(`Failed to clear cache: ${getErrorMessage(error)}`));
+        process.exitCode = 1;
+      }
     });
 
   return command;
@@ -120,4 +132,8 @@ function createProgressBar(percent: number): string {
   }
 
   return '[' + color('█'.repeat(filled)) + '░'.repeat(empty) + ']';
+}
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }

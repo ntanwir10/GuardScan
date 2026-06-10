@@ -38,7 +38,7 @@ const mockCacheStats = {
   hitRate: 70,
 };
 
-const mockClear = jest.fn().mockResolvedValue(undefined);
+const mockClear = jest.fn(async () => undefined);
 
 jest.mock('../../src/core/ai-cache', () => ({
   AICache: jest.fn().mockImplementation(() => ({
@@ -219,9 +219,6 @@ describe('createCacheCommand', () => {
         lastUsed: new Date().toISOString(),
         // No cache property
       } as any);
-
-      const { AICache } = require('../../src/core/ai-cache');
-      const constructorSpy = jest.spyOn(AICache, 'mock' as any);
 
       const cmd = createCacheCommand();
       const statsCmd = cmd.commands.find((c) => c.name() === 'stats')!;
