@@ -229,7 +229,12 @@ export class MonitoringManager {
       return;
     }
 
-    const userConfig = this.configManager.load();
+    let userConfig;
+    try {
+      userConfig = this.configManager.load();
+    } catch {
+      return;
+    }
 
     const usageEvent: UsageEvent = {
       eventId: this.generateId(),
