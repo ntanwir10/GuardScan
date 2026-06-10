@@ -195,26 +195,16 @@ export class RateLimitedProvider extends AIProviderDecorator {
   }
 
   /**
-   * Refill token bucket based on elapsed time (with mutex for thread safety)
-   */
   private async refill(): Promise<void> {
-    // Wait if another refill is in progress
-    while (this.refillLock) {
-      await this.sleep(1);
+    const now = Date.now();
+    const timePassed = (now - this.lastRefill) / 1000; // in seconds
+    const tokensToAdd = timePassed * this.config.refillRate;
+
+    if (tokensToAdd > 0) {
+      this.tokens = Math.min(this.config.maxTokens, this.tokens + tokensToAdd);
+      this.lastRefill = now;
     }
-
-    this.refillLock = true;
-    try {
-      const now = Date.now();
-      const timePassed = (now - this.lastRefill) / 1000; // in seconds
-      const tokensToAdd = timePassed * this.config.refillRate;
-
-      if (tokensToAdd > 0) {
-        this.tokens = Math.min(this.config.maxTokens, this.tokens + tokensToAdd);
-        this.lastRefill = now;
-      }
-    } finally {
-      this.refillLock = false;
+  }
     }
   }
 
