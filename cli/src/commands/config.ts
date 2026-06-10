@@ -10,6 +10,7 @@ interface ConfigOptions {
   provider?: AIProvider;
   key?: string;
   embeddingFallback?: string;
+  telemetry?: string;
   show?: boolean;
 }
 
@@ -32,7 +33,12 @@ export async function configCommand(options: ConfigOptions): Promise<void> {
     }
 
     // Direct config via flags
-    if (options.provider || options.key) {
+    if (
+      options.provider ||
+      options.key ||
+      options.embeddingFallback ||
+      options.telemetry !== undefined
+    ) {
       perfTracker.start("direct-config");
       directConfig(options);
       perfTracker.end("direct-config");
@@ -306,6 +312,26 @@ function directConfig(options: ConfigOptions): void {
     console.log(
       chalk.green(
         `✓ Embedding fallback set to: ${config.embeddingFallback || "none"}`
+      )
+    );
+  }
+
+  if (options.telemetry !== undefined) {
+    const normalized = String(options.telemetry).toLowerCase();
+    if (normalized !== "true" && normalized !== "false") {
+      throw new Error("Invalid telemetry value. Use true or false.");
+    }
+
+    const telemetryEnabled = normalized === "true";
+    config.telemetryEnabled = telemetryEnabled;
+    config.offlineMode = !telemetryEnabled;
+    logger.debug("Telemetry updated", {
+      telemetryEnabled: config.telemetryEnabled,
+      offlineMode: config.offlineMode,
+    });
+    console.log(
+      chalk.green(
+        `✓ Telemetry ${telemetryEnabled ? "enabled" : "disabled"}`
       )
     );
   }

@@ -9,6 +9,8 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
+    "typecheck": "tsc --noEmit",
+    "lint": "npm run typecheck",
     "start": "node dist/index.js",
     "test": "jest"
   },

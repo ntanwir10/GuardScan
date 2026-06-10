@@ -8,12 +8,37 @@ import { execSync } from "child_process";
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
+import yaml from "js-yaml";
 
 import { describe, expect, it, beforeEach, afterEach } from "@jest/globals";
 import { beforeAll, afterAll } from "@jest/globals";
 
 describe("CLI Commands E2E", () => {
   let tempDir: string;
+  const CLI_PATH = path.join(__dirname, "../../dist/index.js");
+
+  const runCli = (cmd: string, expectSuccess: boolean = true): string => {
+    const env = {
+      ...process.env,
+      GUARDSCAN_HOME: tempDir,
+    };
+
+    try {
+      return execSync(`node ${CLI_PATH} ${cmd}`, {
+        cwd: tempDir,
+        encoding: "utf-8",
+        timeout: 30000,
+        env,
+      });
+    } catch (error: any) {
+      if (!expectSuccess) {
+        return [error.stdout, error.stderr, error.message]
+          .filter(Boolean)
+          .join("\n");
+      }
+      throw error;
+    }
+  };
 
   beforeAll(() => {
     // Create a temporary directory for testing
@@ -51,24 +76,7 @@ function complexFunction(x) {
       })
     );
 
-    // Initialize GuardScan config for the test project to avoid ENOENT errors
-    try {
-      execSync(
-        `node ${path.join(
-          __dirname,
-          "../../dist/index.js"
-        )} init --no-telemetry`,
-        {
-          cwd: tempDir,
-          encoding: "utf-8",
-          timeout: 30000,
-        }
-      );
-    } catch (error: any) {
-      // Initialization failures shouldn't break the entire E2E suite
-      // Individual tests will still assert on behavior
-      console.log("Init note (beforeAll):", error.message);
-    }
+    runCli("init --no-telemetry");
   });
 
   afterAll(() => {
@@ -80,54 +88,23 @@ function complexFunction(x) {
 
   describe("Security Scan", () => {
     it("should run security scan successfully", () => {
-      try {
-        const output = execSync(
-          `node ${path.join(
-            __dirname,
-            "../../dist/index.js"
-          )} security --no-telemetry`,
-          {
-            cwd: tempDir,
-            encoding: "utf-8",
-            timeout: 30000,
-          }
-        );
+      const output = runCli("security --no-telemetry", false);
+      expect(output).toBeDefined();
 
-        expect(output).toBeDefined();
-        // Security scan should detect secrets
-        expect(output.toLowerCase()).toContain("secret");
-      } catch (error: any) {
-        // Security scan may exit with non-zero if issues found
-        // That's expected behavior
-        const output = error.stdout || error.message;
-        expect(output).toBeDefined();
-      }
+      const report = fs
+        .readdirSync(tempDir)
+        .filter((file) => file.startsWith("guardscan-security-"))
+        .sort()
+        .pop();
+      expect(report).toBeDefined();
+      const reportContent = fs.readFileSync(path.join(tempDir, report!), "utf-8");
+      expect(reportContent.toLowerCase()).toContain("secret");
     }, 60000);
 
     it("should accept --debug flag without error", () => {
-      try {
-        const output = execSync(
-          `node ${path.join(
-            __dirname,
-            "../../dist/index.js"
-          )} security --debug --no-telemetry`,
-          {
-            cwd: tempDir,
-            encoding: "utf-8",
-            timeout: 30000,
-            env: { ...process.env },
-          }
-        );
-
-        expect(output).toBeDefined();
-        // Should not throw "unknown option" error
-        expect(output).not.toContain("unknown option");
-      } catch (error: any) {
-        // Security scan may exit with non-zero if issues found
-        // But should not fail with "unknown option" error
-        const errorMessage = error.message || error.stdout || "";
-        expect(errorMessage).not.toContain("unknown option");
-      }
+      const output = runCli("security --debug --no-telemetry", false);
+      expect(output).toBeDefined();
+      expect(output).not.toContain("unknown option");
     }, 60000);
   });
 
@@ -135,116 +112,65 @@ function complexFunction(x) {
     it("should generate SBOM in SPDX format", () => {
       const sbomPath = path.join(tempDir, "sbom-report.json");
 
-      try {
-        const output = execSync(
-          `node ${path.join(
-            __dirname,
-            "../../dist/index.js"
-          )} sbom -f spdx -o ${sbomPath} --no-telemetry`,
-          {
-            cwd: tempDir,
-            encoding: "utf-8",
-            timeout: 30000,
-          }
-        );
+      const output = runCli(`sbom -f spdx -o ${sbomPath} --no-telemetry`);
 
-        expect(output).toBeDefined();
-        expect(fs.existsSync(sbomPath)).toBe(true);
+      expect(output).toBeDefined();
+      expect(fs.existsSync(sbomPath)).toBe(true);
 
-        const sbom = JSON.parse(fs.readFileSync(sbomPath, "utf-8"));
-        expect(sbom.spdxVersion).toBeDefined();
-        expect(sbom.name).toBeDefined();
+      const sbom = JSON.parse(fs.readFileSync(sbomPath, "utf-8"));
+      expect(sbom.format).toBe("spdx");
+      expect(sbom.version).toBeDefined();
+      expect(sbom.name).toBeDefined();
 
-        // Clean up
-        fs.unlinkSync(sbomPath);
-      } catch (error: any) {
-        // SBOM generation may fail if no dependencies
-        // That's acceptable for test
-        console.log("SBOM generation note:", error.message);
-      }
+      fs.unlinkSync(sbomPath);
     }, 60000);
   });
 
   describe("Config Management", () => {
     it("should initialize config", () => {
-      const configPath = path.join(tempDir, ".guardscan", "config.json");
+      const configPath = path.join(tempDir, ".guardscan", "config.yml");
 
-      // Remove config if exists
       if (fs.existsSync(configPath)) {
         fs.unlinkSync(configPath);
       }
 
-      try {
-        execSync(
-          `node ${path.join(
-            __dirname,
-            "../../dist/index.js"
-          )} init --no-telemetry`,
-          {
-            cwd: tempDir,
-            encoding: "utf-8",
-            timeout: 30000,
-          }
-        );
+      runCli("init --no-telemetry");
 
-        // Config should be created
-        expect(fs.existsSync(configPath)).toBe(true);
+      expect(fs.existsSync(configPath)).toBe(true);
 
-        const config = JSON.parse(fs.readFileSync(configPath, "utf-8"));
-        expect(config.clientId).toBeDefined();
-        expect(config.telemetryEnabled).toBeDefined();
-      } catch (error: any) {
-        console.log("Init note:", error.message);
-      }
+      const config = yaml.load(fs.readFileSync(configPath, "utf-8")) as any;
+      expect(config.clientId).toBeDefined();
+      expect(config.telemetryEnabled).toBeDefined();
+    }, 60000);
+
+    it("should persist telemetry flag changes", () => {
+      const configPath = path.join(tempDir, ".guardscan", "config.yml");
+
+      runCli("config --telemetry=false --no-telemetry");
+      let config = yaml.load(fs.readFileSync(configPath, "utf-8")) as any;
+      expect(config.telemetryEnabled).toBe(false);
+      expect(config.offlineMode).toBe(true);
+
+      runCli("config --telemetry=true --no-telemetry");
+      config = yaml.load(fs.readFileSync(configPath, "utf-8")) as any;
+      expect(config.telemetryEnabled).toBe(true);
+      expect(config.offlineMode).toBe(false);
     }, 60000);
   });
 
   describe("Status Command", () => {
     it("should show status information", () => {
-      try {
-        const output = execSync(
-          `node ${path.join(
-            __dirname,
-            "../../dist/index.js"
-          )} status --no-telemetry`,
-          {
-            cwd: tempDir,
-            encoding: "utf-8",
-            timeout: 30000,
-          }
-        );
-
-        expect(output).toBeDefined();
-        expect(output.toLowerCase()).toContain("guardscan");
-      } catch (error: any) {
-        const output = error.stdout || "";
-        expect(output).toBeDefined();
-      }
+      const output = runCli("status --no-telemetry", false);
+      expect(output).toBeDefined();
+      expect(output.toLowerCase()).toContain("guardscan");
     }, 60000);
   });
 
   describe("LOC Counter", () => {
     it("should count lines of code", () => {
-      try {
-        const output = execSync(
-          `node ${path.join(
-            __dirname,
-            "../../dist/index.js"
-          )} run --no-telemetry`,
-          {
-            cwd: tempDir,
-            encoding: "utf-8",
-            timeout: 30000,
-          }
-        );
-
-        expect(output).toBeDefined();
-        // Should show some LOC count
-        expect(output).toMatch(/\d+/);
-      } catch (error: any) {
-        const output = error.stdout || "";
-        expect(output).toBeDefined();
-      }
+      const output = runCli("run --no-telemetry", false);
+      expect(output).toBeDefined();
+      expect(output).toMatch(/\d+/);
     }, 60000);
   });
 
@@ -261,17 +187,7 @@ function complexFunction(x) {
           return;
         }
 
-        const output = execSync(
-          `node ${path.join(
-            __dirname,
-            "../../dist/index.js"
-          )} commit --no-body --no-telemetry`,
-          {
-            cwd: tempDir,
-            encoding: "utf-8",
-            timeout: 30000,
-          }
-        );
+        const output = runCli("commit --no-body --no-telemetry", false);
 
         expect(output).toBeDefined();
         // Should not throw "unknown option" error

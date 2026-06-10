@@ -34,6 +34,11 @@ export async function checkForUpdates(): Promise<void> {
   const debug = process.env.GUARDSCAN_DEBUG === "true";
 
   try {
+    if (process.env.GUARDSCAN_NO_TELEMETRY === "true") {
+      if (debug) console.error("[VERSION] Skipping update check (--no-telemetry)");
+      return;
+    }
+
     if (debug) console.error("[VERSION] Checking for updates...");
 
     // Check cache first (only check once per day)

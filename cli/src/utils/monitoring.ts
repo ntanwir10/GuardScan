@@ -374,7 +374,7 @@ export class MonitoringManager {
       nodeVersion: process.version,
       platform: os.platform(),
       arch: os.arch(),
-      cliVersion: require('../../../package.json').version,
+      cliVersion: require('../../package.json').version,
       memory: {
         total: Math.round(totalMemory / 1024 / 1024),
         free: Math.round(freeMemory / 1024 / 1024),

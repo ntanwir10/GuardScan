@@ -28,6 +28,10 @@ import { displayLogo } from "./utils/ascii-art";
 const program = new Command();
 const packageJson = require("../package.json");
 
+if (process.argv.slice(2).includes("--no-telemetry")) {
+  process.env.GUARDSCAN_NO_TELEMETRY = "true";
+}
+
 program
   .name("guardscan")
   .description(
@@ -152,6 +156,7 @@ program
     "Set AI provider (openai, anthropic, google, ollama)"
   )
   .option("-k, --key <key>", "Set API key")
+  .option("--telemetry <enabled>", "Enable or disable telemetry (true or false)")
   .option("--show", "Show current configuration")
   .action(configCommand);
 
@@ -336,10 +341,4 @@ checkForUpdates().catch(() => {
   // Silent fail
 });
 
-// Parse arguments and set global telemetry flag
 program.parse();
-const globalOpts = program.opts();
-if (globalOpts.noTelemetry) {
-  // Set environment variable so telemetry can check it
-  process.env.GUARDSCAN_NO_TELEMETRY = "true";
-}

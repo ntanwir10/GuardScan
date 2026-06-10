@@ -46,15 +46,23 @@ const API_KEY = "sk-1234567890abcdef";
   });
   
   const runCommand = (cmd: string, expectSuccess: boolean = true): string => {
+    const env = {
+      ...process.env,
+      GUARDSCAN_HOME: tempDir,
+    };
+
     try {
       return execSync(`node ${CLI_PATH} ${cmd}`, {
         cwd: tempDir,
         encoding: 'utf-8',
         timeout: 30000,
+        env,
       });
     } catch (error: any) {
       if (!expectSuccess) {
-        return error.stdout || error.message;
+        return [error.stdout, error.stderr, error.message]
+          .filter(Boolean)
+          .join('\n');
       }
       throw error;
     }
@@ -205,4 +213,3 @@ const API_KEY = "sk-1234567890abcdef";
     });
   });
 });
-
