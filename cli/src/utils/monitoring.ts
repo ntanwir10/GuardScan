@@ -129,14 +129,13 @@ export class MonitoringManager {
 
     const merged: MonitoringConfig = {
       enabled: telemetryOn,
-      endpoint: inferredEndpoint,
       errorReportingEnabled: true,
       performanceMonitoringEnabled: true,
       usageAnalyticsEnabled: true,
       sampleRate: 1.0,
       ...custom,
+      endpoint: custom?.endpoint ?? inferredEndpoint,
     };
-    merged.endpoint = custom?.endpoint ?? inferredEndpoint;
 
     this.config = merged;
 
