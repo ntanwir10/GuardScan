@@ -195,6 +195,8 @@ export class RateLimitedProvider extends AIProviderDecorator {
   }
 
   /**
+   * Refill token bucket based on elapsed time
+   */
   private async refill(): Promise<void> {
     const now = Date.now();
     const timePassed = (now - this.lastRefill) / 1000; // in seconds
@@ -203,8 +205,6 @@ export class RateLimitedProvider extends AIProviderDecorator {
     if (tokensToAdd > 0) {
       this.tokens = Math.min(this.config.maxTokens, this.tokens + tokensToAdd);
       this.lastRefill = now;
-    }
-  }
     }
   }
 

@@ -39,6 +39,8 @@ class TestProvider extends AIProvider {
   }
 
   async *stream(messages: AIMessage[]) {
+    this.callCount++;
+
     if (this.failureCount < this.maxFailures) {
       this.failureCount++;
       const error: any = new Error('Transient failure');
