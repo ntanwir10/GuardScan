@@ -86,7 +86,7 @@ describe('CostGuard', () => {
       const status = await costGuard.getBudgetStatus();
 
       expect(status.warnings.length).toBeGreaterThan(0);
-      expect(status.warnings.some((w) => w.includes('80%'))).toBe(true);
+      expect(status.warnings.some((w: string) => w.includes('80%'))).toBe(true);
     });
   });
 

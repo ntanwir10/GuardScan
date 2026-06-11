@@ -86,7 +86,7 @@ describe('RateLimitedProvider', () => {
 
       const startTime = Date.now();
 
-      // First request consumes 500 tokens (full bucket)
+      // First request consumes 1000 tokens (full bucket)
       await rateLimited.chat([{ role: 'user', content: 'test' }]);
 
       // Second request needs to wait for refill
@@ -94,7 +94,7 @@ describe('RateLimitedProvider', () => {
 
       const elapsed = Date.now() - startTime;
 
-      // Should have waited at least 500ms (500 tokens / 1000 tokens per second)
+      // Should have waited about 1s (1000 tokens / 1000 tokens per second)
       expect(elapsed).toBeGreaterThanOrEqual(900); // Wait ~1s for 1000 tokens
     });
 

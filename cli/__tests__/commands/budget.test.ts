@@ -13,6 +13,9 @@ import {
   afterEach,
   jest,
 } from '@jest/globals';
+import type { BudgetStatus } from '../../src/core/cost-guard';
+import type { Config } from '../../src/core/config';
+import type { UsageReport } from '../../src/core/usage-tracker';
 
 // Mock external dependencies before importing the module under test
 jest.mock('../../src/core/config', () => ({
@@ -33,16 +36,18 @@ jest.mock('../../src/core/repository', () => ({
 
 jest.mock('../../src/core/cost-guard', () => ({
   CostGuard: jest.fn().mockImplementation(() => ({
-    getBudgetStatus: jest.fn().mockResolvedValue({
+    getBudgetStatus: jest.fn<() => Promise<BudgetStatus>>(async () => ({
       daily: { used: 2.5, limit: 10, remaining: 7.5, percentUsed: 25 },
       monthly: { used: 15, limit: 100, remaining: 85, percentUsed: 15 },
       perRequest: { limit: 1 },
       warnings: [],
-    }),
-    getUsageReport: jest.fn().mockResolvedValue({
+    })),
+    getUsageReport: jest.fn<() => Promise<UsageReport>>(async () => ({
       summary: { daily: 1.0, weekly: 5.0, monthly: 15.0, allTime: 50.0 },
+      dailyBreakdown: [],
       byProvider: { openai: 10.0, gemini: 5.0 },
       byModel: { 'gpt-4o': 8.0, 'gemini-2.5-flash': 5.0 },
+      byOperation: { chat: 15.0 },
       topCostlyOperations: [
         {
           timestamp: new Date('2024-01-01T10:00:00Z'),
@@ -50,8 +55,8 @@ jest.mock('../../src/core/cost-guard', () => ({
           cost: 0.5,
         },
       ],
-    }),
-    exportUsage: jest.fn().mockResolvedValue(undefined),
+    })),
+    exportUsage: jest.fn<(outputPath: string, days?: number) => void>(),
   })),
   DEFAULT_BUDGET_CONFIG: {
     dailyLimit: 10,
@@ -63,6 +68,8 @@ jest.mock('../../src/core/cost-guard', () => ({
 
 import { createBudgetCommand } from '../../src/commands/budget';
 import { configManager } from '../../src/core/config';
+
+type SavedBudgetConfig = Config & { budget: NonNullable<Config['budget']> };
 
 describe('createBudgetCommand', () => {
   let consoleLogSpy: ReturnType<typeof jest.spyOn>;
@@ -92,7 +99,7 @@ describe('createBudgetCommand', () => {
         perRequestLimit: 1,
         warningThreshold: 0.8,
       },
-    } as any);
+    } as Config);
   });
 
   afterEach(() => {
@@ -146,12 +153,12 @@ describe('createBudgetCommand', () => {
     it('should display warnings when present', async () => {
       const { CostGuard } = require('../../src/core/cost-guard');
       CostGuard.mockImplementationOnce(() => ({
-        getBudgetStatus: jest.fn().mockResolvedValue({
+        getBudgetStatus: jest.fn<() => Promise<BudgetStatus>>(async () => ({
           daily: { used: 8.5, limit: 10, remaining: 1.5, percentUsed: 85 },
           monthly: { used: 90, limit: 100, remaining: 10, percentUsed: 90 },
           perRequest: { limit: 1 },
           warnings: ['Daily usage is at 85% of limit', 'Monthly usage is at 90% of limit'],
-        }),
+        })),
       }));
 
       const cmd = createBudgetCommand();
@@ -185,7 +192,7 @@ describe('createBudgetCommand', () => {
       await setCmd.parseAsync(['--daily', '20'], { from: 'user' });
 
       expect(mockedConfigManager.save).toHaveBeenCalled();
-      const savedConfig = (mockedConfigManager.save as jest.Mock).mock.calls[0][0];
+      const savedConfig = (mockedConfigManager.save as jest.Mock).mock.calls[0][0] as SavedBudgetConfig;
       expect(savedConfig.budget.dailyLimit).toBe(20);
     });
 
@@ -196,7 +203,7 @@ describe('createBudgetCommand', () => {
       await setCmd.parseAsync(['--monthly', '200'], { from: 'user' });
 
       expect(mockedConfigManager.save).toHaveBeenCalled();
-      const savedConfig = (mockedConfigManager.save as jest.Mock).mock.calls[0][0];
+      const savedConfig = (mockedConfigManager.save as jest.Mock).mock.calls[0][0] as SavedBudgetConfig;
       expect(savedConfig.budget.monthlyLimit).toBe(200);
     });
 
@@ -207,7 +214,7 @@ describe('createBudgetCommand', () => {
       await setCmd.parseAsync(['--per-request', '2.5'], { from: 'user' });
 
       expect(mockedConfigManager.save).toHaveBeenCalled();
-      const savedConfig = (mockedConfigManager.save as jest.Mock).mock.calls[0][0];
+      const savedConfig = (mockedConfigManager.save as jest.Mock).mock.calls[0][0] as SavedBudgetConfig;
       expect(savedConfig.budget.perRequestLimit).toBe(2.5);
     });
 
@@ -218,7 +225,7 @@ describe('createBudgetCommand', () => {
       await setCmd.parseAsync(['--warning-threshold', '0.9'], { from: 'user' });
 
       expect(mockedConfigManager.save).toHaveBeenCalled();
-      const savedConfig = (mockedConfigManager.save as jest.Mock).mock.calls[0][0];
+      const savedConfig = (mockedConfigManager.save as jest.Mock).mock.calls[0][0] as SavedBudgetConfig;
       expect(savedConfig.budget.warningThreshold).toBe(0.9);
     });
 
@@ -339,7 +346,7 @@ describe('createBudgetCommand', () => {
       await setCmd.parseAsync(['--daily', '25'], { from: 'user' });
 
       expect(mockedConfigManager.save).toHaveBeenCalled();
-      const savedConfig = (mockedConfigManager.save as jest.Mock).mock.calls[0][0];
+      const savedConfig = (mockedConfigManager.save as jest.Mock).mock.calls[0][0] as SavedBudgetConfig;
       expect(savedConfig.budget).toBeDefined();
       expect(savedConfig.budget.dailyLimit).toBe(25);
     });
@@ -351,7 +358,7 @@ describe('createBudgetCommand', () => {
       await setCmd.parseAsync(['--daily', '0'], { from: 'user' });
 
       expect(mockedConfigManager.save).toHaveBeenCalled();
-      const savedConfig = (mockedConfigManager.save as jest.Mock).mock.calls[0][0];
+      const savedConfig = (mockedConfigManager.save as jest.Mock).mock.calls[0][0] as SavedBudgetConfig;
       expect(savedConfig.budget.dailyLimit).toBe(0);
     });
   });
@@ -400,14 +407,16 @@ describe('createBudgetCommand', () => {
 
     it('should export to file when --export specified', async () => {
       const { CostGuard } = require('../../src/core/cost-guard');
-      const mockExport = jest.fn().mockResolvedValue(undefined);
+      const mockExport = jest.fn<(outputPath: string, days?: number) => void>();
       CostGuard.mockImplementationOnce(() => ({
-        getUsageReport: jest.fn().mockResolvedValue({
+        getUsageReport: jest.fn<() => Promise<UsageReport>>(async () => ({
           summary: { daily: 1.0, weekly: 5.0, monthly: 15.0, allTime: 50.0 },
+          dailyBreakdown: [],
           byProvider: {},
           byModel: {},
+          byOperation: {},
           topCostlyOperations: [],
-        }),
+        })),
         exportUsage: mockExport,
       }));
 
@@ -433,12 +442,12 @@ describe('budget progress bar (via status output)', () => {
   it('should show progress bar output in status command', async () => {
     const { CostGuard } = require('../../src/core/cost-guard');
     CostGuard.mockImplementation(() => ({
-      getBudgetStatus: jest.fn().mockResolvedValue({
+      getBudgetStatus: jest.fn<() => Promise<BudgetStatus>>(async () => ({
         daily: { used: 5, limit: 10, remaining: 5, percentUsed: 50 },
         monthly: { used: 50, limit: 100, remaining: 50, percentUsed: 50 },
         perRequest: { limit: 1 },
         warnings: [],
-      }),
+      })),
     }));
 
     const consoleSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
@@ -457,12 +466,12 @@ describe('budget progress bar (via status output)', () => {
   it('should show 100% filled progress bar at full utilization', async () => {
     const { CostGuard } = require('../../src/core/cost-guard');
     CostGuard.mockImplementation(() => ({
-      getBudgetStatus: jest.fn().mockResolvedValue({
+      getBudgetStatus: jest.fn<() => Promise<BudgetStatus>>(async () => ({
         daily: { used: 10, limit: 10, remaining: 0, percentUsed: 100 },
         monthly: { used: 100, limit: 100, remaining: 0, percentUsed: 100 },
         perRequest: { limit: 1 },
         warnings: [],
-      }),
+      })),
     }));
 
     const consoleSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
