@@ -16,6 +16,7 @@ import {
   afterEach,
   jest,
 } from '@jest/globals';
+import type { Command } from 'commander';
 
 // ─── Mocks ──────────────────────────────────────────────────────────────────
 
@@ -59,7 +60,7 @@ async function callSubcommandAction(
   options: Record<string, unknown> = {}
 ): Promise<void> {
   const program = createCacheCommand();
-  const sub = program.commands.find((c) => c.name() === subcommandName);
+  const sub = program.commands.find((c: Command) => c.name() === subcommandName);
   if (!sub) { throw new Error(`Subcommand "${subcommandName}" not found`); }
   await (sub as any)._actionHandler(options);
 }
@@ -125,28 +126,28 @@ describe('createCacheCommand', () => {
     it('should display total entries count', async () => {
       await callSubcommandAction('stats');
 
-      const allOutput = consoleSpy.mock.calls.map((c) => String(c[0])).join('\n');
+      const allOutput = consoleSpy.mock.calls.map((c: any[]) => String(c[0])).join('\n');
       expect(allOutput).toMatch(/25/); // totalEntries
     });
 
     it('should display cache size in MB', async () => {
       await callSubcommandAction('stats');
 
-      const allOutput = consoleSpy.mock.calls.map((c) => String(c[0])).join('\n');
+      const allOutput = consoleSpy.mock.calls.map((c: any[]) => String(c[0])).join('\n');
       expect(allOutput).toMatch(/5\.00/);  // getSizeMB() value
     });
 
     it('should display max size from config', async () => {
       await callSubcommandAction('stats');
 
-      const allOutput = consoleSpy.mock.calls.map((c) => String(c[0])).join('\n');
+      const allOutput = consoleSpy.mock.calls.map((c: any[]) => String(c[0])).join('\n');
       expect(allOutput).toMatch(/100/); // maxSizeMB
     });
 
     it('should display hits and misses', async () => {
       await callSubcommandAction('stats');
 
-      const allOutput = consoleSpy.mock.calls.map((c) => String(c[0])).join('\n');
+      const allOutput = consoleSpy.mock.calls.map((c: any[]) => String(c[0])).join('\n');
       expect(allOutput).toMatch(/50/);  // hits
       expect(allOutput).toMatch(/10/);  // misses
     });
@@ -154,14 +155,14 @@ describe('createCacheCommand', () => {
     it('should display hit rate percentage', async () => {
       await callSubcommandAction('stats');
 
-      const allOutput = consoleSpy.mock.calls.map((c) => String(c[0])).join('\n');
+      const allOutput = consoleSpy.mock.calls.map((c: any[]) => String(c[0])).join('\n');
       expect(allOutput).toMatch(/83\./); // hitRate
     });
 
     it('should display estimated cost savings when hitRate > 0', async () => {
       await callSubcommandAction('stats');
 
-      const allOutput = consoleSpy.mock.calls.map((c) => String(c[0])).join('\n');
+      const allOutput = consoleSpy.mock.calls.map((c: any[]) => String(c[0])).join('\n');
       expect(allOutput).toMatch(/savings/i);
     });
 
@@ -175,14 +176,14 @@ describe('createCacheCommand', () => {
       });
       await callSubcommandAction('stats');
 
-      const allOutput = consoleSpy.mock.calls.map((c) => String(c[0])).join('\n');
+      const allOutput = consoleSpy.mock.calls.map((c: any[]) => String(c[0])).join('\n');
       expect(allOutput).not.toMatch(/savings/i);
     });
 
     it('should display cache configuration section', async () => {
       await callSubcommandAction('stats');
 
-      const allOutput = consoleSpy.mock.calls.map((c) => String(c[0])).join('\n');
+      const allOutput = consoleSpy.mock.calls.map((c: any[]) => String(c[0])).join('\n');
       expect(allOutput).toMatch(/Configuration/i);
       expect(allOutput).toMatch(/Enabled/i);
     });
@@ -190,7 +191,7 @@ describe('createCacheCommand', () => {
     it('should show semantic threshold from config', async () => {
       await callSubcommandAction('stats');
 
-      const allOutput = consoleSpy.mock.calls.map((c) => String(c[0])).join('\n');
+      const allOutput = consoleSpy.mock.calls.map((c: any[]) => String(c[0])).join('\n');
       expect(allOutput).toMatch(/0\.95/);
     });
 
@@ -198,7 +199,7 @@ describe('createCacheCommand', () => {
       mockLoadOrInit.mockReturnValue({}); // no cache config
       await callSubcommandAction('stats');
 
-      const allOutput = consoleSpy.mock.calls.map((c) => String(c[0])).join('\n');
+      const allOutput = consoleSpy.mock.calls.map((c: any[]) => String(c[0])).join('\n');
       expect(allOutput).toMatch(/100/); // default maxSizeMB
     });
 
@@ -207,7 +208,7 @@ describe('createCacheCommand', () => {
       await callSubcommandAction('stats');
 
       const allOutput = consoleSpy.mock.calls
-        .map((c) => (c[0] as string) ?? '')
+        .map((c: any[]) => (c[0] as string) ?? '')
         .join('\n');
       // eslint-disable-next-line no-control-regex
       const stripped = allOutput.replace(/\x1B\[[0-9;]*m/g, '');
@@ -217,7 +218,7 @@ describe('createCacheCommand', () => {
     it('should show TTL from config', async () => {
       await callSubcommandAction('stats');
 
-      const allOutput = consoleSpy.mock.calls.map((c) => String(c[0])).join('\n');
+      const allOutput = consoleSpy.mock.calls.map((c: any[]) => String(c[0])).join('\n');
       expect(allOutput).toMatch(/3600/);
     });
 
@@ -225,7 +226,7 @@ describe('createCacheCommand', () => {
       mockLoadOrInit.mockReturnValue({});
       await callSubcommandAction('stats');
 
-      const allOutput = consoleSpy.mock.calls.map((c) => String(c[0])).join('\n');
+      const allOutput = consoleSpy.mock.calls.map((c: any[]) => String(c[0])).join('\n');
       expect(allOutput).toMatch(/3600/);
     });
   });
@@ -236,7 +237,7 @@ describe('createCacheCommand', () => {
     it('should display cache configuration details when cache is configured', async () => {
       await callSubcommandAction('info');
 
-      const allOutput = consoleSpy.mock.calls.map((c) => String(c[0])).join('\n');
+      const allOutput = consoleSpy.mock.calls.map((c: any[]) => String(c[0])).join('\n');
       expect(allOutput).toMatch(/Enabled/i);
       expect(allOutput).toMatch(/Max Size/i);
       expect(allOutput).toMatch(/TTL/i);
@@ -246,14 +247,14 @@ describe('createCacheCommand', () => {
     it('should show correct maxSizeMB in info output', async () => {
       await callSubcommandAction('info');
 
-      const allOutput = consoleSpy.mock.calls.map((c) => String(c[0])).join('\n');
+      const allOutput = consoleSpy.mock.calls.map((c: any[]) => String(c[0])).join('\n');
       expect(allOutput).toMatch(/100/);
     });
 
     it('should show TTL in seconds and minutes', async () => {
       await callSubcommandAction('info');
 
-      const allOutput = consoleSpy.mock.calls.map((c) => String(c[0])).join('\n');
+      const allOutput = consoleSpy.mock.calls.map((c: any[]) => String(c[0])).join('\n');
       expect(allOutput).toMatch(/3600/);
       expect(allOutput).toMatch(/60/); // 3600s / 60 = 60 minutes
     });
@@ -261,7 +262,7 @@ describe('createCacheCommand', () => {
     it('should show similarity percentage for semantic threshold', async () => {
       await callSubcommandAction('info');
 
-      const allOutput = consoleSpy.mock.calls.map((c) => String(c[0])).join('\n');
+      const allOutput = consoleSpy.mock.calls.map((c: any[]) => String(c[0])).join('\n');
       expect(allOutput).toMatch(/95%/); // 0.95 * 100 = 95%
     });
 
@@ -270,7 +271,7 @@ describe('createCacheCommand', () => {
 
       await callSubcommandAction('info');
 
-      const allOutput = consoleSpy.mock.calls.map((c) => String(c[0])).join('\n');
+      const allOutput = consoleSpy.mock.calls.map((c: any[]) => String(c[0])).join('\n');
       expect(allOutput).toMatch(/not configured/i);
     });
 
@@ -280,14 +281,14 @@ describe('createCacheCommand', () => {
       await callSubcommandAction('info');
 
       // Should not attempt to display Enabled/MaxSize when config is absent
-      const allOutput = consoleSpy.mock.calls.map((c) => String(c[0])).join('\n');
+      const allOutput = consoleSpy.mock.calls.map((c: any[]) => String(c[0])).join('\n');
       expect(allOutput).not.toMatch(/Max Size/i);
     });
 
     it('should include modify hint in output when config exists', async () => {
       await callSubcommandAction('info');
 
-      const allOutput = consoleSpy.mock.calls.map((c) => String(c[0])).join('\n');
+      const allOutput = consoleSpy.mock.calls.map((c: any[]) => String(c[0])).join('\n');
       expect(allOutput).toMatch(/guardscan config set cache/i);
     });
 
@@ -302,7 +303,7 @@ describe('createCacheCommand', () => {
       });
       await callSubcommandAction('info');
 
-      const allOutput = consoleSpy.mock.calls.map((c) => String(c[0])).join('\n');
+      const allOutput = consoleSpy.mock.calls.map((c: any[]) => String(c[0])).join('\n');
       expect(allOutput).toMatch(/No/i);
     });
   });
@@ -316,7 +317,7 @@ describe('createCacheCommand', () => {
       // cache.clear() should NOT have been called
       expect(mockClear).not.toHaveBeenCalled();
 
-      const allOutput = consoleSpy.mock.calls.map((c) => String(c[0])).join('\n');
+      const allOutput = consoleSpy.mock.calls.map((c: any[]) => String(c[0])).join('\n');
       expect(allOutput).toMatch(/--force/i);
     });
 
@@ -329,14 +330,14 @@ describe('createCacheCommand', () => {
     it('should display success message after clearing', async () => {
       await callSubcommandAction('clear', { force: true });
 
-      const allOutput = consoleSpy.mock.calls.map((c) => String(c[0])).join('\n');
+      const allOutput = consoleSpy.mock.calls.map((c: any[]) => String(c[0])).join('\n');
       expect(allOutput).toMatch(/cleared/i);
     });
 
     it('should not output success message when --force is absent', async () => {
       await callSubcommandAction('clear', { force: false });
 
-      const allOutput = consoleSpy.mock.calls.map((c) => String(c[0])).join('\n');
+      const allOutput = consoleSpy.mock.calls.map((c: any[]) => String(c[0])).join('\n');
       expect(allOutput).not.toMatch(/cleared/i);
     });
 
@@ -383,7 +384,7 @@ describe('createCacheCommand', () => {
       await callSubcommandAction('stats');
 
       const allOutput = consoleSpy.mock.calls
-        .map((c) => (c[0] as string) ?? '')
+        .map((c: any[]) => (c[0] as string) ?? '')
         .join('\n');
       // eslint-disable-next-line no-control-regex
       const stripped = allOutput.replace(/\x1B\[[0-9;]*m/g, '');

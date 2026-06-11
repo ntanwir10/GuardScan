@@ -6,8 +6,10 @@ import { describe, expect, it, beforeEach } from '@jest/globals';
 import { CostGuard, DEFAULT_BUDGET_CONFIG } from '../../src/core/cost-guard';
 
 describe('CostGuard', () => {
+  let costGuard: CostGuard;
+
   beforeEach(async () => {
-    const costGuard = new CostGuard('test-repo');
+    costGuard = new CostGuard('test-repo');
     await costGuard.clearUsage();
   });
   describe('budget checking', () => {
@@ -86,7 +88,7 @@ describe('CostGuard', () => {
       const status = await costGuard.getBudgetStatus();
 
       expect(status.warnings.length).toBeGreaterThan(0);
-      expect(status.warnings.some((w) => w.includes('80%'))).toBe(true);
+      expect(status.warnings.some((w: string) => w.includes('80%'))).toBe(true);
     });
   });
 
@@ -242,7 +244,7 @@ describe('CostGuard', () => {
       await costGuard.recordUsage(1.0); // exactly at limit
 
       const status = await costGuard.getBudgetStatus();
-      expect(status.warnings.some((w) => w.includes('Daily limit reached'))).toBe(true);
+      expect(status.warnings.some((w: string) => w.includes('Daily limit reached'))).toBe(true);
     });
   });
 });

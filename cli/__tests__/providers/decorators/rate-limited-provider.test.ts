@@ -7,6 +7,7 @@ import {
   RateLimitedProvider,
   DEFAULT_RATE_LIMIT_CONFIG,
   PROVIDER_RATE_LIMITS,
+  type RateLimitConfig,
 } from '../../../src/providers/decorators/rate-limited-provider';
 import { AIProvider, AIMessage, AIResponse } from '../../../src/providers/base';
 
@@ -87,7 +88,7 @@ describe('RateLimitedProvider', () => {
 
       const startTime = Date.now();
 
-      // First request consumes 500 tokens (full bucket)
+      // First request consumes 1000 tokens (full bucket)
       await rateLimited.chat([{ role: 'user', content: 'test' }]);
 
       // Second request needs to wait for refill
@@ -95,7 +96,7 @@ describe('RateLimitedProvider', () => {
 
       const elapsed = Date.now() - startTime;
 
-      // Should have waited at least 500ms (500 tokens / 1000 tokens per second)
+      // Should have waited at least ~1s (1000 tokens / 1000 tokens per second)
       expect(elapsed).toBeGreaterThanOrEqual(900); // Wait ~1s for 1000 tokens
     });
 
@@ -217,7 +218,7 @@ describe('RateLimitedProvider', () => {
     });
 
     it('each provider config should have required fields', () => {
-      for (const [providerName, cfg] of Object.entries(PROVIDER_RATE_LIMITS)) {
+      for (const [providerName, cfg] of Object.entries(PROVIDER_RATE_LIMITS) as [string, RateLimitConfig][]) {
         expect(typeof cfg.maxTokens).toBe('number');
         expect(typeof cfg.refillRate).toBe('number');
         expect(typeof cfg.costMultiplier).toBe('number');

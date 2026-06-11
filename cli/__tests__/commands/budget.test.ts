@@ -19,12 +19,28 @@ import {
 
 // ─── Mocks ──────────────────────────────────────────────────────────────────
 
-const mockGetBudgetStatus = jest.fn();
-const mockGetUsageReport = jest.fn();
-const mockExportUsage = jest.fn();
-const mockClearUsage = jest.fn();
-const mockRecordUsage = jest.fn();
-const mockCheckBudget = jest.fn();
+const mockGetBudgetStatus = jest.fn<() => Promise<{
+  daily: { used: number; limit: number; remaining: number; percentUsed: number };
+  monthly: { used: number; limit: number; remaining: number; percentUsed: number };
+  perRequest: { limit: number };
+  warnings: string[];
+}>>();
+const mockGetUsageReport = jest.fn<(days: number) => Promise<{
+  summary: { daily: number; weekly: number; monthly: number; allTime: number };
+  byProvider: Record<string, number>;
+  byModel: Record<string, number>;
+  topCostlyOperations: Array<{
+    timestamp: Date;
+    model: string;
+    cost: number;
+    provider: string;
+    operation: string;
+  }>;
+}>>();
+const mockExportUsage = jest.fn<(path: string, days: number) => Promise<void>>();
+const mockClearUsage = jest.fn<() => Promise<void>>();
+const mockRecordUsage = jest.fn<(cost: number, metadata?: Record<string, unknown>) => Promise<void>>();
+const mockCheckBudget = jest.fn<(estimatedCost: number) => Promise<void>>();
 
 jest.mock('../../src/core/cost-guard', () => ({
   CostGuard: jest.fn().mockImplementation(() => ({
