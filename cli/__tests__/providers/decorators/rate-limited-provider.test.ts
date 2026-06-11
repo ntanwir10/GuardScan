@@ -6,7 +6,9 @@ import { describe, expect, it, jest, beforeEach } from '@jest/globals';
 import {
   RateLimitedProvider,
   DEFAULT_RATE_LIMIT_CONFIG,
+  PROVIDER_RATE_LIMITS,
 } from '../../../src/providers/decorators/rate-limited-provider';
+import type { RateLimitConfig } from '../../../src/providers/decorators/rate-limited-provider';
 import { AIProvider, AIMessage, AIResponse } from '../../../src/providers/base';
 
 // Mock provider
@@ -284,10 +286,6 @@ class OllamaMockProvider extends AIProvider {
   countMessagesTokens(_messages: AIMessage[]): number { return 500; }
 }
 
-import {
-  PROVIDER_RATE_LIMITS,
-} from '../../../src/providers/decorators/rate-limited-provider';
-
 describe('RateLimitedProvider – edge cases', () => {
   describe('request cost exceeds bucket capacity', () => {
     it('should throw when estimated token cost exceeds maxTokens', async () => {
@@ -418,6 +416,17 @@ describe('RateLimitedProvider – edge cases', () => {
   });
 
   describe('PROVIDER_RATE_LIMITS constants', () => {
+    it('should define valid limits for every provider', () => {
+      const entries = Object.entries(PROVIDER_RATE_LIMITS) as [string, RateLimitConfig][];
+
+      for (const [providerName, cfg] of entries) {
+        expect(providerName).toBeTruthy();
+        expect(cfg.maxTokens).toBeGreaterThan(0);
+        expect(cfg.refillRate).toBeGreaterThan(0);
+        expect(cfg.costMultiplier).toBeGreaterThan(0);
+      }
+    });
+
     it('should define rate limits for openai', () => {
       expect(PROVIDER_RATE_LIMITS['openai']).toBeDefined();
       expect(PROVIDER_RATE_LIMITS['openai'].maxTokens).toBeGreaterThan(0);

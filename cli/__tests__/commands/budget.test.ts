@@ -13,6 +13,7 @@ import {
   afterEach,
   jest,
 } from '@jest/globals';
+import type { Command } from 'commander';
 import type { BudgetStatus } from '../../src/core/cost-guard';
 import type { Config } from '../../src/core/config';
 import type { UsageReport } from '../../src/core/usage-tracker';
@@ -71,6 +72,19 @@ import { configManager } from '../../src/core/config';
 
 type SavedBudgetConfig = Config & { budget: NonNullable<Config['budget']> };
 
+const getSubcommand = (program: Command, subcommandName: string): Command => {
+  const subcommand = program.commands.find((c: Command) => c.name() === subcommandName);
+
+  if (!subcommand) {
+    throw new Error(`Missing ${subcommandName} subcommand`);
+  }
+
+  return subcommand;
+};
+
+const getConsoleOutput = (consoleSpy: ReturnType<typeof jest.spyOn>): string =>
+  consoleSpy.mock.calls.map((c: any[]) => String(c[0] ?? '')).join(' ');
+
 describe('createBudgetCommand', () => {
   let consoleLogSpy: ReturnType<typeof jest.spyOn>;
   let consoleErrorSpy: ReturnType<typeof jest.spyOn>;
@@ -117,19 +131,19 @@ describe('createBudgetCommand', () => {
 
     it('should have status subcommand', () => {
       const cmd = createBudgetCommand();
-      const subcommands = cmd.commands.map((c) => c.name());
+      const subcommands = cmd.commands.map((c: Command) => c.name());
       expect(subcommands).toContain('status');
     });
 
     it('should have set subcommand', () => {
       const cmd = createBudgetCommand();
-      const subcommands = cmd.commands.map((c) => c.name());
+      const subcommands = cmd.commands.map((c: Command) => c.name());
       expect(subcommands).toContain('set');
     });
 
     it('should have report subcommand', () => {
       const cmd = createBudgetCommand();
-      const subcommands = cmd.commands.map((c) => c.name());
+      const subcommands = cmd.commands.map((c: Command) => c.name());
       expect(subcommands).toContain('report');
     });
 
@@ -142,7 +156,7 @@ describe('createBudgetCommand', () => {
   describe('budget status subcommand', () => {
     it('should display budget status', async () => {
       const cmd = createBudgetCommand();
-      const statusCmd = cmd.commands.find((c) => c.name() === 'status')!;
+      const statusCmd = getSubcommand(cmd, 'status');
 
       // Invoke the action directly
       await statusCmd.parseAsync([], { from: 'user' });
@@ -162,22 +176,22 @@ describe('createBudgetCommand', () => {
       }));
 
       const cmd = createBudgetCommand();
-      const statusCmd = cmd.commands.find((c) => c.name() === 'status')!;
+      const statusCmd = getSubcommand(cmd, 'status');
 
       await statusCmd.parseAsync([], { from: 'user' });
 
       // Should output something about warnings
-      const allOutput = consoleLogSpy.mock.calls.flat().join(' ');
+      const allOutput = getConsoleOutput(consoleLogSpy);
       expect(allOutput).toMatch(/[Ww]arn/);
     });
 
     it('should display daily and monthly budget info', async () => {
       const cmd = createBudgetCommand();
-      const statusCmd = cmd.commands.find((c) => c.name() === 'status')!;
+      const statusCmd = getSubcommand(cmd, 'status');
 
       await statusCmd.parseAsync([], { from: 'user' });
 
-      const allOutput = consoleLogSpy.mock.calls.flat().join(' ');
+      const allOutput = getConsoleOutput(consoleLogSpy);
       // Should contain budget limit values
       expect(allOutput).toMatch(/10/);
       expect(allOutput).toMatch(/100/);
@@ -187,7 +201,7 @@ describe('createBudgetCommand', () => {
   describe('budget set subcommand', () => {
     it('should update daily limit', async () => {
       const cmd = createBudgetCommand();
-      const setCmd = cmd.commands.find((c) => c.name() === 'set')!;
+      const setCmd = getSubcommand(cmd, 'set');
 
       await setCmd.parseAsync(['--daily', '20'], { from: 'user' });
 
@@ -198,7 +212,7 @@ describe('createBudgetCommand', () => {
 
     it('should update monthly limit', async () => {
       const cmd = createBudgetCommand();
-      const setCmd = cmd.commands.find((c) => c.name() === 'set')!;
+      const setCmd = getSubcommand(cmd, 'set');
 
       await setCmd.parseAsync(['--monthly', '200'], { from: 'user' });
 
@@ -209,7 +223,7 @@ describe('createBudgetCommand', () => {
 
     it('should update per-request limit', async () => {
       const cmd = createBudgetCommand();
-      const setCmd = cmd.commands.find((c) => c.name() === 'set')!;
+      const setCmd = getSubcommand(cmd, 'set');
 
       await setCmd.parseAsync(['--per-request', '2.5'], { from: 'user' });
 
@@ -220,7 +234,7 @@ describe('createBudgetCommand', () => {
 
     it('should update warning threshold', async () => {
       const cmd = createBudgetCommand();
-      const setCmd = cmd.commands.find((c) => c.name() === 'set')!;
+      const setCmd = getSubcommand(cmd, 'set');
 
       await setCmd.parseAsync(['--warning-threshold', '0.9'], { from: 'user' });
 
@@ -231,7 +245,7 @@ describe('createBudgetCommand', () => {
 
     it('should reject invalid daily amount (NaN)', async () => {
       const cmd = createBudgetCommand();
-      const setCmd = cmd.commands.find((c) => c.name() === 'set')!;
+      const setCmd = getSubcommand(cmd, 'set');
 
       await expect(
         setCmd.parseAsync(['--daily', 'not-a-number'], { from: 'user' })
@@ -244,7 +258,7 @@ describe('createBudgetCommand', () => {
 
     it('should reject negative daily amount', async () => {
       const cmd = createBudgetCommand();
-      const setCmd = cmd.commands.find((c) => c.name() === 'set')!;
+      const setCmd = getSubcommand(cmd, 'set');
 
       await expect(
         setCmd.parseAsync(['--daily', '-5'], { from: 'user' })
@@ -257,7 +271,7 @@ describe('createBudgetCommand', () => {
 
     it('should reject invalid monthly amount', async () => {
       const cmd = createBudgetCommand();
-      const setCmd = cmd.commands.find((c) => c.name() === 'set')!;
+      const setCmd = getSubcommand(cmd, 'set');
 
       await expect(
         setCmd.parseAsync(['--monthly', 'bad'], { from: 'user' })
@@ -270,7 +284,7 @@ describe('createBudgetCommand', () => {
 
     it('should reject negative monthly amount', async () => {
       const cmd = createBudgetCommand();
-      const setCmd = cmd.commands.find((c) => c.name() === 'set')!;
+      const setCmd = getSubcommand(cmd, 'set');
 
       await expect(
         setCmd.parseAsync(['--monthly', '-10'], { from: 'user' })
@@ -279,7 +293,7 @@ describe('createBudgetCommand', () => {
 
     it('should reject invalid per-request amount', async () => {
       const cmd = createBudgetCommand();
-      const setCmd = cmd.commands.find((c) => c.name() === 'set')!;
+      const setCmd = getSubcommand(cmd, 'set');
 
       await expect(
         setCmd.parseAsync(['--per-request', 'abc'], { from: 'user' })
@@ -292,7 +306,7 @@ describe('createBudgetCommand', () => {
 
     it('should reject warning threshold above 1', async () => {
       const cmd = createBudgetCommand();
-      const setCmd = cmd.commands.find((c) => c.name() === 'set')!;
+      const setCmd = getSubcommand(cmd, 'set');
 
       await expect(
         setCmd.parseAsync(['--warning-threshold', '1.5'], { from: 'user' })
@@ -305,7 +319,7 @@ describe('createBudgetCommand', () => {
 
     it('should reject warning threshold below 0', async () => {
       const cmd = createBudgetCommand();
-      const setCmd = cmd.commands.find((c) => c.name() === 'set')!;
+      const setCmd = getSubcommand(cmd, 'set');
 
       await expect(
         setCmd.parseAsync(['--warning-threshold', '-0.1'], { from: 'user' })
@@ -318,7 +332,7 @@ describe('createBudgetCommand', () => {
 
     it('should reject when no options are specified', async () => {
       const cmd = createBudgetCommand();
-      const setCmd = cmd.commands.find((c) => c.name() === 'set')!;
+      const setCmd = getSubcommand(cmd, 'set');
 
       await expect(
         setCmd.parseAsync([], { from: 'user' })
@@ -341,7 +355,7 @@ describe('createBudgetCommand', () => {
       } as any);
 
       const cmd = createBudgetCommand();
-      const setCmd = cmd.commands.find((c) => c.name() === 'set')!;
+      const setCmd = getSubcommand(cmd, 'set');
 
       await setCmd.parseAsync(['--daily', '25'], { from: 'user' });
 
@@ -353,7 +367,7 @@ describe('createBudgetCommand', () => {
 
     it('should accept zero as a valid daily limit', async () => {
       const cmd = createBudgetCommand();
-      const setCmd = cmd.commands.find((c) => c.name() === 'set')!;
+      const setCmd = getSubcommand(cmd, 'set');
 
       await setCmd.parseAsync(['--daily', '0'], { from: 'user' });
 
@@ -366,42 +380,42 @@ describe('createBudgetCommand', () => {
   describe('budget report subcommand', () => {
     it('should display usage report with default 30 days', async () => {
       const cmd = createBudgetCommand();
-      const reportCmd = cmd.commands.find((c) => c.name() === 'report')!;
+      const reportCmd = getSubcommand(cmd, 'report');
 
       await reportCmd.parseAsync([], { from: 'user' });
 
       expect(consoleLogSpy).toHaveBeenCalled();
-      const allOutput = consoleLogSpy.mock.calls.flat().join(' ');
+      const allOutput = getConsoleOutput(consoleLogSpy);
       expect(allOutput).toMatch(/30/);
     });
 
     it('should display custom days count', async () => {
       const cmd = createBudgetCommand();
-      const reportCmd = cmd.commands.find((c) => c.name() === 'report')!;
+      const reportCmd = getSubcommand(cmd, 'report');
 
       await reportCmd.parseAsync(['--days', '7'], { from: 'user' });
 
-      const allOutput = consoleLogSpy.mock.calls.flat().join(' ');
+      const allOutput = getConsoleOutput(consoleLogSpy);
       expect(allOutput).toMatch(/7/);
     });
 
     it('should show by-provider breakdown', async () => {
       const cmd = createBudgetCommand();
-      const reportCmd = cmd.commands.find((c) => c.name() === 'report')!;
+      const reportCmd = getSubcommand(cmd, 'report');
 
       await reportCmd.parseAsync([], { from: 'user' });
 
-      const allOutput = consoleLogSpy.mock.calls.flat().join(' ');
+      const allOutput = getConsoleOutput(consoleLogSpy);
       expect(allOutput).toMatch(/openai|gemini|Provider/i);
     });
 
     it('should show top costly operations', async () => {
       const cmd = createBudgetCommand();
-      const reportCmd = cmd.commands.find((c) => c.name() === 'report')!;
+      const reportCmd = getSubcommand(cmd, 'report');
 
       await reportCmd.parseAsync([], { from: 'user' });
 
-      const allOutput = consoleLogSpy.mock.calls.flat().join(' ');
+      const allOutput = getConsoleOutput(consoleLogSpy);
       expect(allOutput).toMatch(/gpt-4o|Costly/i);
     });
 
@@ -421,12 +435,12 @@ describe('createBudgetCommand', () => {
       }));
 
       const cmd = createBudgetCommand();
-      const reportCmd = cmd.commands.find((c) => c.name() === 'report')!;
+      const reportCmd = getSubcommand(cmd, 'report');
 
       await reportCmd.parseAsync(['--export', '/tmp/report.csv'], { from: 'user' });
 
       expect(mockExport).toHaveBeenCalledWith('/tmp/report.csv', 30);
-      const allOutput = consoleLogSpy.mock.calls.flat().join(' ');
+      const allOutput = getConsoleOutput(consoleLogSpy);
       expect(allOutput).toMatch(/exported/i);
     });
   });
@@ -453,10 +467,10 @@ describe('budget progress bar (via status output)', () => {
     const consoleSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
 
     const cmd = createBudgetCommand();
-    const statusCmd = cmd.commands.find((c) => c.name() === 'status')!;
+    const statusCmd = getSubcommand(cmd, 'status');
     await statusCmd.parseAsync([], { from: 'user' });
 
-    const allOutput = consoleSpy.mock.calls.flat().join(' ');
+    const allOutput = getConsoleOutput(consoleSpy);
     // Progress bar uses '█' and '░' characters
     expect(allOutput).toMatch(/[█░]/);
 
@@ -477,10 +491,10 @@ describe('budget progress bar (via status output)', () => {
     const consoleSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
 
     const cmd = createBudgetCommand();
-    const statusCmd = cmd.commands.find((c) => c.name() === 'status')!;
+    const statusCmd = getSubcommand(cmd, 'status');
     await statusCmd.parseAsync([], { from: 'user' });
 
-    const allOutput = consoleSpy.mock.calls.flat().join(' ');
+    const allOutput = getConsoleOutput(consoleSpy);
     expect(allOutput).toMatch(/100/);
 
     consoleSpy.mockRestore();

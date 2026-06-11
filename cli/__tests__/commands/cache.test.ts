@@ -12,6 +12,7 @@ import {
   afterEach,
   jest,
 } from '@jest/globals';
+import type { Command } from 'commander';
 
 // Mock external dependencies before importing the module under test
 jest.mock('../../src/core/config', () => ({
@@ -51,6 +52,19 @@ jest.mock('../../src/core/ai-cache', () => ({
 
 import { createCacheCommand } from '../../src/commands/cache';
 import { configManager } from '../../src/core/config';
+
+const getSubcommand = (program: Command, subcommandName: string): Command => {
+  const subcommand = program.commands.find((c: Command) => c.name() === subcommandName);
+
+  if (!subcommand) {
+    throw new Error(`Missing ${subcommandName} subcommand`);
+  }
+
+  return subcommand;
+};
+
+const getConsoleOutput = (consoleSpy: ReturnType<typeof jest.spyOn>): string =>
+  consoleSpy.mock.calls.map((c: any[]) => String(c[0] ?? '')).join(' ');
 
 describe('createCacheCommand', () => {
   let consoleLogSpy: ReturnType<typeof jest.spyOn>;
@@ -92,19 +106,19 @@ describe('createCacheCommand', () => {
 
     it('should have stats subcommand', () => {
       const cmd = createCacheCommand();
-      const subcommands = cmd.commands.map((c) => c.name());
+      const subcommands = cmd.commands.map((c: Command) => c.name());
       expect(subcommands).toContain('stats');
     });
 
     it('should have info subcommand', () => {
       const cmd = createCacheCommand();
-      const subcommands = cmd.commands.map((c) => c.name());
+      const subcommands = cmd.commands.map((c: Command) => c.name());
       expect(subcommands).toContain('info');
     });
 
     it('should have clear subcommand', () => {
       const cmd = createCacheCommand();
-      const subcommands = cmd.commands.map((c) => c.name());
+      const subcommands = cmd.commands.map((c: Command) => c.name());
       expect(subcommands).toContain('clear');
     });
 
@@ -117,7 +131,7 @@ describe('createCacheCommand', () => {
   describe('cache stats subcommand', () => {
     it('should display cache statistics', async () => {
       const cmd = createCacheCommand();
-      const statsCmd = cmd.commands.find((c) => c.name() === 'stats')!;
+      const statsCmd = getSubcommand(cmd, 'stats');
 
       await statsCmd.parseAsync([], { from: 'user' });
 
@@ -126,41 +140,41 @@ describe('createCacheCommand', () => {
 
     it('should display hit rate', async () => {
       const cmd = createCacheCommand();
-      const statsCmd = cmd.commands.find((c) => c.name() === 'stats')!;
+      const statsCmd = getSubcommand(cmd, 'stats');
 
       await statsCmd.parseAsync([], { from: 'user' });
 
-      const allOutput = consoleLogSpy.mock.calls.flat().join(' ');
+      const allOutput = getConsoleOutput(consoleLogSpy);
       expect(allOutput).toMatch(/70|[Hh]it/);
     });
 
     it('should display total entries', async () => {
       const cmd = createCacheCommand();
-      const statsCmd = cmd.commands.find((c) => c.name() === 'stats')!;
+      const statsCmd = getSubcommand(cmd, 'stats');
 
       await statsCmd.parseAsync([], { from: 'user' });
 
-      const allOutput = consoleLogSpy.mock.calls.flat().join(' ');
+      const allOutput = getConsoleOutput(consoleLogSpy);
       expect(allOutput).toMatch(/60|[Ee]ntri/);
     });
 
     it('should display hit and miss counts', async () => {
       const cmd = createCacheCommand();
-      const statsCmd = cmd.commands.find((c) => c.name() === 'stats')!;
+      const statsCmd = getSubcommand(cmd, 'stats');
 
       await statsCmd.parseAsync([], { from: 'user' });
 
-      const allOutput = consoleLogSpy.mock.calls.flat().join(' ');
+      const allOutput = getConsoleOutput(consoleLogSpy);
       expect(allOutput).toMatch(/42|18/);
     });
 
     it('should show savings message when hitRate > 0', async () => {
       const cmd = createCacheCommand();
-      const statsCmd = cmd.commands.find((c) => c.name() === 'stats')!;
+      const statsCmd = getSubcommand(cmd, 'stats');
 
       await statsCmd.parseAsync([], { from: 'user' });
 
-      const allOutput = consoleLogSpy.mock.calls.flat().join(' ');
+      const allOutput = getConsoleOutput(consoleLogSpy);
       expect(allOutput).toMatch(/[Ss]aving/);
     });
 
@@ -180,32 +194,32 @@ describe('createCacheCommand', () => {
       }));
 
       const cmd = createCacheCommand();
-      const statsCmd = cmd.commands.find((c) => c.name() === 'stats')!;
+      const statsCmd = getSubcommand(cmd, 'stats');
 
       await statsCmd.parseAsync([], { from: 'user' });
 
-      const allOutput = consoleLogSpy.mock.calls.flat().join(' ');
+      const allOutput = getConsoleOutput(consoleLogSpy);
       expect(allOutput).not.toMatch(/[Ss]aving/);
     });
 
     it('should display progress bar for utilization', async () => {
       const cmd = createCacheCommand();
-      const statsCmd = cmd.commands.find((c) => c.name() === 'stats')!;
+      const statsCmd = getSubcommand(cmd, 'stats');
 
       await statsCmd.parseAsync([], { from: 'user' });
 
-      const allOutput = consoleLogSpy.mock.calls.flat().join(' ');
+      const allOutput = getConsoleOutput(consoleLogSpy);
       // Progress bar uses '█' and '░' characters
       expect(allOutput).toMatch(/[█░]/);
     });
 
     it('should show cache configuration in stats output', async () => {
       const cmd = createCacheCommand();
-      const statsCmd = cmd.commands.find((c) => c.name() === 'stats')!;
+      const statsCmd = getSubcommand(cmd, 'stats');
 
       await statsCmd.parseAsync([], { from: 'user' });
 
-      const allOutput = consoleLogSpy.mock.calls.flat().join(' ');
+      const allOutput = getConsoleOutput(consoleLogSpy);
       expect(allOutput).toMatch(/0\.95|3600|[Cc]onfig/i);
     });
 
@@ -221,13 +235,13 @@ describe('createCacheCommand', () => {
       } as any);
 
       const cmd = createCacheCommand();
-      const statsCmd = cmd.commands.find((c) => c.name() === 'stats')!;
+      const statsCmd = getSubcommand(cmd, 'stats');
 
       await statsCmd.parseAsync([], { from: 'user' });
 
       // Should still run without errors
       expect(consoleLogSpy).toHaveBeenCalled();
-      const allOutput = consoleLogSpy.mock.calls.flat().join(' ');
+      const allOutput = getConsoleOutput(consoleLogSpy);
       expect(allOutput).toMatch(/Max Size:\s+100 MB/);
     });
   });
@@ -235,7 +249,7 @@ describe('createCacheCommand', () => {
   describe('cache info subcommand', () => {
     it('should display cache configuration', async () => {
       const cmd = createCacheCommand();
-      const infoCmd = cmd.commands.find((c) => c.name() === 'info')!;
+      const infoCmd = getSubcommand(cmd, 'info');
 
       await infoCmd.parseAsync([], { from: 'user' });
 
@@ -244,21 +258,21 @@ describe('createCacheCommand', () => {
 
     it('should show enabled status', async () => {
       const cmd = createCacheCommand();
-      const infoCmd = cmd.commands.find((c) => c.name() === 'info')!;
+      const infoCmd = getSubcommand(cmd, 'info');
 
       await infoCmd.parseAsync([], { from: 'user' });
 
-      const allOutput = consoleLogSpy.mock.calls.flat().join(' ');
+      const allOutput = getConsoleOutput(consoleLogSpy);
       expect(allOutput).toMatch(/Yes|No|Enabled/i);
     });
 
     it('should show TTL and semantic threshold', async () => {
       const cmd = createCacheCommand();
-      const infoCmd = cmd.commands.find((c) => c.name() === 'info')!;
+      const infoCmd = getSubcommand(cmd, 'info');
 
       await infoCmd.parseAsync([], { from: 'user' });
 
-      const allOutput = consoleLogSpy.mock.calls.flat().join(' ');
+      const allOutput = getConsoleOutput(consoleLogSpy);
       expect(allOutput).toMatch(/3600|0\.95/);
     });
 
@@ -274,21 +288,21 @@ describe('createCacheCommand', () => {
       } as any);
 
       const cmd = createCacheCommand();
-      const infoCmd = cmd.commands.find((c) => c.name() === 'info')!;
+      const infoCmd = getSubcommand(cmd, 'info');
 
       await infoCmd.parseAsync([], { from: 'user' });
 
-      const allOutput = consoleLogSpy.mock.calls.flat().join(' ');
+      const allOutput = getConsoleOutput(consoleLogSpy);
       expect(allOutput).toMatch(/not configured|defaults/i);
     });
 
     it('should show max size in MB', async () => {
       const cmd = createCacheCommand();
-      const infoCmd = cmd.commands.find((c) => c.name() === 'info')!;
+      const infoCmd = getSubcommand(cmd, 'info');
 
       await infoCmd.parseAsync([], { from: 'user' });
 
-      const allOutput = consoleLogSpy.mock.calls.flat().join(' ');
+      const allOutput = getConsoleOutput(consoleLogSpy);
       expect(allOutput).toMatch(/100|MB/);
     });
   });
@@ -296,7 +310,7 @@ describe('createCacheCommand', () => {
   describe('cache clear subcommand', () => {
     it('should NOT clear cache without --force flag', async () => {
       const cmd = createCacheCommand();
-      const clearCmd = cmd.commands.find((c) => c.name() === 'clear')!;
+      const clearCmd = getSubcommand(cmd, 'clear');
 
       await clearCmd.parseAsync([], { from: 'user' });
 
@@ -305,17 +319,17 @@ describe('createCacheCommand', () => {
 
     it('should show warning message without --force flag', async () => {
       const cmd = createCacheCommand();
-      const clearCmd = cmd.commands.find((c) => c.name() === 'clear')!;
+      const clearCmd = getSubcommand(cmd, 'clear');
 
       await clearCmd.parseAsync([], { from: 'user' });
 
-      const allOutput = consoleLogSpy.mock.calls.flat().join(' ');
+      const allOutput = getConsoleOutput(consoleLogSpy);
       expect(allOutput).toMatch(/--force|confirmation/i);
     });
 
     it('should clear cache with --force flag', async () => {
       const cmd = createCacheCommand();
-      const clearCmd = cmd.commands.find((c) => c.name() === 'clear')!;
+      const clearCmd = getSubcommand(cmd, 'clear');
 
       await clearCmd.parseAsync(['--force'], { from: 'user' });
 
@@ -324,21 +338,21 @@ describe('createCacheCommand', () => {
 
     it('should show success message after clearing with --force', async () => {
       const cmd = createCacheCommand();
-      const clearCmd = cmd.commands.find((c) => c.name() === 'clear')!;
+      const clearCmd = getSubcommand(cmd, 'clear');
 
       await clearCmd.parseAsync(['--force'], { from: 'user' });
 
-      const allOutput = consoleLogSpy.mock.calls.flat().join(' ');
+      const allOutput = getConsoleOutput(consoleLogSpy);
       expect(allOutput).toMatch(/cleared|success/i);
     });
 
     it('should not show warning when --force is used', async () => {
       const cmd = createCacheCommand();
-      const clearCmd = cmd.commands.find((c) => c.name() === 'clear')!;
+      const clearCmd = getSubcommand(cmd, 'clear');
 
       await clearCmd.parseAsync(['--force'], { from: 'user' });
 
-      const allOutput = consoleLogSpy.mock.calls.flat().join(' ');
+      const allOutput = getConsoleOutput(consoleLogSpy);
       expect(allOutput).not.toMatch(/Use --force to skip confirmation/);
     });
   });
@@ -365,11 +379,11 @@ describe('createCacheCommand', () => {
       }));
 
       const cmd = createCacheCommand();
-      const statsCmd = cmd.commands.find((c) => c.name() === 'stats')!;
+      const statsCmd = getSubcommand(cmd, 'stats');
 
       await statsCmd.parseAsync([], { from: 'user' });
 
-      const allOutput = consoleLogSpy.mock.calls.flat().join(' ');
+      const allOutput = getConsoleOutput(consoleLogSpy);
       // Should show default 100 MB
       expect(allOutput).toMatch(/100/);
     });
@@ -386,7 +400,7 @@ describe('createCacheCommand', () => {
       }));
 
       const cmd = createCacheCommand();
-      const statsCmd = cmd.commands.find((c) => c.name() === 'stats')!;
+      const statsCmd = getSubcommand(cmd, 'stats');
 
       await statsCmd.parseAsync([], { from: 'user' });
 

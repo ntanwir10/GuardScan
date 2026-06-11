@@ -6,10 +6,12 @@ import { describe, expect, it, beforeEach } from '@jest/globals';
 import { CostGuard, DEFAULT_BUDGET_CONFIG } from '../../src/core/cost-guard';
 
 describe('CostGuard', () => {
+  const usageCleanup = new CostGuard('test-repo');
+
   beforeEach(async () => {
-    const costGuard = new CostGuard('test-repo');
-    await costGuard.clearUsage();
+    await usageCleanup.clearUsage();
   });
+
   describe('budget checking', () => {
     it('should allow requests within budget', async () => {
       const costGuard = new CostGuard('test-repo', {
