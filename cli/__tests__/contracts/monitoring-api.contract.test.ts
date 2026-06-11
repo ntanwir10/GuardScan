@@ -6,6 +6,9 @@
  */
 
 import axios from 'axios';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import { APIClient, TelemetryRequest } from '../../src/utils/api-client';
 import {
   ErrorSeverity,
@@ -139,6 +142,33 @@ describe('Monitoring API contracts', () => {
         'https://monitoring.example/api/health',
         { timeout: 5000 }
       );
+    });
+
+    it('skips usage tracking when the local config has not been initialized', async () => {
+      const originalGuardscanHome = process.env.GUARDSCAN_HOME;
+      const tempHome = fs.mkdtempSync(
+        path.join(os.tmpdir(), 'guardscan-monitoring-')
+      );
+      process.env.GUARDSCAN_HOME = tempHome;
+
+      try {
+        const manager = createManager();
+
+        await expect(
+          manager.trackUsage('security', 250, true, { source: 'test' })
+        ).resolves.toBeUndefined();
+        await manager.flush();
+        await manager.shutdown();
+
+        expect(mockedAxios.post).not.toHaveBeenCalled();
+      } finally {
+        if (originalGuardscanHome === undefined) {
+          delete process.env.GUARDSCAN_HOME;
+        } else {
+          process.env.GUARDSCAN_HOME = originalGuardscanHome;
+        }
+        fs.rmSync(tempHome, { recursive: true, force: true });
+      }
     });
   });
 });
