@@ -210,6 +210,8 @@ describe('createCacheCommand', () => {
     });
 
     it('should use default maxSizeMB when cache config is absent', async () => {
+      const { AICache } = require('../../src/core/ai-cache');
+
       mockedConfigManager.loadOrInit.mockReturnValueOnce({
         clientId: 'test-client',
         provider: 'openai',
@@ -227,6 +229,7 @@ describe('createCacheCommand', () => {
 
       // Should still run without errors
       expect(consoleLogSpy).toHaveBeenCalled();
+      expect(AICache).toHaveBeenCalledWith('test-repo-id', 100);
     });
   });
 
