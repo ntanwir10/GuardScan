@@ -46,7 +46,7 @@ export interface ChatSessionMetadata {
   codebaseSize?: number;
 }
 
-export interface ChatOptions {
+export interface ConversationOptions {
   temperature?: number;        // 0-1 (default: 0.7)
   maxTokens?: number;          // Max response tokens (default: 1000)
   contextTokens?: number;      // Max context tokens (default: 4000)
@@ -120,7 +120,7 @@ export class ChatbotEngine {
   async chat(
     sessionId: string,
     userMessage: string,
-    options: ChatOptions = {}
+    options: ConversationOptions = {}
   ): Promise<ChatResponse> {
     const startTime = Date.now();
 
@@ -396,9 +396,13 @@ Guidelines:
    */
   private async callAI(
     prompt: string,
-    options: Required<Omit<ChatOptions, 'model'>> & { model?: string }
+    options: Required<Omit<ConversationOptions, 'model'>> & { model?: string }
   ): Promise<{ content: string; tokensUsed?: number; model?: string }> {
-    const chatOptions: any = {
+    const chatOptions: {
+      temperature: number;
+      maxTokens: number;
+      model?: string;
+    } = {
       temperature: options.temperature,
       maxTokens: options.maxTokens,
     };
@@ -454,7 +458,7 @@ Guidelines:
   /**
    * Normalize chat options with defaults
    */
-  private normalizeOptions(options: ChatOptions): Required<Omit<ChatOptions, 'model'>> & { model?: string } {
+  private normalizeOptions(options: ConversationOptions): Required<Omit<ConversationOptions, 'model'>> & { model?: string } {
     return {
       temperature: options.temperature ?? 0.7,
       maxTokens: options.maxTokens ?? 1000,
@@ -478,7 +482,7 @@ Guidelines:
     questionsAsked: number;
   } | null {
     const session = this.sessions.get(sessionId);
-    if (!session) return null;
+    if (!session) {return null;}
 
     const messageCount = session.messages.length;
     const questionsAsked = session.messages.filter(m => m.role === 'user').length;

@@ -59,12 +59,12 @@ export class CodeSmellDetector {
     const files: string[] = [];
 
     const search = (currentDir: string, depth: number) => {
-      if (depth > 5) return;
+      if (depth > 5) {return;}
 
       try {
         const items = fs.readdirSync(currentDir);
         for (const item of items) {
-          if (item === 'node_modules' || item === '.git' || item === 'vendor' || item === 'dist') continue;
+          if (item === 'node_modules' || item === '.git' || item === 'vendor' || item === 'dist') {continue;}
 
           const fullPath = path.join(currentDir, item);
           const stat = fs.statSync(fullPath);
@@ -124,7 +124,7 @@ export class CodeSmellDetector {
       for (const block of blocks) {
         // Normalize and hash the block
         const normalized = this.normalizeCode(block.code);
-        if (normalized.length < 100) continue; // Skip small blocks
+        if (normalized.length < 100) {continue;} // Skip small blocks
 
         const hash = crypto.createHash('md5').update(normalized).digest('hex');
 
@@ -227,7 +227,7 @@ export class CodeSmellDetector {
           const nextTrimmed = nextLine.trim();
 
           // Skip empty lines and closing braces
-          if (!nextTrimmed || /^}/.test(nextTrimmed)) break;
+          if (!nextTrimmed || /^}/.test(nextTrimmed)) {break;}
 
           // Found code at same or greater indent level
           if (nextIndent >= indent && nextTrimmed) {
@@ -389,9 +389,9 @@ export class CodeSmellDetector {
         const number = match[1];
 
         // Skip common/safe numbers
-        if (['0', '1', '-1', '100', '1000'].includes(number)) continue;
-        if (number.startsWith('0x')) continue; // Hex literals
-        if (/const|final|readonly/.test(line)) continue; // Already a constant
+        if (['0', '1', '-1', '100', '1000'].includes(number)) {continue;}
+        if (number.startsWith('0x')) {continue;} // Hex literals
+        if (/const|final|readonly/.test(line)) {continue;} // Already a constant
 
         smells.push({
           type: 'Magic Number',
@@ -593,7 +593,7 @@ export class CodeSmellDetector {
       for (const dep of deps) {
         if (!visited.has(dep)) {
           const cycle = findCycle(dep, [...path, file]);
-          if (cycle) return cycle;
+          if (cycle) {return cycle;}
         } else if (recStack.has(dep)) {
           // Found cycle
           return [...path, file, dep];

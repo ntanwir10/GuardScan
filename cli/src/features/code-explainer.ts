@@ -460,8 +460,8 @@ export class CodeExplainer {
    * Get max tokens for explanation level
    */
   private getMaxTokensForLevel(level: ExplanationLevel): number {
-    if (level === 'brief') return 1000;
-    if (level === 'detailed') return 3000;
+    if (level === 'brief') {return 1000;}
+    if (level === 'detailed') {return 3000;}
     return 6000; // comprehensive
   }
 
@@ -493,7 +493,7 @@ export class CodeExplainer {
       context += `- ${method.name}(`;
       context += method.parameters.map(p => `${p.name}: ${p.type}`).join(', ');
       context += `): ${method.returnType}`;
-      if (method.isAsync) context += ' (async)';
+      if (method.isAsync) {context += ' (async)';}
       context += `\n`;
 
       // For detailed/comprehensive, include method bodies
@@ -534,7 +534,7 @@ export class CodeExplainer {
         context += `- ${func.name}(`;
         context += func.parameters.map(p => `${p.name}: ${p.type}`).join(', ');
         context += `): ${func.returnType}`;
-        if (func.isAsync) context += ' (async)';
+        if (func.isAsync) {context += ' (async)';}
         context += ` [complexity: ${func.complexity}]\n`;
 
         if (level !== 'brief' && func.documentation) {
@@ -548,8 +548,8 @@ export class CodeExplainer {
       context += `## Classes (${parsed.classes.length})\n`;
       for (const cls of parsed.classes) {
         context += `- ${cls.name}`;
-        if (cls.extends) context += ` extends ${cls.extends.join(', ')}`;
-        if (cls.implements) context += ` implements ${cls.implements.join(', ')}`;
+        if (cls.extends) {context += ` extends ${cls.extends.join(', ')}`;}
+        if (cls.implements) {context += ` implements ${cls.implements.join(', ')}`;}
         context += `\n`;
 
         if (level !== 'brief' && cls.documentation) {
@@ -592,7 +592,7 @@ export class CodeExplainer {
       output += `## Outputs\n`;
       for (const outputItem of explanation.outputs) {
         output += `- **${outputItem.type}**: ${outputItem.description}`;
-        if (outputItem.conditions) output += ` (${outputItem.conditions})`;
+        if (outputItem.conditions) {output += ` (${outputItem.conditions})`;}
         output += '\n';
       }
       output += '\n';

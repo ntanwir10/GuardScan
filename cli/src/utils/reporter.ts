@@ -70,7 +70,7 @@ export class Reporter {
 
       for (const severity of ['critical', 'high', 'medium', 'low', 'info'] as const) {
         const items = groupedFindings[severity];
-        if (items.length === 0) continue;
+        if (items.length === 0) {continue;}
 
         const icon = this.getSeverityIcon(severity);
         markdown += `### ${icon} ${severity.toUpperCase()} (${items.length})\n\n`;

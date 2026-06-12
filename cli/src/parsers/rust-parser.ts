@@ -330,7 +330,7 @@ export class RustParser {
 
     for (const line of lines) {
       const trimmed = line.trim();
-      if (!trimmed || trimmed === '}' || trimmed === ')') continue;
+      if (!trimmed || trimmed === '}' || trimmed === ')') {continue;}
 
       if (isTuple) {
         // Tuple struct: pub Type,
@@ -401,7 +401,7 @@ export class RustParser {
 
     for (const line of lines) {
       const trimmed = line.trim();
-      if (!trimmed || trimmed === '}') continue;
+      if (!trimmed || trimmed === '}') {continue;}
 
       // Variant,
       // Variant(Type),
@@ -552,7 +552,7 @@ export class RustParser {
    * Parse function parameters
    */
   private parseParameters(params: string): RustParameter[] {
-    if (!params.trim()) return [];
+    if (!params.trim()) {return [];}
 
     const result: RustParameter[] = [];
     const parts = this.splitParameters(params);
@@ -584,8 +584,8 @@ export class RustParser {
     let depth = 0;
 
     for (const char of params) {
-      if (char === '<' || char === '(') depth++;
-      if (char === '>' || char === ')') depth--;
+      if (char === '<' || char === '(') {depth++;}
+      if (char === '>' || char === ')') {depth--;}
 
       if (char === ',' && depth === 0) {
         result.push(current.trim());
@@ -645,10 +645,10 @@ export class RustParser {
    * Parse visibility
    */
   private parseVisibility(vis?: string): 'public' | 'private' | 'pub(crate)' | 'pub(super)' {
-    if (!vis) return 'private';
-    if (vis.includes('pub(crate)')) return 'pub(crate)';
-    if (vis.includes('pub(super)')) return 'pub(super)';
-    if (vis.includes('pub')) return 'public';
+    if (!vis) {return 'private';}
+    if (vis.includes('pub(crate)')) {return 'pub(crate)';}
+    if (vis.includes('pub(super)')) {return 'pub(super)';}
+    if (vis.includes('pub')) {return 'public';}
     return 'private';
   }
 
@@ -662,10 +662,10 @@ export class RustParser {
       const line = lines[i];
 
       for (const char of line) {
-        if (char === '{') depth++;
+        if (char === '{') {depth++;}
         if (char === '}') {
           depth--;
-          if (depth === 0) return i;
+          if (depth === 0) {return i;}
         }
       }
     }

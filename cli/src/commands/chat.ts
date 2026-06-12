@@ -77,12 +77,10 @@ export async function chatCommand(options: ChatCommandOptions): Promise<void> {
     // Use model from options if provided, otherwise use config.model
     const modelToUse = options.model || config.model;
 
-    const aiProvider = ProviderFactory.create(
-      config.provider,
-      config.apiKey,
-      config.apiEndpoint,
-      modelToUse
-    );
+    const aiProvider = ProviderFactory.createForCli(config, {
+      task: 'chat',
+      model: modelToUse,
+    });
 
     // Initialize embedding provider
     let embeddingProvider;
@@ -652,7 +650,7 @@ function highlightInlineCodeAndFiles(text: string): string {
   // Pattern to match inline code: `code` (single backticks, not triple)
   const inlineCodePattern = /`([^`]+)`/g;
 
-  let highlighted = text;
+  const highlighted = text;
   let lastIndex = 0;
   const parts: Array<{ text: string; isCode: boolean; isFilePath?: boolean }> =
     [];

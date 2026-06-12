@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { tokenCounter } from './token-counter';
 import {
   AIProvider,
   AIMessage,
@@ -24,13 +25,71 @@ export class OllamaProvider extends AIProvider {
         role: msg.role,
         content: msg.content,
       })),
-      stream: options?.stream || false,
+      stream: false,
     });
 
     return {
       content: response.data.message.content,
       model: options?.model || this.defaultModel,
     };
+  }
+
+  /**
+   * Stream chat completion
+   */
+  async *stream(
+    messages: AIMessage[],
+    options?: ChatOptions
+  ): AsyncGenerator<string, void, unknown> {
+    const response = await axios.post(
+      `${this.endpoint}/api/chat`,
+      {
+        model: options?.model || this.defaultModel,
+        messages: messages.map(msg => ({
+          role: msg.role,
+          content: msg.content,
+        })),
+        stream: true,
+      },
+      {
+        responseType: 'stream',
+      }
+    );
+
+    const stream = response.data;
+    let buffer = '';
+    
+    for await (const chunk of stream) {
+      buffer += chunk.toString();
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+      
+      for (const line of lines) {
+        if (!line.trim()) {
+          continue;
+        }
+
+        try {
+          const json = JSON.parse(line);
+          if (json.message && json.message.content) {
+            yield json.message.content;
+          }
+        } catch (error) {
+          // Ignore malformed streaming lines so one bad chunk does not stop the generator.
+        }
+      }
+    }
+
+    if (buffer.trim()) {
+      try {
+        const json = JSON.parse(buffer);
+        if (json.message && json.message.content) {
+          yield json.message.content;
+        }
+      } catch (error) {
+        // Ignore a trailing partial or malformed streaming line.
+      }
+    }
   }
 
   isAvailable(): boolean {
@@ -58,6 +117,14 @@ export class OllamaProvider extends AIProvider {
       maxContextTokens: 4096, // Varies by model, codellama default
       embeddingDimensions: 768, // Varies by model
     };
+  }
+
+  /**
+   * Count tokens (uses estimation for Ollama models)
+   */
+  countTokens(text: string): number {
+    const result = tokenCounter.countTokens(text, 'ollama');
+    return result.count;
   }
 
   /**

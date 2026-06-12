@@ -587,7 +587,7 @@ export class CSharpParser {
    * Parse method parameters
    */
   private parseParameters(paramsStr: string): CSharpParameter[] {
-    if (!paramsStr.trim()) return [];
+    if (!paramsStr.trim()) {return [];}
 
     const params = this.splitParameters(paramsStr);
     return params.map(param => {
@@ -599,7 +599,7 @@ export class CSharpParser {
       const isParams = trimmed.startsWith('params ');
 
       // Remove modifiers
-      let cleaned = trimmed
+      const cleaned = trimmed
         .replace(/^ref\s+/, '')
         .replace(/^out\s+/, '')
         .replace(/^in\s+/, '')
@@ -641,8 +641,8 @@ export class CSharpParser {
     let depth = 0;
 
     for (const char of params) {
-      if (char === '<' || char === '(') depth++;
-      if (char === '>' || char === ')') depth--;
+      if (char === '<' || char === '(') {depth++;}
+      if (char === '>' || char === ')') {depth--;}
 
       if (char === ',' && depth === 0) {
         result.push(current.trim());
@@ -701,13 +701,13 @@ export class CSharpParser {
    * Parse visibility modifier
    */
   private parseVisibility(modifier?: string): 'public' | 'private' | 'protected' | 'internal' | 'protected internal' | 'private protected' {
-    if (!modifier) return 'private';
-    if (modifier.includes('protected internal')) return 'protected internal';
-    if (modifier.includes('private protected')) return 'private protected';
-    if (modifier.includes('public')) return 'public';
-    if (modifier.includes('private')) return 'private';
-    if (modifier.includes('protected')) return 'protected';
-    if (modifier.includes('internal')) return 'internal';
+    if (!modifier) {return 'private';}
+    if (modifier.includes('protected internal')) {return 'protected internal';}
+    if (modifier.includes('private protected')) {return 'private protected';}
+    if (modifier.includes('public')) {return 'public';}
+    if (modifier.includes('private')) {return 'private';}
+    if (modifier.includes('protected')) {return 'protected';}
+    if (modifier.includes('internal')) {return 'internal';}
     return 'private';
   }
 
@@ -721,7 +721,7 @@ export class CSharpParser {
       const line = lines[i];
       declaration += ' ' + line.trim();
 
-      if (line.includes('{')) break;
+      if (line.includes('{')) {break;}
     }
 
     return declaration;

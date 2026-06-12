@@ -51,13 +51,13 @@ export async function trackPromises<T>(
       .then((result) => {
         completed++;
         progressBar.update(completed, { status: `Task ${completed}/${total} complete` });
-        if (onProgress) onProgress(completed, total);
+        if (onProgress) {onProgress(completed, total);}
         return result;
       })
       .catch((error) => {
         completed++;
         progressBar.update(completed, { status: `Task ${completed}/${total} (${index + 1} failed)` });
-        if (onProgress) onProgress(completed, total);
+        if (onProgress) {onProgress(completed, total);}
         throw error;
       })
   );

@@ -222,7 +222,7 @@ export class RuleEngine {
         const lines = content.split('\n');
 
         for (const pattern of rule.patterns || []) {
-          if (pattern.type !== 'regex') continue;
+          if (pattern.type !== 'regex') {continue;}
 
           const regex = new RegExp(pattern.pattern, 'gm');
           let match;
@@ -239,7 +239,7 @@ export class RuleEngine {
                   break;
                 }
               }
-              if (excluded) continue;
+              if (excluded) {continue;}
             }
 
             regex.lastIndex = 0;  // Reset regex
@@ -299,7 +299,7 @@ export class RuleEngine {
       // Parse semgrep results
       for (const result of results.results || []) {
         const rule = this.rules.get(result.check_id);
-        if (!rule) continue;
+        if (!rule) {continue;}
 
         violations.push({
           ruleId: rule.id,
@@ -334,8 +334,8 @@ export class RuleEngine {
   /**
    * Convert rule to semgrep config format
    */
-  private convertToSemgrepConfig(rule: Rule): any {
-    const semgrepRule: any = {
+  private convertToSemgrepConfig(rule: Rule): Record<string, any> {
+    const semgrepRule: Record<string, any> = {
       id: rule.id,
       message: rule.description,
       severity: rule.severity.toUpperCase(),

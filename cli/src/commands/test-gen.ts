@@ -52,7 +52,7 @@ export async function testGenCommand(options: TestGenOptions): Promise<void> {
     }
 
     // Create AI provider
-    const provider = ProviderFactory.create(config.provider, config.apiKey, config.apiEndpoint, config.model);
+    const provider = ProviderFactory.createForCli(config, { task: 'test-generation' });
 
     // Create AI cache
     const cache = new AICache(repoInfo.repoId, 100); // 100MB cache

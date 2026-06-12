@@ -68,6 +68,10 @@ class MockAIProvider extends AIProvider {
     return { content: "{}" };
   }
 
+  async *stream(messages: any[]): AsyncGenerator<any, void, unknown> {
+    yield await this.chat(messages);
+  }
+
   isAvailable(): boolean {
     return true;
   }

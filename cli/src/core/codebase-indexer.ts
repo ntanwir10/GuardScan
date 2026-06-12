@@ -12,7 +12,7 @@ import { configManager } from "./config";
 /**
  * Symbol information in the codebase
  */
-export interface Symbol {
+export interface CodeSymbol {
   id: string;
   name: string;
   type: "function" | "class" | "variable" | "interface" | "type";
@@ -80,7 +80,7 @@ export interface CodebaseIndex {
   files: Map<string, FileIndex>;
   functions: Map<string, ParsedFunction>;
   classes: Map<string, ParsedClass>;
-  symbols: Map<string, Symbol>;
+  symbols: Map<string, CodeSymbol>;
   dependencies: DependencyGraph;
   metadata: {
     languages: Map<string, number>; // language -> file count
@@ -227,7 +227,7 @@ export class CodebaseIndexer {
    */
   async updateIndex(changedFiles: string[]): Promise<CodebaseIndex> {
     // Load existing index
-    let index = await this.loadIndex();
+    const index = await this.loadIndex();
 
     if (!index) {
       // No existing index, build from scratch
@@ -274,7 +274,7 @@ export class CodebaseIndexer {
    */
   async searchFunctions(query: string): Promise<ParsedFunction[]> {
     const index = await this.loadIndex();
-    if (!index) return [];
+    if (!index) {return [];}
 
     const results: ParsedFunction[] = [];
     const queryLower = query.toLowerCase();
@@ -293,7 +293,7 @@ export class CodebaseIndexer {
    */
   async searchClasses(query: string): Promise<ParsedClass[]> {
     const index = await this.loadIndex();
-    if (!index) return [];
+    if (!index) {return [];}
 
     const results: ParsedClass[] = [];
     const queryLower = query.toLowerCase();
@@ -312,7 +312,7 @@ export class CodebaseIndexer {
    */
   async getDependencies(symbolId: string): Promise<string[]> {
     const index = await this.loadIndex();
-    if (!index) return [];
+    if (!index) {return [];}
 
     const deps = index.dependencies.edges.get(symbolId);
     return deps ? Array.from(deps) : [];
@@ -323,7 +323,7 @@ export class CodebaseIndexer {
    */
   async getReverseDependencies(symbolId: string): Promise<string[]> {
     const index = await this.loadIndex();
-    if (!index) return [];
+    if (!index) {return [];}
 
     const deps = index.dependencies.reverseEdges.get(symbolId);
     return deps ? Array.from(deps) : [];
@@ -334,7 +334,7 @@ export class CodebaseIndexer {
    */
   async findReferences(symbolName: string): Promise<Reference[]> {
     const index = await this.loadIndex();
-    if (!index) return [];
+    if (!index) {return [];}
 
     const references: Reference[] = [];
 
@@ -358,7 +358,7 @@ export class CodebaseIndexer {
    */
   async getFileIndex(filePath: string): Promise<FileIndex | null> {
     const index = await this.loadIndex();
-    if (!index) return null;
+    if (!index) {return null;}
 
     const relativePath = path.relative(this.repoRoot, filePath);
     return index.files.get(relativePath) || null;
@@ -370,7 +370,7 @@ export class CodebaseIndexer {
   async getParsedFile(filePath: string): Promise<ParsedFile | null> {
     // Check cache first
     let parsed = this.parsedFilesCache.get(filePath);
-    if (parsed) return parsed;
+    if (parsed) {return parsed;}
 
     // Parse and cache
     try {
@@ -394,7 +394,7 @@ export class CodebaseIndexer {
 
     // Parse file
     const parsed = await this.getParsedFile(filePath);
-    if (!parsed) return;
+    if (!parsed) {return;}
 
     // Calculate file hash
     const content = fs.readFileSync(filePath, "utf-8");
@@ -491,7 +491,7 @@ export class CodebaseIndexer {
     const relativePath = path.relative(this.repoRoot, filePath);
     const fileIndex = index.files.get(relativePath);
 
-    if (!fileIndex) return;
+    if (!fileIndex) {return;}
 
     // Remove functions
     for (const funcId of fileIndex.functions) {
@@ -644,7 +644,7 @@ export class CodebaseIndexer {
   /**
    * Find symbol by name
    */
-  private findSymbolByName(name: string, index: CodebaseIndex): Symbol | null {
+  private findSymbolByName(name: string, index: CodebaseIndex): CodeSymbol | null {
     for (const [id, symbol] of index.symbols) {
       if (symbol.name === name) {
         return symbol;

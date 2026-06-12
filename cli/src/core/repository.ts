@@ -152,3 +152,32 @@ export class RepositoryManager {
 }
 
 export const repositoryManager = new RepositoryManager();
+
+/**
+ * Simple Repository class for getting repo ID
+ */
+export class Repository {
+  private repoPath: string;
+  private repoInfo: RepositoryInfo;
+
+  constructor(repoPath: string = process.cwd()) {
+    this.repoPath = repoPath;
+    this.repoInfo = repositoryManager.getRepoInfo(repoPath);
+  }
+
+  getId(): string {
+    return this.repoInfo.repoId;
+  }
+
+  getName(): string {
+    return this.repoInfo.name;
+  }
+
+  getPath(): string {
+    return this.repoInfo.path;
+  }
+
+  isGit(): boolean {
+    return this.repoInfo.isGit;
+  }
+}

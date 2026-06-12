@@ -447,7 +447,7 @@ export class PHPParser {
    * Parse method parameters
    */
   private parseParameters(paramsStr: string): PHPParameter[] {
-    if (!paramsStr.trim()) return [];
+    if (!paramsStr.trim()) {return [];}
 
     const params = this.splitParameters(paramsStr);
     return params.map(param => {
@@ -508,8 +508,8 @@ export class PHPParser {
     let depth = 0;
 
     for (const char of params) {
-      if (char === '(' || char === '[') depth++;
-      if (char === ')' || char === ']') depth--;
+      if (char === '(' || char === '[') {depth++;}
+      if (char === ')' || char === ']') {depth--;}
 
       if (char === ',' && depth === 0) {
         result.push(current.trim());
@@ -559,10 +559,10 @@ export class PHPParser {
    * Parse visibility modifier
    */
   private parseVisibility(modifier?: string): 'public' | 'private' | 'protected' {
-    if (!modifier) return 'public';
-    if (modifier.includes('public')) return 'public';
-    if (modifier.includes('private')) return 'private';
-    if (modifier.includes('protected')) return 'protected';
+    if (!modifier) {return 'public';}
+    if (modifier.includes('public')) {return 'public';}
+    if (modifier.includes('private')) {return 'private';}
+    if (modifier.includes('protected')) {return 'protected';}
     return 'public';
   }
 
@@ -576,7 +576,7 @@ export class PHPParser {
       const line = lines[i];
       declaration += ' ' + line.trim();
 
-      if (line.includes('{')) break;
+      if (line.includes('{')) {break;}
     }
 
     return declaration;

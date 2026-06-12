@@ -222,10 +222,10 @@ export class CommitMessageGenerator {
     }
 
     for (const line of statLines) {
-      if (!line.trim()) continue;
+      if (!line.trim()) {continue;}
 
       const parts = line.split('\t');
-      if (parts.length < 3) continue;
+      if (parts.length < 3) {continue;}
 
       const additions = parseInt(parts[0]) || 0;
       const deletions = parseInt(parts[1]) || 0;
@@ -234,10 +234,10 @@ export class CommitMessageGenerator {
       const status = statusMap.get(file) || 'M';
 
       let type: GitChange['type'];
-      if (status.startsWith('A')) type = 'added';
-      else if (status.startsWith('D')) type = 'deleted';
-      else if (status.startsWith('R')) type = 'renamed';
-      else type = 'modified';
+      if (status.startsWith('A')) {type = 'added';}
+      else if (status.startsWith('D')) {type = 'deleted';}
+      else if (status.startsWith('R')) {type = 'renamed';}
+      else {type = 'modified';}
 
       // Extract diff for this file
       const fileRegex = new RegExp(`diff --git a/${file}[\\s\\S]*?(?=diff --git|$)`, 'g');

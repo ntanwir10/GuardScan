@@ -364,9 +364,9 @@ export class RubyParser {
       const trimmed = line.trim();
 
       // Check visibility
-      if (trimmed === 'private') currentVisibility = 'private';
-      if (trimmed === 'protected') currentVisibility = 'protected';
-      if (trimmed === 'public') currentVisibility = 'public';
+      if (trimmed === 'private') {currentVisibility = 'private';}
+      if (trimmed === 'protected') {currentVisibility = 'protected';}
+      if (trimmed === 'public') {currentVisibility = 'public';}
 
       // attr_reader :name, :age
       const readerMatch = trimmed.match(/^attr_reader\s+(.+)/);
@@ -444,7 +444,7 @@ export class RubyParser {
    * Parse method parameters
    */
   private parseParameters(paramsStr: string): RubyParameter[] {
-    if (!paramsStr.trim()) return [];
+    if (!paramsStr.trim()) {return [];}
 
     const params = paramsStr.split(',').map(p => p.trim());
     return params.map(param => {

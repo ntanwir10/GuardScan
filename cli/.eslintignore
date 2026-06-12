@@ -1,0 +1,7 @@
+dist/
+node_modules/
+coverage/
+**/*.js
+**/*.d.ts
+__tests__/
+

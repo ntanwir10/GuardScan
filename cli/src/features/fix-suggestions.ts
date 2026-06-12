@@ -384,13 +384,13 @@ Requirements:
     const norm1 = normalize(code1);
     const norm2 = normalize(code2);
 
-    if (norm1 === norm2) return 1.0;
+    if (norm1 === norm2) {return 1.0;}
 
     // Simple character-based similarity
     const longer = norm1.length > norm2.length ? norm1 : norm2;
     const shorter = norm1.length > norm2.length ? norm2 : norm1;
 
-    if (longer.length === 0) return 1.0;
+    if (longer.length === 0) {return 1.0;}
 
     const editDistance = this.levenshteinDistance(shorter, longer);
     return (longer.length - editDistance) / longer.length;

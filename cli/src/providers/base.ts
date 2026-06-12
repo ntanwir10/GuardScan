@@ -52,6 +52,17 @@ export abstract class AIProvider {
   abstract chat(messages: AIMessage[], options?: ChatOptions): Promise<AIResponse>;
 
   /**
+   * Stream messages to AI and get response tokens
+   * @param messages - Array of messages
+   * @param options - Optional chat options
+   * @returns AsyncGenerator of string tokens
+   */
+  abstract stream(
+    messages: AIMessage[],
+    options?: ChatOptions
+  ): AsyncGenerator<string, void, unknown>;
+
+  /**
    * Check if provider is available (has required credentials)
    */
   abstract isAvailable(): boolean;

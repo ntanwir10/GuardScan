@@ -65,7 +65,7 @@ export async function refactorCommand(options: RefactorOptions): Promise<void> {
   }
 
   // Initialize AI provider
-  const aiProvider = ProviderFactory.create(config.provider, config.apiKey, config.apiEndpoint, config.model);
+  const aiProvider = ProviderFactory.createForCli(config, { task: 'refactoring' });
   const refactoringEngine = new RefactoringSuggestionsEngine(
     aiProvider,
     repoInfo.path,
@@ -208,7 +208,7 @@ async function analyzeCodeSmells(
 
     // Display by severity
     for (const [severity, items] of Object.entries(bySeverity)) {
-      if (items.length === 0) continue;
+      if (items.length === 0) {continue;}
 
       const severityColor = severity === 'critical' || severity === 'high'
         ? chalk.red
@@ -372,8 +372,8 @@ async function interactiveRefactoring(
       name: 'file',
       message: 'Enter file path:',
       validate: (input: string) => {
-        if (!input) return 'File path is required';
-        if (!fs.existsSync(input)) return 'File not found';
+        if (!input) {return 'File path is required';}
+        if (!fs.existsSync(input)) {return 'File not found';}
         return true;
       }
     }]);

@@ -1,6 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { CodebaseIndexer, Symbol } from './codebase-indexer';
+import { CodebaseIndexer, CodeSymbol } from './codebase-indexer';
 import { ASTParser, ParsedFunction, ParsedClass } from './ast-parser';
 import { AIProvider } from '../providers/base';
 
@@ -550,7 +550,7 @@ export class ContextBuilder {
    */
   private async getFileDependencies(filePath: string): Promise<string[]> {
     const fileIndex = await this.indexer.getFileIndex(filePath);
-    if (!fileIndex) return [];
+    if (!fileIndex) {return [];}
 
     const deps: string[] = [];
     for (const importPath of fileIndex.imports) {
@@ -652,7 +652,7 @@ export class ContextBuilder {
    */
   private async getContainingClass(func: ParsedFunction): Promise<ParsedClass | null> {
     const parsed = await this.indexer.getParsedFile(func.file);
-    if (!parsed) return null;
+    if (!parsed) {return null;}
 
     for (const cls of parsed.classes) {
       if (cls.methods.some(m => m.name === func.name)) {

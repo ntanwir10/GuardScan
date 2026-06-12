@@ -22,6 +22,11 @@ import { refactorCommand } from "./commands/refactor";
 import { threatModelCommand } from "./commands/threat-model";
 import { migrateCommand } from "./commands/migrate";
 import { reviewCommand } from "./commands/review";
+import { createModelsCommand } from "./commands/models";
+import { createRoutingCommand } from "./commands/routing";
+import { createBudgetCommand } from "./commands/budget";
+import { createMetricsCommand } from "./commands/metrics";
+import { createCacheCommand } from "./commands/cache";
 import { checkForUpdates } from "./utils/version";
 import { displayLogo } from "./utils/ascii-art";
 
@@ -323,6 +328,13 @@ program
   .option("--report", "Generate full detailed report")
   .option("-o, --output <path>", "Save report to file")
   .action(reviewCommand);
+
+// Enhanced AI Management Commands
+program.addCommand(createModelsCommand());
+program.addCommand(createRoutingCommand());
+program.addCommand(createBudgetCommand());
+program.addCommand(createMetricsCommand());
+program.addCommand(createCacheCommand());
 
 // Display logo when showing help or version
 const args = process.argv.slice(2);

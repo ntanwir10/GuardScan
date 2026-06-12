@@ -5,6 +5,9 @@ import * as path from "path";
 import * as fs from "fs";
 import { repositoryManager } from "./repository";
 import { TELEMETRY_CONSTANTS } from "../constants/telemetry-constants";
+import { createDebugLogger } from "../utils/debug-logger";
+
+const logger = createDebugLogger("telemetry");
 
 const TELEMETRY_FILE = path.join(configManager.getCacheDir(), "telemetry.json");
 
@@ -94,7 +97,7 @@ export class TelemetryManager {
     } catch (error) {
       // Telemetry sync failed - logged for debugging but non-blocking
       // Batch will be retried next time
-      console.error("Telemetry sync failed:", error);
+      logger.error("Telemetry sync failed", error);
     }
   }
 
@@ -142,25 +145,20 @@ function initializeTelemetryManager(): TelemetryManager {
   const debug = process.env.GUARDSCAN_DEBUG === "true";
 
   try {
-    if (debug) console.error("[TELEMETRY] Initializing telemetryManager...");
+    logger.debug("Initializing telemetryManager");
 
     if (configManager.exists()) {
-      if (debug) console.error("[TELEMETRY] Config exists, loading...");
+      logger.debug("Config exists, loading");
       try {
         const config = configManager.load();
-        if (debug) console.error("[TELEMETRY] Config loaded successfully");
+        logger.debug("Config loaded successfully");
         return new TelemetryManager(config);
       } catch (error) {
-        if (debug)
-          console.error(
-            "[TELEMETRY] Config load failed, using defaults:",
-            error
-          );
+        logger.error("Config load failed, using defaults", error);
         // Fall through to default config
       }
     } else {
-      if (debug)
-        console.error("[TELEMETRY] Config does not exist, using defaults");
+      logger.debug("Config does not exist, using defaults");
     }
 
     // Use default config if no config exists or load failed
@@ -173,11 +171,7 @@ function initializeTelemetryManager(): TelemetryManager {
       lastUsed: new Date().toISOString(),
     });
   } catch (error) {
-    if (debug)
-      console.error(
-        "[TELEMETRY] Initialization failed, using fallback:",
-        error
-      );
+    logger.error("Initialization failed, using fallback", error);
 
     // Absolute fallback
     return new TelemetryManager({

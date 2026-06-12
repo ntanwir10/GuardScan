@@ -194,13 +194,13 @@ function runSecurityScans(
         const duration = perfTracker.end('scanner-secrets');
         logger.performance('scanner-secrets', duration, { findings: allResults.length });
         secretsSpinner.succeed(`Secrets scan complete (${allResults.length} findings)`);
-        if (onProgress) onProgress();
+        if (onProgress) {onProgress();}
         return { type: 'secrets', results: allResults };
       } catch (error: any) {
         perfTracker.end('scanner-secrets');
         logger.error('Secrets scan failed', error);
         secretsSpinner.fail('Secrets scan failed');
-        if (onProgress) onProgress();
+        if (onProgress) {onProgress();}
         return { type: 'secrets', results: [], error };
       }
     })()
@@ -216,13 +216,13 @@ function runSecurityScans(
         const duration = perfTracker.end('scanner-dependencies');
         logger.performance('scanner-dependencies', duration, { findings: results.length });
         depsSpinner.succeed(`Dependency scan complete (${results.length} findings)`);
-        if (onProgress) onProgress();
+        if (onProgress) {onProgress();}
         return { type: 'dependencies', results };
       } catch (error: any) {
         perfTracker.end('scanner-dependencies');
         logger.error('Dependency scan failed', error);
         depsSpinner.fail('Dependency scan failed');
-        if (onProgress) onProgress();
+        if (onProgress) {onProgress();}
         return { type: 'dependencies', results: [], error };
       }
     })()
@@ -238,13 +238,13 @@ function runSecurityScans(
         const duration = perfTracker.end('scanner-dockerfile');
         logger.performance('scanner-dockerfile', duration, { findings: results.length });
         dockerSpinner.succeed(`Dockerfile scan complete (${results.length} findings)`);
-        if (onProgress) onProgress();
+        if (onProgress) {onProgress();}
         return { type: 'dockerfile', results };
       } catch (error: any) {
         perfTracker.end('scanner-dockerfile');
         logger.error('Dockerfile scan failed', error);
         dockerSpinner.fail('Dockerfile scan failed');
-        if (onProgress) onProgress();
+        if (onProgress) {onProgress();}
         return { type: 'dockerfile', results: [], error };
       }
     })()
@@ -260,13 +260,13 @@ function runSecurityScans(
         const duration = perfTracker.end('scanner-iac');
         logger.performance('scanner-iac', duration, { findings: results.length });
         iacSpinner.succeed(`IaC scan complete (${results.length} findings)`);
-        if (onProgress) onProgress();
+        if (onProgress) {onProgress();}
         return { type: 'iac', results };
       } catch (error: any) {
         perfTracker.end('scanner-iac');
         logger.error('IaC scan failed', error);
         iacSpinner.fail('IaC scan failed');
-        if (onProgress) onProgress();
+        if (onProgress) {onProgress();}
         return { type: 'iac', results: [], error };
       }
     })()
@@ -282,13 +282,13 @@ function runSecurityScans(
         const duration = perfTracker.end('scanner-owasp');
         logger.performance('scanner-owasp', duration, { findings: results.length });
         owaspSpinner.succeed(`OWASP scan complete (${results.length} findings)`);
-        if (onProgress) onProgress();
+        if (onProgress) {onProgress();}
         return { type: 'owasp', results };
       } catch (error: any) {
         perfTracker.end('scanner-owasp');
         logger.error('OWASP scan failed', error);
         owaspSpinner.fail('OWASP scan failed');
-        if (onProgress) onProgress();
+        if (onProgress) {onProgress();}
         return { type: 'owasp', results: [], error };
       }
     })()
@@ -304,13 +304,13 @@ function runSecurityScans(
         const duration = perfTracker.end('scanner-api');
         logger.performance('scanner-api', duration, { findings: results.length });
         apiSpinner.succeed(`API scan complete (${results.length} findings)`);
-        if (onProgress) onProgress();
+        if (onProgress) {onProgress();}
         return { type: 'api', results };
       } catch (error: any) {
         perfTracker.end('scanner-api');
         logger.error('API scan failed', error);
         apiSpinner.fail('API scan failed');
-        if (onProgress) onProgress();
+        if (onProgress) {onProgress();}
         return { type: 'api', results: [], error };
       }
     })()
@@ -327,13 +327,13 @@ function runSecurityScans(
           const duration = perfTracker.end('scanner-licenses');
           logger.performance('scanner-licenses', duration, { packages: results.totalDependencies });
           licenseSpinner.succeed(`License scan complete (${results.totalDependencies} packages)`);
-          if (onProgress) onProgress();
+          if (onProgress) {onProgress();}
           return { type: 'licenses', results };
         } catch (error: any) {
           perfTracker.end('scanner-licenses');
           logger.error('License scan failed', error);
           licenseSpinner.fail('License scan failed');
-          if (onProgress) onProgress();
+          if (onProgress) {onProgress();}
           return { type: 'licenses', results: null, error };
         }
       })()
@@ -350,13 +350,13 @@ function runSecurityScans(
         const duration = perfTracker.end('scanner-compliance');
         logger.performance('scanner-compliance', duration, { reports: results.length });
         complianceSpinner.succeed(`Compliance check complete`);
-        if (onProgress) onProgress();
+        if (onProgress) {onProgress();}
         return { type: 'compliance', results };
       } catch (error: any) {
         perfTracker.end('scanner-compliance');
         logger.error('Compliance check failed', error);
         complianceSpinner.fail('Compliance check failed');
-        if (onProgress) onProgress();
+        if (onProgress) {onProgress();}
         return { type: 'compliance', results: [], error };
       }
     })()
@@ -389,13 +389,13 @@ function runQualityAnalysis(
         } else {
           testSpinner.info('No test frameworks detected');
         }
-        if (onProgress) onProgress();
+        if (onProgress) {onProgress();}
         return { type: 'tests', results };
       } catch (error: any) {
         perfTracker.end('scanner-tests');
         logger.error('Test execution failed', error);
         testSpinner.fail('Test execution failed');
-        if (onProgress) onProgress();
+        if (onProgress) {onProgress();}
         return { type: 'tests', results: [], error };
       }
     })()
@@ -411,13 +411,13 @@ function runQualityAnalysis(
         const duration = perfTracker.end('scanner-metrics');
         logger.performance('scanner-metrics', duration, { files: results.length });
         metricsSpinner.succeed(`Metrics analyzed (${results.length} files)`);
-        if (onProgress) onProgress();
+        if (onProgress) {onProgress();}
         return { type: 'metrics', results };
       } catch (error: any) {
         perfTracker.end('scanner-metrics');
         logger.error('Metrics analysis failed', error);
         metricsSpinner.fail('Metrics analysis failed');
-        if (onProgress) onProgress();
+        if (onProgress) {onProgress();}
         return { type: 'metrics', results: [], error };
       }
     })()
@@ -433,13 +433,13 @@ function runQualityAnalysis(
         const duration = perfTracker.end('scanner-smells');
         logger.performance('scanner-smells', duration, { issues: results.length });
         smellSpinner.succeed(`Code smells detected (${results.length} issues)`);
-        if (onProgress) onProgress();
+        if (onProgress) {onProgress();}
         return { type: 'smells', results };
       } catch (error: any) {
         perfTracker.end('scanner-smells');
         logger.error('Code smell detection failed', error);
         smellSpinner.fail('Code smell detection failed');
-        if (onProgress) onProgress();
+        if (onProgress) {onProgress();}
         return { type: 'smells', results: [], error };
       }
     })()
@@ -459,13 +459,13 @@ function runQualityAnalysis(
         } else {
           lintSpinner.info('No linters detected');
         }
-        if (onProgress) onProgress();
+        if (onProgress) {onProgress();}
         return { type: 'linting', results };
       } catch (error: any) {
         perfTracker.end('scanner-linting');
         logger.error('Linting failed', error);
         lintSpinner.fail('Linting failed');
-        if (onProgress) onProgress();
+        if (onProgress) {onProgress();}
         return { type: 'linting', results: [], error };
       }
     })()

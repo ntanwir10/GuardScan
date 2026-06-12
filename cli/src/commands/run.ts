@@ -65,8 +65,8 @@ export async function runCommand(options: RunOptions): Promise<void> {
     // Check if AI is available and requested
     perfTracker.start('init-ai-provider');
     // Only create provider if it's configured and not 'none'
-    const provider = (config.provider && config.provider !== 'none' && config.apiKey) 
-      ? ProviderFactory.create(config.provider, config.apiKey, config.apiEndpoint, config.model) 
+    const provider = (config.provider && config.provider !== 'none' && config.apiKey)
+      ? ProviderFactory.createForCli(config, { task: 'code-review' })
       : null;
     const aiAvailable = provider && provider.isAvailable();
     perfTracker.end('init-ai-provider');

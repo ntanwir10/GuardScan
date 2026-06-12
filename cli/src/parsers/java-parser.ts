@@ -363,7 +363,7 @@ export class JavaParser {
    * Parse method parameters
    */
   private parseParameters(paramsStr: string): JavaParameter[] {
-    if (!paramsStr.trim()) return [];
+    if (!paramsStr.trim()) {return [];}
 
     const params = this.splitParameters(paramsStr);
     return params.map(param => {
@@ -384,7 +384,7 @@ export class JavaParser {
       }
 
       const isFinal = parts[typeStart] === 'final';
-      if (isFinal) typeStart++;
+      if (isFinal) {typeStart++;}
 
       const type = parts[typeStart];
       const name = parts[typeStart + 1] || '';
@@ -409,8 +409,8 @@ export class JavaParser {
     let depth = 0;
 
     for (const char of params) {
-      if (char === '<') depth++;
-      if (char === '>') depth--;
+      if (char === '<') {depth++;}
+      if (char === '>') {depth--;}
 
       if (char === ',' && depth === 0) {
         result.push(current.trim());
@@ -475,10 +475,10 @@ export class JavaParser {
    * Parse visibility modifier
    */
   private parseVisibility(modifier?: string): 'public' | 'private' | 'protected' | 'package' {
-    if (!modifier) return 'package';
-    if (modifier.includes('public')) return 'public';
-    if (modifier.includes('private')) return 'private';
-    if (modifier.includes('protected')) return 'protected';
+    if (!modifier) {return 'package';}
+    if (modifier.includes('public')) {return 'public';}
+    if (modifier.includes('private')) {return 'private';}
+    if (modifier.includes('protected')) {return 'protected';}
     return 'package';
   }
 
@@ -494,11 +494,11 @@ export class JavaParser {
       declaration += ' ' + line.trim();
 
       for (const char of line) {
-        if (char === '{') depth++;
-        if (char === '}') depth--;
+        if (char === '{') {depth++;}
+        if (char === '}') {depth--;}
       }
 
-      if (line.includes('{')) break;
+      if (line.includes('{')) {break;}
     }
 
     return declaration;

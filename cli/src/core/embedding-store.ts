@@ -57,7 +57,7 @@ export class FileBasedEmbeddingStore implements EmbeddingStore {
    * Save embeddings to storage
    */
   async saveEmbeddings(embeddings: CodeEmbedding[], embeddingProvider?: EmbeddingProvider): Promise<void> {
-    if (embeddings.length === 0) return;
+    if (embeddings.length === 0) {return;}
 
     await this.initialize();
 
@@ -146,7 +146,7 @@ export class FileBasedEmbeddingStore implements EmbeddingStore {
     }
 
     const index = await this.loadIndex();
-    if (!index) return [];
+    if (!index) {return [];}
 
     // Load into cache
     this.cache.clear();
@@ -176,7 +176,7 @@ export class FileBasedEmbeddingStore implements EmbeddingStore {
    */
   async deleteEmbeddings(ids: string[]): Promise<void> {
     const index = await this.loadIndex();
-    if (!index) return;
+    if (!index) {return;}
 
     const idsToDelete = new Set(ids);
     index.embeddings = index.embeddings.filter(emb => !idsToDelete.has(emb.id));
@@ -231,7 +231,7 @@ export class FileBasedEmbeddingStore implements EmbeddingStore {
    */
   async getStats(): Promise<StoreStats | null> {
     const index = await this.loadIndex();
-    if (!index) return null;
+    if (!index) {return null;}
 
     let totalSize = 0;
     try {
@@ -255,7 +255,7 @@ export class FileBasedEmbeddingStore implements EmbeddingStore {
    */
   async invalidateChangedFiles(changedFiles: string[]): Promise<void> {
     const index = await this.loadIndex();
-    if (!index) return;
+    if (!index) {return;}
 
     const changedSet = new Set(changedFiles);
     const original = index.embeddings.length;
@@ -282,7 +282,7 @@ export class FileBasedEmbeddingStore implements EmbeddingStore {
    */
   async optimize(): Promise<void> {
     const index = await this.loadIndex();
-    if (!index) return;
+    if (!index) {return;}
 
     // Remove duplicates (keep latest by ID)
     const unique = new Map<string, CodeEmbedding>();
@@ -360,15 +360,15 @@ export class FileBasedEmbeddingStore implements EmbeddingStore {
 
       if (filters.filePattern) {
         const regex = new RegExp(filters.filePattern);
-        if (!regex.test(emb.source)) return false;
+        if (!regex.test(emb.source)) {return false;}
       }
 
       if (filters.minComplexity !== undefined && emb.metadata.complexity !== undefined) {
-        if (emb.metadata.complexity < filters.minComplexity) return false;
+        if (emb.metadata.complexity < filters.minComplexity) {return false;}
       }
 
       if (filters.maxComplexity !== undefined && emb.metadata.complexity !== undefined) {
-        if (emb.metadata.complexity > filters.maxComplexity) return false;
+        if (emb.metadata.complexity > filters.maxComplexity) {return false;}
       }
 
       if (filters.tags && filters.tags.length > 0) {
@@ -376,7 +376,7 @@ export class FileBasedEmbeddingStore implements EmbeddingStore {
         const hasAllTags = filters.tags.every(tag =>
           emb.metadata.tags.includes(tag)
         );
-        if (!hasAllTags) return false;
+        if (!hasAllTags) {return false;}
       }
 
       return true;
@@ -468,8 +468,8 @@ export class FileBasedEmbeddingStore implements EmbeddingStore {
     }
 
     // Fallback to dimension-based inference (for backward compatibility)
-    if (dimensions === 1536) return 'text-embedding-3-small (OpenAI)';
-    if (dimensions === 768) return 'nomic-embed-text (Ollama)';
+    if (dimensions === 1536) {return 'text-embedding-3-small (OpenAI)';}
+    if (dimensions === 768) {return 'nomic-embed-text (Ollama)';}
     return `unknown-${dimensions}d`;
   }
 

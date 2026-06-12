@@ -416,11 +416,11 @@ export default function () {
    * Check if thresholds are met
    */
   private checkThresholds(metrics: PerformanceMetrics, thresholds?: PerformanceConfig['thresholds']): boolean {
-    if (!thresholds) return true;
+    if (!thresholds) {return true;}
 
-    if (thresholds.p95 && metrics.p95 > thresholds.p95) return false;
-    if (thresholds.errorRate && metrics.errorRate > thresholds.errorRate) return false;
-    if (thresholds.throughput && metrics.rps < thresholds.throughput) return false;
+    if (thresholds.p95 && metrics.p95 > thresholds.p95) {return false;}
+    if (thresholds.errorRate && metrics.errorRate > thresholds.errorRate) {return false;}
+    if (thresholds.throughput && metrics.rps < thresholds.throughput) {return false;}
 
     return true;
   }
@@ -431,7 +431,7 @@ export default function () {
   private getThresholdFailures(metrics: PerformanceMetrics, thresholds?: PerformanceConfig['thresholds']): string[] {
     const failures: string[] = [];
 
-    if (!thresholds) return failures;
+    if (!thresholds) {return failures;}
 
     if (thresholds.p95 && metrics.p95 > thresholds.p95) {
       failures.push(`P95 latency ${metrics.p95.toFixed(2)}ms exceeds threshold ${thresholds.p95}ms`);

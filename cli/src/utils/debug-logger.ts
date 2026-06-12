@@ -38,7 +38,7 @@ export class DebugLogger {
    * Log a debug message
    */
   debug(message: string, data?: DebugLogData): void {
-    if (!this.enabled) return;
+    if (!this.enabled) {return;}
 
     const timestamp = new Date().toISOString();
     
@@ -134,7 +134,7 @@ export class DebugLogger {
    * Start a performance timer
    */
   time(label: string): void {
-    if (!this.enabled) return;
+    if (!this.enabled) {return;}
     
     this.timers.set(label, Date.now());
     this.debug(`Timer started: ${label}`);
@@ -144,7 +144,7 @@ export class DebugLogger {
    * End a performance timer and return duration
    */
   timeEnd(label: string): number {
-    if (!this.enabled) return 0;
+    if (!this.enabled) {return 0;}
     
     const startTime = this.timers.get(label);
     if (!startTime) {

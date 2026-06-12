@@ -35,8 +35,8 @@ export async function perfCommand(options: PerfOptions): Promise<void> {
 
     // Determine test type
     let testType: 'load' | 'stress' | 'web' = 'load';
-    if (options.stress) testType = 'stress';
-    if (options.web) testType = 'web';
+    if (options.stress) {testType = 'stress';}
+    if (options.web) {testType = 'web';}
 
     console.log(chalk.gray(`Test Type: ${testType}`));
     console.log();
@@ -81,8 +81,8 @@ export async function perfCommand(options: PerfOptions): Promise<void> {
 
     // Calculate total steps for progress tracking
     let totalSteps = 2; // Run test, Save results
-    if (options.compare) totalSteps++; // Regression analysis
-    if (options.baseline) totalSteps++; // Save baseline
+    if (options.compare) {totalSteps++;} // Regression analysis
+    if (options.baseline) {totalSteps++;} // Save baseline
 
     const progressBar = createProgressBar(totalSteps, 'Performance Test');
     let completedSteps = 0;
@@ -197,8 +197,7 @@ export async function perfCommand(options: PerfOptions): Promise<void> {
     }
 
   } catch (error: any) {
-    console.error(chalk.red('\n✗ Performance test failed:'), error.message);
-    process.exit(1);
+    handleCommandError(error, 'Performance Testing');
   }
 }
 

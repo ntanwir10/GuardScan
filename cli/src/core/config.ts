@@ -16,6 +16,78 @@ export interface Config {
   offlineMode: boolean;
   createdAt: string;
   lastUsed: string;
+  
+  // Reliability features
+  retry?: {
+    enabled: boolean;
+    maxRetries: number;
+    baseDelayMs: number;
+    maxDelayMs: number;
+  };
+  
+  circuitBreaker?: {
+    enabled: boolean;
+    failureThreshold: number;
+    resetTimeoutMs: number;
+    halfOpenSuccessThreshold: number;
+  };
+  
+  rateLimit?: {
+    enabled: boolean;
+    maxTokens: number;
+    refillRate: number;
+  };
+  
+  cache?: {
+    enabled: boolean;
+    semanticThreshold: number;
+    maxSizeMB: number;
+    ttlSeconds: number;
+  };
+  
+  observability?: {
+    enabled: boolean;
+    exportPath?: string;
+    logSpans?: boolean;
+  };
+  
+  budget?: {
+    dailyLimit: number;
+    monthlyLimit: number;
+    perRequestLimit: number;
+    warningThreshold: number;
+  };
+  
+  modelRouting?: {
+    enabled: boolean;
+    strategy: 'cost' | 'quality' | 'speed' | 'balanced';
+    taskOverrides?: {
+      'code-review'?: {
+        model?: string;
+        priority?: 'cost' | 'quality' | 'speed' | 'balanced';
+      };
+      'code-generation'?: {
+        model?: string;
+        priority?: 'cost' | 'quality' | 'speed' | 'balanced';
+      };
+      'chat'?: {
+        model?: string;
+        priority?: 'cost' | 'quality' | 'speed' | 'balanced';
+      };
+      'explanation'?: {
+        model?: string;
+        priority?: 'cost' | 'quality' | 'speed' | 'balanced';
+      };
+      'refactoring'?: {
+        model?: string;
+        priority?: 'cost' | 'quality' | 'speed' | 'balanced';
+      };
+      'test-generation'?: {
+        model?: string;
+        priority?: 'cost' | 'quality' | 'speed' | 'balanced';
+      };
+    };
+  };
 }
 
 export type AIProvider =
@@ -266,3 +338,68 @@ export class ConfigManager {
 }
 
 export const configManager = new ConfigManager();
+
+/** Default configuration for enhanced AI features (retry, cache, routing, etc.). */
+export const DEFAULT_ENHANCED_CONFIG: Partial<Config> = {
+  retry: {
+    enabled: true,
+    maxRetries: 3,
+    baseDelayMs: 1000,
+    maxDelayMs: 10000,
+  },
+  circuitBreaker: {
+    enabled: true,
+    failureThreshold: 5,
+    resetTimeoutMs: 60000,
+    halfOpenSuccessThreshold: 2,
+  },
+  rateLimit: {
+    enabled: false, // Opt-in
+    maxTokens: 100000,
+    refillRate: 1000,
+  },
+  cache: {
+    enabled: true,
+    semanticThreshold: 0.95,
+    maxSizeMB: 100,
+    ttlSeconds: 3600,
+  },
+  observability: {
+    enabled: true,
+    logSpans: false,
+  },
+  budget: {
+    dailyLimit: 10,
+    monthlyLimit: 100,
+    perRequestLimit: 1,
+    warningThreshold: 0.8,
+  },
+  modelRouting: {
+    enabled: false, // Opt-in
+    strategy: 'balanced',
+    taskOverrides: {},
+  },
+};
+
+/** Merge user config with enhanced-feature defaults (retry, cache, observability, etc.). */
+export function mergeConfigWithEnhancedDefaults(config: Config): Config {
+  return {
+    ...config,
+    retry: { ...DEFAULT_ENHANCED_CONFIG.retry, ...config.retry },
+    circuitBreaker: {
+      ...DEFAULT_ENHANCED_CONFIG.circuitBreaker,
+      ...config.circuitBreaker,
+    },
+    rateLimit: { ...DEFAULT_ENHANCED_CONFIG.rateLimit, ...config.rateLimit },
+    cache: { ...DEFAULT_ENHANCED_CONFIG.cache, ...config.cache },
+    observability: {
+      ...DEFAULT_ENHANCED_CONFIG.observability,
+      ...config.observability,
+    },
+    budget: { ...DEFAULT_ENHANCED_CONFIG.budget, ...config.budget },
+    modelRouting: {
+      ...DEFAULT_ENHANCED_CONFIG.modelRouting,
+      ...config.modelRouting,
+    },
+  } as Config;
+}

@@ -72,7 +72,7 @@ export async function rulesCommand(options: RulesOptions): Promise<void> {
 
       // Calculate total steps for progress tracking
       let totalSteps = 4; // Load rules, Scan files, Run rules, Save results
-      if (options.fix) totalSteps++; // Apply autofixes
+      if (options.fix) {totalSteps++;} // Apply autofixes
 
       const progressBar = createProgressBar(totalSteps, 'Rules Engine');
       let completedSteps = 0;

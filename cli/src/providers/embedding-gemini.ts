@@ -43,7 +43,7 @@ export class GeminiEmbeddingProvider extends BaseEmbeddingProvider {
   }
 
   async generateBulkEmbeddings(texts: string[]): Promise<number[][]> {
-    if (texts.length === 0) return [];
+    if (texts.length === 0) {return [];}
 
     const batches = this.chunk(texts, 50);
     const allEmbeddings: number[][] = [];

@@ -108,7 +108,7 @@ export class TokenManager {
    * Estimate tokens for conversation turn
    */
   estimateConversationTokens(turn: ConversationTurn): number {
-    if (turn.tokens) return turn.tokens;
+    if (turn.tokens) {return turn.tokens;}
 
     const rolePrefix = `${turn.role}: `;
     const total = rolePrefix + turn.content;
@@ -120,7 +120,7 @@ export class TokenManager {
    */
   truncateToTokens(text: string, maxTokens: number): string {
     const maxChars = maxTokens * this.CHARS_PER_TOKEN;
-    if (text.length <= maxChars) return text;
+    if (text.length <= maxChars) {return text;}
 
     return text.slice(0, maxChars) + '\n... (truncated)';
   }
@@ -248,8 +248,8 @@ export class RAGContextBuilder {
     const seenFiles = new Set<string>();
 
     for (const result of results) {
-      if (snippets.length >= options.maxCodeSnippets!) break;
-      if (tokensUsed >= budget) break;
+      if (snippets.length >= options.maxCodeSnippets!) {break;}
+      if (tokensUsed >= budget) {break;}
 
       const emb = result.embedding;
 
@@ -302,8 +302,8 @@ export class RAGContextBuilder {
     let tokensUsed = 0;
 
     for (const result of results) {
-      if (snippets.length >= options.maxDocSnippets!) break;
-      if (tokensUsed >= budget) break;
+      if (snippets.length >= options.maxDocSnippets!) {break;}
+      if (tokensUsed >= budget) {break;}
 
       const emb = result.embedding;
       const docType = this.inferDocType(emb.source);
@@ -472,10 +472,10 @@ export class RAGContextBuilder {
   }
 
   private inferDocType(source: string): DocumentationSnippet['type'] {
-    if (source.includes('README')) return 'readme';
-    if (source.includes('API')) return 'api';
-    if (source.includes('ARCHITECTURE')) return 'architecture';
-    if (source.includes('CONTRIBUTING')) return 'contributing';
+    if (source.includes('README')) {return 'readme';}
+    if (source.includes('API')) {return 'api';}
+    if (source.includes('ARCHITECTURE')) {return 'architecture';}
+    if (source.includes('CONTRIBUTING')) {return 'contributing';}
     return 'general';
   }
 
@@ -488,7 +488,7 @@ export class RAGContextBuilder {
       ...docs.map(d => d.relevanceScore),
     ];
 
-    if (allScores.length === 0) return 0;
+    if (allScores.length === 0) {return 0;}
 
     const sum = allScores.reduce((a, b) => a + b, 0);
     return sum / allScores.length;
