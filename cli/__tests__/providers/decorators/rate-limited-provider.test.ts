@@ -2,7 +2,7 @@
  * rate-limited-provider.test.ts - Unit tests for RateLimitedProvider
  */
 
-import { describe, expect, it, jest, beforeEach } from '@jest/globals';
+import { describe, expect, it, jest, beforeEach, afterEach } from '@jest/globals';
 import {
   RateLimitedProvider,
   DEFAULT_RATE_LIMIT_CONFIG,
@@ -62,7 +62,22 @@ class MockProvider extends AIProvider {
   }
 }
 
+const useControlledTime = () => {
+  jest.useFakeTimers();
+  jest.setSystemTime(new Date('2024-01-01T00:00:00.000Z'));
+};
+
+const advanceRateLimitWait = async <T>(promise: Promise<T>, ms: number): Promise<T> => {
+  await Promise.resolve();
+  await jest.advanceTimersByTimeAsync(ms);
+  return promise;
+};
+
 describe('RateLimitedProvider', () => {
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
   describe('token bucket algorithm', () => {
     it('should allow requests when tokens are available', async () => {
       const mock = new MockProvider();
@@ -79,6 +94,7 @@ describe('RateLimitedProvider', () => {
     });
 
     it('should wait when insufficient tokens', async () => {
+      useControlledTime();
       const mock = new MockProvider();
       const rateLimited = new RateLimitedProvider(mock, {
         maxTokens: 1000,  // Small bucket
@@ -86,21 +102,19 @@ describe('RateLimitedProvider', () => {
         costMultiplier: 1.0,
       });
 
-      const startTime = Date.now();
-
       // First request consumes 1000 tokens (full bucket)
       await rateLimited.chat([{ role: 'user', content: 'test' }]);
 
       // Second request needs to wait for refill
-      await rateLimited.chat([{ role: 'user', content: 'test' }]);
+      const secondRequest = rateLimited.chat([{ role: 'user', content: 'test' }]);
+      await advanceRateLimitWait(secondRequest, 1000);
 
-      const elapsed = Date.now() - startTime;
-
-      // Should have waited about 1s (1000 tokens / 1000 tokens per second)
-      expect(elapsed).toBeGreaterThanOrEqual(900); // Wait ~1s for 1000 tokens
+      expect(mock.getCallTimes()).toHaveLength(2);
+      expect(rateLimited.getStats().totalWaitTimeMs).toBe(1000);
     });
 
     it('should refill tokens over time', async () => {
+      useControlledTime();
       const mock = new MockProvider();
       const rateLimited = new RateLimitedProvider(mock, {
         maxTokens: 10000,
@@ -112,8 +126,8 @@ describe('RateLimitedProvider', () => {
       await rateLimited.chat([{ role: 'user', content: 'test' }]);
       const tokensAfterFirst = await rateLimited.getCurrentTokens();
 
-      // Wait for refill
-      await new Promise((resolve) => setTimeout(resolve, 1000));
+      // Advance controlled time to simulate refill.
+      await jest.advanceTimersByTimeAsync(1000);
 
       const tokensAfterWait = await rateLimited.getCurrentTokens();
 
@@ -122,6 +136,7 @@ describe('RateLimitedProvider', () => {
     });
 
     it('should not exceed max tokens', async () => {
+      useControlledTime();
       const mock = new MockProvider();
       const rateLimited = new RateLimitedProvider(mock, {
         maxTokens: 5000,
@@ -129,8 +144,8 @@ describe('RateLimitedProvider', () => {
         costMultiplier: 1.0,
       });
 
-      // Wait to ensure full refill
-      await new Promise((resolve) => setTimeout(resolve, 1000));
+      // Advance controlled time to ensure refill would cap at max.
+      await jest.advanceTimersByTimeAsync(1000);
 
       const tokens = await rateLimited.getCurrentTokens();
 
@@ -141,6 +156,7 @@ describe('RateLimitedProvider', () => {
 
   describe('statistics', () => {
     it('should track wait statistics', async () => {
+      useControlledTime();
       const mock = new MockProvider();
       const rateLimited = new RateLimitedProvider(mock, {
         maxTokens: 1000,
@@ -152,12 +168,13 @@ describe('RateLimitedProvider', () => {
       await rateLimited.chat([{ role: 'user', content: 'test' }]);
 
       // Force wait
-      await rateLimited.chat([{ role: 'user', content: 'test' }]);
+      const secondRequest = rateLimited.chat([{ role: 'user', content: 'test' }]);
+      await advanceRateLimitWait(secondRequest, 1000);
 
       const stats = rateLimited.getStats();
 
       expect(stats.totalWaits).toBeGreaterThan(0);
-      expect(stats.totalWaitTimeMs).toBeGreaterThan(0);
+      expect(stats.totalWaitTimeMs).toBe(1000);
     });
 
     it('should calculate utilization', async () => {
@@ -528,6 +545,7 @@ describe('RateLimitedProvider – edge cases', () => {
     });
 
     it('should reset wait statistics on reset()', async () => {
+      useControlledTime();
       const mock = new MockProvider();
       const rateLimited = new RateLimitedProvider(mock, {
         maxTokens: 1000,
@@ -537,7 +555,8 @@ describe('RateLimitedProvider – edge cases', () => {
 
       // Force a wait to accumulate stats
       await rateLimited.chat([{ role: 'user', content: 'test' }]);
-      await rateLimited.chat([{ role: 'user', content: 'test' }]);
+      const secondRequest = rateLimited.chat([{ role: 'user', content: 'test' }]);
+      await advanceRateLimitWait(secondRequest, 1000);
 
       const statsBefore = rateLimited.getStats();
       expect(statsBefore.totalWaits).toBeGreaterThan(0);

@@ -58,15 +58,19 @@ export class RetryProvider extends AIProviderDecorator {
   ): AsyncGenerator<string, void, unknown> {
     let attempt = 0;
     let lastError: any;
+    let yieldedAny = false;
 
     while (attempt <= this.config.maxRetries) {
       try {
-        yield* this.wrapped.stream(messages, options);
+        for await (const chunk of this.wrapped.stream(messages, options)) {
+          yieldedAny = true;
+          yield chunk;
+        }
         return; // Success, exit
       } catch (error: any) {
         lastError = error;
 
-        if (!this.isRetryable(error) || attempt >= this.config.maxRetries) {
+        if (yieldedAny || !this.isRetryable(error) || attempt >= this.config.maxRetries) {
           throw error;
         }
 

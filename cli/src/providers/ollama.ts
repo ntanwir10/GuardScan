@@ -57,19 +57,37 @@ export class OllamaProvider extends AIProvider {
     );
 
     const stream = response.data;
+    let buffer = '';
     
     for await (const chunk of stream) {
-      const lines = chunk.toString().split('\n').filter((line: string) => line.trim());
+      buffer += chunk.toString();
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
       
       for (const line of lines) {
+        if (!line.trim()) {
+          continue;
+        }
+
         try {
           const json = JSON.parse(line);
           if (json.message && json.message.content) {
             yield json.message.content;
           }
         } catch (error) {
-          // Skip invalid JSON lines
+          // Ignore malformed streaming lines so one bad chunk does not stop the generator.
         }
+      }
+    }
+
+    if (buffer.trim()) {
+      try {
+        const json = JSON.parse(buffer);
+        if (json.message && json.message.content) {
+          yield json.message.content;
+        }
+      } catch (error) {
+        // Ignore a trailing partial or malformed streaming line.
       }
     }
   }

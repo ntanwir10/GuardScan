@@ -66,6 +66,23 @@ class MockProvider extends AIProvider {
   }
 }
 
+class PartialStreamFailureProvider extends MockProvider {
+  private streamCallCount = 0;
+
+  async *stream(): AsyncGenerator<string> {
+    this.streamCallCount++;
+    yield 'partial';
+
+    const error: any = new Error('Stream failed after partial output');
+    error.status = 500;
+    throw error;
+  }
+
+  getStreamCallCount() {
+    return this.streamCallCount;
+  }
+}
+
 describe('RetryProvider', () => {
   describe('chat with retry', () => {
     it('should succeed on first attempt without retrying', async () => {
@@ -126,6 +143,28 @@ describe('RetryProvider', () => {
       ).rejects.toThrow('Bad request');
 
       expect(mock.getCallCount()).toBe(1); // Initial attempt, no retry
+    });
+  });
+
+  describe('stream with retry', () => {
+    it('should not retry after yielding partial stream output', async () => {
+      const mock = new PartialStreamFailureProvider();
+      const retry = new RetryProvider(mock, {
+        maxRetries: 2,
+        baseDelayMs: 1,
+        maxDelayMs: 1,
+        jitterFactor: 0,
+      });
+      const chunks: string[] = [];
+
+      await expect((async () => {
+        for await (const chunk of retry.stream([{ role: 'user', content: 'test' }])) {
+          chunks.push(chunk);
+        }
+      })()).rejects.toThrow('Stream failed after partial output');
+
+      expect(chunks).toEqual(['partial']);
+      expect(mock.getStreamCallCount()).toBe(1);
     });
   });
 
