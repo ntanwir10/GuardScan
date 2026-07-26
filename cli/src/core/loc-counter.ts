@@ -105,7 +105,9 @@ export class LOCCounter {
       '**/*.{js,jsx,ts,tsx,py,java,go,rs,c,cpp,h,hpp,cs,rb,php,swift,kt,scala,sh,bash}',
     ];
 
-    const globPatterns = patterns || defaultPatterns;
+    const globPatterns = (patterns || defaultPatterns).map(pattern =>
+      path.sep === '\\' ? pattern.replace(/\\/g, '/') : pattern
+    );
     const files = await fastGlob(globPatterns, {
       cwd: process.cwd(),
       absolute: true, // Get absolute paths first
@@ -115,7 +117,7 @@ export class LOCCounter {
     // Convert to relative paths and filter using ignore patterns
     const cwd = process.cwd();
     return files
-      .map(file => path.relative(cwd, file))
+      .map(file => path.relative(cwd, file).split(path.sep).join('/'))
       .filter(file => !this.ignoreMatcher.ignores(file));
   }
 
