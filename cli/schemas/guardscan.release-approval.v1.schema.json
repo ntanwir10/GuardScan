@@ -1,0 +1,66 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://guardscancli.com/schemas/guardscan.release-approval.v1.schema.json",
+  "title": "GuardScan stable release promotion approval",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "version",
+    "tag",
+    "commit",
+    "manifestSha256",
+    "scope",
+    "channels",
+    "approvedAt",
+    "evidence"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "guardscan.release-approval.v1" },
+    "version": { "$ref": "#/definitions/semver" },
+    "tag": { "$ref": "#/definitions/versionTag" },
+    "commit": { "$ref": "#/definitions/commit" },
+    "manifestSha256": { "$ref": "#/definitions/sha256" },
+    "scope": { "const": "stable-promotion" },
+    "channels": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "enum": ["npm", "github", "homebrew", "scoop", "winget", "chocolatey", "pypi"]
+      }
+    },
+    "approvedAt": { "type": "string", "format": "date-time" },
+    "expiresAt": { "type": "string", "format": "date-time" },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider", "repository", "environment", "runId", "actor"],
+      "properties": {
+        "provider": { "const": "github-actions" },
+        "repository": { "const": "ntanwir10/GuardScan" },
+        "environment": { "const": "stable-promotion" },
+        "runId": { "type": "string", "pattern": "^[1-9][0-9]{0,19}$" },
+        "actor": { "type": "string", "minLength": 1, "maxLength": 100 }
+      }
+    }
+  },
+  "definitions": {
+    "semver": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$"
+    },
+    "versionTag": {
+      "type": "string",
+      "pattern": "^v(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$"
+    },
+    "commit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  }
+}
