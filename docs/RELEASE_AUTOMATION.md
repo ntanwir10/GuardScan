@@ -23,10 +23,92 @@ The automation is fail-closed. A tag is an identity created by the release train
 | `.github/workflows/release-please.yml` | Maintains the stable release PR only, using a short-lived GitHub App token. |
 | `.github/workflows/release-train.yml` | Derives RC commits, creates protected tags, dispatches builds/publication, reconciles every 30 minutes, promotes, rolls back, and persists release events. |
 | `.github/workflows/release-build.yml` | Builds the exact npm tarball and five SEA targets, signs, notarizes, generates SPDX/CycloneDX, creates wheels, attests, archives deterministically, and aggregates the manifest/checksums. |
-| `.github/workflows/release-publish.yml` | Publishes the tested handoffs through OIDC or first-party bot repositories. |
+| `.github/workflows/release-publish.yml` | Publishes tested registry handoffs through OIDC and opens the generated shared-catalog update PR. |
 | `.github/workflows/release-canary.yml` | Runs hourly public install/invoke/uninstall canaries and polls moderated registries. |
 
 Release workflows deliberately do not use dependency caches. Release-critical actions are pinned to immutable commits.
+
+## Shared package-manager catalog
+
+GuardScan is the sole release authority. The public
+`ntanwir10/homebrew-tap` repository is a generated, cryptographically bound
+projection of one GuardScan release manifest; it is not a second source of
+product or release state. The shared catalog contains both first-party
+package-manager adapters:
+
+```text
+Formula/guardscan.rb
+bucket/guardscan.json
+channel-lock.json
+.github/workflows/verify.yml
+```
+
+A stable release renders the formula, Scoop manifest, and lock together and
+opens one catalog pull request. RCs use the temporary branch
+`channel-preview/vVERSION`; stable users read catalog `main`. Catalog CI
+fetches the immutable GuardScan manifest, verifies its SHA-256 and tagged
+source commit, reruns the renderer from that exact source commit, checks every
+asset URL and digest, and runs the native lifecycle tests before merge.
+Hand-written catalog changes fail unless they are byte-identical to renderer
+output.
+
+`channel-lock.json` uses schema `guardscan.channel-catalog.v1` and binds the
+projection without trying to include the catalog commit in its own contents:
+
+```json
+{
+  "schemaVersion": "guardscan.channel-catalog.v1",
+  "source": {
+    "repository": "ntanwir10/GuardScan",
+    "version": "1.1.0",
+    "tag": "v1.1.0",
+    "commit": "GUARDSCAN_SOURCE_COMMIT",
+    "manifestUrl": "IMMUTABLE_RELEASE_MANIFEST_URL",
+    "manifestSha256": "RELEASE_MANIFEST_SHA256"
+  },
+  "generator": {
+    "repository": "ntanwir10/GuardScan",
+    "commit": "GENERATOR_COMMIT"
+  },
+  "files": {
+    "Formula/guardscan.rb": {
+      "sha256": "FORMULA_SHA256"
+    },
+    "bucket/guardscan.json": {
+      "sha256": "SCOOP_MANIFEST_SHA256"
+    }
+  }
+}
+```
+
+After merge, the catalog sends a `catalog_updated` repository dispatch
+containing the merged commit and lock digest. The dispatch is only a latency
+hint: GuardScan refetches the catalog at that commit and validates the lock,
+manifest, and generated file digests before appending evidence to the release
+ledger. Scheduled reconciliation repeats this check every 30 minutes, so a
+missed dispatch cannot create permanent drift.
+
+Reconciliation is idempotent and fail-closed:
+
+- missing or older catalog state opens or reuses the deterministic update PR;
+- the exact expected lock and file digests materialize as `verified`;
+- different digests for the same release open a release-integrity incident;
+- an unexpected newer catalog version stops automated mutation for review.
+
+The ledger records the catalog repository, merged commit, pull-request number,
+lock digest, manifest digest, and channel-specific path/digest. Channel remote
+identities are:
+
+```text
+github:ntanwir10/homebrew-tap@COMMIT#Formula/guardscan.rb
+github:ntanwir10/homebrew-tap@COMMIT#bucket/guardscan.json
+```
+
+This is strong convergence, not a cross-repository atomic transaction: the
+release remains incomplete while the catalog is behind. A rollback is another
+generated catalog PR pointing to a verified known-good release plus append-only
+ledger events. The repositories are intentionally not connected with
+submodules, subtrees, mirroring, or bidirectional synchronization.
 
 ## Maintainer interface
 
@@ -143,7 +225,7 @@ The train:
 2. creates a candidate commit containing only RC identity changes;
 3. creates `v1.1.0-rc.1` with the release GitHub App;
 4. builds, signs, attests, and verifies every artifact;
-5. publishes npm under `next`, GitHub as a prerelease, TestPyPI then PyPI, and preview tap/bucket branches;
+5. publishes npm under `next`, GitHub as a prerelease, TestPyPI then PyPI, and the shared catalog preview branch `channel-preview/v1.1.0-rc.1`;
 6. renders and validates WinGet/Chocolatey without publishing an RC;
 7. records `publishedAt` and hourly canary evidence;
 8. reconciles every 30 minutes.
@@ -163,7 +245,7 @@ yarn dlx guardscan
 bun add -g guardscan
 bunx guardscan
 brew install ntanwir10/tap/guardscan
-scoop bucket add guardscan https://github.com/ntanwir10/scoop-bucket
+scoop bucket add guardscan https://github.com/ntanwir10/homebrew-tap
 scoop install guardscan
 winget install --exact --id NaumanTanwir.GuardScan
 choco install guardscan
@@ -173,6 +255,18 @@ pipx install guardscan-cli
 
 The npm package requires Node 22 or newer even when invoked by Bun. The standalone and wheel channels include the runtime.
 
+The one-part command `brew install guardscan` becomes available only after
+GuardScan is accepted into Homebrew Core and passes a clean public-Core canary.
+That optional path is submitted after a stable release, does not block release
+completion, and uses a source-building Core formula with Homebrew's `node`
+dependency and `std_npm_args`. Until acceptance, documentation keeps
+`brew install ntanwir10/tap/guardscan` as the primary command; afterward, the
+first-party tap remains the supported fallback.
+
+The optional `homebrew-core` channel uses the normal append-only
+`submitted -> accepted -> verified` states. Submission is not acceptance, and
+acceptance is not public verification.
+
 ## Recovery
 
 Before stable promotion, any failed build, signature, digest, canary, vulnerability, or source-head check stops the train. The correction is a new `rc.N`.
@@ -180,11 +274,13 @@ Before stable promotion, any failed build, signature, digest, canary, vulnerabil
 After stable publication:
 
 - immutable GitHub assets are retained and marked superseded;
-- Homebrew/Scoop redirect to a known-good native release or remove the new listing;
+- Homebrew/Scoop move together through a generated shared-catalog PR to a known-good native release, or remove the new listing;
 - PyPI is yanked where authorized;
 - npm is deprecated and moved forward through a patch;
 - Chocolatey is unlisted/superseded;
 - WinGet receives a corrective manifest;
 - a higher patch version is prepared from selected known-good source.
 
-A release is complete only when every selected channel materializes as `verified`.
+A release is complete only when every selected blocking channel materializes
+as `verified`. Optional Homebrew Core submission/acceptance is tracked
+separately and never blocks the release train.

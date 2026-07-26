@@ -6,6 +6,9 @@
 - [x] Add an append-only hash-chained ledger, idempotent remote classification, integrity incidents, and forward-fix rollback planning.
 - [x] Build the full npm/native/PyPI manifest, deterministic archives and wheels, artifact SBOMs, signed checksums, and build attestations.
 - [x] Implement OIDC npm/PyPI publication plus GitHub, Homebrew, Scoop, WinGet, and Chocolatey workflows.
+- [x] Consolidate Homebrew and Scoop into the generated
+  `ntanwir10/homebrew-tap` shared-catalog contract with a cryptographic lock,
+  dispatch hint, and 30-minute reconciliation.
 - [x] Add hourly fail-closed canaries for every selected install contract and serialize protected ledger updates.
 - [x] Add release CLI interfaces for build, manifest, publish, verify, reconcile, promote, rollback, and status.
 - [x] Pass local typecheck, build, 787-test coverage suite, 53 release contracts, lint ratchet, production audit, and packed-artifact inspection.
@@ -43,8 +46,13 @@
 
 ## Checkpoint C — native package managers
 
-- [ ] GS-DIST-301 create and test the first-party Homebrew tap on macOS and Linuxbrew.
-- [ ] GS-DIST-302 create and test a first-party Scoop manifest/bucket.
+- [ ] GS-DIST-301 create and test `Formula/guardscan.rb` in the shared
+  `ntanwir10/homebrew-tap` catalog on macOS and Linuxbrew.
+- [ ] GS-DIST-302 create and test `bucket/guardscan.json` in that same shared
+  catalog, including lock verification and missed-dispatch reconciliation.
+- [ ] Submit the non-blocking source-building Homebrew Core formula after the
+  stable release; advertise `brew install guardscan` only after acceptance and
+  a public canary.
 - [ ] GS-DIST-302 validate and submit WinGet manifests after Windows artifact stability.
 - [ ] GS-DIST-303 build, locally test, submit, and obtain approval for the Chocolatey package.
 - [ ] Generate adapter versions, URLs, and hashes from the canonical release manifest.
