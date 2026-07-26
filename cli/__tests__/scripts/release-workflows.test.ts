@@ -25,6 +25,7 @@ describe('zero-touch release workflow contracts', () => {
     const source = workflowSource('ci.yml');
     expect(yaml.load(source)).toBeTruthy();
     expect(source).not.toMatch(/^\s+tags:/m);
+    expect(source).not.toContain('"release/**"');
     expect(source).not.toContain('npm publish');
     expect(source).not.toContain('gh release create');
     expect(source).toContain('npm test -- --coverage --runInBand');
