@@ -19,7 +19,7 @@ const releaseWorkflows = [
 ];
 
 function workflowSource(filename: string): string {
-  return fs.readFileSync(path.join(workflowRoot, filename), 'utf8');
+  return fs.readFileSync(path.join(workflowRoot, filename), 'utf8').replace(/\r\n?/g, '\n');
 }
 
 function assertActionPins(source: string): void {
