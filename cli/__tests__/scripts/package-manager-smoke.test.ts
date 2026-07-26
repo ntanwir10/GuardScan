@@ -3,11 +3,13 @@ const {
   installArgs,
   parseManager,
   parseTarball,
+  scanArgsFor,
 } = require('../../scripts/package-manager-smoke') as {
   execArgs: (manager: string, args: string[]) => string[];
   installArgs: (manager: string, tarball: string) => string[];
   parseManager: (args: string[]) => string;
   parseTarball: (args: string[]) => string | undefined;
+  scanArgsFor: (manager: string, output: string) => string[];
 };
 
 describe('package-manager smoke command contracts', () => {
@@ -26,6 +28,11 @@ describe('package-manager smoke command contracts', () => {
 
   it('uses Yarn configuration rather than an unsupported install flag', () => {
     expect(installArgs('yarn', '/tmp/guardscan.tgz')).toEqual(['add', '/tmp/guardscan.tgz']);
+  });
+
+  it('makes Bun partial SBOM inventory explicit without weakening other canaries', () => {
+    expect(scanArgsFor('bun', '/tmp/scan.json')).toContain('--allow-partial');
+    expect(scanArgsFor('npm', '/tmp/scan.json')).not.toContain('--allow-partial');
   });
 
   it('rejects omitted and unknown managers', () => {
