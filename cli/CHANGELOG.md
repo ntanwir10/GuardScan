@@ -5,6 +5,77 @@ All notable changes to GuardScan will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Static-safe `guardscan scan` execution with explicit `--run-project-code` trust capability, scrubbed child environments, report execution-mode metadata, and optional OS-backed network isolation.
+- Official SPDX 2.3 and CycloneDX 1.7 serializers with vendored schema validation.
+- Exact vulnerability snapshot validation and tri-state CISA KEV coverage metadata.
+- Versioned release-manifest and release-state contracts with deterministic planning, dry-run, preparation, status, and resume tooling.
+- Manifest-bound stable-promotion approval evidence, atomic publication-ledger transitions, and deterministic native package adapter validation.
+- A fail-closed host-native Node.js SEA prototype builder and five-target non-publishable CI feasibility matrix.
+- Packed-artifact compatibility gates for npm, pnpm, Yarn Modern, Yarn Classic, and Bun.
+
+### Changed
+
+- `guardscan run` now always executes required local scanners before optional AI enrichment and records incomplete coverage as operational exit code `2`.
+- Offline Ollama and LM Studio endpoints now require literal loopback IPs. Remote self-hosted endpoints require online mode and `allowRemoteSelfHosted: true`.
+- Telemetry and metrics retention, clearing, status, and migration now process the complete state directory with journaled rollback.
+- Configuration parsing is size-, depth-, node-, alias-, and schema-bounded; read-modify-write updates are lease-serialized across processes.
+- The supported Node.js runtime floor is now 22, with package smoke coverage on Node 22 and 24 across Linux, macOS, and Windows.
+
+### Fixed
+
+- Telemetry clearing and retention leaving events stranded beyond the former directory scan limit.
+- Stale lease owners deleting a newer owner’s lease under normal ownership checks.
+- Partially committed telemetry or metrics migrations after metadata or identity conflicts.
+- Redirect-following provider and telemetry transports.
+- Deleted lint-baseline source files bypassing baseline review.
+- Yarn installation failing on an unresolvable stale optional tokenizer package.
+
+The strict ESLint gate remains a per-file non-regression ratchet; this release does not claim that the existing codebase is lint-clean.
+
+## [1.1.0] - 2026-07-13
+
+### Added
+
+- Native OSV-backed dependency vulnerability scanning with `guardscan vuln`, `cve`, and `audit` commands.
+- Exact-version inventory support across JavaScript, Python, Go, Rust, Ruby, and Maven projects.
+- Offline vulnerability coverage snapshots and explicit database status/update/clear commands.
+- Stable finding fingerprints, deterministic scanner execution, comprehensive versioned JSON, and schema-valid SARIF.
+- Explicit telemetry status, sync, and clear commands with a strict privacy allowlist.
+- Repository-scoped and global cache clearing.
+- Windows and expanded Node.js CI coverage plus installed-package smoke tests.
+
+### Changed
+
+- Scanner failures and incomplete vulnerability coverage now fail closed with typed exit code `2` unless partial execution is explicitly allowed.
+- CVE scanning is enabled by default when supported dependency manifests are present.
+- Offline policy is enforced centrally for cloud AI, embeddings, update checks, telemetry, and advisory lookups.
+- Environment-only cloud credentials and keyless Ollama/LM Studio configurations are supported.
+- LM Studio endpoints are normalized to the documented `/v1` base path.
+- Telemetry is opt-in and delivered only through an explicit sync command.
+- License, SBOM, and vulnerability features share local dependency inventory.
+
+### Fixed
+
+- Persisted metrics can no longer poison aggregation or crash `metrics show` through malformed optional fields.
+- Telemetry status, retention, and synchronization now quarantine invalid or future-dated events before use.
+- Legacy metrics and telemetry migrations validate completely before publishing any migrated event.
+- Local metrics, telemetry, vulnerability, and CISA state now share bounded reads, atomic private writes, and bounded quarantine retention.
+- Concurrent telemetry synchronization and conflicting same-identity metrics writes are serialized or rejected explicitly.
+- Partial configuration sections are normalized against defaults, while unknown keys and unsafe values are rejected.
+- Clean-checkout lint ratchet packaging.
+- Fail-open dependency and security scanners.
+- Empty offline SBOMs.
+- Incomplete comprehensive JSON reports.
+- Invalid SARIF pseudo-fixes.
+- Semantic caching continuing under `--no-cache`.
+- Expired cache entries remaining on disk.
+- Release publishing without every quality gate.
+- Windows `npm`/`npx` command resolution and shell-dependent child processes.
+
 ## [1.0.5] - 2025-12-09
 
 ### Added
