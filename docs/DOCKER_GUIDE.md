@@ -49,7 +49,7 @@ This comprehensive guide covers running GuardScan CLI in Docker across all major
 ### General Requirements
 
 - Docker Engine 20.10+ or Docker Desktop 4.0+
-- Node.js 18+ (in container)
+- Node.js 22+ (in container)
 - 2GB+ RAM available for Docker
 - Internet connection (for npm install and AI features)
 
@@ -926,9 +926,13 @@ export GUARDSCAN_API_URL=https://custom-api.example.com
 
 #### `GUARDSCAN_NO_TELEMETRY`
 
-Disable telemetry for the current command execution (set via `--no-telemetry` flag).
+Disable telemetry for the current command execution with either the environment
+variable or the `--no-telemetry` flag.
 
-**Note:** This is handled via the `--no-telemetry` CLI flag, not an environment variable.
+```bash
+export GUARDSCAN_NO_TELEMETRY=true
+guardscan security
+```
 
 ### OS-Specific Environment Variables
 
@@ -1237,7 +1241,7 @@ jobs:
       - name: Install Node.js
         uses: actions/setup-node@v3
         with:
-          node-version: '18'
+          node-version: '22'
       
       - name: Install GuardScan
         run: npm install -g guardscan
@@ -1266,7 +1270,7 @@ jobs:
       - name: Install Node.js
         uses: actions/setup-node@v3
         with:
-          node-version: '18'
+          node-version: '22'
       
       - name: Install GuardScan
         run: npm install -g guardscan
@@ -1741,8 +1745,13 @@ apk add --no-cache \
 
    ```bash
    mkdir -p /tmp/guardscan
-   chmod 755 /tmp/guardscan
+   chmod 700 /tmp/guardscan
    ```
+
+   `GUARDSCAN_HOME` must be an absolute directory private to the container
+   user. Do not share the same writable state directory between different
+   users or containers. Mount a user-owned volume when state must survive the
+   container lifecycle.
 
 ### General Troubleshooting
 

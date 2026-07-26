@@ -33,6 +33,10 @@ Architecture Decision Records (ADRs) are a lightweight way to document important
   - **Status**: Accepted
   - **Summary**: Users provide their own AI API keys for AI features, enabling privacy, cost control, and sustainability
 
+- [ADR 006: Node.js SEA for standalone distribution](./006-node-sea-standalone-distribution.md)
+  - **Status**: Proposed
+  - **Summary**: Bundle GuardScan into host-native Node.js single executables for native package managers and optional pipx wheels
+
 ### Development & Tooling
 
 - [ADR 004: TypeScript Strict Mode](./004-typescript-strict-mode.md)
@@ -152,4 +156,3 @@ If you have questions about ADRs or need help writing one:
 - Open a GitHub Discussion
 - Ask in the team chat
 - Refer to existing ADRs as examples
-

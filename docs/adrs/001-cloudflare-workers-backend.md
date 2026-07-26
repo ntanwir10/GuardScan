@@ -1,17 +1,15 @@
 # ADR 001: Cloudflare Workers for Backend Infrastructure
 
 ## Status
-Accepted
+Superseded for the CLI by [ADR 003](./003-privacy-first-architecture.md); retained as backend history.
 
 ## Date
 2024-11-19
 
 > **Note (2026-05):** The Worker implementation has moved out of this
-> repository to [ntanwir10/GuardScan-Monitoring](https://github.com/ntanwir10/GuardScan-Monitoring)
-> (private). This ADR still captures the original platform decision; current
-> code, deployment scripts, and the Supabase schema live in that repo under
-> `worker/`. The CLI continues to integrate via HTTP only, configurable through
-> the `GUARDSCAN_API_URL` env var.
+> repository. This ADR captures the original platform decision only. The current
+> CLI has no monitoring integration and supports anonymous, explicit telemetry
+> sync only through `GUARDSCAN_TELEMETRY_URL`.
 
 ## Context
 GuardScan needed a backend infrastructure for optional telemetry and monitoring. The backend requirements were:
@@ -169,4 +167,3 @@ This decision should be reviewed if:
 - A clearly superior alternative emerges
 
 **Next review date**: 2025-05-19 (6 months)
-
