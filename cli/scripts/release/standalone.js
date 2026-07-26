@@ -15,6 +15,8 @@ const OPTIONAL_EXTERNALS = Object.freeze(['chartjs-node-canvas', 'tiktoken']);
 const MAX_BUNDLE_BYTES = 256 * 1024 * 1024;
 const MAX_EXECUTABLE_BYTES = 512 * 1024 * 1024;
 const BUILTIN_MODULES = new Set(builtinModules.flatMap(name => [name, name.replace(/^node:/, '')]));
+const TRANSIENT_RENAME_CODES = new Set(['EACCES', 'EBUSY', 'EPERM']);
+const RENAME_RETRY_DELAYS_MS = Object.freeze([50, 100, 200, 400, 800, 1000, 1500, 2000]);
 
 function hostPlatform() {
   const osName = {darwin: 'darwin', linux: 'linux', win32: 'windows'}[process.platform];
@@ -100,6 +102,21 @@ function hashRegularFile(file, maxBytes, label) {
     return {size: stat.size, sha256: hash.digest('hex')};
   } finally {
     fs.closeSync(descriptor);
+  }
+}
+
+async function renameWithTransientRetry(source, destination, options = {}) {
+  const rename = options.rename || fs.promises.rename;
+  const wait = options.wait || (delay => new Promise(resolve => setTimeout(resolve, delay)));
+  const delays = options.delays || RENAME_RETRY_DELAYS_MS;
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      await rename(source, destination);
+      return;
+    } catch (error) {
+      if (!TRANSIENT_RENAME_CODES.has(error?.code) || attempt >= delays.length) throw error;
+      await wait(delays[attempt]);
+    }
   }
 }
 
@@ -297,7 +314,7 @@ async function buildHostPrototype(source, outputDir) {
     });
     fs.rmSync(bundleFile, {force: true});
     fs.rmSync(blobFile, {force: true});
-    fs.renameSync(stage, resolved);
+    await renameWithTransientRetry(stage, resolved);
     return {outputDir: resolved, metadata};
   } finally {
     fs.rmSync(stage, {recursive: true, force: true});
@@ -313,5 +330,6 @@ module.exports = {
   bundleOptions,
   externalPackages,
   hostPlatform,
+  renameWithTransientRetry,
   smokeStandalone,
 };

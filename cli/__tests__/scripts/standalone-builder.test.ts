@@ -7,6 +7,7 @@ const {
   bundleOptions,
   externalPackages,
   hostPlatform,
+  renameWithTransientRetry,
 } = require('../../scripts/release/standalone') as {
   OPTIONAL_EXTERNALS: string[];
   PROTOTYPE_SCHEMA: string;
@@ -14,6 +15,15 @@ const {
   bundleOptions: (entryPoint: string, outputFile: string) => Record<string, any>;
   externalPackages: (metafile: Record<string, any>) => string[];
   hostPlatform: () => {os: string; arch: string};
+  renameWithTransientRetry: (
+    source: string,
+    destination: string,
+    options?: {
+      rename?: (source: string, destination: string) => Promise<void>;
+      wait?: (delay: number) => Promise<void>;
+      delays?: number[];
+    }
+  ) => Promise<void>;
 };
 
 function metafile(imports: Array<{path: string; external?: boolean}>): Record<string, any> {
@@ -67,5 +77,37 @@ describe('standalone executable builder contract', () => {
     expect(['darwin', 'linux', 'windows']).toContain(platform.os);
     expect(['arm64', 'x64']).toContain(platform.arch);
     expect(path.isAbsolute(process.execPath)).toBe(true);
+  });
+
+  it.each(['EACCES', 'EBUSY', 'EPERM'])('retries a transient %s atomic publish failure', async code => {
+    const transient = Object.assign(new Error('temporarily locked'), {code});
+    const rename = jest.fn()
+      .mockRejectedValueOnce(transient)
+      .mockResolvedValueOnce(undefined);
+    const wait = jest.fn().mockResolvedValue(undefined);
+
+    await renameWithTransientRetry('/stage', '/release', {
+      rename,
+      wait,
+      delays: [25],
+    });
+
+    expect(rename).toHaveBeenCalledTimes(2);
+    expect(wait).toHaveBeenCalledWith(25);
+  });
+
+  it('does not retry a non-transient atomic publish failure', async () => {
+    const permanent = Object.assign(new Error('invalid target'), {code: 'EINVAL'});
+    const rename = jest.fn().mockRejectedValue(permanent);
+    const wait = jest.fn().mockResolvedValue(undefined);
+
+    await expect(renameWithTransientRetry('/stage', '/release', {
+      rename,
+      wait,
+      delays: [25],
+    })).rejects.toBe(permanent);
+
+    expect(rename).toHaveBeenCalledTimes(1);
+    expect(wait).not.toHaveBeenCalled();
   });
 });
