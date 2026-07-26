@@ -22,6 +22,8 @@ on:
         type: string
   schedule:
     - cron: "*/30 * * * *"
+  repository_dispatch:
+    types: [catalog_updated]
 
 permissions:
   contents: read
@@ -36,7 +38,7 @@ env:
 jobs:
   scheduler:
     name: Dispatch reconciliation for every active train
-    if: github.event_name == 'schedule'
+    if: github.event_name == 'schedule' && vars.RELEASE_AUTOMATION_ENABLED == 'true'
     runs-on: ubuntu-24.04
     steps:
       - name: Create short-lived release app token
@@ -66,9 +68,82 @@ jobs:
             }
           '
 
+  catalog-hint:
+    name: Validate catalog dispatch hint and request reconciliation
+    if: github.event_name == 'repository_dispatch' && vars.RELEASE_AUTOMATION_ENABLED == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Create short-lived cross-repository release app token
+        id: app
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        with:
+          app-id: ${{ vars.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          owner: ntanwir10
+          repositories: GuardScan,homebrew-tap
+      - name: Refetch and validate the hinted immutable catalog commit
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          HINT_VERSION: ${{ github.event.client_payload.version }}
+          HINT_CATALOG_COMMIT: ${{ github.event.client_payload.catalog_commit || github.event.client_payload.commit }}
+          HINT_LOCK_SHA256: ${{ github.event.client_payload.lock_sha256 || github.event.client_payload.lockSha256 }}
+        run: |
+          test -n "$HINT_CATALOG_COMMIT"
+          test -n "$HINT_LOCK_SHA256"
+          case "$HINT_CATALOG_COMMIT" in
+            *[!a-f0-9]*|'') echo "Invalid catalog commit hint" >&2; exit 1 ;;
+          esac
+          test "${#HINT_CATALOG_COMMIT}" = 40
+          case "$HINT_LOCK_SHA256" in
+            *[!a-f0-9]*|'') echo "Invalid catalog lock digest hint" >&2; exit 1 ;;
+          esac
+          test "${#HINT_LOCK_SHA256}" = 64
+          gh api \
+            -H "Accept: application/vnd.github.raw+json" \
+            "repos/ntanwir10/homebrew-tap/contents/channel-lock.json?ref=$HINT_CATALOG_COMMIT" \
+            > hinted-channel-lock.json
+          ACTUAL_LOCK_SHA256="$(sha256sum hinted-channel-lock.json | cut -d ' ' -f 1)"
+          test "$ACTUAL_LOCK_SHA256" = "$HINT_LOCK_SHA256"
+          RECONCILE_VERSION="$(node - <<'NODE'
+          const lock = require('./hinted-channel-lock.json');
+          if (
+            lock.schemaVersion !== 'guardscan.channel-catalog.v1'
+            || lock.source?.repository?.toLowerCase() !== process.env.GITHUB_REPOSITORY.toLowerCase()
+            || lock.source?.tag !== `v${lock.source?.version}`
+            || (process.env.HINT_VERSION && lock.source.version !== process.env.HINT_VERSION)
+          ) {
+            throw new Error('catalog dispatch hint does not match its refetched lock');
+          }
+          process.stdout.write(lock.source.version);
+          NODE
+          )"
+          export RECONCILE_VERSION
+          gh api \
+            -H "Accept: application/vnd.github.raw+json" \
+            "repos/${GITHUB_REPOSITORY}/contents/active-versions.json?ref=release-ledger" \
+            > active-versions.json
+          RELEASE_PR="$(node - <<'NODE'
+          const active = require('./active-versions.json').trains || [];
+          const train = active.find(item => item.version === process.env.RECONCILE_VERSION);
+          process.stdout.write(train ? String(train.releasePr) : '');
+          NODE
+          )"
+          if [ -z "$RELEASE_PR" ]; then
+            echo "Catalog hint is for an inactive release; no reconciliation requested."
+            exit 0
+          fi
+          gh workflow run release-train.yml \
+            --repo "$GITHUB_REPOSITORY" \
+            -f action=reconcile \
+            -f version="$RECONCILE_VERSION" \
+            -f release_pr="$RELEASE_PR"
+
   prepare:
     name: Resolve exact source and create protected tag
-    if: github.event_name == 'workflow_dispatch' && (inputs.action == 'candidate' || inputs.action == 'promote')
+    if: >-
+      github.event_name == 'workflow_dispatch'
+      && vars.RELEASE_AUTOMATION_ENABLED == 'true'
+      && (inputs.action == 'candidate' || inputs.action == 'promote')
     runs-on: ubuntu-24.04
     concurrency:
       group: release-ledger
@@ -93,6 +168,21 @@ jobs:
           GH_TOKEN: ${{ steps.app.outputs.token }}
         run: |
           test -n "${{ inputs.release_pr }}"
+          gh api \
+            -H "Accept: application/vnd.github.raw+json" \
+            "repos/${GITHUB_REPOSITORY}/contents/active-versions.json?ref=release-ledger" \
+            > active-versions.json
+          node - <<'NODE'
+          const active = require('./active-versions.json').trains || [];
+          const incompleteStable = active.filter(train => train.channel === 'stable');
+          if (incompleteStable.length > 0) {
+            throw new Error(
+              `cannot start or promote while a stable train remains incomplete: ${
+                incompleteStable.map(train => train.version).join(', ')
+              }`
+            );
+          }
+          NODE
           HEAD_SHA="$(gh pr view "${{ inputs.release_pr }}" \
             --repo "${GITHUB_REPOSITORY}" \
             --json headRefOid \
@@ -257,6 +347,10 @@ jobs:
     name: Build exact tagged release
     if: needs.prepare.outputs.build == 'true'
     needs: [prepare]
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     uses: ./.github/workflows/release-build.yml
     with:
       ref: ${{ needs.prepare.outputs.ref }}
@@ -268,6 +362,10 @@ jobs:
     name: Publish every automated channel
     if: needs.prepare.outputs.build == 'true'
     needs: [prepare, build]
+    permissions:
+      actions: read
+      contents: write
+      id-token: write
     uses: ./.github/workflows/release-publish.yml
     with:
       ref: ${{ needs.prepare.outputs.ref }}
@@ -299,6 +397,10 @@ jobs:
         with:
           name: release-payload-${{ needs.prepare.outputs.tag }}
           path: payload
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-catalog-${{ needs.prepare.outputs.tag }}
+          path: catalog-evidence
       - name: Fetch ledger, append chained events, and push
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
@@ -322,6 +424,11 @@ jobs:
           const manifest = fs.readFileSync('payload/release-manifest.json');
           const manifestDocument = JSON.parse(manifest);
           const manifestSha256 = crypto.createHash('sha256').update(manifest).digest('hex');
+          const catalogResult = JSON.parse(fs.readFileSync('catalog-evidence/catalog-result.json'));
+          const catalogLock = JSON.parse(fs.readFileSync('catalog-evidence/catalog-output/channel-lock.json'));
+          const lockSha256 = crypto.createHash('sha256')
+            .update(fs.readFileSync('catalog-evidence/catalog-output/channel-lock.json'))
+            .digest('hex');
           const now = new Date().toISOString();
           const timestampFor = idempotencyKey => (
             readEvents(ledger).find(event => event.idempotencyKey === idempotencyKey)?.timestamp || now
@@ -329,6 +436,12 @@ jobs:
           const base = {version, tag, commit};
           if (readEvents(ledger).length === 0) {
             const idempotencyKey = `train:${tag}`;
+            const channels = [
+              'npm', 'pnpm', 'yarn', 'bun', 'github', 'homebrew', 'scoop', 'pypi',
+              ...(process.env.RELEASE_CHANNEL === 'stable'
+                ? ['homebrew-core', 'winget', 'chocolatey']
+                : []),
+            ];
             appendEvent(ledger, {
               ...base, timestamp: timestampFor(idempotencyKey), type: 'train_started',
               idempotencyKey,
@@ -336,7 +449,7 @@ jobs:
                 profile: 'full',
                 releasePr: Number(process.env.RELEASE_PR),
                 sourcePrHead: process.env.SOURCE_PR_HEAD,
-                channels: ['npm', 'pnpm', 'yarn', 'bun', 'github', 'homebrew', 'scoop', 'winget', 'chocolatey', 'pypi'],
+                channels,
               },
             });
           }
@@ -370,16 +483,32 @@ jobs:
             });
           }
           for (const channel of ['homebrew', 'scoop']) {
-            const idempotencyKey = `adapter:${channel}:${tag}`;
+            const catalogPath = channel === 'homebrew'
+              ? 'Formula/guardscan.rb'
+              : 'bucket/guardscan.json';
+            const pathDigest = catalogLock.files?.[catalogPath]?.sha256;
+            if (!/^[a-f0-9]{64}$/.test(pathDigest || '')) {
+              throw new Error(`catalog lock has no valid digest for ${catalogPath}`);
+            }
+            const idempotencyKey = `catalog-submitted:${channel}:${tag}:${lockSha256}`;
             appendEvent(ledger, {
               ...base, timestamp: timestampFor(idempotencyKey),
-              type: process.env.RELEASE_CHANNEL === 'stable' ? 'channel_published' : 'channel_submitted',
+              type: 'channel_submitted',
               channel,
               idempotencyKey,
               payload: {
                 artifactIds: artifactIds[channel],
-                remoteIdentity: `ntanwir10/${channel}:${tag}`,
-                remoteDigest: manifestSha256,
+                remoteIdentity: `github:${catalogResult.repository}@${catalogResult.commit}#${catalogPath}`,
+                remoteDigest: pathDigest,
+                catalog: {
+                  repository: catalogResult.repository,
+                  commit: catalogResult.commit,
+                  pullRequest: catalogResult.pullRequest,
+                  lockDigest: lockSha256,
+                  manifestDigest: manifestSha256,
+                  path: catalogPath,
+                  fileDigest: pathDigest,
+                },
               },
             });
           }
@@ -408,8 +537,11 @@ jobs:
           active.trains = active.trains.filter(train => train.version !== process.env.RELEASE_TAG.slice(1));
           if (process.env.RELEASE_CHANNEL === 'stable') {
             active.trains = active.trains.filter(train => !(
-              train.channel === 'rc'
-              && train.releasePr === Number(process.env.RELEASE_PR)
+              train.channel === 'stable'
+              || (
+                train.channel === 'rc'
+                && train.releasePr === Number(process.env.RELEASE_PR)
+              )
             ));
           }
           active.trains.push({
@@ -433,17 +565,23 @@ jobs:
     name: Reconcile remote state and trigger eligible promotion
     if: github.event_name == 'workflow_dispatch' && inputs.action == 'reconcile'
     runs-on: ubuntu-24.04
+    concurrency:
+      group: release-ledger
+      cancel-in-progress: false
     steps:
-      - name: Create short-lived release app token
+      - name: Create short-lived cross-repository release app token
         id: app
         uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
         with:
           app-id: ${{ vars.RELEASE_APP_ID }}
           private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          owner: ntanwir10
+          repositories: GuardScan,homebrew-tap
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: v${{ inputs.version }}
           fetch-depth: 0
+          token: ${{ steps.app.outputs.token }}
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: ${{ env.RELEASE_NODE_VERSION }}
@@ -459,8 +597,217 @@ jobs:
             --ledger release-events.jsonl \
             --tag "v${{ inputs.version }}" > reconciliation.json
           cat reconciliation.json
+      - name: Authoritatively refetch and reconcile the shared catalog
+        id: catalog
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          RELEASE_VERSION: ${{ inputs.version }}
+          AUTOMATION_ENABLED: ${{ vars.RELEASE_AUTOMATION_ENABLED }}
+        run: |
+          ACTIVE_CHANNEL="$(gh api \
+            -H "Accept: application/vnd.github.raw+json" \
+            "repos/${GITHUB_REPOSITORY}/contents/active-versions.json?ref=release-ledger" \
+            --jq ".trains[] | select(.version == \"$RELEASE_VERSION\") | .channel")"
+          test "$ACTIVE_CHANNEL" = rc || test "$ACTIVE_CHANNEL" = stable
+          if [ "$ACTIVE_CHANNEL" = rc ]; then
+            CATALOG_REF="channel-preview/v$RELEASE_VERSION"
+            UPDATE_BRANCH="$CATALOG_REF"
+          else
+            CATALOG_REF=main
+            UPDATE_BRANCH="guardscan/v$RELEASE_VERSION"
+          fi
+          gh repo clone ntanwir10/homebrew-tap catalog-checkout
+          if git -C catalog-checkout fetch origin "$CATALOG_REF"; then
+            git -C catalog-checkout switch --detach "origin/$CATALOG_REF"
+          fi
+          CATALOG_COMMIT="$(git -C catalog-checkout rev-parse HEAD)"
+          mkdir catalog-verification
+          gh release download "v$RELEASE_VERSION" \
+            --repo "$GITHUB_REPOSITORY" \
+            --dir catalog-verification \
+            --pattern release-manifest.json
+          MANIFEST_SHA256="$(sha256sum catalog-verification/release-manifest.json | cut -d ' ' -f 1)"
+          LEDGER_MANIFEST_SHA256="$(node - <<'NODE'
+          const {readEvents, materializeReleaseState} = require('./cli/scripts/release/events');
+          process.stdout.write(materializeReleaseState(readEvents('release-events.jsonl')).manifestSha256 || '');
+          NODE
+          )"
+          test "$MANIFEST_SHA256" = "$LEDGER_MANIFEST_SHA256"
+          SOURCE_COMMIT="$(git rev-parse HEAD)"
+          node cli/scripts/release/index.js catalog-status \
+            --manifest catalog-verification/release-manifest.json \
+            --catalog-root catalog-checkout \
+            --manifest-url "https://github.com/${GITHUB_REPOSITORY}/releases/download/v$RELEASE_VERSION/release-manifest.json" \
+            --manifest-sha256 "$MANIFEST_SHA256" \
+            --generator-repository "$GITHUB_REPOSITORY" \
+            --generator-commit "$SOURCE_COMMIT" \
+            > catalog-verification/status.json
+          cat catalog-verification/status.json
+          INTEGRITY_INCIDENT="$(node -p 'String(require("./catalog-verification/status.json").integrityIncident)')"
+          CATALOG_CLASSIFICATION="$(node -p 'require("./catalog-verification/status.json").classification')"
+          if [ "$INTEGRITY_INCIDENT" = true ]; then
+            echo "::error::Release-integrity incident: catalog classification is $CATALOG_CLASSIFICATION"
+            exit 1
+          fi
+          if [ "$CATALOG_CLASSIFICATION" != exact ]; then
+            if [ "$AUTOMATION_ENABLED" != true ]; then
+              echo "exact=false" >> "$GITHUB_OUTPUT"
+              echo "Automation is disabled; catalog drift was diagnosed without mutation."
+              exit 0
+            fi
+            if git -C catalog-checkout show-ref --verify --quiet "refs/remotes/origin/$UPDATE_BRANCH"; then
+              git -C catalog-checkout switch --detach "origin/$UPDATE_BRANCH"
+              node cli/scripts/release/index.js catalog \
+                --manifest catalog-verification/release-manifest.json \
+                --output-dir catalog-checkout \
+                --manifest-url "https://github.com/${GITHUB_REPOSITORY}/releases/download/v$RELEASE_VERSION/release-manifest.json" \
+                --manifest-sha256 "$MANIFEST_SHA256" \
+                --generator-repository "$GITHUB_REPOSITORY" \
+                --generator-commit "$SOURCE_COMMIT" \
+                --check
+              cmp catalog/homebrew-tap/.github/workflows/verify.yml \
+                catalog-checkout/.github/workflows/verify.yml
+            else
+              git -C catalog-checkout switch -c "$UPDATE_BRANCH" origin/main
+              node cli/scripts/release/index.js catalog \
+                --manifest catalog-verification/release-manifest.json \
+                --output-dir catalog-checkout \
+                --manifest-url "https://github.com/${GITHUB_REPOSITORY}/releases/download/v$RELEASE_VERSION/release-manifest.json" \
+                --manifest-sha256 "$MANIFEST_SHA256" \
+                --generator-repository "$GITHUB_REPOSITORY" \
+                --generator-commit "$SOURCE_COMMIT"
+              mkdir -p catalog-checkout/.github/workflows
+              cp catalog/homebrew-tap/.github/workflows/verify.yml \
+                catalog-checkout/.github/workflows/verify.yml
+              git -C catalog-checkout config user.name guardscan-release-bot
+              git -C catalog-checkout config user.email 41898282+github-actions[bot]@users.noreply.github.com
+              git -C catalog-checkout add Formula/guardscan.rb bucket/guardscan.json \
+                channel-lock.json .github/workflows/verify.yml
+              git -C catalog-checkout commit -m "guardscan v$RELEASE_VERSION"
+              git -C catalog-checkout push origin "$UPDATE_BRANCH"
+            fi
+            PR_NUMBER="$(gh pr list --repo ntanwir10/homebrew-tap \
+              --head "$UPDATE_BRANCH" --state all --limit 1 --json number --jq '.[0].number')"
+            if [ -z "$PR_NUMBER" ]; then
+              PR_ARGS=(
+                --repo ntanwir10/homebrew-tap
+                --base main
+                --head "$UPDATE_BRANCH"
+                --title "GuardScan v$RELEASE_VERSION"
+                --body "Generated from GuardScan's immutable release manifest and bound by channel-lock.json."
+              )
+              if [ "$ACTIVE_CHANNEL" = rc ]; then PR_ARGS+=(--draft); fi
+              gh pr create "${PR_ARGS[@]}"
+              PR_NUMBER="$(gh pr list --repo ntanwir10/homebrew-tap \
+                --head "$UPDATE_BRANCH" --state all --limit 1 --json number --jq '.[0].number')"
+            fi
+            if [ "$ACTIVE_CHANNEL" = stable ]; then
+              PR_STATE="$(gh pr view --repo ntanwir10/homebrew-tap "$PR_NUMBER" --json state --jq .state)"
+              if [ "$PR_STATE" != MERGED ]; then
+                gh pr merge --repo ntanwir10/homebrew-tap "$PR_NUMBER" --auto --squash
+              fi
+            fi
+            echo "exact=false" >> "$GITHUB_OUTPUT"
+            echo "Catalog is converging through PR #$PR_NUMBER; verification remains pending."
+            exit 0
+          fi
+          if ! cmp --silent catalog/homebrew-tap/.github/workflows/verify.yml \
+            catalog-checkout/.github/workflows/verify.yml; then
+            echo "::error::Release-integrity incident: catalog verification workflow differs from its source"
+            exit 1
+          fi
+          CATALOG_PULL_REQUEST="$(node - <<'NODE'
+          const {readEvents, materializeReleaseState} = require('./cli/scripts/release/events');
+          const state = materializeReleaseState(readEvents('release-events.jsonl'));
+          process.stdout.write(String(state.channels?.homebrew?.catalog?.pullRequest || ''));
+          NODE
+          )"
+          if [ -z "$CATALOG_PULL_REQUEST" ]; then
+            CATALOG_PULL_REQUEST="$(gh api \
+              "repos/ntanwir10/homebrew-tap/commits/$CATALOG_COMMIT/pulls" \
+              --jq '.[0].number')"
+          fi
+          case "$CATALOG_PULL_REQUEST" in
+            ''|*[!0-9]*) echo "Catalog publication evidence has no pull request" >&2; exit 1 ;;
+          esac
+          export ACTIVE_CHANNEL CATALOG_COMMIT CATALOG_PULL_REQUEST CATALOG_REF MANIFEST_SHA256 SOURCE_COMMIT
+          node - <<'NODE'
+          const fs = require('fs');
+          const crypto = require('crypto');
+          const lockFile = fs.readFileSync('catalog-checkout/channel-lock.json');
+          const lock = JSON.parse(lockFile);
+          fs.writeFileSync('catalog-verification/evidence.json', `${JSON.stringify({
+            repository: 'ntanwir10/homebrew-tap',
+            ref: process.env.CATALOG_REF,
+            commit: process.env.CATALOG_COMMIT,
+            pullRequest: Number(process.env.CATALOG_PULL_REQUEST),
+            channel: process.env.ACTIVE_CHANNEL,
+            manifestSha256: process.env.MANIFEST_SHA256,
+            lockSha256: crypto.createHash('sha256').update(lockFile).digest('hex'),
+            files: lock.files,
+          }, null, 2)}\n`);
+          NODE
+          echo "exact=true" >> "$GITHUB_OUTPUT"
+      - name: Persist refetched catalog publication evidence
+        if: vars.RELEASE_AUTOMATION_ENABLED == 'true' && steps.catalog.outputs.exact == 'true'
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          node - <<'NODE'
+          const fs = require('fs');
+          const {appendEvent, readEvents} = require('./cli/scripts/release/events');
+          const evidence = require('./catalog-verification/evidence.json');
+          const tag = `v${process.env.RELEASE_VERSION}`;
+          const events = readEvents('release-events.jsonl');
+          if (events.length === 0) throw new Error(`release ledger is empty for ${tag}`);
+          const commit = events[0].commit;
+          const timestamp = new Date().toISOString();
+          for (const [channel, catalogPath] of [
+            ['homebrew', 'Formula/guardscan.rb'],
+            ['scoop', 'bucket/guardscan.json'],
+          ]) {
+            const remoteDigest = evidence.files?.[catalogPath]?.sha256;
+            if (!/^[a-f0-9]{64}$/.test(remoteDigest || '')) {
+              throw new Error(`catalog evidence has no valid digest for ${catalogPath}`);
+            }
+            const idempotencyKey = `catalog-published:${channel}:${tag}:${evidence.commit}:${evidence.lockSha256}`;
+            const existing = events.find(event => event.idempotencyKey === idempotencyKey);
+            appendEvent('release-events.jsonl', {
+              version: process.env.RELEASE_VERSION,
+              tag,
+              commit,
+              timestamp: existing?.timestamp || timestamp,
+              type: 'channel_published',
+              channel,
+              idempotencyKey,
+              payload: {
+                remoteIdentity: `github:${evidence.repository}@${evidence.commit}#${catalogPath}`,
+                remoteDigest,
+                catalog: {
+                  repository: evidence.repository,
+                  commit: evidence.commit,
+                  pullRequest: evidence.pullRequest,
+                  lockDigest: evidence.lockSha256,
+                  manifestDigest: evidence.manifestSha256,
+                  path: catalogPath,
+                  fileDigest: remoteDigest,
+                },
+              },
+            });
+          }
+          NODE
+          git worktree add ledger-branch origin/release-ledger
+          cp release-events.jsonl "ledger-branch/events/v${{ inputs.version }}.jsonl"
+          (
+            cd ledger-branch
+            git config user.name guardscan-release-bot
+            git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+            git add "events/v${{ inputs.version }}.jsonl"
+            git commit -m "catalog reconciled: v${{ inputs.version }}" || exit 0
+            git push origin HEAD:release-ledger
+          )
       - name: Trigger promotion when the machine policy is eligible
-        if: contains(inputs.version, '-rc.')
+        if: vars.RELEASE_AUTOMATION_ENABLED == 'true' && contains(inputs.version, '-rc.')
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
         run: |
@@ -486,7 +833,10 @@ jobs:
 
   rollback:
     name: Append rollback and prepare forward fix
-    if: github.event_name == 'workflow_dispatch' && inputs.action == 'rollback'
+    if: >-
+      github.event_name == 'workflow_dispatch'
+      && vars.RELEASE_AUTOMATION_ENABLED == 'true'
+      && inputs.action == 'rollback'
     runs-on: ubuntu-24.04
     concurrency:
       group: release-ledger

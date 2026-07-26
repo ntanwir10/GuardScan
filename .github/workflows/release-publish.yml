@@ -18,10 +18,12 @@ permissions:
 
 env:
   RELEASE_NODE_VERSION: 22.23.1
+  RELEASE_NPM_VERSION: 11.5.2
 
 jobs:
   github:
     name: Immutable GitHub release
+    if: vars.RELEASE_AUTOMATION_ENABLED == 'true'
     runs-on: ubuntu-24.04
     environment: ${{ inputs.channel == 'rc' && 'release-rc' || 'release-stable' }}
     permissions:
@@ -81,7 +83,7 @@ jobs:
           (cd redownload && sha256sum --check SHA256SUMS)
           cosign verify-blob \
             --bundle redownload/SHA256SUMS.sigstore.json \
-            --certificate-identity-regexp "^https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release-build.yml@" \
+            --certificate-identity-regexp "^https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release-train.yml@" \
             --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
             redownload/SHA256SUMS
       - name: Publish verified draft
@@ -94,6 +96,7 @@ jobs:
 
   npm:
     name: npm trusted publication
+    if: vars.RELEASE_AUTOMATION_ENABLED == 'true'
     runs-on: ubuntu-24.04
     needs: [github]
     environment: npm-publish
@@ -113,6 +116,10 @@ jobs:
         with:
           node-version: ${{ env.RELEASE_NODE_VERSION }}
           registry-url: https://registry.npmjs.org
+      - name: Install trusted-publishing-capable npm CLI
+        run: |
+          npm install --global "npm@${RELEASE_NPM_VERSION}"
+          test "$(npm --version)" = "$RELEASE_NPM_VERSION"
       - working-directory: cli
         run: npm ci
       - name: Verify and classify registry state
@@ -133,6 +140,7 @@ jobs:
 
   pypi-test:
     name: TestPyPI trusted publication and lifecycle
+    if: vars.RELEASE_AUTOMATION_ENABLED == 'true'
     runs-on: ubuntu-24.04
     needs: [github]
     environment: pypi
@@ -144,10 +152,10 @@ jobs:
         with:
           name: release-payload-${{ inputs.tag }}
           path: payload
-      - name: Select Linux x64 wheel
+      - name: Select every tested platform wheel
         run: |
           mkdir dist
-          cp payload/*manylinux_2_28_x86_64.whl dist/
+          cp payload/*.whl dist/
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.13"
@@ -169,10 +177,16 @@ jobs:
                   raise
               remote = {"urls": []}
           remote_files = {item["filename"]: item["digests"]["sha256"] for item in remote["urls"]}
-          for wheel in pathlib.Path("dist").glob("*.whl"):
-              digest = hashlib.sha256(wheel.read_bytes()).hexdigest()
-              if wheel.name in remote_files and remote_files[wheel.name] != digest:
-                  raise SystemExit(f"TestPyPI integrity conflict for {wheel.name}")
+          local_files = {
+              wheel.name: hashlib.sha256(wheel.read_bytes()).hexdigest()
+              for wheel in pathlib.Path("dist").glob("*.whl")
+          }
+          unexpected = sorted(set(remote_files) - set(local_files))
+          if unexpected:
+              raise SystemExit(f"TestPyPI has unexpected files for this version: {unexpected}")
+          for filename, digest in local_files.items():
+              if filename in remote_files and remote_files[filename] != digest:
+                  raise SystemExit(f"TestPyPI integrity conflict for {filename}")
           PY
       - uses: pypa/gh-action-pypi-publish@ba38be9e461d3875417946c167d0b5f3d385a247 # v1.14.1
         with:
@@ -180,6 +194,41 @@ jobs:
           packages-dir: dist
           skip-existing: true
           print-hash: true
+      - name: Verify complete TestPyPI file set
+        env:
+          REGISTRY_JSON_BASE: https://test.pypi.org/pypi/guardscan-cli
+          RELEASE_VERSION: ${{ inputs.tag }}
+        run: |
+          python - <<'PY'
+          import hashlib, json, os, pathlib, time, urllib.error, urllib.request
+
+          version = os.environ["RELEASE_VERSION"].removeprefix("v").replace("-rc.", "rc")
+          url = f'{os.environ["REGISTRY_JSON_BASE"]}/{version}/json'
+          local = {
+              wheel.name: hashlib.sha256(wheel.read_bytes()).hexdigest()
+              for wheel in pathlib.Path("dist").glob("*.whl")
+          }
+          for attempt in range(30):
+              try:
+                  with urllib.request.urlopen(url, timeout=30) as response:
+                      remote = {
+                          item["filename"]: item["digests"]["sha256"]
+                          for item in json.load(response)["urls"]
+                      }
+              except urllib.error.HTTPError as error:
+                  if error.code != 404:
+                      raise
+                  remote = {}
+              if remote == local:
+                  break
+              if set(remote) - set(local):
+                  raise SystemExit("TestPyPI returned unexpected files for this version")
+              if any(local.get(name) != digest for name, digest in remote.items()):
+                  raise SystemExit("TestPyPI returned a conflicting wheel digest")
+              if attempt == 29:
+                  raise SystemExit("TestPyPI did not converge to the complete tested wheel set")
+              time.sleep(10)
+          PY
       - name: Convert release tag to PEP 440
         id: version
         shell: bash
@@ -202,6 +251,7 @@ jobs:
 
   pypi:
     name: PyPI trusted publication
+    if: vars.RELEASE_AUTOMATION_ENABLED == 'true'
     runs-on: ubuntu-24.04
     needs: [pypi-test]
     environment: pypi
@@ -236,19 +286,61 @@ jobs:
                   raise
               remote = {"urls": []}
           remote_files = {item["filename"]: item["digests"]["sha256"] for item in remote["urls"]}
-          for wheel in pathlib.Path("dist").glob("*.whl"):
-              digest = hashlib.sha256(wheel.read_bytes()).hexdigest()
-              if wheel.name in remote_files and remote_files[wheel.name] != digest:
-                  raise SystemExit(f"PyPI integrity conflict for {wheel.name}")
+          local_files = {
+              wheel.name: hashlib.sha256(wheel.read_bytes()).hexdigest()
+              for wheel in pathlib.Path("dist").glob("*.whl")
+          }
+          unexpected = sorted(set(remote_files) - set(local_files))
+          if unexpected:
+              raise SystemExit(f"PyPI has unexpected files for this version: {unexpected}")
+          for filename, digest in local_files.items():
+              if filename in remote_files and remote_files[filename] != digest:
+                  raise SystemExit(f"PyPI integrity conflict for {filename}")
           PY
       - uses: pypa/gh-action-pypi-publish@ba38be9e461d3875417946c167d0b5f3d385a247 # v1.14.1
         with:
           packages-dir: dist
           skip-existing: true
           print-hash: true
+      - name: Verify complete PyPI file set
+        env:
+          REGISTRY_JSON_BASE: https://pypi.org/pypi/guardscan-cli
+          RELEASE_VERSION: ${{ inputs.tag }}
+        run: |
+          python - <<'PY'
+          import hashlib, json, os, pathlib, time, urllib.error, urllib.request
 
-  adapters:
-    name: Homebrew and Scoop bot PRs
+          version = os.environ["RELEASE_VERSION"].removeprefix("v").replace("-rc.", "rc")
+          url = f'{os.environ["REGISTRY_JSON_BASE"]}/{version}/json'
+          local = {
+              wheel.name: hashlib.sha256(wheel.read_bytes()).hexdigest()
+              for wheel in pathlib.Path("dist").glob("*.whl")
+          }
+          for attempt in range(30):
+              try:
+                  with urllib.request.urlopen(url, timeout=30) as response:
+                      remote = {
+                          item["filename"]: item["digests"]["sha256"]
+                          for item in json.load(response)["urls"]
+                      }
+              except urllib.error.HTTPError as error:
+                  if error.code != 404:
+                      raise
+                  remote = {}
+              if remote == local:
+                  break
+              if set(remote) - set(local):
+                  raise SystemExit("PyPI returned unexpected files for this version")
+              if any(local.get(name) != digest for name, digest in remote.items()):
+                  raise SystemExit("PyPI returned a conflicting wheel digest")
+              if attempt == 29:
+                  raise SystemExit("PyPI did not converge to the complete tested wheel set")
+              time.sleep(10)
+          PY
+
+  catalog:
+    name: Shared Homebrew and Scoop catalog projection
+    if: vars.RELEASE_AUTOMATION_ENABLED == 'true'
     runs-on: ubuntu-24.04
     needs: [github]
     permissions:
@@ -261,7 +353,7 @@ jobs:
           app-id: ${{ vars.RELEASE_APP_ID }}
           private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
           owner: ntanwir10
-          repositories: homebrew-tap,scoop-bucket
+          repositories: homebrew-tap
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ inputs.ref }}
@@ -274,55 +366,168 @@ jobs:
           node-version: ${{ env.RELEASE_NODE_VERSION }}
       - working-directory: cli
         run: npm ci
-      - working-directory: cli
-        run: npm run release:render -- --manifest ../payload/release-manifest.json --output-dir ../adapters
-      - name: Push deterministic adapter branches and open PRs
+      - name: Render the cryptographically bound shared catalog projection
+        working-directory: cli
+        env:
+          RELEASE_REF: ${{ inputs.ref }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          MANIFEST_SHA256="$(sha256sum ../payload/release-manifest.json | cut -d ' ' -f 1)"
+          node scripts/release/index.js catalog \
+            --manifest ../payload/release-manifest.json \
+            --output-dir ../catalog-output \
+            --manifest-url "https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/release-manifest.json" \
+            --manifest-sha256 "$MANIFEST_SHA256" \
+            --generator-repository "$GITHUB_REPOSITORY" \
+            --generator-commit "$RELEASE_REF"
+      - name: Validate complete generated catalog projection
+        run: |
+          test -f catalog-output/Formula/guardscan.rb
+          test -f catalog-output/bucket/guardscan.json
+          test -f catalog-output/channel-lock.json
+          test -f catalog/homebrew-tap/.github/workflows/verify.yml
+          node - <<'NODE'
+          const fs = require('fs');
+          const crypto = require('crypto');
+          const lock = JSON.parse(fs.readFileSync('catalog-output/channel-lock.json'));
+          if (lock.schemaVersion !== 'guardscan.channel-catalog.v1') {
+            throw new Error('unexpected channel catalog schema');
+          }
+          const expected = new Map([
+            ['Formula/guardscan.rb', 'catalog-output/Formula/guardscan.rb'],
+            ['bucket/guardscan.json', 'catalog-output/bucket/guardscan.json'],
+          ]);
+          for (const [target, source] of expected) {
+            const digest = crypto.createHash('sha256').update(fs.readFileSync(source)).digest('hex');
+            if (lock.files?.[target]?.sha256 !== digest) {
+              throw new Error(`channel-lock digest mismatch for ${target}`);
+            }
+          }
+          NODE
+      - name: Push one deterministic catalog update
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
+          RELEASE_CHANNEL: ${{ inputs.channel }}
+          RELEASE_TAG: ${{ inputs.tag }}
         run: |
-          BRANCH="guardscan/${{ inputs.tag }}"
-          for SPEC in "homebrew-tap:adapters/homebrew/Formula/guardscan.rb:Formula/guardscan.rb" \
-                      "scoop-bucket:adapters/scoop/bucket/guardscan.json:bucket/guardscan.json"; do
-            IFS=: read -r REPO SOURCE TARGET <<< "$SPEC"
-            gh repo clone "ntanwir10/$REPO" "$REPO"
-            (
-              cd "$REPO"
-              git config user.name guardscan-release-bot
-              git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-              if git show-ref --verify --quiet "refs/remotes/origin/$BRANCH"; then
-                git switch --detach "origin/$BRANCH"
-                if [ ! -f "$TARGET" ] || ! cmp --silent "../$SOURCE" "$TARGET"; then
-                  echo "::error::Release-integrity incident: $REPO/$BRANCH differs from the rendered adapter"
-                  exit 1
+          CATALOG_REPOSITORY="ntanwir10/homebrew-tap"
+          if [ "$RELEASE_CHANNEL" = rc ]; then
+            BRANCH="channel-preview/$RELEASE_TAG"
+          else
+            BRANCH="guardscan/$RELEASE_TAG"
+          fi
+          gh repo clone "$CATALOG_REPOSITORY" catalog-checkout
+          (
+            cd catalog-checkout
+            git config user.name guardscan-release-bot
+            git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+            projection_matches() {
+              for SPEC in \
+                "../catalog-output/Formula/guardscan.rb:Formula/guardscan.rb" \
+                "../catalog-output/bucket/guardscan.json:bucket/guardscan.json" \
+                "../catalog-output/channel-lock.json:channel-lock.json" \
+                "../catalog/homebrew-tap/.github/workflows/verify.yml:.github/workflows/verify.yml"; do
+                IFS=: read -r SOURCE TARGET <<< "$SPEC"
+                if [ ! -f "$TARGET" ] || ! cmp --silent "$SOURCE" "$TARGET"; then
+                  return 1
                 fi
-              else
-                git switch -c "$BRANCH"
-                mkdir -p "$(dirname "$TARGET")"
-                cp "../$SOURCE" "$TARGET"
-                git add "$TARGET"
-                git commit -m "guardscan ${{ inputs.tag }}"
-                git push origin "$BRANCH"
+              done
+            }
+            MAIN_ALREADY_CURRENT=false
+            if [ "$RELEASE_CHANNEL" = stable ] && projection_matches; then
+              MAIN_ALREADY_CURRENT=true
+              BRANCH=main
+            elif [ "$RELEASE_CHANNEL" = stable ] && [ -f channel-lock.json ]; then
+              EXISTING_TAG="$(node -p 'require("./channel-lock.json").source?.tag || ""')"
+              if [ "$EXISTING_TAG" = "$RELEASE_TAG" ]; then
+                echo "::error::Release-integrity incident: main has this release identity with different catalog bytes"
+                exit 1
               fi
-              PR_NUMBER="$(gh pr list --repo "ntanwir10/$REPO" \
+            fi
+            if [ "$MAIN_ALREADY_CURRENT" = true ]; then
+              PR_NUMBER=
+              PR_STATE=MERGED
+            elif git show-ref --verify --quiet "refs/remotes/origin/$BRANCH"; then
+              git switch --detach "origin/$BRANCH"
+              if ! projection_matches; then
+                echo "::error::Release-integrity incident: $CATALOG_REPOSITORY@$BRANCH differs"
+                exit 1
+              fi
+            else
+              git switch -c "$BRANCH"
+              mkdir -p Formula bucket .github/workflows
+              cp ../catalog-output/Formula/guardscan.rb Formula/guardscan.rb
+              cp ../catalog-output/bucket/guardscan.json bucket/guardscan.json
+              cp ../catalog-output/channel-lock.json channel-lock.json
+              cp ../catalog/homebrew-tap/.github/workflows/verify.yml .github/workflows/verify.yml
+              git add Formula/guardscan.rb bucket/guardscan.json channel-lock.json .github/workflows/verify.yml
+              git commit -m "guardscan $RELEASE_TAG"
+              git push origin "$BRANCH"
+            fi
+            CATALOG_COMMIT="$(git rev-parse HEAD)"
+            if [ "$MAIN_ALREADY_CURRENT" = true ]; then
+              PR_NUMBER="$(gh api \
+                "repos/$CATALOG_REPOSITORY/commits/$CATALOG_COMMIT/pulls" \
+                --jq '.[0].number')"
+              if [ -z "$PR_NUMBER" ]; then
+                PR_NUMBER="$(gh pr list --repo "$CATALOG_REPOSITORY" \
+                  --search "\"GuardScan $RELEASE_TAG\" in:title" \
+                  --state merged --limit 1 --json number --jq '.[0].number')"
+              fi
+              if [ -z "$PR_NUMBER" ]; then
+                echo "::error::Current catalog bytes have no merged GuardScan projection PR"
+                exit 1
+              fi
+              PR_STATE=MERGED
+            else
+              PR_NUMBER="$(gh pr list --repo "$CATALOG_REPOSITORY" \
                 --head "$BRANCH" --state all --limit 1 --json number --jq '.[0].number')"
               if [ -z "$PR_NUMBER" ]; then
-                gh pr create --repo "ntanwir10/$REPO" \
-                  --base main --head "$BRANCH" \
-                  --title "GuardScan ${{ inputs.tag }}" \
-                  --body "Generated from immutable release-manifest.json."
-                PR_NUMBER="$(gh pr list --repo "ntanwir10/$REPO" \
+                PR_ARGS=(
+                  --repo "$CATALOG_REPOSITORY"
+                  --base main
+                  --head "$BRANCH"
+                  --title "GuardScan $RELEASE_TAG"
+                  --body "Generated from GuardScan's immutable release manifest and bound by channel-lock.json."
+                )
+                if [ "$RELEASE_CHANNEL" = rc ]; then PR_ARGS+=(--draft); fi
+                gh pr create "${PR_ARGS[@]}"
+                PR_NUMBER="$(gh pr list --repo "$CATALOG_REPOSITORY" \
                   --head "$BRANCH" --state all --limit 1 --json number --jq '.[0].number')"
               fi
-              PR_STATE="$(gh pr view --repo "ntanwir10/$REPO" "$PR_NUMBER" --json state --jq .state)"
-              if [ "${{ inputs.channel }}" = stable ] && [ "$PR_STATE" != MERGED ]; then
-                gh pr merge --repo "ntanwir10/$REPO" "$PR_NUMBER" --auto --squash
+              PR_STATE="$(gh pr view --repo "$CATALOG_REPOSITORY" "$PR_NUMBER" --json state --jq .state)"
+              if [ "$RELEASE_CHANNEL" = stable ] && [ "$PR_STATE" != MERGED ]; then
+                gh pr merge --repo "$CATALOG_REPOSITORY" "$PR_NUMBER" --auto --squash
               fi
-            )
-          done
+            fi
+            export CATALOG_REPOSITORY BRANCH CATALOG_COMMIT PR_NUMBER PR_STATE
+          node - <<'NODE'
+          const fs = require('fs');
+          const crypto = require('crypto');
+          const lock = fs.readFileSync('channel-lock.json');
+          fs.writeFileSync('../catalog-result.json', `${JSON.stringify({
+            schemaVersion: 'guardscan.catalog-publication.v1',
+            repository: process.env.CATALOG_REPOSITORY,
+            branch: process.env.BRANCH,
+            commit: process.env.CATALOG_COMMIT,
+            pullRequest: process.env.PR_NUMBER ? Number(process.env.PR_NUMBER) : null,
+            state: process.env.PR_STATE,
+            lockSha256: crypto.createHash('sha256').update(lock).digest('hex'),
+          }, null, 2)}\n`);
+          NODE
+          )
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-catalog-${{ inputs.tag }}
+          path: |
+            catalog-output/channel-lock.json
+            catalog-result.json
+          if-no-files-found: error
+          retention-days: 30
 
   winget:
     name: WinGet submission
-    if: inputs.channel == 'stable'
+    if: vars.RELEASE_AUTOMATION_ENABLED == 'true' && inputs.channel == 'stable'
     runs-on: windows-2025
     needs: [github]
     environment: winget
@@ -366,7 +571,7 @@ jobs:
 
   chocolatey:
     name: Chocolatey submission
-    if: inputs.channel == 'stable'
+    if: vars.RELEASE_AUTOMATION_ENABLED == 'true' && inputs.channel == 'stable'
     runs-on: windows-2025
     needs: [github]
     environment: chocolatey

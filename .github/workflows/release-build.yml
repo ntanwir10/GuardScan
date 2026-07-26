@@ -191,7 +191,7 @@ jobs:
             standalone/guardscan
           cosign verify-blob \
             --bundle standalone/guardscan.sigstore.json \
-            --certificate-identity-regexp "^https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release-build.yml@" \
+            --certificate-identity-regexp "^https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release-train.yml@" \
             --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
             standalone/guardscan
 
@@ -556,7 +556,7 @@ jobs:
           cosign sign-blob --yes --bundle release/SHA256SUMS.sigstore.json release/SHA256SUMS
           cosign verify-blob \
             --bundle release/SHA256SUMS.sigstore.json \
-            --certificate-identity-regexp "^https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release-build.yml@" \
+            --certificate-identity-regexp "^https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release-train.yml@" \
             --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
             release/SHA256SUMS
       - name: Attest complete release payload

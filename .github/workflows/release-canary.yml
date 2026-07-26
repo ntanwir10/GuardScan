@@ -15,10 +15,13 @@ permissions:
 
 env:
   RELEASE_NODE_VERSION: 22.23.1
+  SCOOP_INSTALL_COMMIT: b0ee913725139b816f9178163af0aecdba07a7ed
+  SCOOP_COMMIT: b588a06e41d920d2123ec70aee682bae14935939
 
 jobs:
   discover:
     name: Discover active releases
+    if: github.event_name == 'workflow_dispatch' || vars.RELEASE_AUTOMATION_ENABLED == 'true'
     runs-on: ubuntu-24.04
     outputs:
       trains: ${{ steps.matrix.outputs.trains }}
@@ -235,7 +238,7 @@ jobs:
             --dir release --pattern "$TARGET.guardscan.sigstore.json"
           cosign verify-blob \
             --bundle "release/$TARGET.guardscan.sigstore.json" \
-            --certificate-identity-regexp "^https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release-build.yml@" \
+            --certificate-identity-regexp "^https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release-train.yml@" \
             --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
             executable/guardscan
       - name: Verify macOS signing and Gatekeeper
@@ -330,6 +333,26 @@ jobs:
         train: ${{ fromJSON(needs.discover.outputs.trains) }}
         adapter: [homebrew-macos, homebrew-linux, scoop]
     steps:
+      - name: Check out the pinned Scoop installer
+        if: matrix.adapter == 'scoop'
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: ScoopInstaller/Install
+          ref: ${{ env.SCOOP_INSTALL_COMMIT }}
+          path: .scoop-installer
+          persist-credentials: false
+      - name: Install the pinned Scoop CLI
+        if: matrix.adapter == 'scoop'
+        shell: pwsh
+        run: |
+          $scoopRoot = Join-Path $env:RUNNER_TEMP 'scoop'
+          & .\.scoop-installer\install.ps1 -RunAsAdmin -ScoopDir $scoopRoot
+          if (-not $?) { throw 'Pinned Scoop installer failed' }
+          git -C "$scoopRoot\apps\scoop\current" fetch origin $env:SCOOP_COMMIT --depth 1
+          if ($LASTEXITCODE -ne 0) { throw 'Unable to fetch the pinned Scoop CLI' }
+          git -C "$scoopRoot\apps\scoop\current" checkout --detach $env:SCOOP_COMMIT
+          if ($LASTEXITCODE -ne 0) { throw 'Unable to select the pinned Scoop CLI' }
+          "$scoopRoot\shims" | Out-File $env:GITHUB_PATH -Append
       - name: Initialize fail-closed report
         shell: bash
         run: |
@@ -363,7 +386,7 @@ jobs:
             guardscan --version
             brew uninstall guardscan
           else
-            git clone --branch "guardscan/v$VERSION" \
+            git clone --branch "channel-preview/v$VERSION" \
               https://github.com/ntanwir10/homebrew-tap preview-tap
             brew style preview-tap/Formula/guardscan.rb
             brew audit --strict preview-tap/Formula/guardscan.rb
@@ -386,15 +409,24 @@ jobs:
           CHANNEL: ${{ matrix.train.channel }}
         run: |
           if ($env:CHANNEL -eq 'stable') {
-            scoop bucket add guardscan https://github.com/ntanwir10/scoop-bucket
+            scoop bucket add guardscan https://github.com/ntanwir10/homebrew-tap
+            if ($LASTEXITCODE -ne 0) { throw 'Unable to add the stable GuardScan bucket' }
+            $package = 'guardscan/guardscan'
           } else {
-            git clone --branch "guardscan/v$env:VERSION" https://github.com/ntanwir10/scoop-bucket preview-bucket
+            git clone --branch "channel-preview/v$env:VERSION" https://github.com/ntanwir10/homebrew-tap preview-bucket
+            if ($LASTEXITCODE -ne 0) { throw 'Unable to clone the GuardScan preview bucket' }
             scoop bucket add guardscan-preview (Resolve-Path preview-bucket)
+            if ($LASTEXITCODE -ne 0) { throw 'Unable to add the GuardScan preview bucket' }
+            $package = 'guardscan-preview/guardscan'
           }
-          scoop install guardscan
+          scoop install $package
+          if ($LASTEXITCODE -ne 0) { throw 'Scoop installation failed' }
           guardscan --version
+          if ($LASTEXITCODE -ne 0) { throw 'Scoop invocation failed' }
           scoop update guardscan
+          if ($LASTEXITCODE -ne 0) { throw 'Scoop update check failed' }
           scoop uninstall guardscan
+          if ($LASTEXITCODE -ne 0) { throw 'Scoop uninstall failed' }
           node -e '
             const fs = require("fs");
             const report = JSON.parse(fs.readFileSync("report.json"));
@@ -564,9 +596,9 @@ jobs:
                     type,
                     channel: report.channel,
                     idempotencyKey: `${type}:${suffix}`,
-                    payload: {
-                      remoteIdentity: `${report.channel}:${version}`,
-                    },
+                    payload: ['homebrew', 'scoop'].includes(report.channel)
+                      ? {}
+                      : {remoteIdentity: `${report.channel}:${version}`},
                   });
                 }
               }
@@ -575,11 +607,26 @@ jobs:
           NODE
           git worktree add ledger-branch origin/release-ledger
           cp ledgers/*.jsonl ledger-branch/events/
+          node - <<'NODE'
+          const fs = require('fs');
+          const path = require('path');
+          const {materializeReleaseState, readEvents} = require('./cli/scripts/release/events');
+          const {reconcileRelease} = require('./cli/scripts/release/reconcile');
+          const activeFile = 'ledger-branch/active-versions.json';
+          const active = JSON.parse(fs.readFileSync(activeFile));
+          active.trains = (active.trains || []).filter(train => {
+            if (train.channel !== 'stable') return true;
+            const ledger = path.join('ledger-branch/events', `v${train.version}.jsonl`);
+            return !fs.existsSync(ledger)
+              || !reconcileRelease(materializeReleaseState(readEvents(ledger))).complete;
+          });
+          fs.writeFileSync(activeFile, `${JSON.stringify(active, null, 2)}\n`);
+          NODE
           (
             cd ledger-branch
             git config user.name guardscan-release-bot
             git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-            git add events
+            git add events active-versions.json
             git commit -m "canary evidence: run $GITHUB_RUN_ID"
             git push origin HEAD:release-ledger
           )

@@ -15,7 +15,7 @@ permissions:
 jobs:
   release-pr:
     name: Update release pull request
-    if: ${{ vars.RELEASE_APP_ID != '' }}
+    if: ${{ vars.RELEASE_AUTOMATION_ENABLED == 'true' && vars.RELEASE_APP_ID != '' }}
     runs-on: ubuntu-latest
     steps:
       - name: Create short-lived release app token
