@@ -48,11 +48,16 @@ caller. Environment and OIDC policies therefore identify
 Initialize `ntanwir10/homebrew-tap` with:
 
 ```text
-Formula/guardscan.rb
-bucket/guardscan.json
-channel-lock.json
+README.md
 .github/workflows/verify.yml
 ```
+
+Before the first verified stable native release, all of
+`Formula/guardscan.rb`, `bucket/guardscan.json`, and `channel-lock.json` must
+remain absent. The verification workflow accepts only that exact unpublished
+state; it rejects partial catalog metadata. The first stable catalog PR creates
+all three generated files atomically. After publication, the repository layout
+contains all five files.
 
 Protect catalog `main`; require pull requests and the catalog verification
 check. Stable metadata is merged only to `main`. RC metadata lives on temporary
