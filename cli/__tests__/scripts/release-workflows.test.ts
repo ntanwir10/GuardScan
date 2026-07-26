@@ -504,6 +504,9 @@ describe('zero-touch release workflow contracts', () => {
     expect(yaml.load(source)).toBeTruthy();
     assertActionPins(source);
     expect(source).toContain('manifest digest mismatch');
+    expect(source).toContain('published=false');
+    expect(source).toContain('catalog metadata is partially initialized');
+    expect(source).toContain("needs.integrity.outputs.published == 'true'");
     expect(source).toContain('node scripts/release/index.js catalog');
     expect(source).toContain('--check');
     expect(source).toContain('runs-on: macos-15');
