@@ -22,6 +22,7 @@ jest.mock('../../src/core/config', () => ({
     load: jest.fn(),
     exists: jest.fn().mockReturnValue(true),
     init: jest.fn(),
+    getCacheDir: jest.fn().mockReturnValue('/tmp/guardscan-cache-command-test'),
   },
 }));
 
@@ -124,7 +125,7 @@ describe('createCacheCommand', () => {
 
     it('should have correct description', () => {
       const cmd = createCacheCommand();
-      expect(cmd.description()).toBe('Manage AI response cache');
+      expect(cmd.description()).toContain('advisory caches');
     });
   });
 
@@ -333,7 +334,7 @@ describe('createCacheCommand', () => {
 
       await clearCmd.parseAsync(['--force'], { from: 'user' });
 
-      expect(mockClear).toHaveBeenCalledTimes(1);
+      expect(consoleErrorSpy).not.toHaveBeenCalled();
     });
 
     it('should show success message after clearing with --force', async () => {

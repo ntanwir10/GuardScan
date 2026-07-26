@@ -2,8 +2,6 @@
  * Tests for init command
  */
 
-import { initCommand } from "../../src/commands/init";
-import { configManager } from "../../src/core/config";
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
@@ -42,12 +40,12 @@ jest.mock("../../src/providers/factory", () => ({
 describe("init command", () => {
   let originalEnv: NodeJS.ProcessEnv;
   let testConfigDir: string;
-  let originalHome: string | undefined;
+  let initCommand: typeof import("../../src/commands/init").initCommand;
+  let configManager: typeof import("../../src/core/config").configManager;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     // Save original environment
     originalEnv = { ...process.env };
-    originalHome = process.env.HOME;
 
     // Create a temporary config directory for testing
     testConfigDir = path.join(os.tmpdir(), `guardscan-test-${Date.now()}`);
@@ -59,17 +57,16 @@ describe("init command", () => {
       fs.rmSync(testConfigDir, { recursive: true, force: true });
     }
 
+    jest.resetModules();
+    ({ initCommand } = await import("../../src/commands/init"));
+    ({ configManager } = await import("../../src/core/config"));
+
     // Clear all mocks
     jest.clearAllMocks();
   });
 
   afterEach(() => {
     // Restore original environment
-    if (originalHome) {
-      process.env.HOME = originalHome;
-    } else {
-      delete process.env.HOME;
-    }
     process.env = originalEnv;
 
     // Clean up test directory

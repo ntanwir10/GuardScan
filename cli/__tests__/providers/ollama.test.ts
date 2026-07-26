@@ -36,7 +36,7 @@ describe('OllamaProvider', () => {
       expect(mockedAxios.post).toHaveBeenCalledWith(
         'http://localhost:11434/api/chat',
         expect.objectContaining({ stream: true }),
-        { responseType: 'stream' }
+        { responseType: 'stream', maxRedirects: 0 }
       );
     });
   });

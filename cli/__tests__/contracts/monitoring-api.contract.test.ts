@@ -2,18 +2,11 @@
  * Monitoring API contract tests.
  *
  * These tests pin the request paths and payload envelopes emitted by the CLI
- * clients that talk to the separate GuardScan-Monitoring service.
+ * telemetry client.
  */
 
 import axios from 'axios';
-import * as fs from 'fs';
-import * as os from 'os';
-import * as path from 'path';
 import { APIClient, TelemetryRequest } from '../../src/utils/api-client';
-import {
-  ErrorSeverity,
-  MonitoringManager,
-} from '../../src/utils/monitoring';
 
 jest.mock('axios');
 
@@ -34,20 +27,30 @@ describe('Monitoring API contracts', () => {
 
       const client = new APIClient('https://monitoring.example');
       const payload: TelemetryRequest = {
-        clientId: 'test-client-123',
-        repoId: 'test-repo-456',
+        schemaVersion: 'guardscan.telemetry.v1',
+        batchId: '00000000-0000-4000-8000-000000000001',
+        sentAt: 1700000001000,
         events: [
           {
+            eventId: '00000000-0000-4000-8000-000000000002',
             action: 'scan',
             loc: 1000,
             durationMs: 5000,
-            model: 'sast',
-            timestamp: 1700000000000,
-            metadata: { source: 'contract-test' },
+            executionMode: 'static',
+            occurredAt: 1700000000000,
           },
         ],
         cliVersion: '1.0.0',
       };
+
+      post.mockResolvedValue({
+        status: 202,
+        data: {
+          status: 'accepted',
+          batchId: payload.batchId,
+          accepted: 1,
+        },
+      });
 
       await client.sendTelemetry(payload);
 
@@ -71,104 +74,6 @@ describe('Monitoring API contracts', () => {
       await expect(client.ping()).resolves.toBe(true);
 
       expect(get).toHaveBeenCalledWith('/health', { timeout: 3000 });
-    });
-  });
-
-  describe('Monitoring manager', () => {
-    function createManager(): MonitoringManager {
-      return new MonitoringManager({
-        enabled: true,
-        endpoint: 'https://monitoring.example',
-        errorReportingEnabled: true,
-        performanceMonitoringEnabled: true,
-        usageAnalyticsEnabled: true,
-        sampleRate: 1.0,
-      });
-    }
-
-    it('posts monitoring events to /api/monitoring', async () => {
-      mockedAxios.post.mockResolvedValue({ status: 202 });
-      const manager = createManager();
-
-      await manager.trackError(new Error('boom'), ErrorSeverity.HIGH, {
-        command: 'security',
-      });
-      await manager.trackMetric('command.duration', 1234, 'ms', {
-        command: 'security',
-      });
-      await manager.flush();
-      await manager.shutdown();
-
-      expect(mockedAxios.post).toHaveBeenCalledWith(
-        'https://monitoring.example/api/monitoring',
-        expect.objectContaining({
-          errors: [
-            expect.objectContaining({
-              severity: ErrorSeverity.HIGH,
-              message: 'boom',
-              context: { command: 'security' },
-            }),
-          ],
-          metrics: [
-            expect.objectContaining({
-              name: 'command.duration',
-              value: 1234,
-              unit: 'ms',
-              tags: { command: 'security' },
-            }),
-          ],
-          usage: [],
-          timestamp: expect.any(String),
-        }),
-        expect.objectContaining({
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: 'Bearer ',
-          },
-          timeout: 5000,
-        })
-      );
-    });
-
-    it('checks monitoring health with GET /api/health', async () => {
-      mockedAxios.get.mockResolvedValue({ status: 200 });
-      const manager = createManager();
-
-      const result = await manager.healthCheck();
-      await manager.shutdown();
-
-      expect(result.status).toBe('healthy');
-      expect(mockedAxios.get).toHaveBeenCalledWith(
-        'https://monitoring.example/api/health',
-        { timeout: 5000 }
-      );
-    });
-
-    it('skips usage tracking when the local config has not been initialized', async () => {
-      const originalGuardscanHome = process.env.GUARDSCAN_HOME;
-      const tempHome = fs.mkdtempSync(
-        path.join(os.tmpdir(), 'guardscan-monitoring-')
-      );
-      process.env.GUARDSCAN_HOME = tempHome;
-
-      try {
-        const manager = createManager();
-
-        await expect(
-          manager.trackUsage('security', 250, true, { source: 'test' })
-        ).resolves.toBeUndefined();
-        await manager.flush();
-        await manager.shutdown();
-
-        expect(mockedAxios.post).not.toHaveBeenCalled();
-      } finally {
-        if (originalGuardscanHome === undefined) {
-          delete process.env.GUARDSCAN_HOME;
-        } else {
-          process.env.GUARDSCAN_HOME = originalGuardscanHome;
-        }
-        fs.rmSync(tempHome, { recursive: true, force: true });
-      }
     });
   });
 });

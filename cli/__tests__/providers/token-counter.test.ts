@@ -67,6 +67,8 @@ describe('AccurateTokenCounter', () => {
       
       expect(typeof status.tiktokenAvailable).toBe('boolean');
       expect(typeof status.claudeTokenizerAvailable).toBe('boolean');
+      expect(status.claudeTokenizerAvailable).toBe(false);
+      expect(status.recommendedDependencies.join(' ')).not.toContain('@anthropic-ai/tokenizer');
       expect(Array.isArray(status.recommendedDependencies)).toBe(true);
     });
 
