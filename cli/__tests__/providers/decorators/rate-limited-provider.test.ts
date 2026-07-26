@@ -364,6 +364,7 @@ describe('RateLimitedProvider – edge cases', () => {
 
   describe('costMultiplier', () => {
     it('should apply costMultiplier to token consumption', async () => {
+      useControlledTime();
       const mock = new MockProvider(); // countMessagesTokens = 1000
       const rateLimited = new RateLimitedProvider(mock, {
         maxTokens: 3000,
