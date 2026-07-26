@@ -51,6 +51,18 @@ Ship GuardScan through trustworthy, testable installation channels without creat
 10. **Generated adapters with checked-in review diffs.** Homebrew, Scoop, WinGet, Chocolatey, optional PyPI, and documentation snippets are rendered from templates plus the release manifest. Automation opens reviewable update pull requests instead of directly mutating every downstream stable channel.
 11. **Idempotent, resumable publication.** Each publish step records immutable input/output identity and treats an already-published matching artifact as success; a mismatched artifact is a hard failure. A retry resumes from verified state and never rebuilds or overwrites the version.
 12. **Cost-aware verification tiers.** Pull requests run fast package and generator checks, release candidates run the full platform/artifact matrix, stable promotion reuses those exact tested artifacts, and scheduled canaries use a minimal representative matrix.
+13. **One authoritative repository and one shared generated catalog.**
+    GuardScan owns release state. `ntanwir10/homebrew-tap` contains both
+    `Formula/guardscan.rb` and `bucket/guardscan.json`, bound by
+    `channel-lock.json`; it never changes GuardScan state directly. A
+    post-merge dispatch reduces latency and 30-minute reconciliation guarantees
+    convergence. The repositories do not use submodules, subtrees, mirroring,
+    or bidirectional synchronization.
+14. **Homebrew Core is an optional discovery layer.** The first-party tap is
+    the stable fallback. After a stable release, automation may submit a
+    source-building Homebrew Core formula using Homebrew `node` and
+    `std_npm_args`; Core acceptance and its public canary are tracked but do not
+    block the release.
 
 ## Target channel matrix
 
@@ -62,8 +74,9 @@ Ship GuardScan through trustworthy, testable installation channels without creat
 | Yarn Classic | Reuse npm package; legacy compatibility only | `yarn global add guardscan` | Best effort, tested separately |
 | Bun | Reuse npm package; Node remains required until proven otherwise | `bun install --global guardscan` or `bunx guardscan@VERSION` | Phase 1 preview until matrix passes |
 | GitHub Releases | Signed/attested archives per OS/CPU plus manifest/checksums | Download a versioned archive | Phase 2 canonical binary channel |
-| Homebrew | First-party tap referencing immutable release assets | `brew install ntanwir10/tap/guardscan` | Phase 3; core later |
-| Scoop | JSON manifest referencing Windows portable archive | `scoop install guardscan` via first-party bucket | Phase 3 |
+| Homebrew | Formula in the shared first-party catalog referencing immutable release assets | `brew install ntanwir10/tap/guardscan` | Phase 3; Core later |
+| Homebrew Core | Source-building formula using Homebrew `node` | `brew install guardscan` | Optional after stable acceptance and public canary |
+| Scoop | JSON manifest in the same shared catalog referencing the Windows portable archive | `scoop bucket add guardscan https://github.com/ntanwir10/homebrew-tap`, then `scoop install guardscan` | Phase 3 |
 | WinGet | Community manifest referencing signed Windows artifact | `winget install <publisher>.GuardScan` | Phase 3 after binary stability |
 | Chocolatey | `.nupkg` referencing or embedding the official Windows artifact | `choco install guardscan` | Phase 3 after binary stability |
 | PyPI/pipx | Platform wheels bundling the exact standalone binary | `pipx install guardscan-cli` (name to be reserved) | Phase 4 decision gate |
@@ -184,16 +197,28 @@ Ship GuardScan through trustworthy, testable installation channels without creat
 ### GS-DIST-301 — Launch a first-party Homebrew tap
 
 - **Depends on:** GS-DIST-204, GS-DIST-205, GS-DIST-206, GS-DIST-003.
-- **Files/systems:** preferably a dedicated `ntanwir10/homebrew-tap` repository, formula template/update automation, release docs.
-- **Scope:** create a formula or tap-specific binary adapter using immutable versioned assets and checksums; support Apple Silicon, Intel macOS, and Linuxbrew where artifacts exist; avoid self-update behavior.
+- **Files/systems:** shared `ntanwir10/homebrew-tap` catalog, formula
+  template/update automation, `channel-lock.json`, release docs.
+- **Scope:** generate `Formula/guardscan.rb` as a binary adapter using immutable
+  versioned assets and checksums; support Apple Silicon, Intel macOS, and
+  Linuxbrew where artifacts exist; avoid self-update behavior. Update it in the
+  same catalog PR and lock as the Scoop manifest.
 - **Acceptance:** `brew audit`, `brew style`, install, test, upgrade, and uninstall pass; formula test executes `guardscan --version` and a safe offline command; formula version/digest match the release manifest.
-- **Verification:** test from a clean macOS runner on both available architectures and a Linuxbrew runner. Start with the first-party tap; submit to `homebrew/core` only after stability, usage/notability, and source-build requirements are met.
+- **Verification:** test from a clean macOS runner on both available
+  architectures and a Linuxbrew runner. After a stable release, optionally
+  submit a separate source-building formula to `homebrew/core` using Homebrew
+  `node` and `std_npm_args`; only advertise `brew install guardscan` after Core
+  acceptance and a clean public canary.
 
 ### GS-DIST-302 — Launch Scoop and prepare WinGet
 
 - **Depends on:** GS-DIST-204, GS-DIST-205, GS-DIST-206, GS-DIST-003.
-- **Files/systems:** first-party Scoop bucket, WinGet manifests or submission automation.
-- **Scope:** create architecture-aware manifests with immutable URLs and SHA-256; map the executable to `guardscan`; define update automation and retained-version behavior.
+- **Files/systems:** `bucket/guardscan.json` in the shared
+  `ntanwir10/homebrew-tap` catalog, WinGet manifests or submission automation.
+- **Scope:** create an architecture-aware Scoop manifest with immutable URLs
+  and SHA-256; map the executable to `guardscan`; generate it in the same
+  catalog PR and cryptographic lock as the Homebrew formula; define update
+  automation and retained-version behavior.
 - **Acceptance:** Scoop install/update/uninstall and `checkver` pass; WinGet manifests validate and pass Windows Sandbox install/upgrade/uninstall before submission.
 - **Verification:** test Windows without Node installed, and verify the executable hash against the release manifest before and after each adapter install.
 
@@ -238,7 +263,10 @@ Ship GuardScan through trustworthy, testable installation channels without creat
 - **Depends on:** GS-DIST-103, GS-DIST-204, GS-DIST-500.
 - **Files:** split CI/release workflows, GitHub environments, release scripts.
 - **Scope:** compose small reusable workflows for validation, target builds, artifact tests, signing/attestation, draft release, registry publication, adapter updates, and canaries. Use protected-tag and environment gates, a single-release concurrency lock, matrix builds for independent targets, and immutable artifact handoffs so stable promotion never rebuilds release inputs.
-- **Acceptance:** version/tag mismatch, duplicate version, missing artifact, failed signature, failed smoke, failed approval, or changed artifact identity blocks promotion; reruns never overwrite a released version; channel status and artifact lineage are visible in a concise job summary.
+- **Acceptance:** version/tag mismatch, duplicate version, missing artifact,
+  failed signature, failed smoke, denied machine promotion policy, or changed
+  artifact identity blocks promotion; reruns never overwrite a released version;
+  channel status and artifact lineage are visible in a concise job summary.
 - **Verification:** full prerelease dry run with an intentionally failed channel, concurrent release attempt, cancellation, and safe retry/resume using the original tested artifacts.
 
 ### GS-DIST-502 — Harden the release supply chain
@@ -276,16 +304,34 @@ Ship GuardScan through trustworthy, testable installation channels without creat
 ### GS-DIST-506 — Automate downstream channel update pull requests
 
 - **Depends on:** GS-DIST-206, first implementation of each adapter.
-- **Files/systems:** release renderers/templates, renderer fixtures, Homebrew tap/Scoop bucket/packaging repositories, documentation snippets.
-- **Scope:** use GS-DIST-206 output to open reviewable downstream pull requests with machine-readable provenance back to the source release; apply channel-specific moderation/approval policy without duplicating renderer logic.
-- **Acceptance:** no adapter contains a hand-copied version, URL, or checksum; `render --check` fails on drift; unchanged output creates no commit or pull request; a new channel uses the same narrow renderer/validator/smoke interface.
-- **Verification:** golden tests for every renderer, native manifest validation, and a dry-run against fixture downstream repositories.
+- **Files/systems:** release renderers/templates, renderer fixtures, shared
+  `ntanwir10/homebrew-tap` catalog, moderated-registry packaging sources,
+  documentation snippets.
+- **Scope:** use GS-DIST-206 output to open one reviewable shared-catalog PR
+  containing the Homebrew formula, Scoop manifest, and
+  `guardscan.channel-catalog.v1` lock. Catalog CI refetches the immutable
+  release manifest and rerenders from the exact GuardScan source commit.
+  Catalog merge sends a `catalog_updated` dispatch as a hint; GuardScan
+  independently validates the merged commit and reconciles every 30 minutes.
+- **Acceptance:** no adapter contains a hand-copied version, URL, or checksum;
+  `render --check` fails on drift; unchanged output creates no commit or pull
+  request; same-release digest conflicts open an integrity incident; remote
+  identities bind the catalog commit and channel path. The catalog never
+  independently updates GuardScan.
+- **Verification:** golden tests for every renderer, lock schema/digest tests,
+  native manifest validation, missed-dispatch recovery, catalog
+  older/exact/conflicting/unexpected-newer fixtures, and a dry-run against the
+  shared catalog fixture.
 
 ### GS-DIST-507 — Make releases dry-runnable, observable, and safely resumable
 
 - **Depends on:** GS-DIST-500, GS-DIST-501.
 - **Files/systems:** release-state schema, orchestration scripts, workflow summaries/artifacts, runbook.
-- **Scope:** persist a release ledger containing commit, version, artifact digests, signatures, attestations, per-channel publication identity, approvals, and errors; add `dry-run`, `status`, and `resume` paths; query remote state before every mutation; never infer completion only from a previous job's exit code.
+- **Scope:** persist a release ledger containing commit, version, artifact
+  digests, signatures, attestations, per-channel publication identity, machine
+  policy decisions, and errors; add `dry-run`, `status`, and `resume` paths;
+  query remote state before every mutation; never infer completion only from a
+  previous job's exit code.
 - **Acceptance:** maintainers can determine exactly what published and what remains from one status command; retrying a completed matching step is harmless; conflicting remote state stops with an actionable error; dry-run performs every validation without publishing.
 - **Verification:** deterministic scenarios for no-op rerun, failure before publication, failure after one channel, lost CI job state, remote match, remote conflict, and successful resume.
 
@@ -310,7 +356,11 @@ Ship GuardScan through trustworthy, testable installation channels without creat
 - **GHCR image:** valuable for CI and hermetic use. Run as a non-root user, support read-only repository mounts plus an explicit output mount, publish multi-architecture images by digest, and attest them.
 - **Shell/PowerShell installer:** only after signed standalone assets exist. Default to a user-local directory, accept an explicit version, verify checksum/signature, and avoid `curl | sh` as the only documented path.
 - **APT/RPM:** add only after usage justifies repository signing, mirror operations, distro compatibility, and long-term update maintenance.
-- **Homebrew core:** pursue after the first-party tap is stable and GuardScan meets Homebrew's notability and source-build expectations.
+- **Homebrew Core:** submit only after a stable first-party release. Build from
+  the tested npm source tarball with Homebrew `node` and `std_npm_args`; keep
+  Core acceptance non-blocking and switch the primary install command to
+  `brew install guardscan` only after public-Core verification. The tap remains
+  the fallback.
 
 ## Release checkpoints
 
@@ -319,7 +369,9 @@ Ship GuardScan through trustworthy, testable installation channels without creat
 - GS-DIST-001 through GS-DIST-103 plus GS-DIST-500 complete.
 - Release `1.1.0` or its successor to npm only after clean exact-artifact tests.
 - Document npm, pnpm, Yarn, and Bun commands with accurate Node prerequisites.
-- A routine Node-only release can be prepared through one release PR, exercised in dry-run mode, approved, and resumed without manually editing version or registry metadata.
+- A routine Node-only release can be prepared through one release PR, exercised
+  in dry-run mode, machine-gated, and resumed without manually editing version
+  or registry metadata.
 
 ### Checkpoint B — Binary foundation ready
 
@@ -329,7 +381,8 @@ Ship GuardScan through trustworthy, testable installation channels without creat
 
 ### Checkpoint C — Native channels ready
 
-- First-party Homebrew tap and Scoop pass.
+- The first-party Homebrew formula and Scoop manifest pass together from the
+  shared, cryptographically locked catalog.
 - WinGet and Chocolatey submissions follow after Windows signing and stable binary canaries.
 - Channel rollback runbooks are exercised.
 
@@ -361,8 +414,11 @@ Ship GuardScan through trustworthy, testable installation channels without creat
 - Every advertised installation command has passed install, version/help, offline smoke, upgrade, and uninstall on its supported platforms.
 - npm and standalone artifacts have verifiable provenance; native artifacts have checksums and platform signatures where applicable.
 - All channels resolve to the same product version and artifact identity.
-- Routine releases require one reviewed release PR and an explicit stable-promotion approval, not manual edits across package-manager files.
+- Routine releases require one reviewed release PR and a machine-approved
+  24-hour RC soak, not manual edits across package-manager files.
 - The release can be dry-run, inspected, retried, and resumed from persisted machine-readable state without rebuilding or overwriting artifacts.
-- Channel manifests and install documentation are generated and drift-checked from the canonical release manifest.
+- Channel manifests and install documentation are generated and drift-checked
+  from the canonical release manifest; shared-catalog state is bound by its lock
+  and exact merged commit.
 - Privacy, offline, safe-execution, SBOM, and exit-code contracts remain unchanged across channels.
 - Documentation, support ownership, monitoring, and rollback are live before stable channel labels are applied.
