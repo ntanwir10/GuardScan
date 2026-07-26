@@ -234,6 +234,7 @@ describe('zero-touch release workflow contracts', () => {
     const workflow = yaml.load(source) as any;
     expect(workflow).toBeTruthy();
     expect(source).not.toMatch(/^\s+tags:/m);
+    expect(source).not.toContain('"release/**"');
     expect(source).not.toContain('npm publish');
     expect(source).not.toContain('gh release create');
     if (!workflow.jobs['source-contract']) {
