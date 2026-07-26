@@ -26,6 +26,8 @@ describe('zero-touch release workflow contracts', () => {
     expect(yaml.load(source)).toBeTruthy();
     expect(source).not.toMatch(/^\s+tags:/m);
     expect(source).not.toContain('"release/**"');
+    expect(source).toContain('group: ci-${{ github.event.pull_request.number || github.ref }}');
+    expect(source).toContain('cancel-in-progress: true');
     expect(source).not.toContain('npm publish');
     expect(source).not.toContain('gh release create');
     expect(source).toContain('npm test -- --coverage --runInBand');
