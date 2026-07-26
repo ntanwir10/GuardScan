@@ -58,6 +58,7 @@
         "bun",
         "github",
         "homebrew",
+        "homebrew-core",
         "scoop",
         "winget",
         "chocolatey",

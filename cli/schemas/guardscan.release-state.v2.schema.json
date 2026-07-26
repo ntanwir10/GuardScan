@@ -69,7 +69,32 @@
         "updatedAt": { "type": "string", "format": "date-time" },
         "remoteIdentity": { "type": "string", "minLength": 1, "maxLength": 500 },
         "remoteDigest": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "catalog": { "$ref": "#/definitions/catalogEvidence" },
         "error": { "type": "string", "minLength": 1, "maxLength": 2000 }
+      }
+    },
+    "catalogEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "repository",
+        "commit",
+        "pullRequest",
+        "lockDigest",
+        "manifestDigest",
+        "path",
+        "fileDigest"
+      ],
+      "properties": {
+        "repository": { "const": "ntanwir10/homebrew-tap" },
+        "commit": { "type": "string", "pattern": "^[a-f0-9]{40}$" },
+        "pullRequest": { "type": "integer", "minimum": 1 },
+        "lockDigest": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "manifestDigest": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "path": {
+          "enum": ["Formula/guardscan.rb", "bucket/guardscan.json"]
+        },
+        "fileDigest": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
       }
     },
     "canary": {
