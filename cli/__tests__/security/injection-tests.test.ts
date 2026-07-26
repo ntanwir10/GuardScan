@@ -10,28 +10,6 @@ import * as fs from "fs";
 import { describe, expect, it } from "@jest/globals";
 
 describe("Security - Injection Tests", () => {
-  describe("SQL Injection Prevention", () => {
-    it("should sanitize client_id parameter", () => {
-      const maliciousId = "'; DROP TABLE clients; --";
-
-      // Client IDs should be validated as UUIDs or safe strings
-      const isValidClientId = /^[a-zA-Z0-9\-_]+$/.test(maliciousId);
-
-      expect(isValidClientId).toBe(false);
-    });
-
-    it("should validate UUID format for client IDs", () => {
-      const validUuid = "123e4567-e89b-12d3-a456-426614174000";
-      const invalidUuid = "'; DROP TABLE clients; --";
-
-      const uuidRegex =
-        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-      expect(uuidRegex.test(validUuid)).toBe(true);
-      expect(uuidRegex.test(invalidUuid)).toBe(false);
-    });
-  });
-
   describe("Path Traversal Prevention", () => {
     it("should reject path traversal attempts", () => {
       const maliciousPaths = [

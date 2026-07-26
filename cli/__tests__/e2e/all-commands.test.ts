@@ -1,215 +1,120 @@
-/**
- * Comprehensive E2E Tests for All CLI Commands
- * 
- * Tests all 21 CLI commands across different categories
- */
+/** Public command-surface smoke tests against the compiled CLI. */
 
-import { execSync } from 'child_process';
+import { spawnSync, SpawnSyncReturns } from 'child_process';
 import * as fs from 'fs';
-import * as path from 'path';
 import * as os from 'os';
+import * as path from 'path';
 
-describe('All CLI Commands E2E', () => {
-  let tempDir: string;
-  const CLI_PATH = path.join(__dirname, '../../dist/index.js');
-  
-  beforeAll(() => {
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'guardscan-full-e2e-'));
-    
-    // Create test files
-    fs.writeFileSync(
-      path.join(tempDir, 'test.ts'),
-      `
-export function calculate(x: number, y: number): number {
-  return x + y;
-}
+type CliResult = SpawnSyncReturns<string> & { status: number };
 
-// Secret should be detected
-const API_KEY = "sk-1234567890abcdef";
-      `.trim()
-    );
-    
-    fs.writeFileSync(
-      path.join(tempDir, 'package.json'),
-      JSON.stringify({
-        name: 'test-project',
-        version: '1.0.0',
-        dependencies: {}
-      })
-    );
-  });
-  
-  afterAll(() => {
-    if (fs.existsSync(tempDir)) {
-      fs.rmSync(tempDir, { recursive: true, force: true });
+describe('CLI command surface', () => {
+  const cliPath = path.join(__dirname, '../../dist/index.js');
+  const commands = [
+    'init',
+    'run',
+    'scan',
+    'security',
+    'test',
+    'sbom',
+    'perf',
+    'mutation',
+    'rules',
+    'config',
+    'status',
+    'reset',
+    'commit',
+    'explain',
+    'test-gen',
+    'docs',
+    'chat',
+    'refactor',
+    'threat-model',
+    'migrate',
+    'review',
+    'models',
+    'routing',
+    'budget',
+    'metrics',
+    'cache',
+    'telemetry',
+    'vuln',
+  ] as const;
+  let root: string;
+  let project: string;
+  let home: string;
+
+  const runCli = (args: string[]): CliResult => {
+    const result = spawnSync(process.execPath, [cliPath, ...args], {
+      cwd: project,
+      encoding: 'utf8',
+      shell: false,
+      timeout: 30_000,
+      env: {
+        ...process.env,
+        GUARDSCAN_HOME: home,
+        HOME: home,
+        USERPROFILE: home,
+        GUARDSCAN_NO_TELEMETRY: 'true',
+        GUARDSCAN_OFFLINE: 'true',
+        NO_COLOR: '1',
+        FORCE_COLOR: '0',
+      },
+      windowsHide: true,
+    });
+    if (result.error) {
+      throw result.error;
     }
-  });
-  
-  const runCommand = (cmd: string, expectSuccess: boolean = true): string => {
-    const env = {
-      ...process.env,
-      GUARDSCAN_HOME: tempDir,
-    };
-
-    try {
-      return execSync(`node ${CLI_PATH} ${cmd}`, {
-        cwd: tempDir,
-        encoding: 'utf-8',
-        timeout: 30000,
-        env,
-      });
-    } catch (error: any) {
-      if (!expectSuccess) {
-        return [error.stdout, error.stderr, error.message]
-          .filter(Boolean)
-          .join('\n');
-      }
-      throw error;
-    }
+    return result as CliResult;
   };
-  
-  describe('Configuration Commands', () => {
-    it('1. guardscan init - Initialize configuration', () => {
-      const output = runCommand('init --no-telemetry');
-      expect(output).toBeDefined();
-    });
-    
-    it('2. guardscan config - View configuration', () => {
-      const output = runCommand('config --show --no-telemetry');
-      expect(output).toBeDefined();
-    });
-    
-    it('3. guardscan status - Show status', () => {
-      const output = runCommand('status --no-telemetry');
-      expect(output).toBeDefined();
-    });
-    
-    it('4. guardscan reset - Reset configuration', () => {
-      const output = runCommand('reset --force --no-telemetry');
-      expect(output).toBeDefined();
-    });
+
+  beforeAll(() => {
+    root = fs.mkdtempSync(path.join(os.tmpdir(), 'guardscan-command-help-'));
+    project = path.join(root, 'project');
+    home = path.join(root, 'home');
+    fs.mkdirSync(project, { recursive: true });
+    fs.mkdirSync(home, { recursive: true });
+    fs.writeFileSync(path.join(project, 'package.json'), JSON.stringify({
+      name: 'command-surface-fixture',
+      version: '1.0.0',
+      private: true,
+    }));
   });
-  
-  describe('Code Analysis Commands', () => {
-    it('5. guardscan run - Count lines of code', () => {
-      const output = runCommand('run --no-telemetry', false);
-      expect(output).toBeDefined();
-    });
-    
-    it('6. guardscan scan - Full code scan', () => {
-      const output = runCommand('scan --no-telemetry', false);
-      expect(output).toBeDefined();
-    });
+
+  afterAll(() => {
+    fs.rmSync(root, { recursive: true, force: true });
   });
-  
-  describe('Security Commands', () => {
-    it('7. guardscan security - Security scan', () => {
-      const output = runCommand('security --no-telemetry', false);
-      expect(output).toBeDefined();
-    });
+
+  it('prints a semantic version without touching the real home directory', () => {
+    const result = runCli(['--version']);
+    expect(result.status).toBe(0);
+    expect(result.stdout).toMatch(/\b1\.1\.0\b/);
   });
-  
-  describe('Testing Commands', () => {
-    it('8. guardscan test - Run tests', () => {
-      const output = runCommand('test --no-telemetry', false);
-      // May fail if no test runner configured
-      expect(output).toBeDefined();
-    });
-    
-    it('9. guardscan perf - Performance testing', () => {
-      const output = runCommand('perf --no-telemetry', false);
-      expect(output).toBeDefined();
-    });
-    
-    it('10. guardscan mutation - Mutation testing', () => {
-      const output = runCommand('mutation --no-telemetry', false);
-      expect(output).toBeDefined();
-    });
+
+  it('lists every supported top-level command and privacy flag', () => {
+    const result = runCli(['--help']);
+    expect(result.status).toBe(0);
+    for (const command of commands) {
+      const displayed = command === 'vuln' ? 'vuln\\|cve' : command;
+      expect(result.stdout).toMatch(new RegExp(`^\\s{2}${displayed}(?:\\s|$)`, 'm'));
+    }
+    expect(result.stdout).toContain('--no-telemetry');
+    expect(result.stdout).toContain('--no-cache');
+    expect(result.stdout).toContain('--offline');
   });
-  
-  describe('SBOM & Compliance Commands', () => {
-    it('11. guardscan sbom - Generate SBOM', () => {
-      const output = runCommand('sbom -f spdx --no-telemetry', false);
-      expect(output).toBeDefined();
-    });
-    
-    it('12. guardscan rules - Manage rules', () => {
-      const output = runCommand('rules list --no-telemetry', false);
-      expect(output).toBeDefined();
-    });
+
+  it.each(commands)('%s --help exits successfully and names the command', command => {
+    const result = runCli([command, '--help']);
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain(`Usage: guardscan ${command}`);
+    expect(result.stderr).toBe('');
   });
-  
-  describe('AI-Enhanced Commands', () => {
-    // Note: These require API keys, so we test for proper error handling
-    
-    it('13. guardscan commit - Generate commit message', () => {
-      const output = runCommand('commit --no-telemetry', false);
-      // Should fail without git repo or API key
-      expect(output).toBeDefined();
-    });
-    
-    it('14. guardscan explain - Code explanation', () => {
-      const output = runCommand('explain test.ts --no-telemetry', false);
-      // Should fail without API key
-      expect(output).toBeDefined();
-    });
-    
-    it('15. guardscan test-gen - Generate tests', () => {
-      const output = runCommand('test-gen test.ts --no-telemetry', false);
-      // Should fail without API key
-      expect(output).toBeDefined();
-    });
-    
-    it('16. guardscan docs - Generate documentation', () => {
-      const output = runCommand('docs test.ts --no-telemetry', false);
-      // Should fail without API key
-      expect(output).toBeDefined();
-    });
-    
-    it('17. guardscan chat - Interactive chat', () => {
-      // Chat is interactive, so we can't fully test it in E2E
-      // Just verify the command exists
-      const output = runCommand('--help', false);
-      expect(output).toContain('chat');
-    });
-    
-    it('18. guardscan refactor - Refactoring suggestions', () => {
-      const output = runCommand('refactor test.ts --no-telemetry', false);
-      // Should fail without API key
-      expect(output).toBeDefined();
-    });
-    
-    it('19. guardscan threat-model - Threat modeling', () => {
-      const output = runCommand('threat-model --no-telemetry', false);
-      // Should fail without API key
-      expect(output).toBeDefined();
-    });
-    
-    it('20. guardscan migrate - Migration assistance', () => {
-      const output = runCommand('migrate --from react --to vue --no-telemetry', false);
-      // Should fail without API key
-      expect(output).toBeDefined();
-    });
-    
-    it('21. guardscan review - AI code review', () => {
-      const output = runCommand('review test.ts --no-telemetry', false);
-      // Should fail without API key
-      expect(output).toBeDefined();
-    });
-  });
-  
-  describe('Help Command', () => {
-    it('guardscan --help - Show help', () => {
-      const output = runCommand('--help');
-      expect(output).toContain('guardscan');
-      expect(output).toContain('Usage');
-    });
-  });
-  
-  describe('Version Command', () => {
-    it('guardscan --version - Show version', () => {
-      const output = runCommand('--version');
-      expect(output).toMatch(/\d+\.\d+\.\d+/);
-    });
+
+  it('exposes cve and audit as aliases for the vulnerability command', () => {
+    for (const alias of ['cve', 'audit']) {
+      const result = runCli([alias, '--help']);
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain('Usage: guardscan vuln|cve');
+      expect(result.stdout).toContain('Scan exact dependency versions');
+    }
   });
 });
