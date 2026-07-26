@@ -1,6 +1,13 @@
-import { execSync } from 'child_process';
+import { createHash } from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
+import packageManifest from '../../package.json';
+import {
+  collectPackageInventory,
+  DependencyCoordinate,
+  PackageInventory,
+} from './package-inventory';
+import { runProcess } from '../utils/process-runner';
 
 export interface LicenseFinding {
   package: string;
@@ -43,21 +50,74 @@ export interface LicenseReport {
   sbom?: SBOMDocument;
 }
 
-export interface SBOMDocument {
-  format: 'spdx' | 'cyclonedx';
-  version: string;
-  name: string;
-  packages: SBOMPackage[];
-  timestamp: string;
+export interface LicenseScanOptions {
+  offline?: boolean;
+  /** Explicit capability for installed ecosystem tools that may execute repository code. */
+  runProjectCode?: boolean;
+  networkIsolation?: boolean;
+  /** Reuse a caller-owned inventory when vulnerability and SBOM work share a run. */
+  inventory?: PackageInventory;
 }
 
-export interface SBOMPackage {
+export type SBOMDocument = Spdx23Document | CycloneDx17Document;
+
+export interface Spdx23Document {
+  spdxVersion: 'SPDX-2.3';
+  dataLicense: 'CC0-1.0';
+  SPDXID: 'SPDXRef-DOCUMENT';
+  name: string;
+  documentNamespace: string;
+  creationInfo: { created: string; creators: string[] };
+  packages: Spdx23Package[];
+  relationships: Array<{
+    spdxElementId: 'SPDXRef-DOCUMENT';
+    relationshipType: 'DESCRIBES';
+    relatedSpdxElement: string;
+  }>;
+}
+
+export interface Spdx23Package {
+  name: string;
+  SPDXID: string;
+  versionInfo: string;
+  downloadLocation: 'NOASSERTION';
+  filesAnalyzed: false;
+  licenseConcluded: string;
+  licenseDeclared: string;
+  copyrightText: 'NOASSERTION';
+  externalRefs: Array<{
+    referenceCategory: 'PACKAGE-MANAGER';
+    referenceType: 'purl';
+    referenceLocator: string;
+  }>;
+}
+
+export interface CycloneDx17Document {
+  $schema: 'https://cyclonedx.org/schema/bom-1.7.schema.json';
+  bomFormat: 'CycloneDX';
+  specVersion: '1.7';
+  serialNumber: string;
+  version: 1;
+  metadata: {
+    timestamp: string;
+    tools: { components: Array<{ type: 'application'; name: 'GuardScan'; version: string }> };
+    component: { type: 'application'; name: string; 'bom-ref': string };
+  };
+  components: CycloneDx17Component[];
+  dependencies: Array<{ ref: string; dependsOn: string[] }>;
+}
+
+export interface CycloneDx17Component {
+  type: 'library';
+  'bom-ref': string;
   name: string;
   version: string;
-  license: string;
-  purl?: string; // Package URL
-  cpe?: string;  // Common Platform Enumeration
+  purl: string;
+  scope: 'required';
+  licenses: Array<{ license: { id?: string; name?: string } }>;
 }
+
+const PACKAGE_VERSION = packageManifest.version;
 
 export class LicenseScanner {
   // License compatibility matrix
@@ -86,16 +146,29 @@ export class LicenseScanner {
   /**
    * Scan repository for license compliance
    */
-  async scan(repoPath: string = process.cwd(), projectType: 'proprietary' | 'open-source' = 'proprietary'): Promise<LicenseReport> {
-    const findings: LicenseFinding[] = [];
+  async scan(
+    repoPath: string = process.cwd(),
+    projectType: 'proprietary' | 'open-source' = 'proprietary',
+    options: LicenseScanOptions = {}
+  ): Promise<LicenseReport> {
+    const inventory = options.inventory || collectPackageInventory(repoPath);
+    const localFindings = inventory.coordinates.map(coordinate =>
+      this.findingFromCoordinate(repoPath, coordinate)
+    );
+    let findings = this.mergeFindings(localFindings);
 
-    // Scan different ecosystems
-    findings.push(...await this.scanNpm(repoPath));
-    findings.push(...await this.scanPip(repoPath));
-    findings.push(...await this.scanGo(repoPath));
-    findings.push(...await this.scanCargo(repoPath));
-    findings.push(...await this.scanMaven(repoPath));
-    findings.push(...await this.scanRubygems(repoPath));
+    if (!options.offline && options.runProjectCode === true) {
+      // Scan different ecosystems
+      findings = this.mergeFindings([
+        ...findings,
+        ...await this.scanNpm(repoPath, options.networkIsolation),
+        ...await this.scanPip(repoPath, options.networkIsolation),
+        ...await this.scanGo(repoPath, options.networkIsolation),
+        ...await this.scanCargo(repoPath, options.networkIsolation),
+        ...await this.scanMaven(repoPath),
+        ...await this.scanRubygems(repoPath, options.networkIsolation),
+      ]);
+    }
 
     // Calculate risk for each finding
     findings.forEach(finding => {
@@ -132,9 +205,84 @@ export class LicenseScanner {
   }
 
   /**
+   * Build an SBOM-safe entry from repository data only. Network access is never
+   * required; npm license metadata is read from an installed package when it is
+   * available and otherwise remains explicitly unknown.
+   */
+  private findingFromCoordinate(repoPath: string, coordinate: DependencyCoordinate): LicenseFinding {
+    const source = coordinate.ecosystem === 'ruby' ? 'rubygems' : coordinate.ecosystem;
+    const discoveredLicense = coordinate.ecosystem === 'npm'
+      ? this.readInstalledNpmLicense(repoPath, coordinate)
+      : 'Unknown';
+    const license = this.normalizeLicense(discoveredLicense);
+
+    return {
+      package: coordinate.name,
+      version: coordinate.exactVersion,
+      license,
+      category: this.categorizeLicense(license),
+      risk: 'info',
+      description: `${source} package from ${coordinate.lockfilePath}`,
+      source,
+    };
+  }
+
+  private readInstalledNpmLicense(repoPath: string, coordinate: DependencyCoordinate): string {
+    const candidates = coordinate.dependencyPaths
+      .filter(value => /(?:^|\/)node_modules\//.test(value.replace(/\\/g, '/')))
+      .map(value => path.resolve(repoPath, value, 'package.json'));
+
+    // Lockfile v1 dependency paths do not necessarily name a filesystem path.
+    candidates.push(path.resolve(repoPath, 'node_modules', coordinate.name, 'package.json'));
+
+    for (const candidate of candidates) {
+      const relative = path.relative(repoPath, candidate);
+      if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+        continue;
+      }
+      try {
+        const manifest = JSON.parse(fs.readFileSync(candidate, 'utf8')) as {
+          license?: string | { type?: string };
+          licenses?: Array<string | { type?: string }>;
+        };
+        if (typeof manifest.license === 'string') {return manifest.license;}
+        if (manifest.license && typeof manifest.license.type === 'string') {return manifest.license.type;}
+        if (Array.isArray(manifest.licenses)) {
+          const values = manifest.licenses
+            .map(value => typeof value === 'string' ? value : value?.type)
+            .filter((value): value is string => Boolean(value));
+          if (values.length > 0) {return values.join(' OR ');}
+        }
+      } catch {
+        // Missing and malformed installed metadata falls back to Unknown.
+      }
+    }
+    return 'Unknown';
+  }
+
+  private mergeFindings(values: LicenseFinding[]): LicenseFinding[] {
+    const findings = new Map<string, LicenseFinding>();
+    for (const value of values) {
+      const key = `${value.source}\u0000${value.package}\u0000${value.version}`;
+      const existing = findings.get(key);
+      if (!existing || (existing.license === 'Unknown' && value.license !== 'Unknown')) {
+        findings.set(key, value);
+      }
+    }
+    return [...findings.values()].sort((left, right) =>
+      left.source.localeCompare(right.source) ||
+      left.package.localeCompare(right.package) ||
+      left.version.localeCompare(right.version)
+    );
+  }
+
+  /**
    * Scan npm packages
    */
-  private async scanNpm(repoPath: string): Promise<LicenseFinding[]> {
+  private async scanNpm(
+    repoPath: string,
+    networkIsolation?: boolean
+  ): Promise<LicenseFinding[]> {
     const findings: LicenseFinding[] = [];
     const packageJsonPath = path.join(repoPath, 'package.json');
 
@@ -144,12 +292,12 @@ export class LicenseScanner {
 
     try {
       // Try using license-checker if available
-      const output = execSync('npx license-checker --json', {
-        cwd: repoPath,
-        encoding: 'utf-8',
-        stdio: ['pipe', 'pipe', 'ignore'],
-        timeout: 30000,
-      });
+      const output = runLicenseTool(
+        'npx',
+        ['--no-install', 'license-checker', '--json'],
+        repoPath,
+        networkIsolation
+      );
 
       const licenses = JSON.parse(output);
 
@@ -198,7 +346,10 @@ export class LicenseScanner {
   /**
    * Scan pip packages
    */
-  private async scanPip(repoPath: string): Promise<LicenseFinding[]> {
+  private async scanPip(
+    repoPath: string,
+    networkIsolation?: boolean
+  ): Promise<LicenseFinding[]> {
     const findings: LicenseFinding[] = [];
     const requirementsPath = path.join(repoPath, 'requirements.txt');
 
@@ -208,12 +359,12 @@ export class LicenseScanner {
 
     try {
       // Try using pip-licenses if available
-      const output = execSync('pip-licenses --format=json', {
-        cwd: repoPath,
-        encoding: 'utf-8',
-        stdio: ['pipe', 'pipe', 'ignore'],
-        timeout: 30000,
-      });
+      const output = runLicenseTool(
+        'pip-licenses',
+        ['--format=json'],
+        repoPath,
+        networkIsolation
+      );
 
       const licenses = JSON.parse(output);
 
@@ -262,7 +413,10 @@ export class LicenseScanner {
   /**
    * Scan Go modules
    */
-  private async scanGo(repoPath: string): Promise<LicenseFinding[]> {
+  private async scanGo(
+    repoPath: string,
+    networkIsolation?: boolean
+  ): Promise<LicenseFinding[]> {
     const findings: LicenseFinding[] = [];
     const goModPath = path.join(repoPath, 'go.mod');
 
@@ -271,12 +425,12 @@ export class LicenseScanner {
     }
 
     try {
-      const output = execSync('go list -m -json all', {
-        cwd: repoPath,
-        encoding: 'utf-8',
-        stdio: ['pipe', 'pipe', 'ignore'],
-        timeout: 30000,
-      });
+      const output = runLicenseTool(
+        'go',
+        ['list', '-m', '-json', 'all'],
+        repoPath,
+        networkIsolation
+      );
 
       // Parse NDJSON
       const lines = output.split('\n').filter(l => l.trim());
@@ -308,7 +462,10 @@ export class LicenseScanner {
   /**
    * Scan Cargo packages
    */
-  private async scanCargo(repoPath: string): Promise<LicenseFinding[]> {
+  private async scanCargo(
+    repoPath: string,
+    networkIsolation?: boolean
+  ): Promise<LicenseFinding[]> {
     const findings: LicenseFinding[] = [];
     const cargoTomlPath = path.join(repoPath, 'Cargo.toml');
 
@@ -317,12 +474,12 @@ export class LicenseScanner {
     }
 
     try {
-      const output = execSync('cargo metadata --format-version 1', {
-        cwd: repoPath,
-        encoding: 'utf-8',
-        stdio: ['pipe', 'pipe', 'ignore'],
-        timeout: 30000,
-      });
+      const output = runLicenseTool(
+        'cargo',
+        ['metadata', '--format-version', '1'],
+        repoPath,
+        networkIsolation
+      );
 
       const metadata = JSON.parse(output);
 
@@ -364,7 +521,10 @@ export class LicenseScanner {
   /**
    * Scan Ruby gems
    */
-  private async scanRubygems(repoPath: string): Promise<LicenseFinding[]> {
+  private async scanRubygems(
+    repoPath: string,
+    networkIsolation?: boolean
+  ): Promise<LicenseFinding[]> {
     const findings: LicenseFinding[] = [];
     const gemfilePath = path.join(repoPath, 'Gemfile');
 
@@ -373,12 +533,12 @@ export class LicenseScanner {
     }
 
     try {
-      const output = execSync('bundle exec gem list --local', {
-        cwd: repoPath,
-        encoding: 'utf-8',
-        stdio: ['pipe', 'pipe', 'ignore'],
-        timeout: 30000,
-      });
+      const output = runLicenseTool(
+        'bundle',
+        ['exec', 'gem', 'list', '--local'],
+        repoPath,
+        networkIsolation
+      );
 
       // Parse gem list output
       const lines = output.split('\n');
@@ -561,20 +721,91 @@ export class LicenseScanner {
   /**
    * Generate SBOM (Software Bill of Materials)
    */
-  generateSBOM(findings: LicenseFinding[], format: 'spdx' | 'cyclonedx' = 'spdx', projectName: string = 'unknown'): SBOMDocument {
-    const packages: SBOMPackage[] = findings.map(f => ({
-      name: f.package,
-      version: f.version,
-      license: f.license,
-      purl: this.generatePURL(f),
-    }));
+  generateSBOM(findings: LicenseFinding[], format: 'spdx', projectName?: string): Spdx23Document;
+  generateSBOM(findings: LicenseFinding[], format: 'cyclonedx', projectName?: string): CycloneDx17Document;
+  generateSBOM(findings: LicenseFinding[], format?: 'spdx' | 'cyclonedx', projectName?: string): SBOMDocument;
+  generateSBOM(
+    findings: LicenseFinding[],
+    format: 'spdx' | 'cyclonedx' = 'spdx',
+    projectName: string = 'unknown'
+  ): SBOMDocument {
+    const ordered = [...findings].sort((left, right) =>
+      `${left.source}\0${left.package}\0${left.version}`.localeCompare(
+        `${right.source}\0${right.package}\0${right.version}`
+      )
+    );
+    const created = new Date().toISOString();
+    const rootReference = `urn:guardscan:project:${stableIdentifier(projectName)}`;
 
+    if (format === 'cyclonedx') {
+      const components: CycloneDx17Component[] = ordered.map(finding => {
+        const purl = this.generatePURL(finding);
+        return {
+          type: 'library',
+          'bom-ref': purl,
+          name: finding.package,
+          version: finding.version,
+          purl,
+          scope: 'required',
+          licenses: [{
+            license: isSimpleSpdxIdentifier(finding.license)
+              ? { id: finding.license }
+              : { name: finding.license || 'Unknown' },
+          }],
+        };
+      });
+      return {
+        $schema: 'https://cyclonedx.org/schema/bom-1.7.schema.json',
+        bomFormat: 'CycloneDX',
+        specVersion: '1.7',
+        serialNumber: `urn:uuid:${stableUuid(`${projectName}\0${components.map(value => value['bom-ref']).join('\0')}`)}`,
+        version: 1,
+        metadata: {
+          timestamp: created,
+          tools: { components: [{ type: 'application', name: 'GuardScan', version: PACKAGE_VERSION }] },
+          component: { type: 'application', name: projectName, 'bom-ref': rootReference },
+        },
+        components,
+        dependencies: [
+          { ref: rootReference, dependsOn: components.map(value => value['bom-ref']) },
+          ...components.map(value => ({ ref: value['bom-ref'], dependsOn: [] })),
+        ],
+      };
+    }
+
+    const packages: Spdx23Package[] = ordered.map(finding => {
+      const purl = this.generatePURL(finding);
+      const license = isSpdxExpression(finding.license) ? finding.license : 'NOASSERTION';
+      return {
+        name: finding.package,
+        SPDXID: `SPDXRef-Package-${stableIdentifier(purl)}`,
+        versionInfo: finding.version,
+        downloadLocation: 'NOASSERTION',
+        filesAnalyzed: false,
+        licenseConcluded: license,
+        licenseDeclared: license,
+        copyrightText: 'NOASSERTION',
+        externalRefs: [{
+          referenceCategory: 'PACKAGE-MANAGER',
+          referenceType: 'purl',
+          referenceLocator: purl,
+        }],
+      };
+    });
+    const digest = stableIdentifier(`${projectName}\0${packages.map(value => value.SPDXID).join('\0')}`);
     return {
-      format,
-      version: format === 'spdx' ? '2.3' : '1.4',
+      spdxVersion: 'SPDX-2.3',
+      dataLicense: 'CC0-1.0',
+      SPDXID: 'SPDXRef-DOCUMENT',
       name: projectName,
+      documentNamespace: `https://guardscancli.com/spdx/${encodeURIComponent(projectName)}/${digest}`,
+      creationInfo: { created, creators: [`Tool: GuardScan-${PACKAGE_VERSION}`] },
       packages,
-      timestamp: new Date().toISOString(),
+      relationships: packages.map(value => ({
+        spdxElementId: 'SPDXRef-DOCUMENT',
+        relationshipType: 'DESCRIBES',
+        relatedSpdxElement: value.SPDXID,
+      })),
     };
   }
 
@@ -582,12 +813,51 @@ export class LicenseScanner {
    * Generate Package URL (PURL)
    */
   private generatePURL(finding: LicenseFinding): string {
-    const type = finding.source;
-    const name = finding.package;
-    const version = finding.version;
+    const type = finding.source === 'rubygems' ? 'gem' : finding.source;
+    const name = finding.package.split('/').map(segment => encodeURIComponent(segment)).join('/');
+    const version = encodeURIComponent(finding.version);
 
     return `pkg:${type}/${name}@${version}`;
   }
+}
+
+function runLicenseTool(
+  command: string,
+  args: string[],
+  repoPath: string,
+  networkIsolation?: boolean
+): string {
+  const result = runProcess(command, args, {
+    cwd: repoPath,
+    timeoutMs: 30_000,
+    maxBuffer: 10 * 1024 * 1024,
+    networkIsolation: networkIsolation === true,
+  });
+  if (result.timedOut) {throw new Error(`${command} timed out`);}
+  if (result.status !== 0) {
+    throw new Error(`${command} exited ${result.status} without usable license metadata`);
+  }
+  return result.stdout;
+}
+
+function stableIdentifier(value: string): string {
+  return createHash('sha256').update(value).digest('hex').slice(0, 32);
+}
+
+function stableUuid(value: string): string {
+  const digest = createHash('sha256').update(value).digest('hex').slice(0, 32).split('');
+  digest[12] = '5';
+  digest[16] = ((Number.parseInt(digest[16], 16) & 0x3) | 0x8).toString(16);
+  return `${digest.slice(0, 8).join('')}-${digest.slice(8, 12).join('')}-${digest.slice(12, 16).join('')}-${digest.slice(16, 20).join('')}-${digest.slice(20).join('')}`;
+}
+
+function isSimpleSpdxIdentifier(value: string): boolean {
+  return value !== 'Unknown' && /^[A-Za-z0-9][A-Za-z0-9.+-]*$/.test(value);
+}
+
+function isSpdxExpression(value: string): boolean {
+  return value !== 'Unknown' &&
+    /^[A-Za-z0-9][A-Za-z0-9.+-]*(?: (?:AND|OR) [A-Za-z0-9][A-Za-z0-9.+-]*)*$/.test(value);
 }
 
 export const licenseScanner = new LicenseScanner();
