@@ -26,13 +26,21 @@ describe('package-manager smoke command contracts', () => {
     expect(installArgs(manager, '/tmp/guardscan.tgz')).toContain('--ignore-scripts');
   });
 
+  it('asks Bun to emit the supported Yarn inventory alongside bun.lock', () => {
+    expect(installArgs('bun', '/tmp/guardscan.tgz')).toEqual([
+      'add',
+      '--ignore-scripts',
+      '--yarn',
+      '/tmp/guardscan.tgz',
+    ]);
+  });
+
   it('uses Yarn configuration rather than an unsupported install flag', () => {
     expect(installArgs('yarn', '/tmp/guardscan.tgz')).toEqual(['add', '/tmp/guardscan.tgz']);
   });
 
-  it('makes Bun partial SBOM inventory explicit without weakening other canaries', () => {
-    expect(scanArgsFor('bun', '/tmp/scan.json')).toContain('--allow-partial');
-    expect(scanArgsFor('npm', '/tmp/scan.json')).not.toContain('--allow-partial');
+  it.each(['npm', 'pnpm', 'yarn', 'bun'])('keeps the %s scan canary strict', manager => {
+    expect(scanArgsFor(manager, '/tmp/scan.json')).not.toContain('--allow-partial');
   });
 
   it('rejects omitted and unknown managers', () => {
