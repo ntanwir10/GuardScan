@@ -9,6 +9,7 @@
 
 import axios, { AxiosInstance } from 'axios';
 import { BaseEmbeddingProvider } from '../core/embeddings';
+import { ProviderFactory } from './factory';
 
 export interface LMStudioEmbeddingResponse {
   embedding: number[];
@@ -18,20 +19,21 @@ export class LMStudioEmbeddingProvider extends BaseEmbeddingProvider {
   private client: AxiosInstance;
   private endpoint: string;
 
-  constructor(endpoint: string = 'http://localhost:1234') {
+  constructor(endpoint?: string) {
     super('lmstudio', 'nomic-embed-text', 768);
 
-    this.endpoint = endpoint;
+    this.endpoint = ProviderFactory.normalizeEndpoint('lmstudio', endpoint)!;
     this.client = axios.create({
-      baseURL: endpoint,
+      baseURL: this.endpoint,
       timeout: 30000, // 30 seconds per request
+      maxRedirects: 0,
     });
   }
 
   async generateEmbedding(text: string): Promise<number[]> {
     try {
       const response = await this.client.post<LMStudioEmbeddingResponse>(
-        '/v1/embeddings',
+        '/embeddings',
         {
           model: this.model,
           input: text,
@@ -105,7 +107,7 @@ export class LMStudioEmbeddingProvider extends BaseEmbeddingProvider {
    */
   async checkLMStudioRunning(): Promise<boolean> {
     try {
-      await this.client.get('/v1/models');
+      await this.client.get('/models');
       return true;
     } catch (error) {
       return false;
@@ -117,7 +119,7 @@ export class LMStudioEmbeddingProvider extends BaseEmbeddingProvider {
    */
   async checkModelAvailable(): Promise<boolean> {
     try {
-      const response = await this.client.get<{ data: any[] }>('/v1/models');
+      const response = await this.client.get<{ data: any[] }>('/models');
       const models = response.data.data || [];
       return models.some(m => m.id.includes(this.model));
     } catch (error) {
@@ -151,7 +153,7 @@ export class LMStudioEmbeddingProvider extends BaseEmbeddingProvider {
   } {
     return {
       speed: 'Fast (~100-500 embeddings/sec on consumer hardware)',
-      privacy: '100% local - no data leaves your machine',
+      privacy: 'Requests go only to the configured endpoint; trust non-loopback endpoints',
       cost: 'Free',
       quality: 'Good (768 dimensions, suitable for most use cases)',
     };
@@ -166,5 +168,3 @@ export class LMStudioEmbeddingProvider extends BaseEmbeddingProvider {
     return Math.ceil(count / embeddingsPerSecond);
   }
 }
-
-

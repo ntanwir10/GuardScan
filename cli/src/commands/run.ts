@@ -1,27 +1,33 @@
 import chalk from 'chalk';
 import ora from 'ora';
 import { configManager } from '../core/config';
-import { repositoryManager } from '../core/repository';
-import { locCounter } from '../core/loc-counter';
-import { ProviderFactory } from '../providers/factory';
-import { reporter, ReviewResult } from '../utils/reporter';
-import { telemetryManager } from '../core/telemetry';
-import { apiClient } from '../utils/api-client';
-import { isOnline } from '../utils/network';
+import { repositoryManager, RepositoryInfo } from '../core/repository';
+import { locCounter, LOCResult } from '../core/loc-counter';
+import {
+  ProviderConfigurationError,
+  ProviderFactory,
+} from '../providers/factory';
+import { Finding, reporter, ReviewResult } from '../utils/reporter';
+import { createTelemetryManager } from '../core/telemetry';
 import { displaySimpleBanner } from '../utils/ascii-art';
 import { createDebugLogger } from '../utils/debug-logger';
 import { createPerformanceTracker } from '../utils/performance-tracker';
 import { handleCommandError } from '../utils/error-handler';
+import { EffectiveExecutionPolicy, resolveExecutionPolicy } from '../utils/execution-policy';
 
 const logger = createDebugLogger('run');
 const perfTracker = createPerformanceTracker('guardscan run');
 import { createProgressBar } from '../utils/progress';
 import * as fs from 'fs';
-import * as path from 'path';
 
 interface RunOptions {
   files?: string[];
+  /** Commander stores the negated --no-cloud option as cloud=false. */
+  cloud?: boolean;
   noCloud?: boolean;
+  offline?: boolean;
+  cve?: boolean;
+  allowPartial?: boolean;
   withAi?: boolean;  // Explicitly request AI enhancement
 }
 
@@ -39,16 +45,29 @@ export async function runCommand(options: RunOptions): Promise<void> {
     perfTracker.end('load-config');
     logger.debug('Config loaded', { provider: config.provider });
 
+    const noCloud = options.noCloud === true || options.cloud === false;
+    const executionPolicy = resolveExecutionPolicy({
+      configOffline: config.offlineMode,
+      offline: options.offline,
+      cloud: options.cloud,
+      cve: options.cve,
+      allowPartial: options.allowPartial,
+    });
+    if (noCloud) {
+      console.warn(chalk.yellow('Warning: --no-cloud is deprecated; use --offline instead.'));
+    }
+
     // Get repository info
     perfTracker.start('detect-repository');
     const repoInfo = repositoryManager.getRepoInfo();
     perfTracker.end('detect-repository');
     logger.debug('Repository detected', { name: repoInfo.name, repoId: repoInfo.repoId });
-    console.log(chalk.gray(`Repository: ${repoInfo.name}`));
-    if (repoInfo.branch) {
-      console.log(chalk.gray(`Branch: ${repoInfo.branch}`));
-    }
-    console.log();
+    const repositorySummary = [
+      chalk.gray(`Repository: ${repoInfo.name}`),
+      ...(repoInfo.branch ? [chalk.gray(`Branch: ${repoInfo.branch}`)] : []),
+      '',
+    ];
+    console.log(repositorySummary.join('\n'));
 
     // Initialize progress tracking (3-4 steps depending on validation)
     const totalSteps = 3; // Analyze, Review, Report (validation is embedded in review)
@@ -62,26 +81,48 @@ export async function runCommand(options: RunOptions): Promise<void> {
     logger.debug('LOC counted', { fileCount: locResult.fileCount, codeLines: locResult.codeLines });
     progressBar.update(1, { status: `Analyzed ${locResult.fileCount} files` });
 
-    // Check if AI is available and requested
+    // Resolve AI policy before preparing any repository-derived request context.
     perfTracker.start('init-ai-provider');
-    // Only create provider if it's configured and not 'none'
-    const provider = (config.provider && config.provider !== 'none' && config.apiKey)
-      ? ProviderFactory.createForCli(config, { task: 'code-review' })
-      : null;
-    const aiAvailable = provider && provider.isAvailable();
+    let provider = null;
+    if (options.withAi !== false) {
+      try {
+        provider = ProviderFactory.createForCli(config, {
+          task: 'code-review',
+          offline: executionPolicy.offline,
+        });
+      } catch (error) {
+        if (!(error instanceof ProviderConfigurationError)) {
+          throw error;
+        }
+
+        logger.debug('AI enhancement unavailable; using static analysis', {
+          code: error.code,
+          provider: config.provider,
+        });
+        console.warn(chalk.yellow(`AI enhancement skipped: ${error.message}`));
+      }
+    }
     perfTracker.end('init-ai-provider');
-    logger.debug('AI provider initialized', { provider: config.provider, available: !!provider, aiAvailable });
-    const useAI = options.withAi !== false && aiAvailable; // Use AI by default if available
+    logger.debug('AI provider initialized', { provider: config.provider, available: !!provider });
+    const useAI = provider !== null;
 
-    // Step 2: Run review
-    let reviewResult: ReviewResult;
+    // Step 2: Local scanners are mandatory; AI can enrich but never replace them.
+    progressBar.update(1, { status: 'Running local static analysis...' });
+    perfTracker.start('static-analysis');
+    let reviewResult = await runStaticAnalysis(
+      repoInfo,
+      locResult,
+      options.files,
+      executionPolicy
+    );
+    perfTracker.end('static-analysis');
+    logger.debug('Static analysis completed', { findingsCount: reviewResult.findings.length });
 
-    if (useAI && provider) {
-      // AI-ENHANCED REVIEW (User brings own API key)
+    if (useAI && provider && !reviewResult.metadata.operationalFailure) {
       progressBar.update(1, { status: 'Running AI-enhanced review...' });
 
       perfTracker.start('prepare-context');
-      const context = await prepareReviewContext(repoInfo, locResult, options.files);
+      const context = prepareReviewContext(repoInfo, locResult);
       perfTracker.end('prepare-context');
       logger.debug('Review context prepared', { contextLength: context.length });
 
@@ -123,22 +164,25 @@ Provide constructive feedback with specific suggestions for improvement.`,
         tokensUsed: aiResponse.usage?.totalTokens
       });
 
-      reviewResult = parseAIResponse(aiResponse.content, repoInfo, locResult, config.provider, aiResponse.model, Date.now() - startTime);
-    } else {
-      // STATIC ANALYSIS (No AI configured)
-      progressBar.update(1, { status: 'Running static analysis...' });
-      perfTracker.start('static-analysis');
-      reviewResult = await runStaticAnalysis(repoInfo, locResult, options.files);
-      perfTracker.end('static-analysis');
-      logger.debug('Static analysis completed', { findingsCount: reviewResult.findings.length });
+      const aiReview = parseAIResponse(
+        aiResponse.content,
+        repoInfo,
+        locResult,
+        config.provider,
+        aiResponse.model,
+        Date.now() - startTime
+      );
+      reviewResult = mergeReviewResults(reviewResult, aiReview);
     }
 
     progressBar.update(2, { status: 'Analysis complete' });
 
+    reviewResult.metadata.durationMs = Date.now() - startTime;
+
     // Step 3: Generate report
     progressBar.update(2, { status: 'Generating report...' });
     perfTracker.start('generate-report');
-    const reportPath = reporter.saveReport(reviewResult, 'markdown', undefined, 'ai-review');
+    const reportPath = await reporter.saveReport(reviewResult, 'markdown', undefined, 'ai-review');
     perfTracker.end('generate-report');
     logger.debug('Report generated', { reportPath });
     progressBar.update(3, { status: 'Complete' });
@@ -146,15 +190,13 @@ Provide constructive feedback with specific suggestions for improvement.`,
 
     console.log(chalk.green(`✓ Report saved: ${reportPath}`));
 
-    // Update duration in metadata
-    reviewResult.metadata.durationMs = Date.now() - startTime;
-
     // Display summary
     displaySummary(reviewResult);
 
     // Record telemetry (only if enabled)
     if (config.telemetryEnabled) {
       perfTracker.start('record-telemetry');
+      const telemetryManager = createTelemetryManager(config);
       await telemetryManager.record({
         action: 'review',
         loc: locResult.codeLines,
@@ -164,233 +206,148 @@ Provide constructive feedback with specific suggestions for improvement.`,
       perfTracker.end('record-telemetry');
     }
 
+    const duration = Date.now() - startTime;
     perfTracker.end('run-total');
-    logger.debug('Run command completed successfully', { 
-      duration: Date.now() - startTime,
+    logger.debug('Run command completed successfully', {
+      duration,
       findingsCount: reviewResult.findings.length
     });
     perfTracker.displaySummary();
+
+    if (reviewResult.metadata.operationalFailure) {
+      process.exitCode = 2;
+    }
 
     console.log();
   } catch (error) {
     perfTracker.end('run-total');
     perfTracker.displaySummary();
-    handleCommandError(error, 'Code review');
+    handleCommandError(error, 'Code review', 2);
   }
 }
 
 /**
  * Run comprehensive static analysis (FREE TIER)
  */
-async function runStaticAnalysis(repoInfo: any, locResult: any, filePatterns?: string[]): Promise<ReviewResult> {
-  const repoPath = process.cwd();
-  const findings: any[] = [];
+export async function runStaticAnalysis(
+  repoInfo: RepositoryInfo,
+  locResult: LOCResult,
+  _filePatterns: string[] | undefined,
+  executionPolicy: EffectiveExecutionPolicy = resolveExecutionPolicy()
+): Promise<ReviewResult> {
+  const repoPath = repoInfo.path;
+  const findings: Finding[] = [];
   let securityCount = 0;
   let qualityCount = 0;
+  let operationalFailure = false;
+  const scannerCoverage: NonNullable<ReviewResult['metadata']['scannerCoverage']> = {
+    status: 'failed',
+    scanners: [],
+    errors: [],
+  };
 
-  // Import scanners
-  const { dependencyScanner } = await import('../core/dependency-scanner');
-  const { secretsDetector } = await import('../core/secrets-detector');
-  const { owaspScanner } = await import('../core/owasp-scanner');
-  const { dockerfileScanner } = await import('../core/dockerfile-scanner');
-  const { iacScanner } = await import('../core/iac-scanner');
-  const { apiScanner } = await import('../core/api-scanner');
-  const { complianceChecker } = await import('../core/compliance-checker');
-  const { licenseScanner } = await import('../core/license-scanner');
+  // Import analysis engines
+  const { scanEngine } = await import('../core/scan-engine');
   const { codeMetricsAnalyzer } = await import('../core/code-metrics');
   const { codeSmellDetector } = await import('../core/code-smells');
 
   // 1. Security Scanning
   const securitySpinner = ora('Running security scans...').start();
   try {
-    // Dependency vulnerabilities
-    try {
-      const depResults = await dependencyScanner.scan(repoPath);
-      for (const result of depResults) {
-        for (const vuln of result.vulnerabilities) {
-          findings.push({
-            severity: vuln.severity,
-            category: `Dependency Vulnerability (${result.ecosystem})`,
-            file: 'package.json',
-            description: `${vuln.package}@${vuln.version}: ${vuln.title}`,
-            suggestion: vuln.recommendation,
-          });
-          securityCount++;
-        }
-      }
-    } catch (e) { /* Scanner not available */ }
-
-    // Secrets detection
-    try {
-      const filePaths = locResult.fileBreakdown.map((f: any) => f.path);
-      const secretFindings = await secretsDetector.detectInFiles(filePaths);
-      for (const secret of secretFindings) {
-        findings.push({
-          severity: secret.severity,
-          category: `Secret Detection: ${secret.type}`,
-          file: secret.file,
-          line: secret.line,
-          description: `Potential secret detected (entropy: ${secret.entropy.toFixed(2)})`,
-          suggestion: secret.recommendation,
-        });
-        securityCount++;
-      }
-
-      // Also scan git history
-      const gitSecrets = await secretsDetector.scanGitHistory(repoPath);
-      for (const secret of gitSecrets) {
-        findings.push({
-          severity: secret.severity,
-          category: `Secret in Git History: ${secret.type}`,
-          file: secret.file,
-          line: secret.line,
-          description: `Secret found in git history (entropy: ${secret.entropy.toFixed(2)})`,
-          suggestion: secret.recommendation,
-        });
-        securityCount++;
-      }
-    } catch (e) { /* Scanner not available */ }
-
-    // OWASP Top 10
-    try {
-      const owaspResults = await owaspScanner.scan(repoPath);
-      findings.push(...owaspResults);
-      securityCount += owaspResults.length;
-    } catch (e) { /* Scanner not available */ }
-
-    // Dockerfile security
-    try {
-      const dockerResults = await dockerfileScanner.scan(repoPath);
-      findings.push(...dockerResults);
-      securityCount += dockerResults.length;
-    } catch (e) { /* Scanner not available */ }
-
-    // IaC security
-    try {
-      const iacResults = await iacScanner.scan(repoPath);
-      findings.push(...iacResults);
-      securityCount += iacResults.length;
-    } catch (e) { /* Scanner not available */ }
-
-    // API security
-    try {
-      const apiFindings = await apiScanner.scan(repoPath);
-      for (const finding of apiFindings) {
-        findings.push({
-          severity: finding.severity,
-          category: `${finding.category} API: ${finding.type}`,
-          file: finding.file,
-          line: finding.line,
-          description: finding.description,
-          suggestion: finding.recommendation,
-        });
-        securityCount++;
-      }
-    } catch (e) { /* Scanner not available */ }
-
-    // Compliance
-    try {
-      const complianceReports = await complianceChecker.check(repoPath);
-      for (const report of complianceReports) {
-        for (const violation of report.violations) {
-          findings.push({
-            severity: violation.severity,
-            category: `${violation.standard} Compliance: ${violation.type}`,
-            file: violation.file,
-            line: violation.line,
-            description: violation.description,
-            suggestion: violation.recommendation,
-          });
-          securityCount++;
-        }
-      }
-    } catch (e) { /* Scanner not available */ }
-
-    // License compliance
-    try {
-      const licenseReport = await licenseScanner.scan(repoPath, 'proprietary');
-
-      // Add license findings
-      for (const licenseFinding of licenseReport.findings) {
-        if (licenseFinding.risk === 'critical' || licenseFinding.risk === 'high') {
-          findings.push({
-            severity: licenseFinding.risk,
-            category: `License Compliance: ${licenseFinding.category}`,
-            file: 'dependencies',
-            description: `${licenseFinding.package}@${licenseFinding.version}: ${licenseFinding.license}`,
-            suggestion: `Review license compatibility - ${licenseFinding.description}`,
-          });
-          securityCount++;
-        }
-      }
-
-      // Add compatibility issues
-      for (const issue of licenseReport.compatibilityIssues) {
-        findings.push({
-          severity: issue.severity,
-          category: 'License Compatibility',
-          file: 'dependencies',
-          description: issue.conflict,
-          suggestion: issue.recommendation,
-        });
-        securityCount++;
-      }
-    } catch (e) { /* Scanner not available */ }
-
-    securitySpinner.succeed(`Security scan complete - ${securityCount} issues found`);
+    const scanResult = await scanEngine.runSecurityScan({
+      repoPath,
+      files: locResult.fileBreakdown,
+      offline: executionPolicy.offline,
+      includeLicenses: true,
+      includeVulnerabilities: executionPolicy.includeCve,
+      allowPartial: executionPolicy.allowPartial,
+    });
+    findings.push(...scanResult.findings);
+    securityCount = scanResult.findings.length;
+    scannerCoverage.status = scanResult.status || 'complete';
+    scannerCoverage.scanners = scanResult.scannerResults.map(scanner => ({
+      name: scanner.scanner,
+      status: scanner.status,
+      required: scanner.required === true,
+      detail: scanner.error?.message || scanner.skipReason,
+    }));
+    scannerCoverage.errors = scanResult.errors.map(error => ({
+      scanner: error.scanner || 'security',
+      code: error.code || 'SCANNER_FAILED',
+      message: error.message || 'Scanner failed without an error message',
+    }));
+    const requiredLocalFailure = scanResult.scannerResults.some(scanner =>
+      scanner.required === true && scanner.status === 'failed' && scanner.scanner !== 'dependencies'
+    );
+    operationalFailure = scanResult.status === 'failed' || requiredLocalFailure ||
+      (scanResult.status === 'partial' && !executionPolicy.allowPartial);
+    if (operationalFailure) {
+      securitySpinner.fail(`Security coverage ${scannerCoverage.status}`);
+    } else {
+      securitySpinner.succeed(`Security scan ${scannerCoverage.status} - ${securityCount} issues found`);
+    }
   } catch (error) {
     securitySpinner.fail('Security scan failed');
+    operationalFailure = true;
+    scannerCoverage.status = 'failed';
+    scannerCoverage.errors.push({
+      scanner: 'security',
+      code: 'SCANNER_EXECUTION_FAILED',
+      message: error instanceof Error ? error.message : String(error),
+    });
   }
 
   // 2. Code Quality Analysis
   const qualitySpinner = ora('Analyzing code quality...').start();
   try {
     // Code metrics
-    try {
-      const metricsResults = await codeMetricsAnalyzer.analyze(repoPath);
-      for (const fileMetrics of metricsResults) {
-        if (fileMetrics.metrics.cyclomaticComplexity > 15) {
-          findings.push({
-            severity: 'medium' as const,
-            category: 'Code Complexity',
-            file: fileMetrics.file,
-            description: `High cyclomatic complexity: ${fileMetrics.metrics.cyclomaticComplexity}`,
-            suggestion: 'Consider refactoring to reduce complexity',
-          });
-          qualityCount++;
-        }
-        if (fileMetrics.metrics.maintainabilityIndex < 65) {
-          findings.push({
-            severity: 'low' as const,
-            category: 'Maintainability',
-            file: fileMetrics.file,
-            description: `Low maintainability index: ${fileMetrics.metrics.maintainabilityIndex.toFixed(1)}`,
-            suggestion: 'Improve code readability and reduce complexity',
-          });
-          qualityCount++;
-        }
-      }
-    } catch (e) { /* Scanner not available */ }
-
-    // Code smells
-    try {
-      const smellResults = await codeSmellDetector.detect(repoPath);
-      for (const smell of smellResults) {
+    const metricsResults = await codeMetricsAnalyzer.analyze(repoPath);
+    for (const fileMetrics of metricsResults) {
+      if (fileMetrics.metrics.cyclomaticComplexity > 15) {
         findings.push({
-          severity: smell.severity,
-          category: `Code Smell: ${smell.type}`,
-          file: smell.file,
-          line: smell.line,
-          description: smell.description,
-          suggestion: smell.recommendation,
+          severity: 'medium' as const,
+          category: 'Code Complexity',
+          file: fileMetrics.file,
+          description: `High cyclomatic complexity: ${fileMetrics.metrics.cyclomaticComplexity}`,
+          suggestion: 'Consider refactoring to reduce complexity',
         });
         qualityCount++;
       }
-    } catch (e) { /* Scanner not available */ }
+      if (fileMetrics.metrics.maintainabilityIndex < 65) {
+        findings.push({
+          severity: 'low' as const,
+          category: 'Maintainability',
+          file: fileMetrics.file,
+          description: `Low maintainability index: ${fileMetrics.metrics.maintainabilityIndex.toFixed(1)}`,
+          suggestion: 'Improve code readability and reduce complexity',
+        });
+        qualityCount++;
+      }
+    }
+
+    // Code smells
+    const smellResults = await codeSmellDetector.detect(repoPath);
+    for (const smell of smellResults) {
+      findings.push({
+        severity: smell.severity,
+        category: `Code Smell: ${smell.type}`,
+        file: smell.file,
+        line: smell.line,
+        description: smell.description,
+        suggestion: smell.recommendation,
+      });
+      qualityCount++;
+    }
 
     qualitySpinner.succeed(`Code quality analysis complete - ${qualityCount} issues found`);
   } catch (error) {
     qualitySpinner.fail('Code quality analysis failed');
+    operationalFailure = true;
+    scannerCoverage.errors.push({
+      scanner: 'quality',
+      code: 'QUALITY_EXECUTION_FAILED',
+      message: error instanceof Error ? error.message : String(error),
+    });
   }
 
   // Build summary
@@ -399,9 +356,11 @@ async function runStaticAnalysis(repoInfo: any, locResult: any, filePatterns?: s
 Found ${findings.length} total issues:
 - Security issues: ${securityCount}
 - Code quality issues: ${qualityCount}
+- Security coverage: ${scannerCoverage.status}
+- Operational errors: ${scannerCoverage.errors.length}
 
 This analysis includes:
-✅ Dependency vulnerability scanning
+${executionPolicy.includeCve ? '✅' : '⏭️'} Dependency vulnerability scanning${executionPolicy.includeCve ? '' : ' (opt in with --cve)'}
 ✅ Secrets detection (files + git history)
 ✅ OWASP Top 10 security checks
 ✅ Docker & IaC security
@@ -411,7 +370,7 @@ This analysis includes:
 ✅ Code complexity analysis
 ✅ Code smell detection
 
-💡 Upgrade to Pro for AI-powered insights and context-aware analysis`;
+AI-assisted review is available when a BYOK cloud provider or local model is configured.`;
 
   const recommendations: string[] = [];
 
@@ -424,6 +383,9 @@ This analysis includes:
   if (findings.filter(f => f.severity === 'critical').length > 0) {
     recommendations.push('Critical issues require immediate attention before production deployment');
   }
+  if (operationalFailure) {
+    recommendations.push('Resolve scanner operational failures and rerun GuardScan before relying on this review');
+  }
 
   return {
     summary,
@@ -434,8 +396,11 @@ This analysis includes:
       repoInfo,
       locStats: locResult,
       provider: 'static-analysis',
-      model: 'FREE tier (9 security scanners + quality analysis)',
+      model: 'local static scanners + quality analysis',
       durationMs: 0, // Will be set by caller
+      executionMode: 'static-analysis',
+      operationalFailure,
+      scannerCoverage,
     },
   };
 }
@@ -443,7 +408,7 @@ This analysis includes:
 /**
  * Prepare context for AI review
  */
-async function prepareReviewContext(repoInfo: any, locResult: any, filePatterns?: string[]): Promise<string> {
+function prepareReviewContext(repoInfo: RepositoryInfo, locResult: LOCResult): string {
   logger.debug('Preparing review context', { fileCount: locResult.fileCount, codeLines: locResult.codeLines });
   
   let context = `# Code Review Request\n\n`;
@@ -464,7 +429,7 @@ async function prepareReviewContext(repoInfo: any, locResult: any, filePatterns?
   // Sample some file contents (limited to avoid token limits)
   context += `\n## Code Samples:\n\n`;
   const filesToSample = locResult.fileBreakdown
-    .filter((f: any) => f.codeLines > 10 && f.codeLines < 500)
+    .filter(file => file.codeLines > 10 && file.codeLines < 500)
     .slice(0, 5);
 
   for (const file of filesToSample) {
@@ -487,8 +452,8 @@ async function prepareReviewContext(repoInfo: any, locResult: any, filePatterns?
  */
 function parseAIResponse(
   content: string,
-  repoInfo: any,
-  locResult: any,
+  repoInfo: RepositoryInfo,
+  locResult: LOCResult,
   provider: string,
   model: string,
   durationMs: number
@@ -496,9 +461,7 @@ function parseAIResponse(
   // Basic parsing - in production, you'd want more sophisticated parsing
   const lines = content.split('\n');
 
-  const summary = content.substring(0, 500); // First 500 chars as summary
-
-  const findings: any[] = []; // Parse findings from AI response
+  const findings: Finding[] = []; // Parse findings from AI response
   const recommendations: string[] = []; // Parse recommendations
 
   // Simple pattern matching (you'd want to improve this)
@@ -528,6 +491,31 @@ function parseAIResponse(
   };
 }
 
+function mergeReviewResults(local: ReviewResult, ai: ReviewResult): ReviewResult {
+  const findings = new Map<string, ReviewResult['findings'][number]>();
+  for (const finding of [...local.findings, ...ai.findings]) {
+    const key = [
+      finding.severity,
+      finding.category,
+      finding.file,
+      finding.line || 0,
+      finding.description,
+    ].join('\0');
+    findings.set(key, finding);
+  }
+  return {
+    summary: `${local.summary}\n\nAI enhancement:\n${ai.summary}`,
+    findings: [...findings.values()],
+    recommendations: [...new Set([...local.recommendations, ...ai.recommendations])],
+    metadata: {
+      ...ai.metadata,
+      executionMode: local.metadata.executionMode,
+      operationalFailure: local.metadata.operationalFailure,
+      scannerCoverage: local.metadata.scannerCoverage,
+    },
+  };
+}
+
 /**
  * Display review summary
  */
@@ -552,7 +540,9 @@ function displaySummary(result: ReviewResult): void {
     console.log(chalk.blue(`  🔵 Low: ${lowCount}`));
   }
 
-  if (result.findings.length === 0) {
+  if (result.findings.length === 0 && result.metadata.operationalFailure) {
+    console.log(chalk.red('  ⚠ Review incomplete: required scanner coverage failed'));
+  } else if (result.findings.length === 0) {
     console.log(chalk.green('  ✅ No major issues found!'));
   }
 

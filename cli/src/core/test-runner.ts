@@ -1,6 +1,8 @@
-import { execSync } from 'child_process';
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
+import { runProcess } from '../utils/process-runner';
+import { EffectiveExecutionPolicy } from '../utils/execution-policy';
 
 export interface TestResult {
   framework: string;
@@ -31,30 +33,37 @@ export class TestRunner {
   /**
    * Auto-detect and run tests for the project
    */
-  async runTests(repoPath: string = process.cwd(), withCoverage: boolean = false): Promise<TestResult[]> {
+  async runTests(
+    repoPath: string = process.cwd(),
+    withCoverage: boolean = false,
+    policy?: EffectiveExecutionPolicy
+  ): Promise<TestResult[]> {
+    if (policy && (policy.offline || !policy.runProjectCode)) {
+      return [];
+    }
     const results: TestResult[] = [];
 
     // Detect and run Jest (JavaScript/TypeScript)
     if (this.hasJest(repoPath)) {
-      const jestResult = await this.runJest(repoPath, withCoverage);
+      const jestResult = await this.runJest(repoPath, withCoverage, policy);
       if (jestResult) {results.push(jestResult);}
     }
 
     // Detect and run pytest (Python)
     if (this.hasPytest(repoPath)) {
-      const pytestResult = await this.runPytest(repoPath, withCoverage);
+      const pytestResult = await this.runPytest(repoPath, withCoverage, policy);
       if (pytestResult) {results.push(pytestResult);}
     }
 
     // Detect and run go test (Go)
     if (this.hasGoTest(repoPath)) {
-      const goResult = await this.runGoTest(repoPath, withCoverage);
+      const goResult = await this.runGoTest(repoPath, withCoverage, policy);
       if (goResult) {results.push(goResult);}
     }
 
     // Detect and run cargo test (Rust)
     if (this.hasCargoTest(repoPath)) {
-      const cargoResult = await this.runCargoTest(repoPath);
+      const cargoResult = await this.runCargoTest(repoPath, policy);
       if (cargoResult) {results.push(cargoResult);}
     }
 
@@ -100,20 +109,27 @@ export class TestRunner {
   /**
    * Run Jest tests
    */
-  private async runJest(repoPath: string, withCoverage: boolean): Promise<TestResult | null> {
+  private async runJest(
+    repoPath: string,
+    withCoverage: boolean,
+    policy?: EffectiveExecutionPolicy
+  ): Promise<TestResult | null> {
+    const reportDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'guardscan-jest-report-'));
+    const reportPath = path.join(reportDirectory, 'results.json');
     try {
-      const coverageFlag = withCoverage ? '--coverage' : '';
-      const output = execSync(`npm test -- --json ${coverageFlag} 2>&1 || true`, {
+      const args = ['test', '--', '--json', '--outputFile', reportPath];
+      if (withCoverage) {args.push('--coverage');}
+      const processResult = runProcess('npm', args, {
         cwd: repoPath,
-        encoding: 'utf-8',
         maxBuffer: 10 * 1024 * 1024,
+        timeoutMs: 10 * 60 * 1000,
+        networkIsolation: policy?.isolateProjectNetwork === true,
       });
-
-      // Parse Jest JSON output
-      const jsonMatch = output.match(/\{[\s\S]*"testResults"[\s\S]*\}/);
-      if (!jsonMatch) {return null;}
-
-      const result = JSON.parse(jsonMatch[0]);
+      if (processResult.timedOut) {throw new Error('Jest timed out');}
+      if (!fs.existsSync(reportPath)) {
+        throw new Error(`Jest exited ${processResult.status} without producing a JSON report`);
+      }
+      const result = JSON.parse(fs.readFileSync(reportPath, 'utf8'));
 
       const failures: TestFailure[] = [];
       let totalTests = 0;
@@ -147,7 +163,9 @@ export class TestRunner {
         failures,
       };
     } catch (error) {
-      return null;
+      throw new Error(`Jest execution failed: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      fs.rmSync(reportDirectory, { recursive: true, force: true });
     }
   }
 
@@ -198,20 +216,33 @@ export class TestRunner {
   /**
    * Run pytest tests
    */
-  private async runPytest(repoPath: string, withCoverage: boolean): Promise<TestResult | null> {
+  private async runPytest(
+    repoPath: string,
+    withCoverage: boolean,
+    policy?: EffectiveExecutionPolicy
+  ): Promise<TestResult | null> {
+    const reportDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'guardscan-pytest-report-'));
+    const reportPath = path.join(reportDirectory, 'results.json');
     try {
-      const coverageFlag = withCoverage ? '--cov --cov-report=json' : '';
-      const output = execSync(`pytest --json-report ${coverageFlag} 2>&1 || true`, {
+      const args = ['--json-report', `--json-report-file=${reportPath}`];
+      if (withCoverage) {args.push('--cov', '--cov-report=json');}
+      const processResult = runProcess('pytest', args, {
         cwd: repoPath,
-        encoding: 'utf-8',
         maxBuffer: 10 * 1024 * 1024,
+        timeoutMs: 10 * 60 * 1000,
+        networkIsolation: policy?.isolateProjectNetwork === true,
       });
+      if (processResult.timedOut) {throw new Error('pytest timed out');}
+      const output = `${processResult.stdout}\n${processResult.stderr}`;
 
       // Parse pytest JSON report
-      const reportPath = path.join(repoPath, '.report.json');
       if (!fs.existsSync(reportPath)) {
         // Fallback: parse text output
-        return this.parsePytestTextOutput(output);
+        const parsed = this.parsePytestTextOutput(output);
+        if (!parsed) {
+          throw new Error(`pytest exited ${processResult.status} without a parseable report`);
+        }
+        return parsed;
       }
 
       const report = JSON.parse(fs.readFileSync(reportPath, 'utf-8'));
@@ -237,7 +268,9 @@ export class TestRunner {
         failures,
       };
     } catch (error) {
-      return null;
+      throw new Error(`pytest execution failed: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      fs.rmSync(reportDirectory, { recursive: true, force: true });
     }
   }
 
@@ -298,14 +331,23 @@ export class TestRunner {
   /**
    * Run go test
    */
-  private async runGoTest(repoPath: string, withCoverage: boolean): Promise<TestResult | null> {
+  private async runGoTest(
+    repoPath: string,
+    withCoverage: boolean,
+    policy?: EffectiveExecutionPolicy
+  ): Promise<TestResult | null> {
     try {
-      const coverageFlag = withCoverage ? '-coverprofile=coverage.out' : '';
-      const output = execSync(`go test -json ${coverageFlag} ./... 2>&1 || true`, {
+      const args = ['test', '-json'];
+      if (withCoverage) {args.push('-coverprofile=coverage.out');}
+      args.push('./...');
+      const processResult = runProcess('go', args, {
         cwd: repoPath,
-        encoding: 'utf-8',
         maxBuffer: 10 * 1024 * 1024,
+        timeoutMs: 10 * 60 * 1000,
+        networkIsolation: policy?.isolateProjectNetwork === true,
       });
+      if (processResult.timedOut) {throw new Error('go test timed out');}
+      const output = `${processResult.stdout}\n${processResult.stderr}`;
 
       let totalTests = 0;
       let passed = 0;
@@ -346,26 +388,31 @@ export class TestRunner {
         failed,
         skipped,
         duration: 0,
-        coverage: this.parseGoCoverage(repoPath),
+        coverage: this.parseGoCoverage(repoPath, policy),
         failures,
       };
     } catch (error) {
-      return null;
+      throw new Error(`go test execution failed: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
   /**
    * Parse go test coverage
    */
-  private parseGoCoverage(repoPath: string): CoverageResult | undefined {
+  private parseGoCoverage(
+    repoPath: string,
+    policy?: EffectiveExecutionPolicy
+  ): CoverageResult | undefined {
     const coveragePath = path.join(repoPath, 'coverage.out');
     if (!fs.existsSync(coveragePath)) {return undefined;}
 
     try {
-      const output = execSync('go tool cover -func=coverage.out', {
+      const processResult = runProcess('go', ['tool', 'cover', '-func=coverage.out'], {
         cwd: repoPath,
-        encoding: 'utf-8',
+        networkIsolation: policy?.isolateProjectNetwork === true,
       });
+      if (processResult.status !== 0) {return undefined;}
+      const output = processResult.stdout;
 
       const totalMatch = output.match(/total:.*\s(\d+\.\d+)%/);
       const coverage = totalMatch ? parseFloat(totalMatch[1]) : 0;
@@ -391,19 +438,27 @@ export class TestRunner {
   /**
    * Run cargo test
    */
-  private async runCargoTest(repoPath: string): Promise<TestResult | null> {
+  private async runCargoTest(
+    repoPath: string,
+    policy?: EffectiveExecutionPolicy
+  ): Promise<TestResult | null> {
     try {
-      const output = execSync('cargo test -- --format=json 2>&1 || true', {
+      const processResult = runProcess('cargo', ['test', '--', '--format=json'], {
         cwd: repoPath,
-        encoding: 'utf-8',
         maxBuffer: 10 * 1024 * 1024,
+        timeoutMs: 10 * 60 * 1000,
+        networkIsolation: policy?.isolateProjectNetwork === true,
       });
+      if (processResult.timedOut) {throw new Error('cargo test timed out');}
+      const output = `${processResult.stdout}\n${processResult.stderr}`;
 
       // Parse cargo test output (basic parsing)
       const passedMatch = output.match(/test result:.*?(\d+) passed/);
       const failedMatch = output.match(/(\d+) failed/);
 
-      if (!passedMatch) {return null;}
+      if (!passedMatch) {
+        throw new Error(`cargo test exited ${processResult.status} without a parseable report`);
+      }
 
       const passed = parseInt(passedMatch[1]);
       const failed = failedMatch ? parseInt(failedMatch[1]) : 0;
@@ -418,7 +473,7 @@ export class TestRunner {
         failures: [],
       };
     } catch (error) {
-      return null;
+      throw new Error(`cargo test execution failed: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 

@@ -60,7 +60,7 @@ export async function reviewCommand(options: ReviewCommandOptions): Promise<void
     logger.debug('Config loaded', { provider: config.provider });
 
     // Check AI provider
-    if (!config.provider || config.provider === 'none' || !config.apiKey) {
+    if (!ProviderFactory.isConfigured(config)) {
       spinner.fail('No AI provider configured');
       console.log(chalk.yellow('\nCode review requires an AI provider.'));
       console.log(chalk.gray('Configure with: guardscan config\n'));
@@ -79,7 +79,7 @@ export async function reviewCommand(options: ReviewCommandOptions): Promise<void
 
     // Initialize components
     const provider = ProviderFactory.createForCli(config, { task: 'code-review' });
-    const cache = new AICache(repoInfo.repoId);
+    const cache = new AICache(repoInfo.repoId, config.cache || 100);
     const engine = new CodeReviewEngine(provider, cache, repoInfo.path);
 
     spinner.text = 'Analyzing changes...';

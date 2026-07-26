@@ -41,7 +41,7 @@ export async function testGenCommand(options: TestGenOptions): Promise<void> {
     console.log(chalk.blue('🧪 Generating tests with AI...'));
 
     // Check if AI provider is configured
-    if (!config.provider || config.provider === 'none' || !config.apiKey) {
+    if (!ProviderFactory.isConfigured(config)) {
       console.log(chalk.yellow('\n⚠ AI provider not configured. Run `guardscan config` to set up.'));
       return;
     }
@@ -55,7 +55,7 @@ export async function testGenCommand(options: TestGenOptions): Promise<void> {
     const provider = ProviderFactory.createForCli(config, { task: 'test-generation' });
 
     // Create AI cache
-    const cache = new AICache(repoInfo.repoId, 100); // 100MB cache
+    const cache = new AICache(repoInfo.repoId, config.cache || 100);
 
     // Create indexer
     const indexer = new CodebaseIndexer(repoRoot, repoInfo.repoId);

@@ -11,7 +11,8 @@ import { GeminiEmbeddingProvider } from "./embedding-gemini";
 import { ClaudeEmbeddingProvider } from "./embedding-claude";
 import { OllamaEmbeddingProvider } from "./embedding-ollama";
 import { LMStudioEmbeddingProvider } from "./embedding-lmstudio";
-import { AIProvider } from "../core/config";
+import { AIProvider, Config } from "../core/config";
+import { ProviderFactory } from "./factory";
 
 export type EmbeddingFallbackProvider = "ollama" | "lmstudio" | "none";
 
@@ -23,7 +24,41 @@ export interface EmbeddingProviderResult {
   fallbackProvider?: "ollama" | "lmstudio";
 }
 
+export interface CreateEmbeddingForCliOptions {
+  provider?: Exclude<AIProvider, "none">;
+  endpoint?: string;
+  fallback?: EmbeddingFallbackProvider;
+  offline?: boolean;
+}
+
 export class EmbeddingProviderFactory {
+  static createForCli(
+    config: Pick<
+      Config,
+      "provider" | "apiKey" | "apiEndpoint" | "embeddingFallback" | "offlineMode" |
+      "allowRemoteSelfHosted"
+    >,
+    options: CreateEmbeddingForCliOptions = {}
+  ): EmbeddingProviderResult {
+    const provider = options.provider || config.provider;
+    const usesConfiguredProvider = provider === config.provider;
+    const fallback =
+      options.fallback !== undefined
+        ? options.fallback
+        : usesConfiguredProvider || provider === 'claude'
+          ? config.embeddingFallback
+          : undefined;
+
+    return this.create(
+      provider,
+      usesConfiguredProvider ? config.apiKey : undefined,
+      options.endpoint ?? (usesConfiguredProvider ? config.apiEndpoint : undefined),
+      fallback,
+      config.offlineMode || options.offline === true,
+      config.allowRemoteSelfHosted === true
+    );
+  }
+
   /**
    * Create embedding provider based on AI provider and fallback preference
    */
@@ -31,7 +66,9 @@ export class EmbeddingProviderFactory {
     aiProvider: AIProvider,
     apiKey?: string,
     apiEndpoint?: string,
-    embeddingFallback?: EmbeddingFallbackProvider
+    embeddingFallback?: EmbeddingFallbackProvider,
+    offline: boolean = false,
+    allowRemoteSelfHosted: boolean = false
   ): EmbeddingProviderResult {
     let provider: EmbeddingProvider;
     let isFallback = false;
@@ -41,13 +78,20 @@ export class EmbeddingProviderFactory {
 
     // Handle fallback override first (if user explicitly chose fallback)
     if (embeddingFallback === "ollama" || embeddingFallback === "lmstudio") {
+      ProviderFactory.assertNetworkPolicy(embeddingFallback, offline);
+      const endpoint = ProviderFactory.normalizeEndpoint(
+        embeddingFallback,
+        apiEndpoint,
+        offline,
+        allowRemoteSelfHosted
+      );
       // User wants to use local provider regardless of AI provider
       if (embeddingFallback === "lmstudio") {
-        provider = new LMStudioEmbeddingProvider(apiEndpoint);
+        provider = new LMStudioEmbeddingProvider(endpoint);
         dimensions = 768;
         fallbackProvider = "lmstudio";
       } else {
-        provider = new OllamaEmbeddingProvider(apiEndpoint);
+        provider = new OllamaEmbeddingProvider(endpoint);
         dimensions = 768;
         fallbackProvider = "ollama";
       }
@@ -62,15 +106,25 @@ export class EmbeddingProviderFactory {
       };
     }
 
-    // Handle native providers or default fallbacks
+    // Handle native providers or default fallbacks. Apply policy to the actual
+    // embedding transport, which may be local even when chat uses Claude.
+    const credential = ProviderFactory.resolveCredential({
+      provider: aiProvider,
+      apiKey,
+    });
+
     switch (aiProvider) {
       case "openai":
+        ProviderFactory.assertNetworkPolicy('openai', offline);
         if (embeddingFallback === "none" || embeddingFallback === undefined) {
           // Use native OpenAI embeddings
-          if (!apiKey) {
+          if (!credential) {
             throw new Error("OpenAI API key required for OpenAI embeddings");
           }
-          provider = new OpenAIEmbeddingProvider(apiKey, apiEndpoint);
+          provider = new OpenAIEmbeddingProvider(
+            credential,
+            ProviderFactory.normalizeEndpoint('openai', apiEndpoint, offline)
+          );
           dimensions = 1536;
         } else {
           // Should not reach here due to earlier check, but handle gracefully
@@ -81,12 +135,13 @@ export class EmbeddingProviderFactory {
         break;
 
       case "gemini":
+        ProviderFactory.assertNetworkPolicy('gemini', offline);
         if (embeddingFallback === "none" || embeddingFallback === undefined) {
           // Use native Gemini embeddings
-          if (!apiKey) {
+          if (!credential) {
             throw new Error("Google API key required for Gemini embeddings");
           }
-          provider = new GeminiEmbeddingProvider(apiKey);
+          provider = new GeminiEmbeddingProvider(credential);
           dimensions = 768;
         } else {
           // Should not reach here due to earlier check, but handle gracefully
@@ -102,32 +157,45 @@ export class EmbeddingProviderFactory {
         // Here we only handle 'none' or undefined, both default to Ollama
         isFallback = true;
         fallbackProvider = "ollama"; // Default to Ollama for Claude
-        provider = new ClaudeEmbeddingProvider(fallbackProvider, apiEndpoint);
+        provider = new ClaudeEmbeddingProvider(
+          fallbackProvider,
+          ProviderFactory.normalizeEndpoint(
+            fallbackProvider,
+            apiEndpoint,
+            offline,
+            allowRemoteSelfHosted
+          )
+        );
         dimensions = 768;
         fallbackReason = `Claude does not support embeddings natively. Using ${fallbackProvider} (local, free) for embeddings.`;
         break;
 
       case "ollama":
         // Ollama is already local, no fallback needed
-        provider = new OllamaEmbeddingProvider(apiEndpoint);
+        provider = new OllamaEmbeddingProvider(
+          ProviderFactory.normalizeEndpoint('ollama', apiEndpoint, offline, allowRemoteSelfHosted)
+        );
         dimensions = 768;
         break;
 
       case "lmstudio":
         // LM Studio is already local, no fallback needed
-        provider = new LMStudioEmbeddingProvider(apiEndpoint);
+        provider = new LMStudioEmbeddingProvider(
+          ProviderFactory.normalizeEndpoint('lmstudio', apiEndpoint, offline, allowRemoteSelfHosted)
+        );
         dimensions = 768;
         break;
 
       case "openrouter":
+        ProviderFactory.assertNetworkPolicy('openrouter', offline);
         if (embeddingFallback === "none" || embeddingFallback === undefined) {
           // Use OpenAI-compatible embeddings via OpenRouter
-          if (!apiKey) {
+          if (!credential) {
             throw new Error("OpenRouter API key required for embeddings");
           }
           provider = new OpenAIEmbeddingProvider(
-            apiKey,
-            apiEndpoint || "https://openrouter.ai/api/v1"
+            credential,
+            ProviderFactory.normalizeEndpoint('openrouter', apiEndpoint, offline)
           );
           dimensions = 1536;
         } else {
@@ -143,7 +211,9 @@ export class EmbeddingProviderFactory {
         // Default to Ollama if no AI provider configured or unknown
         isFallback = true;
         fallbackReason = `No AI provider configured or unknown provider "${aiProvider}". Using Ollama (local, free) for embeddings.`;
-        provider = new OllamaEmbeddingProvider(apiEndpoint);
+        provider = new OllamaEmbeddingProvider(
+          ProviderFactory.normalizeEndpoint('ollama', apiEndpoint, offline, allowRemoteSelfHosted)
+        );
         dimensions = 768;
         fallbackProvider = "ollama";
         break;

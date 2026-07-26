@@ -1,6 +1,7 @@
-import { execSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
+import { ProcessResult, runProcess } from '../utils/process-runner';
+import { EffectiveExecutionPolicy } from '../utils/execution-policy';
 
 export interface LintResult {
   file: string;
@@ -25,41 +26,47 @@ export class LinterIntegration {
   /**
    * Run all available linters
    */
-  async runAll(repoPath: string = process.cwd()): Promise<LinterReport[]> {
+  async runAll(
+    repoPath: string = process.cwd(),
+    policy?: EffectiveExecutionPolicy
+  ): Promise<LinterReport[]> {
+    if (policy && (policy.offline || !policy.runProjectCode)) {
+      return [];
+    }
     const reports: LinterReport[] = [];
 
     // Detect and run JavaScript/TypeScript linters
     if (this.hasESLint(repoPath)) {
-      const eslintReport = await this.runESLint(repoPath);
+      const eslintReport = await this.runESLint(repoPath, policy);
       if (eslintReport) {reports.push(eslintReport);}
     }
 
     // Detect and run Python linters
     if (this.hasFlake8(repoPath)) {
-      const flake8Report = await this.runFlake8(repoPath);
+      const flake8Report = await this.runFlake8(repoPath, policy);
       if (flake8Report) {reports.push(flake8Report);}
     }
 
     if (this.hasPylint(repoPath)) {
-      const pylintReport = await this.runPylint(repoPath);
+      const pylintReport = await this.runPylint(repoPath, policy);
       if (pylintReport) {reports.push(pylintReport);}
     }
 
     // Detect and run Go linters
     if (this.hasGoLint(repoPath)) {
-      const golintReport = await this.runGoLint(repoPath);
+      const golintReport = await this.runGoLint(repoPath, policy);
       if (golintReport) {reports.push(golintReport);}
     }
 
     // Detect and run Ruby linters
     if (this.hasRubocop(repoPath)) {
-      const rubocopReport = await this.runRubocop(repoPath);
+      const rubocopReport = await this.runRubocop(repoPath, policy);
       if (rubocopReport) {reports.push(rubocopReport);}
     }
 
     // Detect and run PHP linters
     if (this.hasPhpCS(repoPath)) {
-      const phpcsReport = await this.runPhpCS(repoPath);
+      const phpcsReport = await this.runPhpCS(repoPath, policy);
       if (phpcsReport) {reports.push(phpcsReport);}
     }
 
@@ -84,17 +91,22 @@ export class LinterIntegration {
   /**
    * Run ESLint
    */
-  private async runESLint(repoPath: string): Promise<LinterReport | null> {
+  private async runESLint(
+    repoPath: string,
+    policy?: EffectiveExecutionPolicy
+  ): Promise<LinterReport | null> {
     try {
-      const output = execSync('npx eslint . --format json 2>&1 || true', {
+      const execution = runProcess('npx', ['--no-install', 'eslint', '.', '--format', 'json'], {
         cwd: repoPath,
-        encoding: 'utf-8',
         maxBuffer: 10 * 1024 * 1024,
+        timeoutMs: 5 * 60 * 1000,
+        networkIsolation: policy?.isolateProjectNetwork === true,
       });
+      const output = combinedOutput(execution);
 
       // Parse ESLint JSON output
       const jsonMatch = output.match(/\[[\s\S]*\]/);
-      if (!jsonMatch) {return null;}
+      if (!jsonMatch) {throw reportError('ESLint', execution);}
 
       const eslintResults = JSON.parse(jsonMatch[0]);
       const results: LintResult[] = [];
@@ -122,7 +134,7 @@ export class LinterIntegration {
         info: results.filter(r => r.severity === 'info').length,
       };
     } catch (error) {
-      return null;
+      throw new Error(`ESLint execution failed: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
@@ -139,20 +151,30 @@ export class LinterIntegration {
   /**
    * Run Flake8
    */
-  private async runFlake8(repoPath: string): Promise<LinterReport | null> {
+  private async runFlake8(
+    repoPath: string,
+    policy?: EffectiveExecutionPolicy
+  ): Promise<LinterReport | null> {
     try {
       // Check if flake8 is installed
       try {
-        execSync('flake8 --version', { stdio: 'ignore' });
+        if (runProcess('flake8', ['--version'], {
+          cwd: repoPath,
+          networkIsolation: policy?.isolateProjectNetwork === true,
+        }).status !== 0) {return null;}
       } catch {
         return null; // Flake8 not installed
       }
 
-      const output = execSync('flake8 --format=json . 2>&1 || true', {
+      const execution = runProcess('flake8', [
+        '--format=%(path)s:%(row)d:%(col)d: %(code)s %(text)s',
+        '.',
+      ], {
         cwd: repoPath,
-        encoding: 'utf-8',
         maxBuffer: 10 * 1024 * 1024,
+        networkIsolation: policy?.isolateProjectNetwork === true,
       });
+      const output = combinedOutput(execution);
 
       // Flake8 JSON format (if using flake8-json plugin)
       // Otherwise, parse line format: filename:line:column: code message
@@ -174,6 +196,7 @@ export class LinterIntegration {
           });
         }
       }
+      if (results.length === 0 && execution.status > 1) {throw reportError('Flake8', execution);}
 
       return {
         linter: 'Flake8',
@@ -184,7 +207,7 @@ export class LinterIntegration {
         info: 0,
       };
     } catch (error) {
-      return null;
+      throw new Error(`Flake8 execution failed: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
@@ -198,24 +221,31 @@ export class LinterIntegration {
   /**
    * Run Pylint
    */
-  private async runPylint(repoPath: string): Promise<LinterReport | null> {
+  private async runPylint(
+    repoPath: string,
+    policy?: EffectiveExecutionPolicy
+  ): Promise<LinterReport | null> {
     try {
       // Check if pylint is installed
       try {
-        execSync('pylint --version', { stdio: 'ignore' });
+        if (runProcess('pylint', ['--version'], {
+          cwd: repoPath,
+          networkIsolation: policy?.isolateProjectNetwork === true,
+        }).status !== 0) {return null;}
       } catch {
         return null; // Pylint not installed
       }
 
-      const output = execSync('pylint . --output-format=json 2>&1 || true', {
+      const execution = runProcess('pylint', ['.', '--output-format=json'], {
         cwd: repoPath,
-        encoding: 'utf-8',
         maxBuffer: 10 * 1024 * 1024,
+        networkIsolation: policy?.isolateProjectNetwork === true,
       });
+      const output = combinedOutput(execution);
 
       // Parse Pylint JSON output
       const jsonMatch = output.match(/\[[\s\S]*\]/);
-      if (!jsonMatch) {return null;}
+      if (!jsonMatch) {throw reportError('Pylint', execution);}
 
       const pylintResults = JSON.parse(jsonMatch[0]);
       const results: LintResult[] = [];
@@ -244,7 +274,7 @@ export class LinterIntegration {
         info: results.filter(r => r.severity === 'info').length,
       };
     } catch (error) {
-      return null;
+      throw new Error(`Pylint execution failed: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
@@ -258,24 +288,32 @@ export class LinterIntegration {
   /**
    * Run golangci-lint or go vet
    */
-  private async runGoLint(repoPath: string): Promise<LinterReport | null> {
+  private async runGoLint(
+    repoPath: string,
+    policy?: EffectiveExecutionPolicy
+  ): Promise<LinterReport | null> {
     try {
       let output = '';
+      let linter = 'Go Vet';
+      let execution: ProcessResult;
 
       // Try golangci-lint first
       try {
-        output = execSync('golangci-lint run --out-format=json 2>&1 || true', {
+        execution = runProcess('golangci-lint', ['run', '--out-format=line-number'], {
           cwd: repoPath,
-          encoding: 'utf-8',
           maxBuffer: 10 * 1024 * 1024,
+          networkIsolation: policy?.isolateProjectNetwork === true,
         });
+        output = combinedOutput(execution);
+        linter = 'golangci-lint';
       } catch {
         // Fall back to go vet
-        output = execSync('go vet ./... 2>&1 || true', {
+        execution = runProcess('go', ['vet', './...'], {
           cwd: repoPath,
-          encoding: 'utf-8',
           maxBuffer: 10 * 1024 * 1024,
+          networkIsolation: policy?.isolateProjectNetwork === true,
         });
+        output = combinedOutput(execution);
       }
 
       const results: LintResult[] = [];
@@ -293,13 +331,14 @@ export class LinterIntegration {
             severity: 'warning',
             rule: 'go-vet',
             message: message.trim(),
-            linter: 'Go Vet',
+            linter,
           });
         }
       }
+      if (results.length === 0 && execution.status > 1) {throw reportError(linter, execution);}
 
       return {
-        linter: 'Go Vet',
+        linter,
         results,
         totalIssues: results.length,
         errors: 0,
@@ -307,7 +346,7 @@ export class LinterIntegration {
         info: 0,
       };
     } catch (error) {
-      return null;
+      throw new Error(`Go lint execution failed: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
@@ -322,23 +361,30 @@ export class LinterIntegration {
   /**
    * Run Rubocop
    */
-  private async runRubocop(repoPath: string): Promise<LinterReport | null> {
+  private async runRubocop(
+    repoPath: string,
+    policy?: EffectiveExecutionPolicy
+  ): Promise<LinterReport | null> {
     try {
       // Check if rubocop is installed
       try {
-        execSync('rubocop --version', { stdio: 'ignore' });
+        if (runProcess('rubocop', ['--version'], {
+          cwd: repoPath,
+          networkIsolation: policy?.isolateProjectNetwork === true,
+        }).status !== 0) {return null;}
       } catch {
         return null; // Rubocop not installed
       }
 
-      const output = execSync('rubocop --format json 2>&1 || true', {
+      const execution = runProcess('rubocop', ['--format', 'json'], {
         cwd: repoPath,
-        encoding: 'utf-8',
         maxBuffer: 10 * 1024 * 1024,
+        networkIsolation: policy?.isolateProjectNetwork === true,
       });
+      const output = combinedOutput(execution);
 
       const jsonMatch = output.match(/\{[\s\S]*\}/);
-      if (!jsonMatch) {return null;}
+      if (!jsonMatch) {throw reportError('Rubocop', execution);}
 
       const rubocopResult = JSON.parse(jsonMatch[0]);
       const results: LintResult[] = [];
@@ -366,7 +412,7 @@ export class LinterIntegration {
         info: 0,
       };
     } catch (error) {
-      return null;
+      throw new Error(`Rubocop execution failed: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
@@ -380,23 +426,30 @@ export class LinterIntegration {
   /**
    * Run PHP CodeSniffer
    */
-  private async runPhpCS(repoPath: string): Promise<LinterReport | null> {
+  private async runPhpCS(
+    repoPath: string,
+    policy?: EffectiveExecutionPolicy
+  ): Promise<LinterReport | null> {
     try {
       // Check if phpcs is installed
       try {
-        execSync('phpcs --version', { stdio: 'ignore' });
+        if (runProcess('phpcs', ['--version'], {
+          cwd: repoPath,
+          networkIsolation: policy?.isolateProjectNetwork === true,
+        }).status !== 0) {return null;}
       } catch {
         return null; // PHP_CodeSniffer not installed
       }
 
-      const output = execSync('phpcs --report=json . 2>&1 || true', {
+      const execution = runProcess('phpcs', ['--report=json', '.'], {
         cwd: repoPath,
-        encoding: 'utf-8',
         maxBuffer: 10 * 1024 * 1024,
+        networkIsolation: policy?.isolateProjectNetwork === true,
       });
+      const output = combinedOutput(execution);
 
       const jsonMatch = output.match(/\{[\s\S]*\}/);
-      if (!jsonMatch) {return null;}
+      if (!jsonMatch) {throw reportError('PHP_CodeSniffer', execution);}
 
       const phpcsResult = JSON.parse(jsonMatch[0]);
       const results: LintResult[] = [];
@@ -425,7 +478,7 @@ export class LinterIntegration {
         info: 0,
       };
     } catch (error) {
-      return null;
+      throw new Error(`PHP_CodeSniffer execution failed: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
@@ -463,3 +516,14 @@ export class LinterIntegration {
 }
 
 export const linterIntegration = new LinterIntegration();
+
+function combinedOutput(result: ProcessResult): string {
+  return `${result.stdout}\n${result.stderr}`.trim();
+}
+
+function reportError(tool: string, result: ProcessResult): Error {
+  const detail = combinedOutput(result).replace(/\s+/g, ' ').slice(0, 300);
+  return new Error(
+    `${tool} exited ${result.status} without a parseable report${detail ? `: ${detail}` : ''}`
+  );
+}

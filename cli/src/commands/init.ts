@@ -34,16 +34,12 @@ export async function initCommand(): Promise<void> {
     // Check if already initialized
     if (configExists) {
       perfTracker.start('load-existing-config');
-      const config = configManager.load();
+      const config = configManager.load({ touchLastUsed: false });
       perfTracker.end('load-existing-config');
       
-      logger.debug('Already initialized', { 
-        clientId: config.clientId,
-        provider: config.provider 
-      });
+      logger.debug('Already initialized', { provider: config.provider });
       
       console.log(chalk.yellow('Already initialized!'));
-      console.log(chalk.gray(`Client ID: ${config.clientId}`));
       console.log(chalk.gray(`Provider: ${config.provider}`));
       console.log(chalk.gray('\nRun "guardscan config" to modify settings\n'));
       
@@ -57,14 +53,10 @@ export async function initCommand(): Promise<void> {
     const config = configManager.init();
     perfTracker.end('create-config');
     
-    logger.debug('Config created', {
-      clientId: config.clientId,
-      configDir: configManager.getConfigDir()
-    });
+    logger.debug('Config created', { configDir: configManager.getConfigDir() });
 
     console.log(chalk.green('✓ Configuration initialized'));
     console.log(chalk.gray(`  Config directory: ${configManager.getConfigDir()}`));
-    console.log(chalk.gray(`  Client ID: ${config.clientId}`));
 
     // Detect repository
     perfTracker.start('detect-repository');
@@ -147,11 +139,19 @@ export async function initCommand(): Promise<void> {
     }
 
     console.log(chalk.gray('\nℹ Privacy Notice:'));
-    console.log(chalk.gray('  - Your client_id is stored locally only'));
-    console.log(chalk.gray('  - No source code is ever transmitted'));
-    console.log(chalk.gray('  - Only anonymized metadata is collected'));
-    console.log(chalk.gray('  - Telemetry can be disabled via config\n'));
-    
+    console.log(
+      chalk.gray(
+        '  - Source-derived context is sent only when an AI feature uses your configured provider endpoint'
+      )
+    );
+    if (config.telemetryEnabled) {
+      console.log(chalk.gray('  - Allowlisted usage counts may be queued locally; source, paths, findings, prompts, and errors are excluded'));
+      console.log(chalk.gray('  - Delivery occurs only when you run `guardscan telemetry sync`'));
+    } else {
+      console.log(chalk.gray('  - Telemetry is disabled; no usage events are recorded or sent'));
+    }
+    console.log(chalk.gray('  - Disabling telemetry deletes every queued event\n'));
+
     perfTracker.end('init-total');
     logger.debug('Init command completed successfully');
     perfTracker.displaySummary();
@@ -232,12 +232,12 @@ async function setupCloudAI(config: any): Promise<void> {
       type: 'confirm',
       name: 'telemetry',
       message: 'Enable telemetry? (helps improve GuardScan)',
-      default: true,
+      default: false,
     },
     {
       type: 'confirm',
       name: 'offlineMode',
-      message: 'Enable offline mode? (skip telemetry and monitoring)',
+      message: 'Enable offline mode? (block network-backed checks and telemetry)',
       default: false,
     },
   ]);
@@ -249,8 +249,8 @@ async function setupCloudAI(config: any): Promise<void> {
 
   console.log(chalk.green('\n✓ Configuration saved'));
 
-  // Test connection if API key provided
-  if (answers.apiKey) {
+  // Test whenever the factory can resolve a persisted or environment credential.
+  if (ProviderFactory.isConfigured(config)) {
     console.log(chalk.gray('\nTesting connection...'));
     perfTracker.start('test-ai-connection');
     try {
@@ -286,8 +286,8 @@ async function setupLocalAI(config: any): Promise<void> {
   console.log(chalk.cyan.bold('\n🏠 Setting up Local AI\n'));
 
   const localProviders = [
-    { name: 'Ollama (http://localhost:11434)', value: 'ollama' },
-    { name: 'LM Studio (http://localhost:1234)', value: 'lmstudio' },
+    { name: 'Ollama (http://127.0.0.1:11434)', value: 'ollama' },
+    { name: 'LM Studio (http://127.0.0.1:1234)', value: 'lmstudio' },
   ];
 
   const answers = await inquirer.prompt([
@@ -302,13 +302,13 @@ async function setupLocalAI(config: any): Promise<void> {
       name: 'apiEndpoint',
       message: 'Enter API endpoint:',
       default: (answers: any) =>
-        answers.provider === 'ollama' ? 'http://localhost:11434' : 'http://localhost:1234',
+        answers.provider === 'ollama' ? 'http://127.0.0.1:11434' : 'http://127.0.0.1:1234',
     },
     {
       type: 'confirm',
       name: 'telemetry',
       message: 'Enable telemetry? (helps improve GuardScan)',
-      default: true,
+      default: false,
     },
   ]);
 
@@ -318,7 +318,15 @@ async function setupLocalAI(config: any): Promise<void> {
   config.offlineMode = true; // Always offline for local AI
 
   console.log(chalk.green('\n✓ Configuration saved'));
-  console.log(chalk.green('✓ No internet required for reviews'));
+  const trustWarning = ProviderFactory.getEndpointTrustWarning(
+    config.provider,
+    config.apiEndpoint
+  );
+  if (trustWarning) {
+    console.log(chalk.yellow(`⚠ ${trustWarning}`));
+  } else {
+    console.log(chalk.green('✓ Configured to use a loopback AI endpoint'));
+  }
   console.log(chalk.gray('\nℹ  Make sure your local AI server is running:'));
   console.log(chalk.gray(`   ${answers.apiEndpoint}`));
 }
@@ -328,7 +336,7 @@ async function setupStaticOnly(config: any): Promise<void> {
 
   // Check if running in non-interactive mode
   const isNonInteractive = !process.stdin.isTTY;
-  let telemetryEnabled = true; // Default to enabled
+  let telemetryEnabled = false; // Explicit opt-in only
   
   if (isNonInteractive) {
     // In non-interactive mode, use defaults
@@ -339,7 +347,7 @@ async function setupStaticOnly(config: any): Promise<void> {
         type: 'confirm',
         name: 'telemetry',
         message: 'Enable telemetry? (helps improve GuardScan)',
-        default: true,
+        default: false,
       },
     ]);
     telemetryEnabled = answers.telemetry;

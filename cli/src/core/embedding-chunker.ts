@@ -7,6 +7,7 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
+import fastGlob from 'fast-glob';
 import { CodebaseIndexer, CodebaseIndex } from './codebase-indexer';
 import { ParsedFunction, ParsedClass } from './ast-parser';
 import { CodeChunk, EmbeddingMetadata, hashContent } from './embeddings';
@@ -255,14 +256,20 @@ export class EmbeddingChunker {
       'docs/**/*.md',
     ];
 
-    for (const pattern of docPatterns) {
-      try {
-        const docPath = path.join(this.repoRoot, pattern);
+    const docPaths = await fastGlob(docPatterns, {
+      cwd: this.repoRoot,
+      onlyFiles: true,
+      unique: true,
+    });
 
-        if (fs.existsSync(docPath) && fs.statSync(docPath).isFile()) {
-          const content = await fs.promises.readFile(docPath, 'utf-8');
+    for (const docPath of docPaths) {
+      try {
+        const fullPath = path.join(this.repoRoot, docPath);
+
+        if (fs.existsSync(fullPath) && fs.statSync(fullPath).isFile()) {
+          const content = await fs.promises.readFile(fullPath, 'utf-8');
           const formattedContent = this.formatDocumentationForEmbedding(
-            pattern,
+            docPath,
             content
           );
 
@@ -273,10 +280,10 @@ export class EmbeddingChunker {
               language: 'markdown',
               dependencies: [],
               exports: [],
-              tags: ['documentation', this.inferDocType(pattern)],
-              lastModified: await this.getFileModificationTime(pattern),
+              tags: ['documentation', this.inferDocType(docPath)],
+              lastModified: await this.getFileModificationTime(docPath),
             },
-            source: pattern,
+            source: docPath,
           });
         }
       } catch (error) {

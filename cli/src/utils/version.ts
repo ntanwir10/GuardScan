@@ -34,16 +34,32 @@ export async function checkForUpdates(): Promise<void> {
   const debug = process.env.GUARDSCAN_DEBUG === "true";
 
   try {
-    if (process.env.GUARDSCAN_NO_TELEMETRY === "true") {
+    if (
+      process.env.GUARDSCAN_NO_TELEMETRY === "true" ||
+      process.env.GUARDSCAN_OFFLINE === "true"
+    ) {
       if (debug)
         {console.error("[VERSION] Skipping update check (--no-telemetry)");}
+      return;
+    }
+
+    const configManager = new ConfigManager();
+    if (!configManager.exists()) {
+      if (debug) {console.error("[VERSION] Skipping update check (no config)");}
+      return;
+    }
+
+    const config = configManager.load({ touchLastUsed: false });
+    if (!config.telemetryEnabled || config.offlineMode) {
+      if (debug) {
+        console.error("[VERSION] Skipping update check (telemetry disabled or offline mode enabled)");
+      }
       return;
     }
 
     if (debug) {console.error("[VERSION] Checking for updates...");}
 
     // Check cache first (only check once per day)
-    const configManager = new ConfigManager();
     const cacheDir = configManager.getCacheDir();
 
     if (debug) {console.error(`[VERSION] Cache dir: ${cacheDir}`);}
