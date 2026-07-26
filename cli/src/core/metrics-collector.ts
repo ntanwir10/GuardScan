@@ -1,16 +1,39 @@
 /**
  * metrics-collector.ts - AI Metrics Collection and Analysis
  *
- * Local spans persist under ~/.guardscan/cache. When telemetry is enabled,
- * aggregate performance samples are flushed through utils/monitoring to the
- * GuardScan-Monitoring Worker (POST /api/monitoring).
+ * Local spans persist under ~/.guardscan/cache and are never sent remotely.
  */
 
 import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
 import { configManager } from './config';
-import { getMonitoring } from '../utils/monitoring';
+import {
+  acquireFileLease,
+  atomicReplaceJson,
+  ensurePrivateDirectory,
+  FileLease,
+  forEachDirectoryEntry,
+  publishJsonNoReplace,
+  quarantineFile,
+  readJsonFileBounded,
+  removeStaleTemporaryFiles,
+} from '../utils/private-state';
+
+const MAX_SPANS = 1000;
+const MAX_EVENT_FILE_BYTES = 64 * 1024;
+const MAX_MIGRATION_FILE_BYTES = 8 * 1024 * 1024;
+const EVENT_FILE = /^[a-f0-9]{64}\.json$/;
+const MIGRATION_JOURNAL_VERSION = 'guardscan.metrics.migration.v1' as const;
+const MIGRATION_LEASE_MS = 5 * 60 * 1000;
+
+interface MetricsMigrationJournal {
+  schemaVersion: typeof MIGRATION_JOURNAL_VERSION;
+  source: string;
+  migrated: string;
+  phase: 'committing' | 'committed';
+  createdFiles: Array<{file: string; span: AISpan}>;
+}
 
 export interface AISpan {
   traceId: string;
@@ -53,13 +76,31 @@ export interface AggregatedMetrics {
 
 export class MetricsCollector {
   private spans: AISpan[] = [];
-  private maxSpans: number = 10000; // Keep last 10k spans in memory
+  private maxSpans: number = MAX_SPANS;
+  private recordsSincePrune = 0;
   private repoId: string;
-  private telemetryEnabled: boolean;
+  private readonly metricsDir: string;
+  private readonly eventsDir: string;
+  private readonly legacyMetricsPath: string;
+  private readonly quarantineDir: string;
+  private readonly migrationLeaseFile: string;
+  private readonly migrationJournalFile: string;
 
-  constructor(repoId: string, telemetryEnabled: boolean = false) {
+  constructor(repoId: string) {
     this.repoId = repoId;
-    this.telemetryEnabled = telemetryEnabled;
+    const baseCacheDir = configManager.getCacheDir();
+    const safeRepoId = /^[A-Za-z0-9_-]{1,128}$/.test(repoId)
+      ? repoId
+      : crypto.createHash('sha256').update(repoId).digest('hex');
+    this.metricsDir = path.join(baseCacheDir, safeRepoId, 'metrics');
+    this.eventsDir = path.join(this.metricsDir, 'events');
+    this.legacyMetricsPath = path.join(this.metricsDir, 'spans.json');
+    this.quarantineDir = path.join(this.metricsDir, 'quarantine');
+    this.migrationLeaseFile = path.join(this.metricsDir, 'migration.lock');
+    this.migrationJournalFile = path.join(this.metricsDir, 'migration.journal.json');
+    this.ensureStorage();
+    this.runMigration();
+    this.pruneDiskEvents();
     this.loadFromDisk();
   }
 
@@ -67,23 +108,30 @@ export class MetricsCollector {
    * Record a span
    */
   async recordSpan(span: AISpan): Promise<void> {
-    this.spans.push(span);
+    const safeSpan = parseSpan(span);
+    const created = this.persistSpan(safeSpan);
+    if (!created) {return;}
+    this.spans.push(safeSpan);
+    const shouldPrune = this.spans.length > this.maxSpans;
+    let evicted: AISpan | undefined;
 
     // Trim old spans if exceeding max
     if (this.spans.length > this.maxSpans) {
-      this.spans = this.spans.slice(-this.maxSpans);
+      evicted = this.spans.shift();
+      if (evicted) {
+        try {fs.unlinkSync(path.join(this.eventsDir, `${this.storageId(evicted)}.json`));}
+        catch { /* concurrent delete */ }
+      }
     }
 
-    // Persist to disk (async, non-blocking)
-    this.saveToDisk().catch((err) => {
-      console.warn('Failed to save metrics:', err);
-    });
-
-    if (this.telemetryEnabled) {
-      this.forwardSpanToMonitoring(span).catch(() => {
-        /* non-blocking; matches optional telemetry semantics */
-      });
+    if (shouldPrune) {
+      this.recordsSincePrune += 1;
+      if (this.recordsSincePrune >= 32) {
+        this.pruneDiskEvents();
+        this.recordsSincePrune = 0;
+      }
     }
+    await Promise.resolve();
   }
 
   /**
@@ -124,7 +172,10 @@ export class MetricsCollector {
    * Get spans
    */
   getSpans(limit?: number): AISpan[] {
-    if (limit) {
+    if (limit !== undefined) {
+      if (!Number.isSafeInteger(limit) || limit < 0) {
+        throw new Error('span limit must be a non-negative safe integer');
+      }
       return this.spans.slice(-limit);
     }
     return [...this.spans];
@@ -133,11 +184,20 @@ export class MetricsCollector {
   /**
    * Clear all spans
    */
-  clear(): void {
-    this.spans = [];
-    this.saveToDisk().catch((err) => {
-      console.warn('Failed to save metrics after clear:', err);
-    });
+  async clear(): Promise<void> {
+    const lease = acquireMetricsLease(this.migrationLeaseFile);
+    try {
+      this.spans = [];
+      this.ensureStorage();
+      const handle = await fs.promises.opendir(this.eventsDir);
+      for await (const entry of handle) {
+        if (!entry.name.endsWith('.json')) {continue;}
+        try {await fs.promises.unlink(path.join(this.eventsDir, entry.name));}
+        catch { /* concurrent delete */ }
+      }
+    } finally {
+      lease.release();
+    }
   }
 
   /**
@@ -159,7 +219,8 @@ export class MetricsCollector {
       spans: relevantSpans,
     };
 
-    fs.writeFileSync(outputPath, JSON.stringify(exportData, null, 2), 'utf-8');
+    const target = path.resolve(outputPath);
+    atomicReplaceJson(target, exportData, {privateParent: false});
   }
 
   // ========================================================================
@@ -167,13 +228,13 @@ export class MetricsCollector {
   // ========================================================================
 
   private calculateAverageLatency(spans: AISpan[]): number {
-    if (spans.length === 0) return 0;
+    if (spans.length === 0) {return 0;}
     const total = spans.reduce((sum, span) => sum + span.latency, 0);
     return total / spans.length;
   }
 
   private calculatePercentileLatency(spans: AISpan[], percentile: number): number {
-    if (spans.length === 0) return 0;
+    if (spans.length === 0) {return 0;}
 
     const sorted = spans.map((s) => s.latency).sort((a, b) => a - b);
     const index = Math.ceil(sorted.length * percentile) - 1;
@@ -190,50 +251,25 @@ export class MetricsCollector {
   }
 
   private calculateCacheHitRate(spans: AISpan[]): number {
-    if (spans.length === 0) return 0;
+    if (spans.length === 0) {return 0;}
     const cacheHits = spans.filter((span) => span.cacheHit).length;
     return (cacheHits / spans.length) * 100;
   }
 
   private groupErrorsByType(failedSpans: AISpan[]): Record<string, number> {
-    const groups: Record<string, number> = {};
-
-    for (const span of failedSpans) {
-      const errorType = span.errorType || 'unknown';
-      groups[errorType] = (groups[errorType] || 0) + 1;
-    }
-
-    return groups;
+    return groupCounts(failedSpans.map(span => span.errorType || 'unknown'));
   }
 
   private groupByProvider(spans: AISpan[]): Record<string, number> {
-    const groups: Record<string, number> = {};
-
-    for (const span of spans) {
-      groups[span.provider] = (groups[span.provider] || 0) + 1;
-    }
-
-    return groups;
+    return groupCounts(spans.map(span => span.provider));
   }
 
   private groupByModel(spans: AISpan[]): Record<string, number> {
-    const groups: Record<string, number> = {};
-
-    for (const span of spans) {
-      groups[span.model] = (groups[span.model] || 0) + 1;
-    }
-
-    return groups;
+    return groupCounts(spans.map(span => span.model));
   }
 
   private groupByOperation(spans: AISpan[]): Record<string, number> {
-    const groups: Record<string, number> = {};
-
-    for (const span of spans) {
-      groups[span.operation] = (groups[span.operation] || 0) + 1;
-    }
-
-    return groups;
+    return groupCounts(spans.map(span => span.operation));
   }
 
   private getEmptyMetrics(): AggregatedMetrics {
@@ -254,85 +290,158 @@ export class MetricsCollector {
     };
   }
 
-  /**
-   * Get metrics directory path
-   */
-  private getMetricsDir(): string {
-    const baseCacheDir = configManager.getCacheDir();
-    return path.join(baseCacheDir, this.repoId, 'metrics');
+  private ensureStorage(): void {
+    ensurePrivateDirectory(this.metricsDir);
+    ensurePrivateDirectory(this.eventsDir);
+    ensurePrivateDirectory(this.quarantineDir);
+    removeStaleTemporaryFiles(this.eventsDir);
   }
 
-  /**
-   * Save metrics to disk
-   */
-  private async saveToDisk(): Promise<void> {
-    const metricsDir = this.getMetricsDir();
+  private storageId(span: AISpan): string {
+    return crypto.createHash('sha256').update(`${span.traceId}:${span.spanId}`).digest('hex');
+  }
 
-    try {
-      fs.mkdirSync(metricsDir, { recursive: true });
-    } catch (error) {
-      // Directory might already exist
+  private persistSpan(span: AISpan): boolean {
+    this.ensureStorage();
+    const target = path.join(this.eventsDir, `${this.storageId(span)}.json`);
+    if (publishJsonNoReplace(target, span)) {return true;}
+    const existing = parseSpan(readJsonFileBounded(target, MAX_EVENT_FILE_BYTES));
+    if (JSON.stringify(existing) !== JSON.stringify(span)) {
+      throw new Error(`metrics span identity conflict for ${span.traceId}:${span.spanId}`);
     }
-
-    const metricsPath = path.join(metricsDir, 'spans.json');
-
-    // Save last 1000 spans to disk
-    const spansToSave = this.spans.slice(-1000);
-
-    try {
-      fs.writeFileSync(
-        metricsPath,
-        JSON.stringify(spansToSave, null, 2),
-        'utf-8'
-      );
-    } catch (error: any) {
-      console.warn('Failed to save metrics to disk:', error.message);
-      // Continue without crashing - metrics just won't persist
-    }
+    return false;
   }
 
   /**
    * Load metrics from disk
    */
   private loadFromDisk(): void {
-    const metricsDir = this.getMetricsDir();
-    const metricsPath = path.join(metricsDir, 'spans.json');
+    const loaded: AISpan[] = [];
+    this.scanMetricFiles(span => {addNewest(loaded, span, this.maxSpans, compareSpans);});
+    this.spans = loaded.sort(compareSpans);
+  }
 
-    if (!fs.existsSync(metricsPath)) {
-      return;
-    }
-
-    try {
-      const content = fs.readFileSync(metricsPath, 'utf-8');
-      const loaded = JSON.parse(content);
-
-      if (Array.isArray(loaded)) {
-        this.spans = loaded;
+  private scanMetricFiles(callback: (span: AISpan, file: string) => void): void {
+    this.ensureStorage();
+    forEachDirectoryEntry(this.eventsDir, entry => {
+      if (!entry.name.endsWith('.json')) {return;}
+      try {
+        if (!EVENT_FILE.test(entry.name)) {throw new Error('unexpected metrics event filename');}
+        const value = parseSpan(readJsonFileBounded(entry.path, MAX_EVENT_FILE_BYTES));
+        if (`${this.storageId(value)}.json` !== entry.name) {
+          throw new Error('metrics event identity mismatch');
+        }
+        callback(value, entry.path);
+      } catch (error) {
+        quarantineFile(entry.path, this.quarantineDir);
+        console.warn('Malformed metrics event was quarantined:', error);
       }
-    } catch (error) {
-      console.warn('Failed to load metrics from disk:', error);
-      this.spans = [];
+    });
+  }
+
+  private runMigration(): void {
+    let lease: FileLease;
+    try {lease = acquireMetricsLease(this.migrationLeaseFile);} catch {return;}
+    try {
+      this.recoverMigrationJournal();
+      this.migrateLegacyMetrics();
+    } finally {
+      lease.release();
     }
   }
 
-  /**
-   * Forward span-derived metrics to the GuardScan-Monitoring service.
-   */
-  private async forwardSpanToMonitoring(span: AISpan): Promise<void> {
-    const mon = getMonitoring();
-    const tagBase = {
-      provider: span.provider,
-      model: span.model,
-      operation: span.operation,
-      success: span.success ? 'true' : 'false',
+  private migrateLegacyMetrics(): void {
+    if (!fs.existsSync(this.legacyMetricsPath)) {return;}
+    try {
+      const value = readJsonFileBounded(this.legacyMetricsPath, MAX_MIGRATION_FILE_BYTES);
+      if (!Array.isArray(value)) {throw new Error('legacy metrics must be an array');}
+      if (value.length > MAX_SPANS) {throw new Error('legacy metrics exceed span limit');}
+      const spans = value.map(parseSpan);
+      this.commitMigration(spans);
+    } catch (error) {
+      quarantineFile(this.legacyMetricsPath, this.quarantineDir);
+      console.warn('Legacy metrics were quarantined:', error);
+    }
+  }
+
+  private pruneDiskEvents(): void {
+    const retained: AISpan[] = [];
+    this.scanMetricFiles(span => {
+      const evicted = addNewest(retained, span, this.maxSpans, compareSpans);
+      if (evicted) {
+        try {fs.unlinkSync(path.join(this.eventsDir, `${this.storageId(evicted)}.json`));}
+        catch { /* concurrent delete */ }
+      }
+    });
+    this.spans = this.spans.slice(-this.maxSpans);
+  }
+
+  private commitMigration(spans: AISpan[]): void {
+    const source = this.legacyMetricsPath;
+    const migrated = `${source}.migrated`;
+    const createdFiles = spans
+      .map(span => ({file: path.join(this.eventsDir, `${this.storageId(span)}.json`), span}))
+      .filter(({file, span}) => {
+        if (!fs.existsSync(file)) {return true;}
+        const existing = parseSpan(readJsonFileBounded(file, MAX_EVENT_FILE_BYTES));
+        if (JSON.stringify(existing) !== JSON.stringify(span)) {
+          throw new Error(`metrics migration identity conflict for ${span.traceId}:${span.spanId}`);
+        }
+        return false;
+      });
+    const journal: MetricsMigrationJournal = {
+      schemaVersion: MIGRATION_JOURNAL_VERSION,
+      source,
+      migrated,
+      phase: 'committing',
+      createdFiles,
     };
-    await mon.trackMetric(`ai.${span.operation}.latency`, span.latency, 'ms', tagBase);
-    if (span.tokens?.total !== undefined) {
-      await mon.trackMetric('ai.tokens.total', span.tokens.total, 'count', tagBase);
+    atomicReplaceJson(this.migrationJournalFile, journal);
+    try {
+      for (const {file, span} of createdFiles) {
+        if (!publishJsonNoReplace(file, span)) {
+          throw new Error(`metrics migration identity conflict for ${span.traceId}:${span.spanId}`);
+        }
+      }
+      fs.renameSync(source, migrated);
+      journal.phase = 'committed';
+      atomicReplaceJson(this.migrationJournalFile, journal);
+      unlinkIfPresent(this.migrationJournalFile);
+    } catch (error) {
+      this.rollbackMigration(journal);
+      throw error;
     }
-    if (span.cost !== undefined && Number.isFinite(span.cost)) {
-      await mon.trackMetric('ai.estimated_cost_usd', span.cost, 'count', tagBase);
+  }
+
+  private recoverMigrationJournal(): void {
+    if (!fs.existsSync(this.migrationJournalFile)) {return;}
+    try {
+      const journal = readJsonFileBounded(this.migrationJournalFile, MAX_MIGRATION_FILE_BYTES) as MetricsMigrationJournal;
+      if (journal.schemaVersion !== MIGRATION_JOURNAL_VERSION || !Array.isArray(journal.createdFiles)) {
+        throw new Error('invalid metrics migration journal');
+      }
+      if (journal.phase === 'committed' || (!fs.existsSync(journal.source) && fs.existsSync(journal.migrated))) {
+        unlinkIfPresent(this.migrationJournalFile);
+      } else {
+        this.rollbackMigration(journal);
+      }
+    } catch (error) {
+      quarantineFile(this.migrationJournalFile, this.quarantineDir);
+      console.warn('Metrics migration journal was quarantined:', error);
     }
+  }
+
+  private rollbackMigration(journal: MetricsMigrationJournal): void {
+    for (const {file, span} of journal.createdFiles) {
+      try {
+        const current = parseSpan(readJsonFileBounded(file, MAX_EVENT_FILE_BYTES));
+        if (JSON.stringify(current) === JSON.stringify(span)) {unlinkIfPresent(file);}
+      } catch { /* missing or concurrently changed */ }
+    }
+    if (!fs.existsSync(journal.source) && fs.existsSync(journal.migrated)) {
+      fs.renameSync(journal.migrated, journal.source);
+    }
+    unlinkIfPresent(this.migrationJournalFile);
   }
 
   /**
@@ -347,5 +456,110 @@ export class MetricsCollector {
    */
   static generateSpanId(): string {
     return crypto.randomBytes(8).toString('hex');
+  }
+}
+
+function parseSpan(value: unknown): AISpan {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('invalid metrics span');
+  }
+  const span = value as Record<string, unknown>;
+  if (!isBoundedString(span.traceId, 128) || !isBoundedString(span.spanId, 128) ||
+      !isBoundedString(span.provider, 256) || !isBoundedString(span.model, 256) ||
+      !['chat', 'stream', 'embed', 'embed-bulk'].includes(String(span.operation)) ||
+      !isNonNegativeFinite(span.startTime) || !isNonNegativeFinite(span.endTime) ||
+      !isNonNegativeFinite(span.latency) || (span.endTime) < (span.startTime) ||
+      typeof span.success !== 'boolean') {
+    throw new Error('invalid metrics span');
+  }
+  const parsed: AISpan = {
+    traceId: span.traceId,
+    spanId: span.spanId,
+    provider: span.provider,
+    model: span.model,
+    operation: span.operation as AISpan['operation'],
+    startTime: span.startTime,
+    endTime: span.endTime,
+    latency: span.latency,
+    success: span.success,
+  };
+  if (span.tokens !== undefined) {
+    if (!span.tokens || typeof span.tokens !== 'object' || Array.isArray(span.tokens)) {
+      throw new Error('invalid metrics tokens');
+    }
+    const tokens = span.tokens as Record<string, unknown>;
+    if (Object.keys(tokens).some(key => !['prompt', 'completion', 'total'].includes(key)) ||
+        !isNonNegativeSafeInteger(tokens.prompt) || !isNonNegativeSafeInteger(tokens.completion) ||
+        !isNonNegativeSafeInteger(tokens.total)) {
+      throw new Error('invalid metrics tokens');
+    }
+    parsed.tokens = {prompt: tokens.prompt, completion: tokens.completion, total: tokens.total};
+  }
+  if (span.cost !== undefined) {
+    if (!isNonNegativeFinite(span.cost)) {throw new Error('invalid metrics cost');}
+    parsed.cost = span.cost;
+  }
+  if (span.errorType !== undefined) {
+    if (!isBoundedString(span.errorType, 128)) {throw new Error('invalid metrics error type');}
+    parsed.errorType = span.errorType;
+  }
+  if (span.cacheHit !== undefined) {
+    if (typeof span.cacheHit !== 'boolean') {throw new Error('invalid metrics cache flag');}
+    parsed.cacheHit = span.cacheHit;
+  }
+  if (span.retryCount !== undefined) {
+    if (!isNonNegativeSafeInteger(span.retryCount)) {throw new Error('invalid metrics retry count');}
+    parsed.retryCount = span.retryCount;
+  }
+  if (span.circuitBreakerState !== undefined) {
+    if (!isBoundedString(span.circuitBreakerState, 128)) {throw new Error('invalid circuit breaker state');}
+    parsed.circuitBreakerState = span.circuitBreakerState;
+  }
+  return parsed;
+}
+
+function isBoundedString(value: unknown, maximum: number): value is string {
+  return typeof value === 'string' && value.length > 0 && value.length <= maximum;
+}
+
+function isNonNegativeFinite(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0;
+}
+
+function isNonNegativeSafeInteger(value: unknown): value is number {
+  return Number.isSafeInteger(value) && (value as number) >= 0;
+}
+
+function groupCounts(values: string[]): Record<string, number> {
+  const counts = new Map<string, number>();
+  for (const value of values) {counts.set(value, (counts.get(value) || 0) + 1);}
+  return Object.fromEntries(counts);
+}
+
+function acquireMetricsLease(file: string): FileLease {
+  return acquireFileLease(file, MIGRATION_LEASE_MS);
+}
+
+function compareSpans(left: AISpan, right: AISpan): number {
+  return left.endTime - right.endTime || left.spanId.localeCompare(right.spanId);
+}
+
+function addNewest<T>(
+  values: T[],
+  value: T,
+  limit: number,
+  compare: (left: T, right: T) => number
+): T | undefined {
+  values.push(value);
+  values.sort(compare);
+  if (values.length <= limit) {return undefined;}
+  return values.shift();
+}
+
+function unlinkIfPresent(file: string): void {
+  try {fs.unlinkSync(file);} catch (error: unknown) {
+    if (!error || typeof error !== 'object' || !('code' in error) || error.code !== 'ENOENT') {
+      throw error;
+    }
   }
 }
