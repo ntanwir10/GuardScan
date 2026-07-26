@@ -220,6 +220,8 @@ function makeApproval(): JsonDocument {
 
 describe('release contract schemas', () => {
   const validateApproval = loadValidator('guardscan.release-approval.v1.schema.json');
+  const validateCatalog = loadValidator('guardscan.channel-catalog.v1.schema.json');
+  const validateEvent = loadValidator('guardscan.release-event.v1.schema.json');
   const validateManifest = loadValidator('guardscan.release-manifest.v1.schema.json');
   const validateState = loadValidator('guardscan.release-state.v1.schema.json');
 
@@ -233,6 +235,55 @@ describe('release contract schemas', () => {
     expect(validateState.errors).toBeNull();
     expect(validateApproval(makeApproval())).toBe(true);
     expect(validateApproval.errors).toBeNull();
+  });
+
+  it('binds the shared channel catalog to GuardScan source, generator, and file digests', () => {
+    const catalog = {
+      schemaVersion: 'guardscan.channel-catalog.v1',
+      source: {
+        repository: 'ntanwir10/GuardScan',
+        version: '1.2.3',
+        tag: 'v1.2.3',
+        commit,
+        manifestUrl: 'https://github.com/ntanwir10/GuardScan/releases/download/v1.2.3/release-manifest.json',
+        manifestSha256: digest,
+      },
+      generator: {
+        repository: 'ntanwir10/GuardScan',
+        commit,
+      },
+      files: {
+        'Formula/guardscan.rb': {sha256: 'c'.repeat(64)},
+        'bucket/guardscan.json': {sha256: 'd'.repeat(64)},
+      },
+    };
+    expect(validateCatalog(catalog)).toBe(true);
+    expect(validateCatalog.errors).toBeNull();
+
+    const circular = clone(catalog) as Record<string, unknown>;
+    circular.catalogCommit = commit;
+    expect(validateCatalog(circular)).toBe(false);
+
+    const unknownFile = clone(catalog) as {files: Record<string, unknown>};
+    unknownFile.files['unmanaged.txt'] = {sha256: 'e'.repeat(64)};
+    expect(validateCatalog(unknownFile)).toBe(false);
+  });
+
+  it('models Homebrew Core as an explicit release event channel', () => {
+    expect(validateEvent({
+      schemaVersion: 'guardscan.release-event.v1',
+      version: '1.2.3',
+      tag: 'v1.2.3',
+      commit,
+      sequence: 2,
+      previousHash: 'c'.repeat(64),
+      timestamp,
+      type: 'channel_submitted',
+      channel: 'homebrew-core',
+      idempotencyKey: 'homebrew-core:v1.2.3',
+      payload: {},
+      eventHash: 'd'.repeat(64),
+    })).toBe(true);
   });
 
   it('rejects broad, malformed, and untrusted promotion approvals', () => {

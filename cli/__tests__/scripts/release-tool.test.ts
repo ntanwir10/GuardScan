@@ -61,6 +61,19 @@ const {
     nextState: Record<string, any>
   ) => void;
 };
+const {
+  createEvent,
+  materializeReleaseState,
+} = require('../../scripts/release/events') as {
+  createEvent: (
+    input: Record<string, unknown>,
+    previous?: Record<string, unknown>
+  ) => Record<string, any>;
+  materializeReleaseState: (events: Array<Record<string, unknown>>) => Record<string, any>;
+};
+const {reconcileRelease} = require('../../scripts/release/reconcile') as {
+  reconcileRelease: (state: Record<string, any>) => Record<string, any>;
+};
 
 const COMMIT = 'a'.repeat(40);
 let root: string;
@@ -134,6 +147,10 @@ describe('release planning and state summaries', () => {
     expect(channels.find(channel => channel.id === 'npm')?.status).toBe('planned');
     expect(channels.find(channel => channel.id === 'github')?.status).toBe('deferred');
     expect(channels.find(channel => channel.id === 'pypi')?.status).toBe('deferred');
+    expect(channels.find(channel => channel.id === 'homebrew-core')).toMatchObject({
+      status: 'deferred',
+      required: false,
+    });
   });
 
   it('reports failed and remaining channels without treating them as complete', () => {
@@ -161,6 +178,76 @@ describe('release planning and state summaries', () => {
       channels: Record<string, unknown>;
     };
     expect(Object.keys(state.channels)).toEqual(['npm', 'github']);
+  });
+
+  it('tracks optional Homebrew Core work without blocking release completion', () => {
+    expect(reconcileRelease({
+      incidents: {},
+      channels: {
+        npm: {status: 'verified'},
+        homebrew: {status: 'verified'},
+        scoop: {status: 'verified'},
+        'homebrew-core': {status: 'submitted'},
+      },
+    })).toMatchObject({
+      complete: true,
+      blocked: false,
+      blocking: [],
+      actions: [{
+        channel: 'homebrew-core',
+        required: false,
+        currentStatus: 'submitted',
+        action: 'poll-acceptance',
+      }],
+    });
+  });
+
+  it('materializes catalog publication evidence and its immutable remote identity', () => {
+    const first = createEvent({
+      version: '1.2.3',
+      tag: 'v1.2.3',
+      commit: COMMIT,
+      timestamp: '2026-07-20T12:00:00.000Z',
+      type: 'train_started',
+      idempotencyKey: 'train:v1.2.3',
+      payload: {channels: ['homebrew']},
+    });
+    const catalogCommit = 'c'.repeat(40);
+    const fileDigest = 'd'.repeat(64);
+    const second = createEvent({
+      version: '1.2.3',
+      tag: 'v1.2.3',
+      commit: COMMIT,
+      timestamp: '2026-07-20T12:01:00.000Z',
+      type: 'channel_verified',
+      channel: 'homebrew',
+      idempotencyKey: 'catalog:homebrew:v1.2.3',
+      payload: {
+        remoteIdentity: `github:ntanwir10/homebrew-tap@${catalogCommit}#Formula/guardscan.rb`,
+        remoteDigest: fileDigest,
+        catalog: {
+          repository: 'ntanwir10/homebrew-tap',
+          commit: catalogCommit,
+          pullRequest: 42,
+          lockDigest: 'e'.repeat(64),
+          manifestDigest: 'f'.repeat(64),
+          path: 'Formula/guardscan.rb',
+          fileDigest,
+        },
+      },
+    }, first);
+    expect(materializeReleaseState([first, second]).channels.homebrew).toMatchObject({
+      status: 'verified',
+      remoteIdentity: `github:ntanwir10/homebrew-tap@${catalogCommit}#Formula/guardscan.rb`,
+      remoteDigest: fileDigest,
+      catalog: {
+        repository: 'ntanwir10/homebrew-tap',
+        commit: catalogCommit,
+        pullRequest: 42,
+        path: 'Formula/guardscan.rb',
+        fileDigest,
+      },
+    });
   });
 
   it('prepares one atomic ledger and treats an identical retry as a no-op', () => {

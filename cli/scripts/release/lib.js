@@ -18,6 +18,13 @@ const CHANNELS = Object.freeze([
   {id: 'bun', phase: 'node', operation: 'verify', artifacts: ['npm-tarball']},
   {id: 'github', phase: 'native', operation: 'publish', artifacts: ['standalone', 'checksum', 'sbom']},
   {id: 'homebrew', phase: 'full', operation: 'update-adapter', artifacts: ['standalone']},
+  {
+    id: 'homebrew-core',
+    phase: 'full',
+    operation: 'submit',
+    artifacts: ['npm-tarball'],
+    required: false,
+  },
   {id: 'scoop', phase: 'full', operation: 'update-adapter', artifacts: ['standalone']},
   {id: 'winget', phase: 'full', operation: 'submit', artifacts: ['standalone']},
   {id: 'chocolatey', phase: 'full', operation: 'publish', artifacts: ['standalone']},
@@ -137,6 +144,7 @@ function createPlan(source, profile = 'node') {
     phase: channel.phase,
     operation: channel.operation,
     artifacts: [...channel.artifacts],
+    required: channel.required !== false,
     status: PROFILE_ORDER[channel.phase] <= PROFILE_ORDER[profile] ? 'planned' : 'deferred',
   }));
   const gates = [
@@ -181,7 +189,9 @@ function createInitialState(source, profile, timestamp) {
   if (!(profile in PROFILE_ORDER)) throw new Error(`Unknown release profile: ${profile}`);
   const normalizedTimestamp = new Date(timestamp).toISOString();
   const publicationChannels = CHANNELS.filter(channel => (
-    channel.operation !== 'verify' && PROFILE_ORDER[channel.phase] <= PROFILE_ORDER[profile]
+    channel.operation !== 'verify'
+      && channel.required !== false
+      && PROFILE_ORDER[channel.phase] <= PROFILE_ORDER[profile]
   ));
   return {
     schemaVersion: 'guardscan.release-state.v1',
@@ -241,6 +251,7 @@ function validateDocument(kind, file, packageRoot) {
   const document = readJson(path.resolve(file), kind);
   const schemaNames = {
     approval: 'guardscan.release-approval.v1.schema.json',
+    catalog: 'guardscan.channel-catalog.v1.schema.json',
     decision: 'guardscan.promotion-decision.v1.schema.json',
     event: 'guardscan.release-event.v1.schema.json',
     manifest: 'guardscan.release-manifest.v1.schema.json',
@@ -260,7 +271,7 @@ function validateDocument(kind, file, packageRoot) {
 }
 
 function assertInternalDocumentIdentity(kind, document) {
-  if (kind === 'decision') return;
+  if (kind === 'decision' || kind === 'catalog') return;
   if (document.tag !== `v${document.version}`) {
     throw new Error(`${kind} tag does not match its version`);
   }

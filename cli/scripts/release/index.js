@@ -13,7 +13,13 @@ const {
   validateDocument,
   validateSource,
 } = require('./lib');
-const {renderAdapters, writeRenderedOutput} = require('./renderers');
+const {
+  classifyChannelCatalog,
+  renderAdapters,
+  renderChannelCatalog,
+  writeChannelCatalogOutput,
+  writeRenderedOutput,
+} = require('./renderers');
 const {
   buildNpmArtifact,
   queryNpmRemote,
@@ -58,6 +64,8 @@ const COMMANDS = new Set([
   'prepare',
   'dry-run',
   'render',
+  'catalog',
+  'catalog-status',
   'validate-adapters',
   'standalone-prototype',
   'package',
@@ -100,6 +108,8 @@ function printHelp() {
     '  promote     Generate the machine 24-hour promotion decision',
     '  rollback    Append rollback_started and produce a forward-fix recovery plan',
     '  status      Materialize and summarize release state',
+    '  catalog     Render or check the authoritative shared channel catalog',
+    '  catalog-status  Classify shared catalog drift against the exact release source',
     '',
     'Foundation and compatibility commands:',
     '  validate, plan, prepare, dry-run, render, validate-adapters',
@@ -122,6 +132,10 @@ function printHelp() {
     '  --artifact-id ID         Manifest artifact identity',
     '  --remote-identity ID     Immutable public identity',
     '  --remote-digest SHA256   Observed public SHA-256',
+    '  --manifest-url URL       Immutable GitHub release-manifest.json URL',
+    '  --manifest-sha256 SHA    Exact release-manifest.json SHA-256',
+    '  --generator-repository R Repository containing the catalog renderer',
+    '  --generator-commit SHA   Exact renderer source commit',
     '',
   ].join('\n'));
 }
@@ -169,6 +183,36 @@ function platformFromOptions(options) {
   };
 }
 
+function catalogEvidence(options, manifestFile) {
+  if (!['homebrew', 'scoop'].includes(options.channel)) return undefined;
+  requireOptions('catalog publication', options, [
+    'catalogRepository',
+    'catalogCommit',
+    'catalogPullRequest',
+    'catalogLockDigest',
+    'catalogManifestDigest',
+    'catalogPath',
+    'catalogFileDigest',
+  ]);
+  const pullRequest = Number(options.catalogPullRequest);
+  if (!Number.isSafeInteger(pullRequest) || pullRequest < 1) {
+    throw new Error('catalog publication requires a positive --catalog-pull-request');
+  }
+  const evidence = {
+    repository: options.catalogRepository,
+    commit: options.catalogCommit,
+    pullRequest,
+    lockDigest: options.catalogLockDigest,
+    manifestDigest: options.catalogManifestDigest,
+    path: options.catalogPath,
+    fileDigest: options.catalogFileDigest,
+  };
+  if (evidence.manifestDigest !== manifestDigest(manifestFile)) {
+    throw new Error('catalog manifest digest does not match the exact release manifest');
+  }
+  return evidence;
+}
+
 function hashExecutable(file) {
   const buffer = fs.readFileSync(path.resolve(file));
   if (buffer.length <= 0) throw new Error('standalone executable is empty');
@@ -177,6 +221,27 @@ function hashExecutable(file) {
     size: buffer.length,
     sha256: crypto.createHash('sha256').update(buffer).digest('hex'),
   };
+}
+
+function renderCatalogFromOptions(manifest, options) {
+  requireOptions('catalog', options, [
+    'manifest',
+    'manifestUrl',
+    'manifestSha256',
+    'generatorRepository',
+    'generatorCommit',
+  ]);
+  const manifestBytes = fs.readFileSync(path.resolve(options.manifest));
+  const actualManifestSha256 = crypto.createHash('sha256').update(manifestBytes).digest('hex');
+  if (actualManifestSha256 !== options.manifestSha256) {
+    throw new Error('catalog manifestSha256 does not match the exact manifest file');
+  }
+  return renderChannelCatalog(manifest, {
+    manifestUrl: options.manifestUrl,
+    manifestSha256: options.manifestSha256,
+    generatorRepository: options.generatorRepository,
+    generatorCommit: options.generatorCommit,
+  });
 }
 
 async function handleBuild(source, options) {
@@ -257,8 +322,9 @@ function handlePublication(command, source, manifest, options) {
   ]);
   const artifact = manifestArtifact(manifest, options.artifactId);
   if (options.artifactRoot) verifyManifestFiles(manifest, options.artifactRoot);
+  const catalog = catalogEvidence(options, options.manifest);
   const classification = classifyRemoteArtifact(
-    {sha256: artifact.sha256},
+    {sha256: catalog?.fileDigest || artifact.sha256},
     {identity: options.remoteIdentity, sha256: options.remoteDigest}
   );
   if (classification.integrityIncident) {
@@ -280,6 +346,7 @@ function handlePublication(command, source, manifest, options) {
     artifactIds: [artifact.id],
     remoteIdentity: options.remoteIdentity,
     remoteDigest: options.remoteDigest,
+    ...(catalog ? {catalog} : {}),
   }, options.channel));
   return {changed: result.changed, classification, event: result.event};
 }
@@ -524,6 +591,36 @@ async function main(argv) {
     requireOptions('render', options, ['outputDir']);
     const rendered = renderAdapters(manifest, options.channels);
     const result = writeRenderedOutput(manifest, rendered, options.outputDir, options.check === true);
+    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+    return;
+  }
+
+  if (command === 'catalog') {
+    if (!manifest) throw new Error('catalog requires --manifest');
+    requireOptions('catalog', options, ['outputDir']);
+    const rendered = renderCatalogFromOptions(manifest, options);
+    const result = writeChannelCatalogOutput(
+      rendered,
+      options.outputDir,
+      options.check === true
+    );
+    validateDocument('catalog', path.join(result.outputDir, 'channel-lock.json'), packageRoot);
+    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+    return;
+  }
+
+  if (command === 'catalog-status') {
+    if (!manifest) throw new Error('catalog-status requires --manifest');
+    requireOptions('catalog-status', options, ['catalogRoot']);
+    const rendered = renderCatalogFromOptions(manifest, options);
+    const result = classifyChannelCatalog(rendered, options.catalogRoot);
+    if (result.classification === 'exact') {
+      validateDocument(
+        'catalog',
+        path.join(path.resolve(options.catalogRoot), 'channel-lock.json'),
+        packageRoot
+      );
+    }
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
     return;
   }

@@ -25,6 +25,20 @@ function validateStructuredOutput(manifest, outputDir, channels) {
     }
     results.homebrew = {valid: true, files: 1};
   }
+  if (channels.includes('homebrew-core')) {
+    const formula = readOutput(
+      outputDir,
+      'homebrew-core/Formula/guardscan.rb',
+      'Homebrew Core formula'
+    );
+    const npmUrl = `https://registry.npmjs.org/guardscan/-/guardscan-${manifest.version}.tgz`;
+    if (!formula.includes(`url "${npmUrl}"`)
+        || !formula.includes('depends_on "node"')
+        || !formula.includes('system "npm", "install", *std_npm_args')) {
+      throw new Error('Homebrew Core formula does not preserve the source-build contract');
+    }
+    results['homebrew-core'] = {valid: true, files: 1};
+  }
   if (channels.includes('scoop')) {
     const scoop = JSON.parse(readOutput(outputDir, 'scoop/bucket/guardscan.json', 'Scoop manifest'));
     if (scoop.version !== manifest.version || scoop.bin !== 'guardscan.exe'
@@ -93,6 +107,22 @@ function nativeValidationPlan(outputDir, channels, platform = process.platform, 
       });
     } else {
       skip('homebrew', 'Homebrew validation requires macOS or Linux');
+    }
+  }
+  if (channels.includes('homebrew-core')) {
+    if (platform === 'darwin' || platform === 'linux') {
+      plan.push({
+        channel: 'homebrew-core',
+        command: 'brew',
+        args: [
+          'audit',
+          '--strict',
+          '--new-formula',
+          path.join(outputDir, 'homebrew-core', 'Formula', 'guardscan.rb'),
+        ],
+      });
+    } else {
+      skip('homebrew-core', 'Homebrew Core validation requires macOS or Linux');
     }
   }
   if (channels.includes('scoop')) {

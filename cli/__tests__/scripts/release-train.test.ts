@@ -215,8 +215,8 @@ describe('append-only release train', () => {
       expect(reconcileRelease(state)).toMatchObject({
         complete: false,
         actions: expect.arrayContaining([
-          {channel: 'github', currentStatus: 'planned', action: 'publish'},
-          {channel: 'winget', currentStatus: 'planned', action: 'submit'},
+          {channel: 'github', currentStatus: 'planned', action: 'publish', required: true},
+          {channel: 'winget', currentStatus: 'planned', action: 'submit', required: true},
         ]),
       });
       expect(planRollback(state)).toMatchObject({

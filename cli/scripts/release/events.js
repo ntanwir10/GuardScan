@@ -7,6 +7,7 @@ const {CHANNELS, readBounded} = require('./lib');
 
 const EVENT_SCHEMA = 'guardscan.release-event.v1';
 const MAX_EVENT_BYTES = 64 * 1024;
+const CATALOG_IDENTITY_PATTERN = /^github:ntanwir10\/homebrew-tap@[a-f0-9]{40}#(?:Formula\/guardscan\.rb|bucket\/guardscan\.json)$/;
 const EVENT_TYPES = Object.freeze([
   'train_started',
   'artifact_built',
@@ -73,6 +74,58 @@ function assertIdentity(document, expected, label) {
   }
 }
 
+function validateCatalogEvidence(event) {
+  const evidence = event.payload?.catalog;
+  if (evidence === undefined) return;
+  if (!['homebrew', 'scoop'].includes(event.channel)) {
+    throw new Error('catalog evidence is valid only for homebrew or scoop events');
+  }
+  if (!evidence || typeof evidence !== 'object' || Array.isArray(evidence)) {
+    throw new Error('release event catalog evidence must be an object');
+  }
+  const keys = Object.keys(evidence).sort();
+  const expectedKeys = [
+    'commit',
+    'fileDigest',
+    'lockDigest',
+    'manifestDigest',
+    'path',
+    'pullRequest',
+    'repository',
+  ].sort();
+  if (keys.join('\n') !== expectedKeys.join('\n')) {
+    throw new Error('release event catalog evidence has unexpected or missing fields');
+  }
+  if (evidence.repository !== 'ntanwir10/homebrew-tap') {
+    throw new Error('release event catalog repository is invalid');
+  }
+  if (!/^[a-f0-9]{40}$/.test(evidence.commit || '')) {
+    throw new Error('release event catalog commit is invalid');
+  }
+  if (!Number.isSafeInteger(evidence.pullRequest) || evidence.pullRequest < 1) {
+    throw new Error('release event catalog pull request is invalid');
+  }
+  for (const field of ['lockDigest', 'manifestDigest', 'fileDigest']) {
+    if (!/^[a-f0-9]{64}$/.test(evidence[field] || '')) {
+      throw new Error(`release event catalog ${field} is invalid`);
+    }
+  }
+  const expectedPath = event.channel === 'homebrew'
+    ? 'Formula/guardscan.rb'
+    : 'bucket/guardscan.json';
+  if (evidence.path !== expectedPath) {
+    throw new Error(`release event catalog path does not match ${event.channel}`);
+  }
+  if (!CATALOG_IDENTITY_PATTERN.test(event.payload.remoteIdentity || '')
+      || event.payload.remoteIdentity
+        !== `github:${evidence.repository}@${evidence.commit}#${evidence.path}`) {
+    throw new Error('release event catalog remote identity is invalid');
+  }
+  if (event.payload.remoteDigest !== evidence.fileDigest) {
+    throw new Error('release event catalog remote digest does not match file evidence');
+  }
+}
+
 function validateEvent(event, previous) {
   if (!event || typeof event !== 'object' || Array.isArray(event)) {
     throw new Error('release event must be an object');
@@ -98,6 +151,7 @@ function validateEvent(event, previous) {
   if (event.payload === null || typeof event.payload !== 'object' || Array.isArray(event.payload)) {
     throw new Error('release event payload must be an object');
   }
+  validateCatalogEvidence(event);
   assertCanonicalTimestamp(event.timestamp, 'release event timestamp');
   if (!/^[a-f0-9]{64}$/.test(event.eventHash || '')
       || event.eventHash !== eventDigest(event)) {
@@ -277,6 +331,9 @@ function materializeReleaseState(events) {
           ? {remoteDigest: event.payload.remoteDigest || previous.remoteDigest}
           : {}),
         ...(event.payload.error ? {error: event.payload.error} : {}),
+        ...(event.payload.catalog || previous.catalog
+          ? {catalog: event.payload.catalog || previous.catalog}
+          : {}),
       };
     }
     if (event.type === 'canary_recorded') {

@@ -12,19 +12,23 @@ function channelOperation(channel) {
 function reconcileRelease(state) {
   const actions = [];
   const blocking = [];
+  const optionalBlocking = [];
   const openIncidents = Object.entries(state.incidents || {})
     .filter(([, incident]) => incident.status === 'open')
     .map(([incidentId]) => incidentId);
   if (openIncidents.length > 0) blocking.push(`open incidents: ${openIncidents.join(', ')}`);
   for (const [channel, channelState] of Object.entries(state.channels || {})) {
+    const definition = CHANNELS.find(candidate => candidate.id === channel);
     const operation = channelOperation(channel);
+    const required = definition.required !== false;
     if (['verified', 'withdrawn', 'superseded'].includes(channelState.status)) continue;
     if (channelState.status === 'failed') {
-      blocking.push(`${channel} failed`);
+      (required ? blocking : optionalBlocking).push(`${channel} failed`);
       continue;
     }
     const action = {
       channel,
+      required,
       currentStatus: channelState.status,
       action: 'verify',
     };
@@ -40,9 +44,10 @@ function reconcileRelease(state) {
     actions.push(action);
   }
   return {
-    complete: actions.length === 0 && blocking.length === 0,
+    complete: actions.every(action => action.required === false) && blocking.length === 0,
     blocked: blocking.length > 0,
     blocking,
+    optionalBlocking,
     actions: actions.sort((a, b) => a.channel.localeCompare(b.channel)),
   };
 }
@@ -71,6 +76,7 @@ function planRollback(state, knownGoodVersion) {
         bun: 'verify-npm-forward-fix',
         pypi: 'yank-and-forward-fix',
         homebrew: knownGoodVersion ? 'redirect-to-known-good' : 'remove-new-listing',
+        'homebrew-core': 'submit-corrective-formula-or-revision',
         scoop: knownGoodVersion ? 'redirect-to-known-good' : 'remove-new-listing',
         winget: 'submit-corrective-manifest',
         chocolatey: 'unlist-or-supersede',
