@@ -63,6 +63,7 @@ ci-gitconfig
 ci-netrc
 cli/scripts/*
 !cli/scripts/eslint-ratchet.js
+!cli/scripts/eslint-ratchet-lib.js
 !cli/scripts/eslint-baseline.json
 !cli/scripts/clean-dist.js
 !cli/scripts/package-smoke.js
