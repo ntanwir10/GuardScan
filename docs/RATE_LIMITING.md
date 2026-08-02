@@ -1,6 +1,10 @@
 # Telemetry Collector Rate Limiting
 
-GuardScan does not ship or configure a hosted collector. `guardscan telemetry sync` sends one bounded batch to the HTTPS endpoint selected with `GUARDSCAN_TELEMETRY_URL`.
+GuardScan does not ship, configure, or operate a hosted collector.
+`guardscan telemetry sync` sends one bounded batch to the user-operated HTTPS
+endpoint selected with `GUARDSCAN_TELEMETRY_URL`. The former
+`api.guardscancli.com` endpoint and `GUARDSCAN_API_URL` setting are retired and
+must not be used as collector configuration.
 
 The CLI sends no client or repository identifier. A collector that applies rate limits must therefore use transport-level information such as source IP, an operator-provided authentication mechanism, or aggregate endpoint limits. Collector operators must document their limits, retention, deletion, access-control, and jurisdiction policies independently of GuardScan.
 
@@ -28,4 +32,5 @@ guardscan telemetry clear --force
 - Return accepted event IDs for partial acknowledgements, and return `duplicate` only for a complete duplicate batch.
 - Do not infer that an anonymous event identifies a stable installation or repository.
 
-See [API Documentation](./API.md) for the exact request and acknowledgement contract.
+See [Self-Hosted Telemetry Collector Protocol](./API.md) for the exact request
+and acknowledgement contract.

@@ -234,7 +234,7 @@ OS-backed network sandbox and fails the affected checks if the platform sandbox 
 
 We take privacy seriously:
 
-### ❌ Never Sent to GuardScan Servers
+### ❌ No GuardScan-Hosted Processing
 
 - Your source code
 - File paths or file names
@@ -255,8 +255,11 @@ Local AI/RAG features can store prompts, responses, file paths, and code-derived
 
 - Disabled by default and explicitly enabled with `guardscan config --telemetry=true`
 - Queued locally only after consent
-- Sent only by `guardscan telemetry sync` to an endpoint you configure
+- Sent only by `guardscan telemetry sync` to a user-operated endpoint selected
+  with `GUARDSCAN_TELEMETRY_URL`
 - Recording and delivery are suppressed by offline mode or `--no-telemetry`
+- Never sent to a GuardScan-hosted collector; GuardScan operates no telemetry
+  ingestion service
 
 See the [Privacy Policy](./PRIVACY.md) for the exact event allowlist and local retention behavior.
 
@@ -347,7 +350,7 @@ GuardScan follows a **privacy-first, client-side architecture** where all code a
                 │                      │
                 ▼                      ▼
 ┌──────────────────────────┐  ┌──────────────────────────┐
-│  User's AI Provider      │  │  Configured HTTPS        │
+│  User's AI Provider      │  │  User-operated HTTPS     │
 │  (User pays directly)    │  │  telemetry endpoint      │
 │                          │  │                          │
 │  • OpenAI                │  │  • Explicit sync only    │
@@ -369,10 +372,11 @@ GuardScan follows a **privacy-first, client-side architecture** where all code a
 - Testing: Jest with enforced coverage thresholds
 - Build: TypeScript Compiler (tsc)
 
-**Telemetry collector (optional):**
+**Self-hosted telemetry collector (optional):**
 
-- The CLI has no hosted endpoint configured by default.
-- Operators can deploy any compatible HTTPS collector.
+- GuardScan does not operate a hosted telemetry collector or provide a default
+  endpoint.
+- Operators may deploy their own compatible HTTPS collector.
 - Delivery occurs only through `guardscan telemetry sync` after setting `GUARDSCAN_TELEMETRY_URL`.
 - The payload is the strict aggregate event allowlist described in [PRIVACY.md](./PRIVACY.md); errors and findings are excluded.
 

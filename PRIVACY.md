@@ -1,8 +1,11 @@
 # Privacy Policy
 
-**Last updated: July 20, 2026**
+**Last updated: August 2, 2026**
 
-GuardScan is a local-first security scanner and BYOK AI client. This document describes the CLI's network boundaries and the data it stores. It distinguishes local scanning, third-party AI providers, public vulnerability services, and optional GuardScan telemetry because they have different privacy properties.
+GuardScan is a local-first security scanner and BYOK AI client. This document
+describes the CLI's network boundaries and the data it stores. It distinguishes
+local scanning, third-party AI providers, public vulnerability services, and
+optional self-hosted telemetry because they have different privacy properties.
 
 ## Defaults
 
@@ -64,7 +67,16 @@ See [Vulnerability Scanning](./docs/VULNERABILITY_SCANNING.md) for coverage and 
 
 ## Telemetry
 
-Telemetry is opt-in and never uploads automatically. Enabling consent allows GuardScan to queue an allowlisted event locally; delivery happens only when you run `guardscan telemetry sync`.
+Telemetry is opt-in and never uploads automatically. Enabling consent allows
+GuardScan to queue an allowlisted event locally; delivery happens only when you
+configure a user-operated collector with `GUARDSCAN_TELEMETRY_URL` and run
+`guardscan telemetry sync`.
+
+GuardScan does not operate a hosted telemetry collector. The former Cloudflare
+service at `api.guardscancli.com` is retired under
+[ADR 007](./docs/adrs/007-retire-hosted-cloudflare-telemetry.md). It is not a
+valid default or self-hosting target. The apex `guardscancli.com` website and
+document identifiers remain active and are separate from that retired service.
 
 An event may contain:
 
@@ -108,7 +120,15 @@ guardscan telemetry status
 guardscan telemetry clear --force
 ```
 
-No hosted telemetry endpoint is configured by default. Whoever operates the endpoint is responsible for publishing its retention, deletion, access-control, and jurisdiction terms.
+There is no GuardScan-hosted endpoint or default. Whoever operates the
+self-hosted endpoint is responsible for publishing its retention, deletion,
+access-control, and jurisdiction terms.
+
+After `1.1.0` is published, the retired endpoint returns `410 Gone` for seven
+days without accepting, storing, or redirecting telemetry, and is then deleted.
+Users of `1.0.5` and earlier should upgrade or disable telemetry. Existing local
+queues are not transferred and remain available to inspect, explicitly sync to
+a user-operated collector, or delete.
 
 ## Local storage
 

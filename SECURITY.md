@@ -79,7 +79,7 @@ We follow responsible disclosure practices:
    - GuardScan works offline for static analysis
    - Cloud AI and fresh CVE lookups require network access; local AI is offline-only at literal loopback IP endpoints
    - Use `--offline` to block GuardScan cloud, advisory, update, and telemetry clients
-   - Telemetry is opt-in and delivered only by an explicit `guardscan telemetry sync`
+   - Telemetry is opt-in and delivered only by an explicit `guardscan telemetry sync` to a user-operated endpoint selected with `GUARDSCAN_TELEMETRY_URL`
 
 ### For Developers
 
@@ -130,7 +130,8 @@ If telemetry is enabled:
 
 - Only action, aggregate LOC, duration, coarse execution mode, event ID, and timestamp are queued
 - Source, paths, prompts, responses, findings, dependency names, and errors are excluded
-- Events remain local until `guardscan telemetry sync` is run against a configured HTTPS endpoint
+- GuardScan operates no hosted telemetry collector and provides no default endpoint
+- Events remain local until `guardscan telemetry sync` is run against a user-operated HTTPS endpoint selected with `GUARDSCAN_TELEMETRY_URL`
 - You can suppress an invocation with `--no-telemetry` and inspect or clear the queue with `guardscan telemetry`
 
 ### Dependency Scanning

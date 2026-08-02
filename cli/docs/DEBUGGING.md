@@ -150,9 +150,12 @@ Look for:
 - Branch detection
 - Repo ID generation
 
-### 5. Backend API Issues
+### 5. Self-Hosted Telemetry Collector Issues
 
-For backend debugging, check Cloudflare Workers logs. Debug logging is automatically enabled in development mode.
+GuardScan operates no hosted telemetry backend. If explicit telemetry sync
+fails, verify `GUARDSCAN_TELEMETRY_URL`, inspect the logs and policies of the
+user-operated collector, and run `guardscan telemetry status`. GuardScan debug
+logging is automatically enabled in development mode.
 
 ## JSON Output for CI
 
@@ -260,6 +263,6 @@ If debug logging doesn't help resolve your issue:
 
 For more information, see:
 
-- [Testing Guide](./TESTING.md)
+- [Testing Tools Guide](./TESTING_TOOLS.md)
 - [Performance Guide](./PERFORMANCE.md)
 - [Main README](../README.md)

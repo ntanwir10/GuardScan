@@ -916,13 +916,16 @@ guardscan init  # Will show detailed logging
 docker run -e GUARDSCAN_DEBUG=true node:lts-alpine guardscan init
 ```
 
-#### `GUARDSCAN_API_URL`
+#### `GUARDSCAN_TELEMETRY_URL`
 
-Override the default backend API URL (for self-hosting or testing).
+Select a user-operated telemetry collector. GuardScan has no hosted or default
+collector, and telemetry is sent only by an explicit `guardscan telemetry sync`.
 
 ```bash
-export GUARDSCAN_API_URL=https://custom-api.example.com
+export GUARDSCAN_TELEMETRY_URL=https://telemetry.example.com
 ```
+
+`GUARDSCAN_API_URL` and `api.guardscancli.com` are retired.
 
 #### `GUARDSCAN_NO_TELEMETRY`
 
@@ -2192,7 +2195,7 @@ spec:
 
 - [Main README](../README.md)
 - [Getting Started Guide](GETTING_STARTED.md)
-- [Alpine Linux Quick Reference](../DOCKER_ALPINE_GUIDE.md)
+- [Alpine Linux Quick Reference](./DOCKER_ALPINE_GUIDE.md)
 - [Issue #25 - Alpine Linux Fix](https://github.com/ntanwir10/GuardScan/issues/25)
 - [Docker Documentation](https://docs.docker.com/)
 - [Docker Compose Documentation](https://docs.docker.com/compose/)
