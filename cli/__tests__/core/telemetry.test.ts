@@ -28,6 +28,7 @@ describe('TelemetryManager', () => {
   let stateDir: string;
   let legacyCacheDir: string;
   const oldUrl = process.env.GUARDSCAN_TELEMETRY_URL;
+  const oldLegacyApiUrl = process.env.GUARDSCAN_API_URL;
   const oldOffline = process.env.GUARDSCAN_OFFLINE;
   const oldNoTelemetry = process.env.GUARDSCAN_NO_TELEMETRY;
 
@@ -37,6 +38,7 @@ describe('TelemetryManager', () => {
     stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'guardscan-telemetry-'));
     legacyCacheDir = path.join(stateDir, 'cache');
     process.env.GUARDSCAN_TELEMETRY_URL = 'https://telemetry.example';
+    delete process.env.GUARDSCAN_API_URL;
     delete process.env.GUARDSCAN_NO_TELEMETRY;
     delete process.env.GUARDSCAN_OFFLINE;
   });
@@ -45,6 +47,8 @@ describe('TelemetryManager', () => {
     fs.rmSync(stateDir, { recursive: true, force: true });
     if (oldUrl === undefined) delete process.env.GUARDSCAN_TELEMETRY_URL;
     else process.env.GUARDSCAN_TELEMETRY_URL = oldUrl;
+    if (oldLegacyApiUrl === undefined) delete process.env.GUARDSCAN_API_URL;
+    else process.env.GUARDSCAN_API_URL = oldLegacyApiUrl;
     if (oldOffline === undefined) delete process.env.GUARDSCAN_OFFLINE;
     else process.env.GUARDSCAN_OFFLINE = oldOffline;
     if (oldNoTelemetry === undefined) delete process.env.GUARDSCAN_NO_TELEMETRY;
@@ -87,6 +91,36 @@ describe('TelemetryManager', () => {
     await manager.record({ action: 'scan', loc: 1, durationMs: 2 });
     expect(manager.getStats()).toEqual(expect.objectContaining({ pending: 0, suppressed: true }));
     await expect(manager.sync()).rejects.toThrow('disabled for this command');
+  });
+
+  it('rejects the removed legacy endpoint alias without creating a network transport', async () => {
+    delete process.env.GUARDSCAN_TELEMETRY_URL;
+    process.env.GUARDSCAN_API_URL = 'https://legacy.example.test';
+    const manager = new TelemetryManager(config(), stateDir);
+
+    expect(manager.getStats().endpointConfigured).toBe(false);
+    await expect(manager.sync()).rejects.toThrow(
+      'Set GUARDSCAN_TELEMETRY_URL to your self-hosted collector URL before syncing.'
+    );
+    expect(mockedAxios.create).not.toHaveBeenCalled();
+  });
+
+  it('uses only the explicit telemetry endpoint when the removed alias is also present', async () => {
+    process.env.GUARDSCAN_API_URL = 'https://legacy.example.test';
+    const post = jest.fn().mockImplementation((_url, request) => Promise.resolve({
+      status: 202,
+      data: { status: 'accepted', batchId: request.batchId, accepted: request.events.length },
+    }));
+    mockedAxios.create.mockReturnValue({ post } as any);
+    const manager = new TelemetryManager(config(), stateDir);
+    await manager.record({ action: 'scan', loc: 1, durationMs: 2 });
+
+    await expect(manager.sync()).resolves.toEqual({ sent: 1, remaining: 0 });
+
+    expect(mockedAxios.create).toHaveBeenCalledWith(expect.objectContaining({
+      baseURL: 'https://telemetry.example',
+    }));
+    expect(post).toHaveBeenCalledTimes(1);
   });
 
   it('does not lose events recorded by concurrent managers', async () => {
