@@ -8,6 +8,7 @@ const {spawnSync} = require('child_process');
 const {builtinModules} = require('module');
 const esbuild = require('esbuild');
 const {inject} = require('postject');
+const {assertRuntimeArtifactClean} = require('./runtime-artifact-policy');
 
 const PROTOTYPE_SCHEMA = 'guardscan.standalone-prototype.v1';
 const SEA_FUSE = 'NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2';
@@ -238,6 +239,7 @@ async function prepareExecutable(bundleFile, blobFile, executable) {
     useCodeCache: false,
   }, null, 2)}\n`, {encoding: 'utf8', mode: 0o600});
   run(process.execPath, ['--experimental-sea-config', seaConfig], path.dirname(bundleFile), process.env);
+  assertRuntimeArtifactClean(fs.readFileSync(blobFile), 'standalone SEA payload');
   fs.copyFileSync(process.execPath, executable);
   fs.chmodSync(executable, 0o755);
   if (process.platform === 'darwin') {
@@ -273,6 +275,7 @@ async function buildHostPrototype(source, outputDir) {
     const executable = path.join(stage, executableName);
     const build = await esbuild.build(bundleOptions(entryPoint, bundleFile));
     const externals = assertExternalAllowlist(build.metafile);
+    assertRuntimeArtifactClean(fs.readFileSync(bundleFile), 'standalone bundle');
     const bundle = hashRegularFile(bundleFile, MAX_BUNDLE_BYTES, 'standalone bundle');
     await prepareExecutable(bundleFile, blobFile, executable);
     const smoke = smokeStandalone(executable, source.version);

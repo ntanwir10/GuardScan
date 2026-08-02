@@ -1,3 +1,5 @@
+import fs from 'fs';
+import os from 'os';
 import path from 'path';
 
 const {
@@ -26,6 +28,16 @@ const {
   ) => Promise<void>;
 };
 
+const {
+  FORBIDDEN_RUNTIME_LITERALS,
+  assertCompiledRuntimeFilesClean,
+  assertRuntimeArtifactClean,
+} = require('../../scripts/release/runtime-artifact-policy') as {
+  FORBIDDEN_RUNTIME_LITERALS: readonly string[];
+  assertCompiledRuntimeFilesClean: (root: string, files: Iterable<string>, label?: string) => string[];
+  assertRuntimeArtifactClean: (content: Buffer | string, label: string) => void;
+};
+
 function metafile(imports: Array<{path: string; external?: boolean}>): Record<string, any> {
   return {
     outputs: {
@@ -35,6 +47,43 @@ function metafile(imports: Array<{path: string; external?: boolean}>): Record<st
 }
 
 describe('standalone executable builder contract', () => {
+  it('fails closed on retired API literals in runtime bytes', () => {
+    expect(FORBIDDEN_RUNTIME_LITERALS).toEqual([
+      'api.guardscancli.com',
+      'GUARDSCAN_API_URL',
+      'DEFAULT_API_BASE_URL',
+    ]);
+    expect(() => assertRuntimeArtifactClean(Buffer.from('clean runtime'), 'SEA payload')).not.toThrow();
+    for (const literal of FORBIDDEN_RUNTIME_LITERALS) {
+      expect(() => assertRuntimeArtifactClean(
+        Buffer.from(`runtime contains ${literal}`),
+        'SEA payload'
+      )).toThrow(`SEA payload contains forbidden retired runtime literals: ${literal}`);
+    }
+  });
+
+  it('scans packed compiled JavaScript without rejecting packaged historical documentation', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'guardscan-runtime-policy-'));
+    try {
+      fs.mkdirSync(path.join(root, 'dist'));
+      fs.writeFileSync(path.join(root, 'dist', 'index.js'), 'module.exports = true;\n');
+      fs.writeFileSync(path.join(root, 'README.md'), FORBIDDEN_RUNTIME_LITERALS.join('\n'));
+      fs.writeFileSync(path.join(root, 'CHANGELOG.md'), FORBIDDEN_RUNTIME_LITERALS.join('\n'));
+      const files = ['README.md', 'CHANGELOG.md', 'dist/index.js'];
+
+      expect(() => assertCompiledRuntimeFilesClean(root, files.slice(0, 2), 'npm packed runtime'))
+        .toThrow('npm packed runtime contains no compiled JavaScript under dist/');
+      expect(assertCompiledRuntimeFilesClean(root, files, 'npm packed runtime'))
+        .toEqual(['dist/index.js']);
+
+      fs.writeFileSync(path.join(root, 'dist', 'index.js'), 'const url = "api.guardscancli.com";\n');
+      expect(() => assertCompiledRuntimeFilesClean(root, files, 'npm packed runtime'))
+        .toThrow(/npm packed runtime dist\/index\.js contains forbidden retired runtime literals/);
+    } finally {
+      fs.rmSync(root, {recursive: true, force: true});
+    }
+  });
+
   it('creates a single CommonJS Node 22 bundle and externalizes only optional native capabilities', () => {
     const options = bundleOptions('/source/dist/index.js', '/output/guardscan.bundle.cjs');
     expect(options).toMatchObject({
