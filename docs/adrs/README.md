@@ -16,18 +16,18 @@ Architecture Decision Records (ADRs) are a lightweight way to document important
 ### Backend & Infrastructure
 
 - [ADR 001: Cloudflare Workers for Backend](./001-cloudflare-workers-backend.md)
-  - **Status**: Accepted
-  - **Summary**: Use Cloudflare Workers for optional telemetry backend due to global performance, zero ops, and cost-effectiveness
+  - **Status**: Superseded by [ADR 007](./007-retire-hosted-cloudflare-telemetry.md)
+  - **Summary**: Historical platform decision for the retired hosted telemetry backend
 
-- [ADR 002: Supabase PostgreSQL for Database](./002-supabase-postgresql.md)
-  - **Status**: Accepted
-  - **Summary**: Use Supabase PostgreSQL for telemetry storage due to REST API compatibility with Workers and excellent developer experience
+ADR number 002 is intentionally unused. An earlier index entry referenced a
+file that was never present in this repository, so it is not an active or
+recoverable architecture decision.
 
 ### Architecture & Design
 
 - [ADR 003: Privacy-First Architecture](./003-privacy-first-architecture.md)
   - **Status**: Accepted
-  - **Summary**: All code analysis happens locally, source code never sent to servers, optional anonymized telemetry only
+  - **Summary**: Local analysis, direct BYOK providers, and optional explicit synchronization to user-operated telemetry collectors
 
 - [ADR 005: BYOK (Bring Your Own Key) AI Model](./005-byok-ai-model.md)
   - **Status**: Accepted
@@ -36,6 +36,10 @@ Architecture Decision Records (ADRs) are a lightweight way to document important
 - [ADR 006: Node.js SEA for standalone distribution](./006-node-sea-standalone-distribution.md)
   - **Status**: Proposed
   - **Summary**: Bundle GuardScan into host-native Node.js single executables for native package managers and optional pipx wheels
+
+- [ADR 007: Retire GuardScan-Hosted Cloudflare Telemetry](./007-retire-hosted-cloudflare-telemetry.md)
+  - **Status**: Accepted
+  - **Summary**: Retire the hosted endpoint while preserving explicit user-operated telemetry collectors
 
 ### Development & Tooling
 

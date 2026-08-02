@@ -363,7 +363,20 @@ Or edit config:
 telemetryEnabled: false
 ```
 
-Telemetry is disabled by default and never uploads automatically. After explicit consent, events are queued only while online. Configure an HTTPS endpoint and run `guardscan telemetry sync` to deliver a batch; failed delivery leaves it queued. `guardscan config --telemetry=false` deletes the queue. Use `guardscan telemetry status` and `guardscan telemetry clear --force` to inspect or delete it explicitly.
+Telemetry is disabled by default and never uploads automatically. GuardScan
+operates no hosted collector or default endpoint. After explicit consent,
+events are queued only while online and remain local until you configure a
+user-operated HTTPS collector and sync explicitly:
+
+```bash
+export GUARDSCAN_TELEMETRY_URL=https://telemetry.example.com
+guardscan telemetry sync
+```
+
+Failed delivery leaves the batch queued. `guardscan config --telemetry=false`
+deletes the queue. Use `guardscan telemetry status` and
+`guardscan telemetry clear --force` to inspect or delete it explicitly.
+`GUARDSCAN_API_URL` and the former `api.guardscancli.com` service are retired.
 
 ## Troubleshooting
 

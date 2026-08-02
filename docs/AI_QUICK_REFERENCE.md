@@ -67,7 +67,10 @@ guardscan --no-telemetry security --ci --format sarif --output guardscan.sarif -
 - `--no-cache` disables AI response caching for one command.
 - `guardscan config --telemetry=false` persists telemetry opt-out and deletes queued events.
 - `guardscan config --offline=true` blocks cloud AI, cloud embeddings, advisory lookups, update checks, and telemetry recording and delivery.
-- `guardscan telemetry status` shows consent and local queue state; `guardscan telemetry sync` is the only delivery action.
+- `guardscan telemetry status` shows consent and local queue state; `guardscan telemetry sync` is the only delivery action and requires a user-operated collector selected with `GUARDSCAN_TELEMETRY_URL`.
 - `guardscan cache clear --repo --force` clears the current repository, while `--all` clears every repository cache.
 
-Telemetry is disabled by default. If enabled, it queues an aggregate allowlisted event locally while online; it never includes source, paths, prompts, responses, findings, or errors.
+Telemetry is disabled by default. If enabled, it queues an aggregate allowlisted
+event locally while online; it never includes source, paths, prompts, responses,
+findings, or errors. GuardScan operates no hosted telemetry collector or default
+endpoint.

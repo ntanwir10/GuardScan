@@ -338,7 +338,7 @@ Or run: edit ~/.guardscan/config.yml: providers.openai.apiKey YOUR_KEY
 
 ## Related Decisions
 - [ADR 003: Privacy-First Architecture](./003-privacy-first-architecture.md) - Why direct requests
-- [ADR 001: Cloudflare Workers Backend](./001-cloudflare-workers-backend.md) - Why no AI proxy
+- [ADR 007: Retire GuardScan-Hosted Cloudflare Telemetry](./007-retire-hosted-cloudflare-telemetry.md) - Why GuardScan operates no hosted telemetry or AI proxy
 
 ## References
 - [OpenAI API Pricing](https://openai.com/pricing)

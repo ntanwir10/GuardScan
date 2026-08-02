@@ -31,6 +31,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `guardscan run` now always executes required local scanners before optional AI enrichment and records incomplete coverage as operational exit code `2`.
 - Offline Ollama and LM Studio endpoints now require literal loopback IPs. Remote self-hosted endpoints require online mode and `allowRemoteSelfHosted: true`.
 - Telemetry and metrics retention, clearing, status, and migration now process the complete state directory with journaled rollback.
+- Self-hosted telemetry delivery requires an explicit `GUARDSCAN_TELEMETRY_URL`; consent only queues allowlisted events locally until the user runs `guardscan telemetry sync`.
 - Configuration parsing is size-, depth-, node-, alias-, and schema-bounded; read-modify-write updates are lease-serialized across processes.
 - The supported Node.js runtime floor is now 22, with package smoke coverage on Node 22 and 24 across Linux, macOS, and Windows.
 - Scanner failures and incomplete vulnerability coverage now fail closed with typed exit code `2` unless partial execution is explicitly allowed.
@@ -40,6 +41,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - LM Studio endpoints are normalized to the documented `/v1` base path.
 - Telemetry is opt-in and delivered only through an explicit sync command.
 - License, SBOM, and vulnerability features share local dependency inventory.
+
+### Removed
+
+- The GuardScan-hosted Cloudflare telemetry service at
+  `api.guardscancli.com`, its implicit default endpoint, and the legacy
+  `GUARDSCAN_API_URL` setting. After `1.1.0` is published, the retired endpoint
+  returns `410 Gone` without accepting, storing, or redirecting data for seven
+  days and is then deleted. Users of `1.0.5` and earlier should upgrade or run
+  `guardscan config --telemetry=false`; self-hosted operators must use
+  `GUARDSCAN_TELEMETRY_URL`. Existing queues remain local.
 
 ### Fixed
 

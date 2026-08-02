@@ -1,16 +1,29 @@
-# API Documentation
+# Self-Hosted Telemetry Collector Protocol and CLI Output
 
-GuardScan is local-first and BYOK. Built-in scanners do not send source code to GuardScan services. Cloud AI requests go directly to the provider selected by the user.
+GuardScan is local-first and BYOK. Built-in scanners do not send source code to
+GuardScan services. Cloud AI requests go directly to the provider selected by
+the user.
 
-## Optional telemetry
+## Optional self-hosted telemetry
 
-Telemetry is anonymous, opt-in, and delivered only by an explicit `guardscan telemetry sync`. Recording and delivery are suppressed when telemetry consent is disabled, persistent offline mode is enabled, `GUARDSCAN_OFFLINE=true`, `GUARDSCAN_NO_TELEMETRY=true`, `--offline`, or `--no-telemetry` applies.
+GuardScan operates no hosted telemetry collector and provides no default
+endpoint. The former service at `api.guardscancli.com` and the legacy
+`GUARDSCAN_API_URL` setting are retired. Operators may implement this protocol
+at a user-controlled HTTPS endpoint selected with `GUARDSCAN_TELEMETRY_URL`.
 
-### Endpoint
+Telemetry is anonymous, opt-in, and delivered only by an explicit
+`guardscan telemetry sync`. Recording and delivery are suppressed when
+telemetry consent is disabled, persistent offline mode is enabled,
+`GUARDSCAN_OFFLINE=true`, `GUARDSCAN_NO_TELEMETRY=true`, `--offline`, or
+`--no-telemetry` applies. Events otherwise remain in the local queue.
+
+### Collector endpoint
 
 ```text
 POST /api/telemetry
 ```
+
+This is a relative self-hosted protocol path, not a GuardScan-operated URL.
 
 ### Request: `guardscan.telemetry.v1`
 
