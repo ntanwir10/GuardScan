@@ -41,6 +41,10 @@
       "type": "object",
       "additionalProperties": { "$ref": "#/definitions/incident" }
     },
+    "actionRequired": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/actionRequired" }
+    },
     "promotion": { "type": "object" }
   },
   "definitions": {
@@ -117,6 +121,18 @@
         "openedAt": { "type": "string", "format": "date-time" },
         "resolvedAt": { "type": "string", "format": "date-time" },
         "summary": { "type": "string", "minLength": 1, "maxLength": 2000 }
+      }
+    },
+    "actionRequired": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["channel", "action", "authority", "reason", "requestedAt"],
+      "properties": {
+        "channel": { "type": "string", "minLength": 1, "maxLength": 50 },
+        "action": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "authority": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "reason": { "type": "string", "minLength": 1, "maxLength": 2000 },
+        "requestedAt": { "type": "string", "format": "date-time" }
       }
     }
   }

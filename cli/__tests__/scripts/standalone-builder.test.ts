@@ -10,6 +10,7 @@ const {
   OPTIONAL_EXTERNALS,
   PROTOTYPE_SCHEMA,
   assertExternalAllowlist,
+  assertReducedCapabilityEvidence,
   bundleOptions,
   bundledComponents,
   externalPackages,
@@ -19,6 +20,7 @@ const {
   OPTIONAL_EXTERNALS: string[];
   PROTOTYPE_SCHEMA: string;
   assertExternalAllowlist: (metafile: Record<string, any>) => string[];
+  assertReducedCapabilityEvidence: (evidence: Record<string, any>) => Record<string, any>;
   bundleOptions: (entryPoint: string, outputFile: string) => Record<string, any>;
   bundledComponents: (metafile: Record<string, any>, lock: Record<string, any>) => Array<Record<string, string>>;
   externalPackages: (metafile: Record<string, any>) => string[];
@@ -147,6 +149,56 @@ describe('standalone executable builder contract', () => {
     ]));
     expect(OPTIONAL_EXTERNALS).toEqual(['chartjs-node-canvas', 'tiktoken']);
     expect(PROTOTYPE_SCHEMA).toBe('guardscan.standalone-prototype.v1');
+  });
+
+  it('accepts observed reduced-capability evidence from the standalone executable', () => {
+    const evidence = {
+      schemaVersion: 'guardscan.runtime-capabilities.v1',
+      tokenCounting: {
+        dependency: 'tiktoken',
+        dependencyAvailable: false,
+        mode: 'estimated',
+        sampleTokenCount: 7,
+        safeFallbackObserved: true,
+      },
+      chartRendering: {
+        dependency: 'chartjs-node-canvas',
+        dependencyAvailable: false,
+        mode: 'unavailable',
+        safeFallbackObserved: true,
+      },
+    };
+
+    expect(assertReducedCapabilityEvidence(evidence)).toBe(evidence);
+  });
+
+  it.each([
+    ['tiktoken was unexpectedly available', {
+      schemaVersion: 'guardscan.runtime-capabilities.v1',
+      tokenCounting: {
+        dependency: 'tiktoken', dependencyAvailable: true, mode: 'accurate',
+        sampleTokenCount: 7, safeFallbackObserved: false,
+      },
+      chartRendering: {
+        dependency: 'chartjs-node-canvas', dependencyAvailable: false,
+        mode: 'unavailable', safeFallbackObserved: true,
+      },
+    }],
+    ['chart fallback was not observed', {
+      schemaVersion: 'guardscan.runtime-capabilities.v1',
+      tokenCounting: {
+        dependency: 'tiktoken', dependencyAvailable: false, mode: 'estimated',
+        sampleTokenCount: 7, safeFallbackObserved: true,
+      },
+      chartRendering: {
+        dependency: 'chartjs-node-canvas', dependencyAvailable: false,
+        mode: 'unavailable', safeFallbackObserved: false,
+      },
+    }],
+  ])('rejects standalone evidence when %s', (_label, evidence) => {
+    expect(() => assertReducedCapabilityEvidence(evidence)).toThrow(
+      /standalone reduced-capability contract failed/
+    );
   });
 
   it('ignores Node built-ins and rejects undeclared runtime package dependencies', () => {

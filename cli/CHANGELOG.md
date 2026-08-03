@@ -24,6 +24,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Explicit telemetry status, sync, and clear commands with a strict privacy allowlist.
 - Repository-scoped and global cache clearing.
 - Windows and expanded Node.js CI coverage plus installed-package smoke tests.
+- A machine-readable `guardscan capabilities --json` diagnostic that exercises
+  optional token-counting and chart-rendering boundaries and reports observed
+  safe fallback behavior.
 
 ### Changed
 

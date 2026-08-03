@@ -9,6 +9,7 @@ const {
   createInitialState,
   createPlan,
   prepareRelease,
+  releaseTrainChannels,
   summarizeState,
   validateSource,
 } = require('../../scripts/release/lib') as {
@@ -31,6 +32,10 @@ const {
     source: Record<string, string>,
     options: Record<string, string>
   ) => {created: boolean; outputDir: string};
+  releaseTrainChannels: (
+    channel: 'rc' | 'stable',
+    options?: {homebrewCoreEnabled?: boolean}
+  ) => string[];
   summarizeState: (state: Record<string, unknown>) => Record<string, unknown>;
   validateSource: (options: Record<string, string>) => Record<string, string>;
 };
@@ -117,8 +122,21 @@ describe('release source validation', () => {
     '## 1.2.3 - 2026-07-20',
     '## [1.2.3] - 2026-07-20',
   ])('accepts exact release-please changelog heading %s', heading => {
-    fs.writeFileSync(path.join(packageRoot, 'CHANGELOG.md'), `# Changelog\n\n${heading}\n`);
+    fs.writeFileSync(
+      path.join(packageRoot, 'CHANGELOG.md'),
+      `# Changelog\n\n## [Unreleased]\n\n${heading}\n\n- Released notes.\n`
+    );
     expect(validateSource({packageRoot, repositoryRoot: root, commit: COMMIT}).version).toBe('1.2.3');
+  });
+
+  it('rejects duplicate exact versions across accepted heading formats', () => {
+    fs.writeFileSync(
+      path.join(packageRoot, 'CHANGELOG.md'),
+      '# Changelog\n\n## 1.2.3 - 2026-07-20\n\n'
+      + '## [1.2.3](https://example.test/releases/v1.2.3) - 2026-07-21\n'
+    );
+    expect(() => validateSource({packageRoot, repositoryRoot: root, commit: COMMIT}))
+      .toThrow(/exactly one release section for 1\.2\.3/);
   });
 
   it.each(['## 1.2.30 - 2026-07-20', '## [1.2.30](https://example.test)'])
@@ -145,6 +163,24 @@ describe('release source validation', () => {
   it('rejects malformed source identities', () => {
     expect(() => validateSource({packageRoot, repositoryRoot: root, commit: 'not-a-sha'}))
       .toThrow(/commit must be a 40-character lowercase git SHA/);
+  });
+
+  it('rejects split or duplicated stable release notes', () => {
+    fs.writeFileSync(
+      path.join(packageRoot, 'CHANGELOG.md'),
+      '# Changelog\n\n## [Unreleased]\n\n### Added\n\n- A 1.2.3 feature.\n\n'
+      + '## [1.2.3] - 2026-07-20\n\n- Older notes.\n'
+    );
+    expect(() => validateSource({packageRoot, repositoryRoot: root, commit: COMMIT}))
+      .toThrow(/Unreleased section must be empty for stable release 1\.2\.3/);
+
+    fs.writeFileSync(
+      path.join(packageRoot, 'CHANGELOG.md'),
+      '# Changelog\n\n## [Unreleased]\n\n## [1.2.3] - 2026-07-20\n\n'
+      + '## [1.2.3] - 2026-07-21\n'
+    );
+    expect(() => validateSource({packageRoot, repositoryRoot: root, commit: COMMIT}))
+      .toThrow(/exactly one release section for 1\.2\.3/);
   });
 });
 
@@ -217,6 +253,20 @@ describe('release planning and state summaries', () => {
         action: 'poll-acceptance',
       }],
     });
+  });
+
+  it('selects Homebrew Core only when optional stable submission is enabled', () => {
+    expect(releaseTrainChannels('rc')).toEqual([
+      'npm', 'pnpm', 'yarn', 'bun', 'github', 'homebrew', 'scoop', 'pypi',
+    ]);
+    expect(releaseTrainChannels('stable')).toEqual([
+      'npm', 'pnpm', 'yarn', 'bun', 'github', 'homebrew', 'scoop', 'pypi',
+      'winget', 'chocolatey',
+    ]);
+    expect(releaseTrainChannels('stable', {homebrewCoreEnabled: true})).toEqual([
+      'npm', 'pnpm', 'yarn', 'bun', 'github', 'homebrew', 'scoop', 'pypi',
+      'homebrew-core', 'winget', 'chocolatey',
+    ]);
   });
 
   it('materializes catalog publication evidence and its immutable remote identity', () => {

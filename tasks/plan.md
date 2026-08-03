@@ -1,5 +1,454 @@
 # GuardScan multi-channel distribution and launch plan
 
+## Active execution plan — v1.1.0 release closure (2026-08-02)
+
+### Objective
+
+Move GuardScan from a clean, CI-green `release/1.1.0` implementation branch to
+an operational RC-first release train that publishes `1.1.0-rc.1`, observes it
+for 24 hours, and promotes the unchanged stable source to `1.1.0` across npm,
+GitHub Releases, the shared Homebrew/Scoop catalog, PyPI, WinGet, and
+Chocolatey. Homebrew Core remains an optional discovery channel and must never
+block the first-party Homebrew tap or the stable release.
+
+The plan separates repository work from external authority boundaries. Code,
+tests, workflow definitions, documentation, and bootstrap branches are
+automatable. Account creation, legal agreements, trusted-publisher approval,
+Apple identity, Azure identity, and registry moderation require provider-owned
+state and cannot be simulated by repository changes.
+
+### Current baseline
+
+- Source: clean `release/1.1.0` at `d94a07a5cf9c2bf06723cdcbb3ef80f3d6982636`.
+- Review: PR #32 is open and draft; its exact-head 27-job CI run is green.
+- Public state: npm and GitHub stop at `1.0.5`; every new 1.1.0 channel is
+  unpublished.
+- Automation: release workflows exist only on the release branch, while
+  GitHub requires dispatch and scheduled workflows to exist on the default
+  branch. `RELEASE_AUTOMATION_ENABLED` is intentionally false.
+- Provider state: release environments exist but are empty; the GitHub App,
+  signing identities, moderated-registry credentials, and trusted publishers
+  are not proven. The current local GitHub CLI credential is invalid.
+- Shared catalog: `ntanwir10/homebrew-tap` is public, protected, and healthy in
+  its intentionally empty bootstrap state.
+
+### Architecture and operating decisions
+
+1. Keep `release/1.1.0` as the stable product source. Land inert workflow
+   definitions on `main` through a separate bootstrap PR, then merge that
+   bootstrap commit back into the release branch before deriving the RC.
+2. Keep automation disabled until every release environment passes a
+   credential/preflight rehearsal. Tags alone never authorize publication.
+3. Use the exact tested npm tarball for npm, pnpm, Yarn, and Bun. These clients
+   are compatibility channels, not independent publications.
+4. Use the exact signed standalone executable for GitHub, the shared catalog,
+   WinGet, Chocolatey, and the platform wheels published to PyPI.
+5. Keep Homebrew and Scoop in one generated, cryptographically locked catalog.
+   GuardScan is authoritative; the catalog is a projection and reports back by
+   signed dispatch plus scheduled reconciliation.
+6. Treat Homebrew Core as optional. Include it in release state only when an
+   explicit provider setting enables submission. Never advertise
+   `brew install guardscan` until Core acceptance and a public canary succeed.
+7. Treat WinGet and Chocolatey `submitted`, `accepted`, and `verified` as
+   different append-only states. Expected moderation delay is pending, not
+   failure.
+8. Use tests first for behavioral fixes. Workflow text/structure tests must
+   reproduce each release bug before the YAML or release logic is changed.
+9. Keep the Cloudflare retirement downstream of verified stable publication:
+   seven days of `410 Gone`, then deletion, with no collection or redirect.
+
+### Dependency graph
+
+```text
+Release-content truth (changelog, docs, ADR, command contracts)
+    |
+    +--> Workflow correctness (PR readiness, per-version canaries,
+    |    moderation states, native TestPyPI lifecycle)
+    |       |
+    |       +--> Default-branch workflow bootstrap
+    |               |
+    |               +--> GitHub App and repository protections
+    |               +--> npm/PyPI trusted publishers
+    |               +--> Apple/Azure signing
+    |               +--> WinGet/Chocolatey publisher onboarding
+    |                       |
+    |                       +--> v1.1.0-rc.1 publication
+    |                               |
+    |                               +--> 24-hour canary evidence
+    |                                       |
+    |                                       +--> v1.1.0 promotion
+    |                                               |
+    |                                               +--> moderated acceptance
+    |                                               +--> Homebrew Core optional PR
+    |                                               +--> Cloudflare retirement
+    +--> Whole-product acceptance expansion -----------------------^
+```
+
+### Phase 1 — release-content and product-contract truth
+
+#### Task 1.1 — Reconcile the 1.1.0 changelog
+
+**Description:** Move every 1.1.0-bound entry out of `Unreleased`, merge it into
+one authoritative `1.1.0` section, and harden source validation so a stable
+release cannot pass with populated release notes stranded above its version.
+
+**Acceptance criteria:**
+
+- One stable `1.1.0` section contains all release changes, including hosted
+  telemetry retirement.
+- Candidate derivation adds only RC identity and does not duplicate stable
+  release notes.
+- A focused regression test fails for the former split-changelog structure.
+
+**Verification:** `npm run test:release`; `npm run release:validate`.
+
+**Dependencies:** None. **Scope:** Medium, 3-4 files.
+
+#### Task 1.2 — Correct public command syntax and command inventory
+
+**Description:** Align README and quick-start examples with the actual
+Commander definitions for `review`, `docs`, `test-gen`, and `refactor`, and add
+a contract test that checks documented invocations against `--help` output.
+
+**Acceptance criteria:**
+
+- No documented positional argument is accepted only in prose.
+- The documented 29-command inventory matches registered commands.
+- Documentation tests fail if command syntax drifts again.
+
+**Verification:** focused documentation/CLI test; full build and tests.
+
+**Dependencies:** None. **Scope:** Small, 2-3 files.
+
+#### Task 1.3 — Promote the standalone ADR from proposal to accepted evidence
+
+**Description:** Define the exact evidence required to change ADR 006 from
+`Proposed` to `Accepted`. Repository feasibility can accept the architecture;
+production signing evidence remains an explicit launch gate.
+
+**Acceptance criteria:**
+
+- ADR status and evidence distinguish architectural acceptance from provider
+  rehearsal.
+- Reduced standalone capabilities remain explicit and machine-readable.
+- Documentation never claims chart rendering or accurate tokenization in SEA.
+
+**Verification:** release documentation contract tests and review.
+
+**Dependencies:** Task 1.1. **Scope:** Small, 2 files.
+
+#### Task 1.4 — Expand whole-product acceptance evidence
+
+**Description:** Replace placeholder RAG assertions with deterministic local
+index/search/chat tests, and maintain an acceptance matrix that separates
+offline core behavior, optional external tools, mocked BYOK providers, and live
+provider rehearsals.
+
+**Acceptance criteria:**
+
+- RAG tests exercise real repository indexing and retrieval with deterministic
+  local doubles only at the network/provider boundary.
+- Every advertised command has more than a help-only contract or is explicitly
+  classified as requiring an external tool/provider.
+- No CI test requires paid API credentials or uploads source code.
+
+**Verification:** focused RAG/command tests; full coverage suite.
+
+**Dependencies:** Task 1.2. **Scope:** split into multiple medium follow-ups.
+
+### Phase 2 — release workflow correctness
+
+#### Task 2.1 — Make canary execution version-safe
+
+**Description:** Stop selecting the first active train as a shared checkout.
+Use default-branch release tooling for ledger recording while every matrix item
+continues to verify its own immutable public version.
+
+**Acceptance criteria:**
+
+- Two simultaneous active trains cannot use one another's tag as tooling.
+- Manual single-version canaries remain supported.
+- Workflow contract tests reproduce and prevent the former first-train bug.
+
+**Verification:** release workflow tests and YAML parse.
+
+**Dependencies:** Phase 1 plan only. **Scope:** Small, 2 files.
+
+#### Task 2.2 — Preserve pending moderation states
+
+**Description:** Make WinGet and Chocolatey absence during normal review an
+explicit pending result. Only install, signature, checksum, or invocation
+failures after discovery may produce `failed`.
+
+**Acceptance criteria:**
+
+- “Package not public yet” remains pending.
+- A discovered package that fails installation/invocation is failed.
+- Reconciliation keeps polling pending channels without opening an incident.
+
+**Verification:** workflow regression test plus release-state unit tests.
+
+**Dependencies:** None. **Scope:** Small, 2-3 files.
+
+#### Task 2.3 — Add idempotent moderated-registry submission evidence
+
+**Description:** Capture WinGet PR identity and Chocolatey package submission
+identity, distinguish matching prior submissions from integrity conflicts, and
+persist these identities in the ledger.
+
+**Acceptance criteria:**
+
+- Rerunning a matching submission records/reuses the same identity.
+- Conflicting remote content stops as an integrity incident.
+- WinGet submission and catalog acceptance are separate states.
+
+**Verification:** mocked remote-contract tests and workflow text contracts.
+
+**Dependencies:** Task 2.2. **Scope:** Medium, 4-5 files.
+
+#### Task 2.4 — Test every TestPyPI wheel natively before PyPI
+
+**Description:** After TestPyPI publication, install the exact version with pip
+and pipx on Linux x64/arm64, macOS x64/arm64, and Windows x64. Production PyPI
+must depend on the complete matrix.
+
+**Acceptance criteria:**
+
+- All five platform tags select and run their intended executable.
+- Version, help, offline scan, and uninstall pass for pip and pipx.
+- PyPI publication cannot start if any native TestPyPI lifecycle fails.
+
+**Verification:** workflow structure tests, then hosted RC rehearsal.
+
+**Dependencies:** Task 2.1. **Scope:** Medium, 2 files.
+
+#### Task 2.5 — Exercise reduced standalone capabilities
+
+**Description:** Add a deterministic runtime capability diagnostic and smoke
+that actually invokes token-count estimation and chart-unavailable degradation
+with optional native modules absent.
+
+**Acceptance criteria:**
+
+- SEA reports `accurateTokenCounting=false` and demonstrates estimated token
+  counting without `tiktoken`.
+- A report path that requests charts completes safely without
+  `chartjs-node-canvas` and records the reduced capability.
+- Artifact metadata is derived from the observed smoke, not an unconditional
+  boolean.
+
+**Verification:** failing focused tests first, local package tests, five hosted
+SEA jobs.
+
+**Dependencies:** Task 1.3. **Scope:** Medium, 4-5 files.
+
+#### Task 2.6 — Make release-PR readiness zero-touch and fail closed
+
+**Description:** Candidate preparation must inspect the exact PR, mark the
+bot-owned release PR ready when allowed, and fail if it is closed, from a fork,
+or no longer targets `main`. Promotion still requires unchanged head and all
+required checks.
+
+**Acceptance criteria:**
+
+- The current draft state cannot silently deadlock promotion.
+- Untrusted/fork PRs never receive release credentials or tags.
+- Ready state, base branch, head SHA, and mergeability are recorded.
+
+**Verification:** workflow contract tests and a non-publishing GitHub rehearsal.
+
+**Dependencies:** Tasks 2.1-2.5. **Scope:** Small, 2 files.
+
+#### Task 2.7 — Make Homebrew Core honestly optional
+
+**Description:** Remove phantom planned state when Core submission is not
+configured. If enabled, render, validate, submit, record PR identity, poll
+acceptance, and verify public installation without blocking required channels.
+
+**Acceptance criteria:**
+
+- Stable completion is possible with the first-party tap while Core is off.
+- When on, Core progresses `submitted -> accepted -> verified` with evidence.
+- User docs expose `brew install guardscan` only after verification.
+
+**Verification:** release-state tests, renderer tests, workflow contracts.
+
+**Dependencies:** Tasks 2.2-2.3. **Scope:** split into medium implementation
+and external onboarding tasks.
+
+### Phase 3 — default-branch bootstrap and repository controls
+
+#### Task 3.1 — Create an inert workflow-bootstrap change
+
+**Description:** Prepare a branch from `origin/main` containing the reusable
+release workflows and their default-branch entrypoints, with automation still
+off. Do not merge the product release or create a release tag.
+
+**Acceptance criteria:**
+
+- GitHub lists the train, canary, build, publish, and Release Please workflows
+  on `main` after merge.
+- Schedules and dispatches are inert while the repository variable is false.
+- Bootstrap CI passes and no registry receives a publication request.
+
+**Verification:** PR checks, GitHub workflow listing, dry dispatch rejection.
+
+**Dependencies:** Phase 2 complete. **Scope:** remote Git/GitHub operation.
+
+#### Task 3.2 — Finish GitHub App and protection setup
+
+**Description:** Install `guardscan-release-bot` on GuardScan and the shared
+catalog; configure short-lived token inputs; protect release tags and restrict
+ledger writes to the App while preserving break-glass recovery.
+
+**Acceptance criteria:**
+
+- No long-lived general-purpose token publishes a release.
+- Release tags and ledger writes are limited to the intended identity.
+- Catalog notifications authenticate cross-repository and are idempotent.
+
+**Verification:** permission-negative tests from a fork and positive dry runs.
+
+**Dependencies:** Valid GitHub authentication and Task 3.1.
+
+#### Task 3.3 — Merge bootstrap truth back into the stable release PR
+
+**Description:** Merge `main` into `release/1.1.0`, resolve only release-owned
+files, rerun the exact source gate, and confirm PR #32 remains unchanged after
+the final approved head is selected.
+
+**Acceptance criteria:** clean worktree, green exact-SHA CI, PR ready for
+review, no unreviewed product change after RC derivation.
+
+**Verification:** full local gate and hosted CI.
+
+**Dependencies:** Tasks 3.1-3.2.
+
+### Phase 4 — provider onboarding and production rehearsals
+
+#### Task 4.1 — npm and PyPI trusted publishing
+
+Configure exact workflow/environment bindings for npm, TestPyPI, and PyPI;
+rehearse OIDC issuance; verify provenance; remove the legacy `NPM_TOKEN` only
+after OIDC succeeds.
+
+#### Task 4.2 — Apple and Windows signing
+
+Provision Developer ID/notary credentials and Azure Artifact Signing OIDC;
+build, sign, notarize/timestamp, staple, and verify representative artifacts.
+
+#### Task 4.3 — WinGet and Chocolatey publisher authority
+
+Complete the Microsoft CLA and scoped GitHub credential; confirm Chocolatey
+publisher ownership and API key; submit non-public validation fixtures where
+the provider allows it.
+
+#### Task 4.4 — Homebrew Core optional authority
+
+Configure a narrowly scoped contribution credential and enable the optional
+channel only after the first-party stable formula is verified.
+
+#### Task 4.5 — Credential-expiry monitoring
+
+Add scheduled checks for certificate dates, App installation health, OIDC
+bindings, and provider identity revalidation, with alerts that contain no
+secret material.
+
+**Phase 4 acceptance:** every required environment passes a preflight, secrets
+stay out of logs/artifacts, fork PRs cannot mint tokens, and automation remains
+off until the final go/no-go decision.
+
+### Phase 5 — RC, soak, stable promotion, and recovery
+
+#### Task 5.1 — Publish `v1.1.0-rc.1`
+
+Enable automation and dispatch the candidate from `main` using PR #32. Publish
+npm `next`, an immutable GitHub prerelease, TestPyPI then PyPI `1.1.0rc1`, and
+isolated shared-catalog preview branches. Render but do not submit RC WinGet or
+Chocolatey packages.
+
+#### Task 5.2 — Complete the 24-hour soak
+
+Require at least 24 hourly samples per required channel, fresh final evidence,
+unchanged source head, no high/critical dependency vulnerability, valid public
+digests/signatures, and no open release/security incident.
+
+#### Task 5.3 — Promote stable `v1.1.0`
+
+Materialize the machine promotion decision, auto-merge the unchanged PR,
+rebuild/sign/attest from the exact merge commit, publish npm `latest`, GitHub,
+PyPI, the shared catalog, then submit WinGet and Chocolatey.
+
+#### Task 5.4 — Reconcile moderated channels and optional Core
+
+Poll external review without misclassifying delay. Mark release completion only
+when every required selected channel is verified; keep optional Core evidence
+separate.
+
+#### Task 5.5 — Execute post-release Cloudflare retirement
+
+After stable public verification, serve seven days of `410 Gone` without
+collection or redirect, monitor old-client traffic only through aggregate
+infrastructure signals if already available, then remove the hosted Worker and
+DNS/runtime resources according to ADR 007.
+
+### Verification checkpoints
+
+#### Checkpoint A — repository correctness
+
+- Focused regression tests are red before each behavioral fix and green after.
+- `npm run typecheck`, `npm run build`, `npm run test:release`, release package
+  verification, documentation contracts, and `git diff --check` pass.
+
+#### Checkpoint B — whole product
+
+- Full coverage suite passes in band.
+- Production dependency audit has no high or critical result.
+- Packed npm artifact and all five package-manager smokes pass.
+- Offline scan, SPDX, CycloneDX, telemetry disabled, and declared optional
+  degradation pass from installed artifacts.
+
+#### Checkpoint C — hosted release feasibility
+
+- Exact-SHA 27-job or expanded CI matrix passes.
+- Five signed native artifacts pass platform verification.
+- Five TestPyPI wheels pass native pip/pipx lifecycles.
+
+#### Checkpoint D — public RC
+
+- Manifest, signatures, SBOMs, checksums, attestations, URLs, and public bytes
+  agree for every artifact.
+- Required channel canaries remain green for 24 hours.
+
+#### Checkpoint E — stable completion
+
+- Every required public install command reports `1.1.0`.
+- Moderated channels are tracked as pending/submitted until truly public.
+- Rollback/forward-fix procedures are executable without overwriting artifacts.
+
+### Risks and mitigations
+
+| Risk | Impact | Mitigation |
+| --- | --- | --- |
+| Workflow bootstrap accidentally publishes | Critical | Keep automation false; no provider credentials in bootstrap environments |
+| RC source changes during soak | Critical | Bind candidate metadata to PR head and fail promotion on any head change |
+| Registry rerun overwrites/conflicts | Critical | Digest preflight; identical means continue, different means incident |
+| Apple/Azure setup blocks native launch | High | Rehearse before enabling; never publish unsigned substitutes |
+| Moderation lasts days | Medium | Separate submitted/accepted/verified; do not block already verified first-party channels |
+| Homebrew Core rejects formula | Low | First-party tap remains supported; Core stays optional |
+| Shared catalog drifts | High | One generated projection, lock file, protected CI, dispatch plus reconciliation |
+| Optional native modules crash SEA | High | Exercise actual fallback paths and bind observed capabilities into metadata |
+| Documentation overstates availability | High | Publish install commands only from verified ledger state |
+| Legacy Cloudflare clients keep sending | Medium | Stable upgrade notice, seven-day 410 window, then teardown |
+
+### External authority boundaries
+
+Implementation may prepare every command and validation, but it must stop for
+the owner when a provider requires identity verification, MFA, legal terms,
+certificate purchase/renewal, CLA acceptance, trusted-publisher approval, or
+moderator action. These are not code defects and must not be bypassed with
+long-lived or over-scoped credentials.
+
 Status: historical design record, superseded by the approved RC-first zero-touch release train. This document does not authorize a release by itself. The current operating contract is in `docs/RELEASE_AUTOMATION.md`, and provider onboarding is in `docs/RELEASE_ONBOARDING.md`.
 
 ## Implementation status — 2026-07-25

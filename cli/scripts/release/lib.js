@@ -31,6 +31,22 @@ const CHANNELS = Object.freeze([
   {id: 'pypi', phase: 'full', operation: 'publish', artifacts: ['python-wheel', 'standalone']},
 ]);
 
+const REQUIRED_RC_CHANNELS = Object.freeze([
+  'npm', 'pnpm', 'yarn', 'bun', 'github', 'homebrew', 'scoop', 'pypi',
+]);
+
+function releaseTrainChannels(channel, options = {}) {
+  if (!['rc', 'stable'].includes(channel)) {
+    throw new Error(`unsupported release train channel: ${channel}`);
+  }
+  const channels = [...REQUIRED_RC_CHANNELS];
+  if (channel === 'stable') {
+    if (options.homebrewCoreEnabled === true) channels.push('homebrew-core');
+    channels.push('winget', 'chocolatey');
+  }
+  return channels;
+}
+
 function readBounded(file, label = 'file', maxBytes = MAX_RELEASE_FILE_BYTES) {
   if (!Number.isSafeInteger(maxBytes) || maxBytes < 1) throw new Error('file byte limit is invalid');
   const descriptor = fs.openSync(file, 'r');
@@ -114,12 +130,31 @@ function validateSource(options = {}) {
   if (semver.valid(packageJson.version)) {
     const changelog = readBounded(path.join(packageRoot, 'CHANGELOG.md'), 'CHANGELOG.md');
     const escapedVersion = packageJson.version.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const releaseHeading = new RegExp(
-      `^## (?:\\[${escapedVersion}\\](?:\\([^\\r\\n)]*\\))?|${escapedVersion})(?:\\s|$)`,
-      'm'
-    );
-    if (!releaseHeading.test(changelog)) {
+    const releaseHeadings = changelog.match(
+      new RegExp(
+        `^## (?:\\[${escapedVersion}\\](?:\\([^\\r\\n)]*\\))?|${escapedVersion})(?:\\s|$)`,
+        'gm'
+      )
+    ) || [];
+    if (releaseHeadings.length === 0) {
       errors.push(`CHANGELOG.md has no release section for ${packageJson.version}`);
+    } else if (releaseHeadings.length !== 1) {
+      errors.push(`CHANGELOG.md must contain exactly one release section for ${packageJson.version}`);
+    }
+    if (semver.prerelease(packageJson.version) === null) {
+      const unreleasedHeading = /^## \[Unreleased\][^\n]*$/m.exec(changelog);
+      const unreleasedBody = unreleasedHeading
+        ? changelog.slice(
+          unreleasedHeading.index + unreleasedHeading[0].length,
+          (() => {
+            const next = changelog.indexOf('\n## ', unreleasedHeading.index + unreleasedHeading[0].length);
+            return next === -1 ? changelog.length : next;
+          })()
+        ).trim()
+        : '';
+      if (unreleasedBody.length > 0) {
+        errors.push(`CHANGELOG.md Unreleased section must be empty for stable release ${packageJson.version}`);
+      }
     }
   }
 
@@ -356,6 +391,7 @@ module.exports = {
   prepareRelease,
   readBounded,
   readJson,
+  releaseTrainChannels,
   resolveGitCommit,
   resolveGitTimestamp,
   summarizeState,
