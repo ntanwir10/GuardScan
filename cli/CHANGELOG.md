@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-07-13
+
 ### Added
 
 - Static-safe `guardscan scan` execution with explicit `--run-project-code` trust capability, scrubbed child environments, report execution-mode metadata, and optional OS-backed network isolation.
@@ -16,6 +18,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Manifest-bound stable-promotion approval evidence, atomic publication-ledger transitions, and deterministic native package adapter validation.
 - A fail-closed host-native Node.js SEA prototype builder and five-target non-publishable CI feasibility matrix.
 - Packed-artifact compatibility gates for npm, pnpm, Yarn Modern, Yarn Classic, and Bun.
+- Native OSV-backed dependency vulnerability scanning with `guardscan vuln`, `cve`, and `audit` commands.
+- Exact-version inventory support across JavaScript, Python, Go, Rust, Ruby, and Maven projects.
+- Offline vulnerability coverage snapshots and explicit database status/update/clear commands.
+- Stable finding fingerprints, deterministic scanner execution, comprehensive versioned JSON, and schema-valid SARIF.
+- Explicit telemetry status, sync, and clear commands with a strict privacy allowlist.
+- Repository-scoped and global cache clearing.
+- Windows and expanded Node.js CI coverage plus installed-package smoke tests.
+- A machine-readable `guardscan capabilities --json` diagnostic that exercises
+  optional token-counting and chart-rendering boundaries and reports observed
+  safe fallback behavior.
 
 ### Changed
 
@@ -27,6 +39,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   locally until the user runs `guardscan telemetry sync`.
 - Configuration parsing is size-, depth-, node-, alias-, and schema-bounded; read-modify-write updates are lease-serialized across processes.
 - The supported Node.js runtime floor is now 22, with package smoke coverage on Node 22 and 24 across Linux, macOS, and Windows.
+- Scanner failures and incomplete vulnerability coverage now fail closed with typed exit code `2` unless partial execution is explicitly allowed.
+- CVE scanning is enabled by default when supported dependency manifests are present.
+- Offline policy is enforced centrally for cloud AI, embeddings, update checks, telemetry, and advisory lookups.
+- Environment-only cloud credentials and keyless Ollama/LM Studio configurations are supported.
+- LM Studio endpoints are normalized to the documented `/v1` base path.
+- Telemetry is opt-in and delivered only through an explicit sync command.
+- License, SBOM, and vulnerability features share local dependency inventory.
 
 ### Removed
 
@@ -46,33 +65,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Redirect-following provider and telemetry transports.
 - Deleted lint-baseline source files bypassing baseline review.
 - Yarn installation failing on an unresolvable stale optional tokenizer package.
-
-The strict ESLint gate remains a per-file non-regression ratchet; this release does not claim that the existing codebase is lint-clean.
-
-## [1.1.0] - 2026-07-13
-
-### Added
-
-- Native OSV-backed dependency vulnerability scanning with `guardscan vuln`, `cve`, and `audit` commands.
-- Exact-version inventory support across JavaScript, Python, Go, Rust, Ruby, and Maven projects.
-- Offline vulnerability coverage snapshots and explicit database status/update/clear commands.
-- Stable finding fingerprints, deterministic scanner execution, comprehensive versioned JSON, and schema-valid SARIF.
-- Explicit telemetry status, sync, and clear commands with a strict privacy allowlist.
-- Repository-scoped and global cache clearing.
-- Windows and expanded Node.js CI coverage plus installed-package smoke tests.
-
-### Changed
-
-- Scanner failures and incomplete vulnerability coverage now fail closed with typed exit code `2` unless partial execution is explicitly allowed.
-- CVE scanning is enabled by default when supported dependency manifests are present.
-- Offline policy is enforced centrally for cloud AI, embeddings, update checks, telemetry, and advisory lookups.
-- Environment-only cloud credentials and keyless Ollama/LM Studio configurations are supported.
-- LM Studio endpoints are normalized to the documented `/v1` base path.
-- Telemetry is opt-in and delivered only through an explicit sync command.
-- License, SBOM, and vulnerability features share local dependency inventory.
-
-### Fixed
-
 - Persisted metrics can no longer poison aggregation or crash `metrics show` through malformed optional fields.
 - Telemetry status, retention, and synchronization now quarantine invalid or future-dated events before use.
 - Legacy metrics and telemetry migrations validate completely before publishing any migrated event.
@@ -88,6 +80,8 @@ The strict ESLint gate remains a per-file non-regression ratchet; this release d
 - Expired cache entries remaining on disk.
 - Release publishing without every quality gate.
 - Windows `npm`/`npx` command resolution and shell-dependent child processes.
+
+The strict ESLint gate remains a per-file non-regression ratchet; this release does not claim that the existing codebase is lint-clean.
 
 ## [1.0.5] - 2025-12-09
 

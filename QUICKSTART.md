@@ -71,7 +71,7 @@ Follow the prompts to set:
 
 ## 📋 Available Commands
 
-GuardScan provides **28 top-level commands** organized by category:
+GuardScan provides **29 top-level commands** organized by category:
 
 ### Setup & Configuration
 
@@ -82,6 +82,7 @@ guardscan status                  # Show provider, repo, and local config status
 guardscan reset                   # Clear local cache and config
 guardscan cache                   # Inspect or clear repository/global cache
 guardscan telemetry               # Inspect, explicitly sync, or clear telemetry
+guardscan capabilities            # Inspect optional runtime capabilities and safe fallbacks
 ```
 
 ### Security & Scanning (Offline-Capable, 100% FREE)

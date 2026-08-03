@@ -4,6 +4,13 @@ GuardScan uses one RC-first, append-only release train for npm, standalone GitHu
 
 The automation is fail-closed. A tag is an identity created by the release train, never publication authority. General CI has no tag trigger, publication permission, registry command, or GitHub release job.
 
+[`FUNCTIONAL_ACCEPTANCE.md`](./FUNCTIONAL_ACCEPTANCE.md) maps every public
+command and major workflow to its strongest evidence class, install/runtime
+variants, and remaining launch gate. [`RELEASE_ONBOARDING.md`](./RELEASE_ONBOARDING.md)
+defines the one-time default-branch bootstrap and provider activation order.
+Neither an implemented workflow nor a green component test is public-release
+evidence until it is bound to the selected commit and exact artifact.
+
 ## Release invariants
 
 - `cli/package.json`, `cli/package-lock.json`, `cli/CHANGELOG.md`, the tag, and the exact commit agree.
@@ -14,6 +21,18 @@ The automation is fail-closed. A tag is an identity created by the release train
 - Stable promotion is a machine decision after a full 24-hour window. It requires an unchanged release-PR head, fresh green canaries for every RC channel, and no open release incident.
 - WinGet and Chocolatey remain `submitted` until their public catalogs accept them and a clean public installation passes.
 - Rollback never mutates history or overwrites a release. It appends recovery events and prepares a forward-fix patch.
+
+## Selected channels
+
+The current RC train selects npm, its pnpm/Yarn/Bun consumer canaries, GitHub
+native assets, Homebrew tap preview, Scoop preview, and PyPI. The stable train
+selects those channels plus WinGet and Chocolatey. Every selected channel must
+reach `verified` before the stable release is complete.
+
+Homebrew Core is not selected. The renderer and validator are dormant building
+blocks only: the orchestrator calls `releaseTrainChannels` without the explicit
+`homebrewCoreEnabled` option, so it cannot submit Core in the current train.
+Core requires a separate reviewed enablement and remains nonblocking.
 
 ## Workflow ownership
 
@@ -161,7 +180,8 @@ The builder bundles one CommonJS program, allows only `tiktoken` and `chartjs-no
 - offline static scanning;
 - SPDX 2.3 and CycloneDX 1.7;
 - telemetry-disabled status;
-- safe reduced capability behavior.
+- safe reduced capability behavior, proven by invoking
+  `guardscan capabilities --json` from the exact standalone executable.
 
 The standalone profile reports:
 
@@ -210,7 +230,10 @@ The repository also contains:
 
 ## RC and promotion
 
-Start the first candidate after provider onboarding:
+Before the first candidate, merge the inert automation bootstrap to `main`
+while `RELEASE_AUTOMATION_ENABLED=false`, complete every onboarding check, and
+verify that the release PR head and full gate are unchanged. Then set the
+variable to `true` and start the candidate from the default-branch workflow:
 
 ```bash
 gh workflow run release-train.yml \
@@ -255,17 +278,17 @@ pipx install guardscan-cli
 
 The npm package requires Node 22 or newer even when invoked by Bun. The standalone and wheel channels include the runtime.
 
-The one-part command `brew install guardscan` becomes available only after
-GuardScan is accepted into Homebrew Core and passes a clean public-Core canary.
-That optional path is submitted after a stable release, does not block release
-completion, and uses a source-building Core formula with Homebrew's `node`
-dependency and `std_npm_args`. Until acceptance, documentation keeps
-`brew install ntanwir10/tap/guardscan` as the primary command; afterward, the
-first-party tap remains the supported fallback.
+The one-part command `brew install guardscan` is **not selected or advertised by
+the current train**. It becomes available only after a separately reviewed
+change enables the optional `homebrew-core` channel, a source-building formula
+is submitted and accepted, and a clean public-Core canary reaches `verified`.
+Until then, `brew install ntanwir10/tap/guardscan` is the only supported Homebrew
+contract.
 
-The optional `homebrew-core` channel uses the normal append-only
-`submitted -> accepted -> verified` states. Submission is not acceptance, and
-acceptance is not public verification.
+If enabled later, `homebrew-core` uses the normal append-only
+`submitted -> accepted -> verified` states. Submission is not acceptance,
+acceptance is not public verification, and Core never blocks first-party release
+completion.
 
 ## Recovery
 

@@ -44,8 +44,20 @@ const {
   planRollback,
   reconcileRelease,
 } = require('../../scripts/release/reconcile') as {
-  planRollback: (state: Record<string, any>, knownGood?: string) => Record<string, any>;
+  planRollback: (
+    state: Record<string, any>,
+    knownGoodVersion?: string,
+    knownGoodCommit?: string
+  ) => Record<string, any>;
   reconcileRelease: (state: Record<string, any>) => Record<string, any>;
+};
+const {
+  prepareForwardFixSource,
+} = require('../../scripts/release/recovery-source') as {
+  prepareForwardFixSource: (
+    repositoryRoot: string,
+    input: Record<string, string>
+  ) => Record<string, any>;
 };
 const {
   createReleaseManifest,
@@ -126,6 +138,22 @@ function standalone(
       chartRendering: false,
       accurateTokenCounting: false,
     },
+    optionalCapabilities: {
+      schemaVersion: 'guardscan.runtime-capabilities.v1',
+      tokenCounting: {
+        dependency: 'tiktoken',
+        dependencyAvailable: false,
+        mode: 'estimated',
+        sampleTokenCount: 7,
+        safeFallbackObserved: true,
+      },
+      chartRendering: {
+        dependency: 'chartjs-node-canvas',
+        dependencyAvailable: false,
+        mode: 'unavailable',
+        safeFallbackObserved: true,
+      },
+    },
     platform: {os: osName, arch, ...(libc ? {libc} : {})},
     archiveFormat: osName === 'windows' ? 'zip' : 'tar.gz',
     entrypoint,
@@ -167,6 +195,55 @@ function wheel(native: Record<string, any>, digest: string): Record<string, any>
 }
 
 describe('append-only release train', () => {
+  it('prepares deterministic forward-fix source from the exact known-good tree', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'guardscan-forward-fix-'));
+    const cli = path.join(root, 'cli');
+    fs.mkdirSync(cli);
+    fs.writeFileSync(path.join(cli, 'package.json'), `${JSON.stringify({
+      name: 'guardscan',
+      version: '1.1.9',
+    }, null, 2)}\n`);
+    fs.writeFileSync(path.join(cli, 'package-lock.json'), `${JSON.stringify({
+      name: 'guardscan',
+      version: '1.1.9',
+      lockfileVersion: 3,
+      packages: {'': {name: 'guardscan', version: '1.1.9'}},
+    }, null, 2)}\n`);
+    fs.writeFileSync(path.join(cli, 'CHANGELOG.md'), [
+      '# Changelog',
+      '',
+      '## [Unreleased]',
+      '',
+      '## [1.1.9]',
+      '',
+      '- Known good.',
+      '',
+    ].join('\n'));
+    try {
+      const input = {
+        knownGoodVersion: '1.1.9',
+        defectiveVersion: '1.2.0',
+        forwardFixVersion: '1.2.1',
+      };
+      const first = prepareForwardFixSource(root, input);
+      const second = prepareForwardFixSource(root, input);
+      expect(first).toMatchObject({
+        changed: true,
+        version: '1.2.1',
+        files: ['cli/CHANGELOG.md', 'cli/package-lock.json', 'cli/package.json'],
+      });
+      expect(second).toMatchObject({changed: false, version: '1.2.1'});
+      expect(JSON.parse(fs.readFileSync(path.join(cli, 'package.json'), 'utf8')).version)
+        .toBe('1.2.1');
+      expect(JSON.parse(fs.readFileSync(path.join(cli, 'package-lock.json'), 'utf8')))
+        .toMatchObject({version: '1.2.1', packages: {'': {version: '1.2.1'}}});
+      expect(fs.readFileSync(path.join(cli, 'CHANGELOG.md'), 'utf8'))
+        .toContain('## [1.2.1]\n\n### Fixed\n\n- Restore verified v1.1.9 source');
+    } finally {
+      fs.rmSync(root, {recursive: true, force: true});
+    }
+  });
+
   it('appends, replays, retries idempotently, and models rollback without backward mutation', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'guardscan-ledger-'));
     const ledger = path.join(root, 'v1.2.0-rc.1.jsonl');
@@ -193,9 +270,22 @@ describe('append-only release train', () => {
         payload: {},
       }));
       appendEvent(ledger, eventInput('rollback_started', 3, {
-        payload: {knownGoodVersion: null, forwardFixVersion: '1.2.1'},
+        payload: {
+          knownGoodVersion: '1.1.9',
+          knownGoodCommit: 'b'.repeat(40),
+          forwardFixVersion: '1.2.1',
+          forwardFixBranch: 'release/forward-fix-v1.2.1-from-v1.1.9',
+        },
       }));
-      appendEvent(ledger, eventInput('superseded', 4, {
+      appendEvent(ledger, eventInput('action_required', 4, {
+        channel: 'npm',
+        payload: {
+          action: 'deprecate-and-forward-fix',
+          authority: 'npm-maintainer',
+          reason: 'GitHub OIDC trusted publishing cannot deprecate an existing npm version',
+        },
+      }));
+      appendEvent(ledger, eventInput('superseded', 5, {
         channel: 'npm',
         payload: published.payload,
       }));
@@ -203,7 +293,14 @@ describe('append-only release train', () => {
       const state = materializeReleaseState(readEvents(ledger));
       expect(state).toMatchObject({
         schemaVersion: 'guardscan.release-state.v2',
-        lastSequence: 5,
+        lastSequence: 6,
+        actionRequired: [{
+          channel: 'npm',
+          action: 'deprecate-and-forward-fix',
+          authority: 'npm-maintainer',
+          reason: 'GitHub OIDC trusted publishing cannot deprecate an existing npm version',
+          requestedAt: '2026-07-20T00:04:00.000Z',
+        }],
         channels: {
           npm: {
             status: 'superseded',
@@ -219,9 +316,37 @@ describe('append-only release train', () => {
           {channel: 'winget', currentStatus: 'planned', action: 'submit', required: true},
         ]),
       });
-      expect(planRollback(state)).toMatchObject({
+      const rollbackInput = {
+        ...state,
+        channels: {
+          ...state.channels,
+          npm: {...state.channels.npm, status: 'verified'},
+        },
+      };
+      expect(planRollback(rollbackInput, '1.1.9', 'b'.repeat(40))).toMatchObject({
+        schemaVersion: 'guardscan.rollback-plan.v1',
+        knownGood: {
+          version: '1.1.9',
+          tag: 'v1.1.9',
+          commit: 'b'.repeat(40),
+        },
         forwardFixVersion: '1.2.1',
+        forwardFixBranch: 'release/forward-fix-v1.2.1-from-v1.1.9',
+        repositoryActions: expect.arrayContaining([
+          expect.objectContaining({id: 'deactivate-train'}),
+          expect.objectContaining({id: 'forward-fix-pr'}),
+          expect.objectContaining({id: 'shared-catalog-rollback'}),
+        ]),
+        actions: expect.arrayContaining([
+          expect.objectContaining({
+            channel: 'npm',
+            automation: 'external-action-required',
+            authority: 'npm-maintainer',
+          }),
+        ]),
       });
+      expect(() => planRollback(rollbackInput)).toThrow(/verified known-good version is required/);
+      expect(() => planRollback(rollbackInput, '1.1.9')).toThrow(/known-good commit is required/);
     } finally {
       fs.rmSync(root, {recursive: true, force: true});
     }
@@ -234,6 +359,22 @@ describe('append-only release train', () => {
       appendEvent(ledger, eventInput('train_started', 0));
       fs.appendFileSync(ledger, '{"partial":');
       expect(() => readEvents(ledger)).toThrow(/partial final record/);
+    } finally {
+      fs.rmSync(root, {recursive: true, force: true});
+    }
+  });
+
+  it('rejects malformed external recovery authority events', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'guardscan-ledger-action-'));
+    const ledger = path.join(root, 'ledger.jsonl');
+    try {
+      appendEvent(ledger, eventInput('train_started', 0, {
+        payload: {channels: ['npm']},
+      }));
+      expect(() => appendEvent(ledger, eventInput('action_required', 1, {
+        channel: 'npm',
+        payload: {action: 'deprecate-and-forward-fix'},
+      }))).toThrow(/action_required payload/);
     } finally {
       fs.rmSync(root, {recursive: true, force: true});
     }
@@ -368,6 +509,12 @@ describe('deterministic artifacts and manifest aggregation', () => {
       artifacts,
     });
     expect(manifest.artifacts).toHaveLength(10);
+    expect(manifest.artifacts
+      .filter((artifact: Record<string, any>) => artifact.kind === 'standalone')
+      .every((artifact: Record<string, any>) => (
+        artifact.optionalCapabilities?.schemaVersion
+          === 'guardscan.runtime-capabilities.v1'
+      ))).toBe(true);
     const mismatched = JSON.parse(JSON.stringify(artifacts));
     mismatched[5].embeddedExecutableSha256 = 'f'.repeat(64);
     expect(() => createReleaseManifest(source, {

@@ -1,5 +1,92 @@
 # GuardScan distribution launch checklist
 
+## Active v1.1.0 execution checklist — 2026-08-02
+
+### Phase 1 — release truth and product contracts
+
+- [ ] 1.1 Merge populated `Unreleased` content into one authoritative `1.1.0` changelog section.
+- [ ] 1.1 Add a regression test and validator for split stable release notes.
+- [ ] 1.2 Correct README positional/option syntax for review, docs, test-gen, and refactor.
+- [ ] 1.2 Add a documented-command contract test for all 28 commands.
+- [ ] 1.3 Accept ADR 006 architecture with production signing evidence still gated.
+- [ ] 1.4 Replace placeholder RAG assertions with deterministic indexing/retrieval behavior.
+- [ ] 1.4 Classify each command as offline-proven, external-tool, mocked-provider, or live-rehearsal.
+
+### Phase 2 — workflow correctness
+
+- [ ] 2.1 Reproduce and fix first-active-train canary checkout selection.
+- [ ] 2.2 Reproduce and fix WinGet/Chocolatey pending moderation classification.
+- [ ] 2.3 Persist idempotent WinGet PR and Chocolatey submission identities.
+- [ ] 2.4 Add five-platform native TestPyPI pip/pipx lifecycle jobs.
+- [ ] 2.5 Exercise token-estimation and chart-unavailable SEA fallbacks.
+- [ ] 2.5 Derive standalone capability evidence from observed smoke results.
+- [ ] 2.6 Make candidate preparation validate and ready the exact trusted release PR.
+- [ ] 2.7 Remove phantom Homebrew Core state when optional submission is disabled.
+- [ ] 2.7 Track Core submission, acceptance, and public verification when enabled.
+
+### Checkpoint A — local repository gate
+
+- [ ] Focused regressions pass.
+- [ ] `npm run typecheck` passes.
+- [ ] `npm run build` passes.
+- [ ] `npm run test:release` passes.
+- [ ] Full coverage suite passes.
+- [ ] Lint ratchet and `git diff --check` pass.
+- [ ] Production dependency audit passes.
+- [ ] npm pack and package-manager smokes pass.
+
+### Phase 3 — GitHub bootstrap and controls
+
+- [ ] 3.1 Reauthenticate GitHub CLI as `ntanwir10`.
+- [ ] 3.1 Create inert workflow-bootstrap branch/PR from `origin/main`.
+- [ ] 3.1 Confirm release workflows are registered on `main` with automation off.
+- [ ] 3.2 Install/configure `guardscan-release-bot` on GuardScan and shared catalog.
+- [ ] 3.2 Protect release tags and restrict ledger writes to the release identity.
+- [ ] 3.2 Configure and verify cross-repository catalog notifications.
+- [ ] 3.3 Merge bootstrap truth back into `release/1.1.0` and rerun exact-SHA CI.
+- [ ] 3.3 Mark PR #32 ready and complete real review.
+
+### Phase 4 — provider onboarding
+
+- [ ] 4.1 Configure and rehearse npm trusted publishing; remove `NPM_TOKEN` after success.
+- [ ] 4.1 Configure and rehearse TestPyPI/PyPI pending trusted publishers.
+- [ ] 4.2 Configure Apple Developer ID and notarization credentials.
+- [ ] 4.2 Configure Azure Artifact Signing and GitHub OIDC federation.
+- [ ] 4.3 Complete Microsoft CLA and configure scoped WinGet token.
+- [ ] 4.3 Confirm Chocolatey ownership and configure API key.
+- [ ] 4.4 Configure optional Homebrew Core submission authority, or leave it disabled.
+- [ ] 4.5 Add credential/certificate/App health and expiry monitoring.
+
+### Checkpoint B — provider rehearsal
+
+- [ ] Fork PRs cannot access secrets or mint publication OIDC tokens.
+- [ ] Five native targets are signed and verified on native runners.
+- [ ] Five TestPyPI wheels pass pip and pipx lifecycle tests.
+- [ ] Registry preflights distinguish absent, identical, and conflicting state.
+- [ ] `RELEASE_AUTOMATION_ENABLED` remains false until all required checks pass.
+
+### Phase 5 — RC and stable execution
+
+- [ ] 5.1 Enable automation and dispatch `v1.1.0-rc.1` from `main` against PR #32.
+- [ ] 5.1 Verify npm `next`, GitHub prerelease, PyPI `1.1.0rc1`, and catalog previews.
+- [ ] 5.2 Collect 24 hourly samples for every required channel.
+- [ ] 5.2 Verify unchanged source head, signatures, digests, audit, and incident state.
+- [ ] 5.3 Materialize promotion decision and auto-merge the unchanged stable PR.
+- [ ] 5.3 Publish and verify stable GitHub, npm, PyPI, Homebrew tap, and Scoop.
+- [ ] 5.3 Submit WinGet and Chocolatey stable packages.
+- [ ] 5.4 Poll moderated channels until public and installable.
+- [ ] 5.4 Submit/poll optional Homebrew Core without blocking stable completion.
+- [ ] 5.5 After stable verification, run seven-day Cloudflare 410 retirement and delete it.
+
+### Final acceptance
+
+- [ ] Every required public command reports `1.1.0`.
+- [ ] Offline scan, SPDX, CycloneDX, telemetry-disabled status, install, upgrade, and uninstall pass.
+- [ ] Public provenance, signatures, checksums, SBOMs, manifest, and immutable assets agree.
+- [ ] Required ledger channels are `verified`; moderated/optional states remain truthful.
+- [ ] Rollback and forward-fix paths are rehearsed and append-only.
+- [ ] User-facing docs advertise only channels verified in public registries.
+
 ## Implementation progress — local automation complete, channel acceptance pending
 
 - [x] Implement the exact-source RC and stable train with 30-minute reconciliation and a 24-hour machine promotion policy.

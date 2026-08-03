@@ -44,6 +44,7 @@
         "canary_recorded",
         "promotion_decided",
         "rollback_started",
+        "action_required",
         "withdrawn",
         "superseded",
         "incident_opened",

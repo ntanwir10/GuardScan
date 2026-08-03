@@ -11,6 +11,7 @@ const {inject} = require('postject');
 const {assertRuntimeArtifactClean} = require('./runtime-artifact-policy');
 
 const PROTOTYPE_SCHEMA = 'guardscan.standalone-prototype.v1';
+const RUNTIME_CAPABILITY_SCHEMA = 'guardscan.runtime-capabilities.v1';
 const SEA_FUSE = 'NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2';
 const OPTIONAL_EXTERNALS = Object.freeze(['chartjs-node-canvas', 'tiktoken']);
 const MAX_BUNDLE_BYTES = 256 * 1024 * 1024;
@@ -164,6 +165,26 @@ function assertSuccessfulOutput(result, expected, label) {
   }
 }
 
+function assertReducedCapabilityEvidence(evidence) {
+  const tokenCounting = evidence?.tokenCounting;
+  const chartRendering = evidence?.chartRendering;
+  const valid = evidence?.schemaVersion === RUNTIME_CAPABILITY_SCHEMA
+    && tokenCounting?.dependency === 'tiktoken'
+    && tokenCounting.dependencyAvailable === false
+    && tokenCounting.mode === 'estimated'
+    && Number.isInteger(tokenCounting.sampleTokenCount)
+    && tokenCounting.sampleTokenCount > 0
+    && tokenCounting.safeFallbackObserved === true
+    && chartRendering?.dependency === 'chartjs-node-canvas'
+    && chartRendering.dependencyAvailable === false
+    && chartRendering.mode === 'unavailable'
+    && chartRendering.safeFallbackObserved === true;
+  if (!valid) {
+    throw new Error('standalone reduced-capability contract failed');
+  }
+  return evidence;
+}
+
 function smokeStandalone(executable, version) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'guardscan-standalone-smoke-'));
   const project = path.join(root, 'project');
@@ -216,11 +237,31 @@ function smokeStandalone(executable, version) {
     if (!telemetry.stdout.includes('Consent: disabled')) {
       throw new Error('standalone telemetry opt-out contract failed');
     }
+    const capabilityResult = run(
+      executable,
+      ['--no-telemetry', 'capabilities', '--json'],
+      project,
+      env
+    );
+    let optionalCapabilities;
+    try {
+      optionalCapabilities = assertReducedCapabilityEvidence(
+        JSON.parse(capabilityResult.stdout.trim())
+      );
+    } catch (error) {
+      throw new Error(
+        `standalone capability evidence was invalid: ${error instanceof Error ? error.message : error}`
+      );
+    }
+    const optionalCapabilitiesUnavailableSafely =
+      optionalCapabilities.tokenCounting.safeFallbackObserved === true
+      && optionalCapabilities.chartRendering.safeFallbackObserved === true;
     return {
       valid: true,
       nodeAbsentFromPath: true,
       packageManagersAbsentFromPath: true,
-      optionalCapabilitiesUnavailableSafely: true,
+      optionalCapabilitiesUnavailableSafely,
+      optionalCapabilities,
       spdx: true,
       cyclonedx: true,
     };
@@ -296,8 +337,8 @@ async function buildHostPrototype(source, outputDir) {
       capabilities: {
         coreScan: true,
         sbom: true,
-        chartRendering: false,
-        accurateTokenCounting: false,
+        chartRendering: smoke.optionalCapabilities.chartRendering.dependencyAvailable,
+        accurateTokenCounting: smoke.optionalCapabilities.tokenCounting.mode === 'accurate',
       },
       optionalExternalPackages: externals,
       bundle,
@@ -329,6 +370,7 @@ module.exports = {
   PROTOTYPE_SCHEMA,
   assertEmbeddableNodeRuntime,
   assertExternalAllowlist,
+  assertReducedCapabilityEvidence,
   buildHostPrototype,
   bundleOptions,
   externalPackages,

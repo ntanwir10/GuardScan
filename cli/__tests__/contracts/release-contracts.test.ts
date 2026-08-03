@@ -88,6 +88,22 @@ function makeManifest(): JsonDocument {
         sha256: 'd'.repeat(64),
         source,
         capabilities,
+        optionalCapabilities: {
+          schemaVersion: 'guardscan.runtime-capabilities.v1',
+          tokenCounting: {
+            dependency: 'tiktoken',
+            dependencyAvailable: false,
+            mode: 'estimated',
+            sampleTokenCount: 7,
+            safeFallbackObserved: true,
+          },
+          chartRendering: {
+            dependency: 'chartjs-node-canvas',
+            dependencyAvailable: false,
+            mode: 'unavailable',
+            safeFallbackObserved: true,
+          },
+        },
         platform: { os: 'linux', arch: 'x64', libc: 'glibc' },
         archiveFormat: 'tar.gz',
         entrypoint: 'guardscan',
@@ -336,6 +352,22 @@ describe('release contract schemas', () => {
     };
     unknownSignature.artifacts[1].signatures![0].issuer = 'unexpected';
     expect(validateManifest(unknownSignature)).toBe(false);
+  });
+
+  it('requires observed reduced-capability evidence on standalone artifacts', () => {
+    const missing = clone(makeManifest()) as {
+      artifacts: Array<{optionalCapabilities?: Record<string, unknown>}>;
+    };
+    delete missing.artifacts[1].optionalCapabilities;
+    expect(validateManifest(missing)).toBe(false);
+
+    const inconsistent = clone(makeManifest()) as {
+      artifacts: Array<{
+        optionalCapabilities?: {tokenCounting: {dependencyAvailable: boolean}};
+      }>;
+    };
+    inconsistent.artifacts[1].optionalCapabilities!.tokenCounting.dependencyAvailable = true;
+    expect(validateManifest(inconsistent)).toBe(false);
   });
 
   it('rejects invalid state transitions, channel names, and unknown fields', () => {

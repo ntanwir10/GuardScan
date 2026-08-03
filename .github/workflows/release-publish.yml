@@ -19,6 +19,8 @@ permissions:
 env:
   RELEASE_NODE_VERSION: 22.23.1
   RELEASE_NPM_VERSION: 11.5.2
+  RELEASE_WINGETCREATE_VERSION: 1.12.13.0
+  RELEASE_WINGETCREATE_SHA256: 24042bd37915805615e6cf969ac57c6439124c3fe85823327f5f3fb24bd9ffea
 
 jobs:
   github:
@@ -139,7 +141,7 @@ jobs:
         run: npm run release:npm-preflight -- --artifact-dir ../npm-artifact
 
   pypi-test:
-    name: TestPyPI trusted publication and lifecycle
+    name: TestPyPI trusted publication
     if: vars.RELEASE_AUTOMATION_ENABLED == 'true'
     runs-on: ubuntu-24.04
     needs: [github]
@@ -229,31 +231,86 @@ jobs:
                   raise SystemExit("TestPyPI did not converge to the complete tested wheel set")
               time.sleep(10)
           PY
-      - name: Convert release tag to PEP 440
-        id: version
+
+  pypi-test-lifecycle:
+    name: TestPyPI lifecycle on ${{ matrix.target.id }}
+    if: vars.RELEASE_AUTOMATION_ENABLED == 'true'
+    needs: [pypi-test]
+    runs-on: ${{ matrix.target.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - id: linux-x64-glibc
+            runner: ubuntu-24.04
+          - id: linux-arm64-glibc
+            runner: ubuntu-24.04-arm
+          - id: darwin-arm64
+            runner: macos-15
+          - id: darwin-x64
+            runner: macos-15-intel
+          - id: windows-x64
+            runner: windows-2025
+    steps:
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.13"
+      - name: Test TestPyPI wheel through pip and pipx on ${{ matrix.target.id }}
         shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
         run: |
-          VERSION="${{ inputs.tag }}"
-          VERSION="${VERSION#v}"
-          VERSION="${VERSION/-rc./rc}"
-          echo "value=$VERSION" >> "$GITHUB_OUTPUT"
-      - name: Test TestPyPI wheel through pip and pipx
-        run: |
+          VERSION="${RELEASE_TAG#v}"
+          PYPI_VERSION="${VERSION/-rc./rc}"
+          exercise_guardscan() {
+            executable="$1"
+            label="$2"
+            project="$PWD/testpypi-$label"
+            rm -rf "$project"
+            mkdir -p "$project"
+            printf '{"name":"guardscan-testpypi","version":"1.0.0","private":true}\n' \
+              > "$project/package.json"
+            printf 'module.exports = 42;\n' > "$project/index.js"
+            (
+              cd "$project"
+              test "$("$executable" --version | tr -d '\r')" = "$VERSION"
+              "$executable" --help > help.txt
+              grep -q scan help.txt
+              "$executable" --no-telemetry scan --offline --no-cve --skip-tests --skip-ai \
+                --format json --output scan.json
+              python - <<'PY'
+          import json
+          scan = json.load(open('scan.json', encoding='utf-8'))
+          if (
+              scan.get('schemaVersion') != 'guardscan.scan.v1'
+              or scan.get('run', {}).get('executionMode') != 'static-analysis'
+              or scan.get('run', {}).get('offline') is not True
+          ):
+              raise SystemExit('TestPyPI offline scan contract failed')
+          PY
+            )
+          }
+
           python -m pip install --index-url https://test.pypi.org/simple/ \
-            --no-deps "guardscan-cli==${{ steps.version.outputs.value }}"
-          guardscan --version
+            --no-deps "guardscan-cli==$PYPI_VERSION"
+          exercise_guardscan guardscan pip
           python -m pip uninstall -y guardscan-cli
+
           python -m pip install pipx
           python -m pipx install --index-url https://test.pypi.org/simple/ \
-            --pip-args=--no-deps "guardscan-cli==${{ steps.version.outputs.value }}"
-          "$HOME/.local/bin/guardscan" --version
+            --pip-args=--no-deps "guardscan-cli==$PYPI_VERSION"
+          PIPX_BIN_DIR="$(python -m pipx environment --value PIPX_BIN_DIR)"
+          GUARDSCAN="$PIPX_BIN_DIR/guardscan"
+          if [ -f "$GUARDSCAN.exe" ]; then GUARDSCAN="$GUARDSCAN.exe"; fi
+          exercise_guardscan "$GUARDSCAN" pipx
+          python -m pipx runpip guardscan-cli show guardscan-cli
           python -m pipx uninstall guardscan-cli
 
   pypi:
     name: PyPI trusted publication
     if: vars.RELEASE_AUTOMATION_ENABLED == 'true'
     runs-on: ubuntu-24.04
-    needs: [pypi-test]
+    needs: [pypi-test-lifecycle]
     environment: pypi
     permissions:
       contents: read
@@ -549,6 +606,9 @@ jobs:
       - name: Validate and install WinGet local manifest
         shell: pwsh
         run: |
+          if ($null -eq (Get-Command winget -ErrorAction SilentlyContinue)) {
+            throw 'WinGet is unavailable on the selected Windows runner'
+          }
           $installer = Get-ChildItem adapters\winget -Filter '*.installer.yaml' -Recurse | Select-Object -First 1
           if ($null -eq $installer) { throw 'Rendered WinGet installer manifest is missing' }
           $manifestDirectory = $installer.Directory.FullName
@@ -556,18 +616,174 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'WinGet manifest validation failed' }
           winget install --manifest $manifestDirectory --accept-package-agreements --accept-source-agreements
           if ($LASTEXITCODE -ne 0) { throw 'WinGet local manifest installation failed' }
-          guardscan --version
-          if ($LASTEXITCODE -ne 0) { throw 'WinGet local manifest invocation failed' }
+          $installedVersion = (& guardscan --version | Out-String).Trim()
+          if ($LASTEXITCODE -ne 0 -or $installedVersion -ne '${{ inputs.tag }}'.TrimStart('v')) {
+            throw 'WinGet local manifest invocation or version check failed'
+          }
           winget uninstall --exact --id NaumanTanwir.GuardScan
           if ($LASTEXITCODE -ne 0) { throw 'WinGet local manifest uninstall failed' }
-      - name: Submit WinGet manifests
+      - name: Preflight and submit WinGet manifests with exact evidence
         shell: pwsh
         env:
+          GH_TOKEN: ${{ secrets.WINGET_GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ inputs.tag }}
           WINGET_GITHUB_TOKEN: ${{ secrets.WINGET_GITHUB_TOKEN }}
         run: |
-          dotnet tool install --global wingetcreate
-          if ($LASTEXITCODE -ne 0) { throw 'wingetcreate installation failed' }
-          wingetcreate submit adapters\winget --token $env:WINGET_GITHUB_TOKEN
+          $ErrorActionPreference = 'Stop'
+          $version = $env:RELEASE_TAG.TrimStart('v')
+          $packageIdentity = "NaumanTanwir.GuardScan@$version"
+          $manifestPath = "manifests/n/NaumanTanwir/GuardScan/$version"
+          $installer = Get-ChildItem adapters\winget -Filter '*.installer.yaml' -Recurse | Select-Object -First 1
+          if ($null -eq $installer) { throw 'Rendered WinGet installer manifest is missing' }
+          $manifestDirectory = $installer.Directory.FullName
+          $localFiles = [ordered]@{}
+          Get-ChildItem $manifestDirectory -File -Filter '*.yaml' | Sort-Object Name | ForEach-Object {
+            $localFiles[$_.Name] = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          }
+          if ($localFiles.Count -ne 3) { throw 'WinGet evidence requires exactly three rendered manifests' }
+          $digestInput = ($localFiles.GetEnumerator() | ForEach-Object { "$($_.Key)`0$($_.Value)`n" }) -join ''
+          [IO.File]::WriteAllText('winget-digest-input.txt', $digestInput, [Text.UTF8Encoding]::new($false))
+          $manifestDigest = (Get-FileHash winget-digest-input.txt -Algorithm SHA256).Hash.ToLowerInvariant()
+
+          function Write-WinGetEvidence($state, $remoteIdentity, $pullRequest, $commit, $publicBytesVerified) {
+            [ordered]@{
+              schemaVersion = 'guardscan.moderated-submission.v1'
+              channel = 'winget'
+              version = $version
+              tag = $env:RELEASE_TAG
+              state = $state
+              packageIdentity = $packageIdentity
+              remoteIdentity = $remoteIdentity
+              remoteDigest = $manifestDigest
+              files = $localFiles
+              provider = [ordered]@{
+                repository = 'microsoft/winget-pkgs'
+                path = $manifestPath
+                pullRequest = $pullRequest
+                commit = $commit
+                publicBytesVerified = $publicBytesVerified
+                pendingStateQuery = 'digest-bound open pull request, then protected release ledger'
+              }
+              checkedAt = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.fffZ')
+            } | ConvertTo-Json -Depth 8 | Out-File winget-evidence.json -Encoding utf8
+          }
+
+          function Assert-WinGetRemoteFiles($remoteFiles) {
+            $expectedNames = @($localFiles.Keys | Sort-Object)
+            $actualNames = @($remoteFiles | ForEach-Object { Split-Path $_.filename -Leaf } | Sort-Object)
+            if (Compare-Object $expectedNames $actualNames) {
+              throw 'WinGet public manifest integrity conflict'
+            }
+            foreach ($remoteFile in $remoteFiles) {
+              $name = Split-Path $remoteFile.filename -Leaf
+              $destination = Join-Path $env:RUNNER_TEMP "winget-remote-$name"
+              Invoke-WebRequest $remoteFile.raw_url -OutFile $destination
+              $remoteDigest = (Get-FileHash $destination -Algorithm SHA256).Hash.ToLowerInvariant()
+              if ($remoteDigest -ne $localFiles[$name]) {
+                throw 'WinGet public manifest integrity conflict'
+              }
+            }
+          }
+
+          function Find-WinGetPullRequest($submitter, $title) {
+            $query = "repo:microsoft/winget-pkgs is:pr is:open author:$submitter in:title `"$title`""
+            $search = gh api --method GET search/issues -f q="$query" -f per_page=20
+            if ($LASTEXITCODE -ne 0) { throw 'Unable to query pending WinGet pull requests reliably' }
+            $match = ($search | Out-String | ConvertFrom-Json).items |
+              Where-Object { $_.title -eq $title } |
+              Sort-Object updated_at -Descending |
+              Select-Object -First 1
+            if ($null -eq $match) { return $null }
+            $pull = gh api "repos/microsoft/winget-pkgs/pulls/$($match.number)"
+            if ($LASTEXITCODE -ne 0) { throw 'Unable to read pending WinGet pull request' }
+            return ($pull | Out-String | ConvertFrom-Json)
+          }
+
+          function Assert-WinGetPullRequest($pullRequest) {
+            $pullFiles = gh api "repos/microsoft/winget-pkgs/pulls/$($pullRequest.number)/files?per_page=100"
+            if ($LASTEXITCODE -ne 0) { throw 'Unable to read pending WinGet pull request files' }
+            $remoteFiles = @($pullFiles | Out-String | ConvertFrom-Json |
+              Where-Object { $_.filename -like "$manifestPath/*" })
+            Assert-WinGetRemoteFiles $remoteFiles
+          }
+
+          $publicListing = gh api "repos/microsoft/winget-pkgs/contents/${manifestPath}?ref=master" 2>&1
+          $publicStatus = $LASTEXITCODE
+          if ($publicStatus -eq 0) {
+            $entries = @($publicListing | Out-String | ConvertFrom-Json)
+            $remoteFiles = @($entries | ForEach-Object {
+              [pscustomobject]@{ filename = "$manifestPath/$($_.name)"; raw_url = $_.download_url }
+            })
+            Assert-WinGetRemoteFiles $remoteFiles
+            $catalogCommit = (gh api --method GET repos/microsoft/winget-pkgs/commits -f path="$manifestPath" -f per_page=1 --jq '.[0].sha').Trim()
+            if ($LASTEXITCODE -ne 0 -or $catalogCommit -notmatch '^[a-f0-9]{40}$') {
+              throw 'Unable to resolve exact public WinGet catalog commit'
+            }
+            Write-WinGetEvidence 'public-exact' "github:microsoft/winget-pkgs@$catalogCommit#$manifestPath" $null $catalogCommit $true
+            exit 0
+          }
+          if (($publicListing | Out-String) -notmatch 'HTTP 404') {
+            throw 'Unable to query public WinGet catalog reliably'
+          }
+
+          $submitter = (gh api user --jq .login).Trim()
+          if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($submitter)) {
+            throw 'Unable to resolve WinGet submitting identity'
+          }
+          $pullTitle = "GuardScan $version [$($manifestDigest.Substring(0, 12))]"
+          $pullRequest = Find-WinGetPullRequest $submitter $pullTitle
+          if ($null -ne $pullRequest) {
+            Assert-WinGetPullRequest $pullRequest
+            Write-WinGetEvidence 'pending' "github:microsoft/winget-pkgs/pull/$($pullRequest.number)@$($pullRequest.head.sha)#$manifestPath" $($pullRequest.number) $($pullRequest.head.sha) $false
+            exit 0
+          }
+
+          git fetch origin release-ledger
+          if ($LASTEXITCODE -ne 0) { throw 'Unable to fetch protected release ledger' }
+          $ledgerPath = "events/$($env:RELEASE_TAG).jsonl"
+          $ledgerEntry = git ls-tree --name-only origin/release-ledger -- $ledgerPath
+          if ($LASTEXITCODE -ne 0) { throw 'Unable to inspect protected release ledger' }
+          if (-not [string]::IsNullOrWhiteSpace(($ledgerEntry | Out-String))) {
+            $ledgerLines = git show "origin/release-ledger:$ledgerPath"
+            if ($LASTEXITCODE -ne 0) { throw 'Unable to read protected release ledger' }
+            $existing = $ledgerLines | ForEach-Object { $_ | ConvertFrom-Json } |
+              Where-Object { $_.type -eq 'channel_submitted' -and $_.channel -eq 'winget' } |
+              Select-Object -Last 1
+            if ($null -ne $existing) {
+              if ($existing.payload.remoteDigest -ne $manifestDigest) {
+                throw 'WinGet protected-ledger digest conflicts with rendered manifests'
+              }
+              if ($null -eq $existing.payload.submission) {
+                throw 'WinGet protected-ledger evidence is incomplete'
+              }
+              $existing.payload.submission | ConvertTo-Json -Depth 8 | Out-File winget-evidence.json -Encoding utf8
+              Write-Host 'WinGet pending provider state is not stronger than recorded evidence; the protected release ledger prevents a blind duplicate.'
+              exit 0
+            }
+          }
+
+          $wingetCreateUrl = "https://github.com/microsoft/winget-create/releases/download/v$env:RELEASE_WINGETCREATE_VERSION/wingetcreate.exe"
+          Invoke-WebRequest $wingetCreateUrl -OutFile wingetcreate.exe
+          $wingetCreateDigest = (Get-FileHash wingetcreate.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($wingetCreateDigest -ne $env:RELEASE_WINGETCREATE_SHA256) {
+            throw 'Pinned wingetcreate executable failed SHA-256 verification'
+          }
+          & .\wingetcreate.exe submit --prtitle "$pullTitle" --no-open --token $env:WINGET_GITHUB_TOKEN $manifestDirectory
+          if ($LASTEXITCODE -ne 0) { throw 'WinGet submission failed' }
+          for ($attempt = 0; $attempt -lt 30; $attempt += 1) {
+            $pullRequest = Find-WinGetPullRequest $submitter $pullTitle
+            if ($null -ne $pullRequest) { break }
+            Start-Sleep -Seconds 10
+          }
+          if ($null -eq $pullRequest) { throw 'Submitted WinGet pull request identity did not become queryable' }
+          Assert-WinGetPullRequest $pullRequest
+          Write-WinGetEvidence 'submitted' "github:microsoft/winget-pkgs/pull/$($pullRequest.number)@$($pullRequest.head.sha)#$manifestPath" $($pullRequest.number) $($pullRequest.head.sha) $false
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-winget-evidence-${{ inputs.tag }}
+          path: winget-evidence.json
+          if-no-files-found: error
+          retention-days: 30
 
   chocolatey:
     name: Chocolatey submission
@@ -593,6 +809,9 @@ jobs:
       - name: Pack and test Chocolatey from a local feed
         shell: pwsh
         run: |
+          if ($null -eq (Get-Command choco -ErrorAction SilentlyContinue)) {
+            throw 'Chocolatey is unavailable on the selected Windows runner'
+          }
           New-Item -ItemType Directory -Force local-feed | Out-Null
           Push-Location adapters\chocolatey
           choco pack guardscan.nuspec --output-directory ..\..\local-feed
@@ -600,16 +819,95 @@ jobs:
           Pop-Location
           choco install guardscan --source "$(Resolve-Path local-feed)" --yes
           if ($LASTEXITCODE -ne 0) { throw 'Chocolatey local-feed installation failed' }
-          guardscan --version
-          if ($LASTEXITCODE -ne 0) { throw 'Chocolatey local-feed invocation failed' }
+          $installedVersion = (& guardscan --version | Out-String).Trim()
+          if ($LASTEXITCODE -ne 0 -or $installedVersion -ne '${{ inputs.tag }}'.TrimStart('v')) {
+            throw 'Chocolatey local-feed invocation or version check failed'
+          }
           choco uninstall guardscan --yes
           if ($LASTEXITCODE -ne 0) { throw 'Chocolatey local-feed uninstall failed' }
-      - name: Submit Chocolatey package
+      - name: Preflight and submit Chocolatey package with exact evidence
         shell: pwsh
         env:
           CHOCO_API_KEY: ${{ secrets.CHOCO_API_KEY }}
+          RELEASE_TAG: ${{ inputs.tag }}
         run: |
+          $ErrorActionPreference = 'Stop'
+          $version = $env:RELEASE_TAG.TrimStart('v')
           $package = Get-ChildItem local-feed\*.nupkg | Select-Object -First 1
           if ($null -eq $package) { throw 'Chocolatey package is missing' }
+          $packageDigest = (Get-FileHash $package.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          $packageIdentity = "guardscan@$version"
+          $publicUrl = "https://community.chocolatey.org/api/v2/package/guardscan/$version"
+
+          function Write-ChocolateyEvidence($state, $remoteIdentity, $publicBytesVerified) {
+            [ordered]@{
+              schemaVersion = 'guardscan.moderated-submission.v1'
+              channel = 'chocolatey'
+              version = $version
+              tag = $env:RELEASE_TAG
+              state = $state
+              packageIdentity = $packageIdentity
+              packageFilename = $package.Name
+              remoteIdentity = $remoteIdentity
+              remoteDigest = $packageDigest
+              provider = [ordered]@{
+                url = $publicUrl
+                publicBytesVerified = $publicBytesVerified
+                pendingStateQuery = 'public package bytes only; protected release ledger prevents a blind duplicate after recorded submission'
+              }
+              checkedAt = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.fffZ')
+            } | ConvertTo-Json -Depth 8 | Out-File chocolatey-evidence.json -Encoding utf8
+          }
+
+          $public = $false
+          try {
+            Invoke-WebRequest $publicUrl -OutFile public-guardscan.nupkg
+            $public = $true
+          } catch {
+            $statusCode = if ($null -ne $_.Exception.Response) {
+              [int]$_.Exception.Response.StatusCode
+            } else { 0 }
+            if ($statusCode -ne 404) { throw 'Unable to query public Chocolatey package reliably' }
+          }
+          if ($public) {
+            $publicDigest = (Get-FileHash public-guardscan.nupkg -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($publicDigest -ne $packageDigest) {
+              throw 'Chocolatey public package integrity conflict'
+            }
+            Write-ChocolateyEvidence 'public-exact' $publicUrl $true
+            exit 0
+          }
+
+          git fetch origin release-ledger
+          if ($LASTEXITCODE -ne 0) { throw 'Unable to fetch protected release ledger' }
+          $ledgerPath = "events/$($env:RELEASE_TAG).jsonl"
+          $ledgerEntry = git ls-tree --name-only origin/release-ledger -- $ledgerPath
+          if ($LASTEXITCODE -ne 0) { throw 'Unable to inspect protected release ledger' }
+          if (-not [string]::IsNullOrWhiteSpace(($ledgerEntry | Out-String))) {
+            $ledgerLines = git show "origin/release-ledger:$ledgerPath"
+            if ($LASTEXITCODE -ne 0) { throw 'Unable to read protected release ledger' }
+            $existing = $ledgerLines | ForEach-Object { $_ | ConvertFrom-Json } |
+              Where-Object { $_.type -eq 'channel_submitted' -and $_.channel -eq 'chocolatey' } |
+              Select-Object -Last 1
+            if ($null -ne $existing) {
+              if ($existing.payload.remoteDigest -ne $packageDigest) {
+                throw 'Chocolatey protected-ledger digest conflicts with rendered package'
+              }
+              if ($null -eq $existing.payload.submission) {
+                throw 'Chocolatey protected-ledger evidence is incomplete'
+              }
+              $existing.payload.submission | ConvertTo-Json -Depth 8 | Out-File chocolatey-evidence.json -Encoding utf8
+              Write-Host 'Chocolatey pending moderation cannot be queried reliably; the protected release ledger prevents a blind duplicate.'
+              exit 0
+            }
+          }
+
           choco push $package.FullName --source https://push.chocolatey.org/ --api-key $env:CHOCO_API_KEY
           if ($LASTEXITCODE -ne 0) { throw 'Chocolatey submission failed' }
+          Write-ChocolateyEvidence 'submitted' "chocolatey:$packageIdentity" $false
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-chocolatey-evidence-${{ inputs.tag }}
+          path: chocolatey-evidence.json
+          if-no-files-found: error
+          retention-days: 30

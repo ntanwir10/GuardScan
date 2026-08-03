@@ -136,6 +136,8 @@ function printHelp() {
     '  --manifest-sha256 SHA    Exact release-manifest.json SHA-256',
     '  --generator-repository R Repository containing the catalog renderer',
     '  --generator-commit SHA   Exact renderer source commit',
+    '  --known-good VERSION      Verified stable rollback source version',
+    '  --known-good-commit SHA   Exact verified rollback source commit',
     '',
   ].join('\n'));
 }
@@ -494,14 +496,53 @@ async function main(argv) {
   }
 
   if (command === 'rollback') {
-    requireOptions('rollback', options, ['ledger', 'timestamp', 'idempotencyKey']);
+    requireOptions('rollback', options, [
+      'ledger',
+      'timestamp',
+      'idempotencyKey',
+      'knownGood',
+      'knownGoodCommit',
+    ]);
     const materialized = materializeReleaseState(readEvents(options.ledger));
-    const plan = planRollback(materialized, options.knownGood);
-    const result = appendEvent(options.ledger, eventIdentity(source, options, 'rollback_started', {
-      knownGoodVersion: options.knownGood || null,
+    const plan = planRollback(materialized, options.knownGood, options.knownGoodCommit);
+    const results = [];
+    results.push(appendEvent(options.ledger, eventIdentity(source, options, 'rollback_started', {
+      knownGoodVersion: options.knownGood,
+      knownGoodCommit: options.knownGoodCommit,
       forwardFixVersion: plan.forwardFixVersion,
-    }));
-    process.stdout.write(`${JSON.stringify({changed: result.changed, plan}, null, 2)}\n`);
+      forwardFixBranch: plan.forwardFixBranch,
+    })));
+    const authorityReasons = {
+      npm: 'GitHub OIDC trusted publishing cannot deprecate an existing npm version',
+      pypi: 'PyPI trusted publishing cannot yank an existing release',
+      'homebrew-core': 'Homebrew Core changes require an upstream maintainer-reviewed pull request',
+      winget: 'WinGet correction requires upstream submission and moderation authority',
+      chocolatey: 'Chocolatey unlisting or superseding requires publisher moderation authority',
+    };
+    for (const action of plan.actions.filter(item => item.automation === 'external-action-required')) {
+      const eventOptions = {
+        ...options,
+        idempotencyKey: `${options.idempotencyKey}:action-required:${action.channel}`,
+      };
+      results.push(appendEvent(options.ledger, eventIdentity(
+        source,
+        eventOptions,
+        'action_required',
+        {
+          action: action.action,
+          authority: action.authority,
+          reason: authorityReasons[action.channel],
+        },
+        action.channel
+      )));
+    }
+    process.stdout.write(`${JSON.stringify({
+      ...plan,
+      ledger: {
+        changed: results.some(result => result.changed),
+        eventHashes: results.map(result => result.event.eventHash),
+      },
+    }, null, 2)}\n`);
     return;
   }
 

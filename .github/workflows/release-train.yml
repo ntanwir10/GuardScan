@@ -183,12 +183,41 @@ jobs:
             );
           }
           NODE
-          HEAD_SHA="$(gh pr view "${{ inputs.release_pr }}" \
-            --repo "${GITHUB_REPOSITORY}" \
-            --json headRefOid \
-            --jq .headRefOid)"
-          test "${#HEAD_SHA}" = 40
+          gh api "repos/${GITHUB_REPOSITORY}/pulls/${{ inputs.release_pr }}" > release-pr.json
+          HEAD_SHA="$(node - <<'NODE'
+          const pr = require('./release-pr.json');
+          if (pr.state !== 'open') {
+            throw new Error('release PR must be OPEN');
+          }
+          if (pr.base?.ref !== 'main') {
+            throw new Error('release PR must target main');
+          }
+          if (
+            pr.head?.repo?.full_name?.toLowerCase()
+            !== process.env.GITHUB_REPOSITORY.toLowerCase()
+          ) {
+            throw new Error('release PR must originate from this repository, not a fork');
+          }
+          if (!/^[a-f0-9]{40}$/.test(pr.head?.sha || '')) {
+            throw new Error('release PR has no valid head commit');
+          }
+          process.stdout.write(pr.head.sha);
+          NODE
+          )"
           echo "head_sha=$HEAD_SHA" >> "$GITHUB_OUTPUT"
+          echo "is_draft=$(node -p 'String(require("./release-pr.json").draft)')" >> "$GITHUB_OUTPUT"
+      - name: Mark validated release PR ready and recheck candidate source
+        if: inputs.action == 'candidate'
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          EXPECTED_HEAD: ${{ steps.source.outputs.head_sha }}
+        run: |
+          if [ "${{ steps.source.outputs.is_draft }}" = true ]; then
+            gh pr ready "${{ inputs.release_pr }}" --repo "${GITHUB_REPOSITORY}"
+          fi
+          CURRENT_HEAD="$(gh pr view "${{ inputs.release_pr }}" \
+            --repo "${GITHUB_REPOSITORY}" --json headRefOid --jq .headRefOid)"
+          test "$CURRENT_HEAD" = "$EXPECTED_HEAD"
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ steps.source.outputs.head_sha }}
@@ -401,6 +430,16 @@ jobs:
         with:
           name: release-catalog-${{ needs.prepare.outputs.tag }}
           path: catalog-evidence
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        if: needs.prepare.outputs.channel == 'stable'
+        with:
+          name: release-winget-evidence-${{ needs.prepare.outputs.tag }}
+          path: moderated-evidence/winget
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        if: needs.prepare.outputs.channel == 'stable'
+        with:
+          name: release-chocolatey-evidence-${{ needs.prepare.outputs.tag }}
+          path: moderated-evidence/chocolatey
       - name: Fetch ledger, append chained events, and push
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
@@ -417,6 +456,7 @@ jobs:
           const fs = require('fs');
           const cp = require('child_process');
           const {appendEvent, readEvents} = require('./cli/scripts/release/events');
+          const {releaseTrainChannels} = require('./cli/scripts/release/lib');
           const tag = process.env.RELEASE_TAG;
           const version = tag.slice(1);
           const commit = cp.execFileSync('git', ['rev-parse', 'HEAD'], {encoding: 'utf8'}).trim();
@@ -436,12 +476,7 @@ jobs:
           const base = {version, tag, commit};
           if (readEvents(ledger).length === 0) {
             const idempotencyKey = `train:${tag}`;
-            const channels = [
-              'npm', 'pnpm', 'yarn', 'bun', 'github', 'homebrew', 'scoop', 'pypi',
-              ...(process.env.RELEASE_CHANNEL === 'stable'
-                ? ['homebrew-core', 'winget', 'chocolatey']
-                : []),
-            ];
+            const channels = releaseTrainChannels(process.env.RELEASE_CHANNEL);
             appendEvent(ledger, {
               ...base, timestamp: timestampFor(idempotencyKey), type: 'train_started',
               idempotencyKey,
@@ -469,6 +504,67 @@ jobs:
             scoop: manifestDocument.artifacts.filter(artifact =>
               artifact.kind === 'standalone' && artifact.platform.os === 'windows'
             ).map(artifact => artifact.id),
+          };
+          const readModeratedEvidence = channel => {
+            const file = `moderated-evidence/${channel}/${channel}-evidence.json`;
+            const evidence = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, ''));
+            if (evidence.schemaVersion !== 'guardscan.moderated-submission.v1'
+                || evidence.channel !== channel
+                || evidence.version !== version
+                || evidence.tag !== tag
+                || typeof evidence.packageIdentity !== 'string'
+                || evidence.packageIdentity.length === 0
+                || typeof evidence.remoteIdentity !== 'string'
+                || evidence.remoteIdentity.length === 0
+                || !/^[a-f0-9]{64}$/.test(evidence.remoteDigest || '')
+                || !['submitted', 'pending', 'pending-ledger', 'public-exact'].includes(evidence.state)
+                || typeof evidence.provider?.pendingStateQuery !== 'string') {
+              throw new Error(`${channel} submission evidence is invalid or belongs to another release`);
+            }
+            if (channel === 'winget') {
+              const expectedNames = [
+                'NaumanTanwir.GuardScan.installer.yaml',
+                'NaumanTanwir.GuardScan.locale.en-US.yaml',
+                'NaumanTanwir.GuardScan.yaml',
+              ];
+              const names = Object.keys(evidence.files || {}).sort();
+              if (JSON.stringify(names) !== JSON.stringify(expectedNames)
+                  || names.some(name => !/^[a-f0-9]{64}$/.test(evidence.files[name]))) {
+                throw new Error('WinGet submission evidence has an invalid rendered manifest set');
+              }
+              const digestInput = names.map(name => `${name}\0${evidence.files[name]}\n`).join('');
+              const aggregate = crypto.createHash('sha256').update(digestInput).digest('hex');
+              const expectedRemoteIdentity = evidence.state === 'public-exact'
+                ? `github:microsoft/winget-pkgs@${evidence.provider.commit}#${evidence.provider.path}`
+                : `github:microsoft/winget-pkgs/pull/${evidence.provider.pullRequest}@${evidence.provider.commit}#${evidence.provider.path}`;
+              if (aggregate !== evidence.remoteDigest
+                  || evidence.packageIdentity !== `NaumanTanwir.GuardScan@${version}`
+                  || evidence.provider.repository !== 'microsoft/winget-pkgs'
+                  || evidence.provider.path !== `manifests/n/NaumanTanwir/GuardScan/${version}`
+                  || !/^[a-f0-9]{40}$/.test(evidence.provider.commit || '')
+                  || evidence.remoteIdentity !== expectedRemoteIdentity
+                  || evidence.provider.publicBytesVerified !== (evidence.state === 'public-exact')
+                  || (evidence.state !== 'public-exact'
+                    && (!Number.isInteger(evidence.provider.pullRequest)
+                      || evidence.provider.pullRequest <= 0))) {
+                throw new Error('WinGet submission evidence does not match the rendered release identity');
+              }
+            } else {
+              const expectedRemoteIdentity = evidence.state === 'public-exact'
+                ? evidence.provider.url
+                : `chocolatey:${evidence.packageIdentity}`;
+              if (evidence.packageIdentity !== `guardscan@${version}`
+                  || evidence.packageFilename !== `guardscan.${version}.nupkg`
+                  || evidence.provider.url !== `https://community.chocolatey.org/api/v2/package/guardscan/${version}`
+                  || evidence.remoteIdentity !== expectedRemoteIdentity
+                  || evidence.provider.publicBytesVerified !== (evidence.state === 'public-exact')) {
+                throw new Error('Chocolatey submission evidence does not match the rendered package identity');
+              }
+            }
+            const normalized = {...evidence};
+            delete normalized.checkedAt;
+            normalized.state = evidence.state === 'public-exact' ? 'public-exact' : 'pending';
+            return normalized;
           };
           for (const channel of ['github', 'npm', 'pypi']) {
             const idempotencyKey = `published:${channel}:${tag}`;
@@ -514,14 +610,20 @@ jobs:
           }
           if (process.env.RELEASE_CHANNEL === 'stable') {
             for (const channel of ['winget', 'chocolatey']) {
-              const idempotencyKey = `submitted:${channel}:${tag}`;
+              const evidence = readModeratedEvidence(channel);
+              const identityKey = crypto.createHash('sha256')
+                .update(evidence.remoteIdentity)
+                .digest('hex')
+                .slice(0, 16);
+              const idempotencyKey = `submitted:${channel}:${tag}:${evidence.remoteDigest}:${identityKey}`;
               appendEvent(ledger, {
                 ...base, timestamp: timestampFor(idempotencyKey), type: 'channel_submitted', channel,
                 idempotencyKey,
                 payload: {
                   artifactIds: artifactIds.scoop,
-                  remoteIdentity: `${channel}:${tag}`,
-                  remoteDigest: manifestSha256,
+                  remoteIdentity: evidence.remoteIdentity,
+                  remoteDigest: evidence.remoteDigest,
+                  submission: evidence,
                 },
               });
             }

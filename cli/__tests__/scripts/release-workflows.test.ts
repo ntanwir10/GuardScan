@@ -117,7 +117,8 @@ describe('zero-touch release workflow contracts', () => {
     expect(train).toContain('channel-preview/v$RELEASE_VERSION');
     expect(train).toContain("type: 'channel_published'");
     expect(train).toContain("type: 'channel_submitted'");
-    expect(train).toContain("['homebrew-core', 'winget', 'chocolatey']");
+    expect(train).toContain("releaseTrainChannels(process.env.RELEASE_CHANNEL)");
+    expect(train).not.toContain("? ['homebrew-core', 'winget', 'chocolatey']");
     expect(train).toContain('cannot start or promote while a stable train remains incomplete');
     expect(canary).toContain("train.channel !== 'stable'");
     expect(canary).toContain('reconcileRelease(materializeReleaseState(readEvents(ledger))).complete');
@@ -128,6 +129,101 @@ describe('zero-touch release workflow contracts', () => {
     expect(train).toMatch(
       /publish:\n[\s\S]*?permissions:\n\s+actions: read\n\s+contents: write\n\s+id-token: write/
     );
+  });
+
+  it('fails closed and persists an idempotent repository-side rollback recovery', () => {
+    const train = workflowSource('release-train.yml');
+    expect(train).toContain('repositories: GuardScan,homebrew-tap');
+    expect(train).toContain("schemaVersion: 'guardscan.rollback-plan.v1'");
+    expect(train).toContain('verified known-good release is required');
+    expect(train).toContain('known-good release ledger is incomplete');
+    expect(train).toContain('known-good manifest digest does not match its protected ledger');
+    expect(train).toContain('release/forward-fix-v${FORWARD_FIX_VERSION}-from-v${KNOWN_GOOD_VERSION}');
+    expect(train).toContain('Rollback GuardScan v${{ inputs.version }} catalog to v${{ inputs.known_good }}');
+    expect(train).toContain('gh pr create "${FORWARD_FIX_PR_ARGS[@]}"');
+    expect(train).toContain('gh pr merge --repo ntanwir10/homebrew-tap');
+    expect(train).toContain("event.type === 'action_required'");
+    expect(train).toContain('active.trains = active.trains.filter');
+    expect(train).toContain('rollback-plan-v${{ inputs.version }}');
+    expect(train).toContain('rollback-plan.json');
+    expect(train).toContain('rollback-evidence.json');
+    expect(train).not.toContain('NPM_TOKEN');
+    expect(train).not.toContain('PYPI_TOKEN');
+  });
+
+  it('uses default-branch canary tooling while every matrix entry verifies its own version', () => {
+    const canary = workflowSource('release-canary.yml');
+    expect(canary).not.toContain('implementation_ref');
+    expect(canary).not.toContain('trains[0]');
+    expect(canary).toContain('ref: ${{ github.event.repository.default_branch }}');
+    expect(canary).toContain('VERSION: ${{ matrix.train.version }}');
+    expect(canary).toContain('version = \'${{ matrix.train.version }}\'');
+    expect(canary).toContain('assert_version guardscan --version');
+    expect(canary).toContain('test "$ACTUAL_VERSION" = "$VERSION"');
+    expect(canary).toContain('test "$(guardscan --version | tr -d \'\\r\')" = "$VERSION"');
+    expect(canary).toContain('test "$("$PIPX_GUARDSCAN" --version | tr -d \'\\r\')" = "$VERSION"');
+    expect(canary).toContain('$installedVersion -ne $env:VERSION');
+    expect(canary).toContain('const expectedTargetCounts = {');
+    expect(canary).toContain('resolved.length === expectedCount');
+    expect(canary).toContain("type: 'channel_failed'");
+    expect(canary).toContain("error: 'one or more current public canary targets failed'");
+    expect(canary).toContain('const versionAggregateTimestamp = versionReports');
+    expect(canary).not.toContain('{remoteIdentity: `${channel}:${version}`}');
+    expect(canary).toContain("if: inputs.version == '' || vars.RELEASE_AUTOMATION_ENABLED == 'true'");
+    expect(canary).toMatch(
+      /record:\n[\s\S]*?if: >-\n\s+always\(\)\n\s+&& vars\.RELEASE_AUTOMATION_ENABLED == 'true'/
+    );
+  });
+
+  it('keeps undiscovered moderated packages pending and fails discovered lifecycle errors', () => {
+    const canary = workflowSource('release-canary.yml');
+    expect(canary).toContain('$discovered = $false');
+    expect(canary).toContain('$discovered = $true');
+    expect(canary).toContain("if ($discovered) { $report.status = 'failed' }");
+    expect(canary).not.toContain("throw 'WinGet package is not public yet'");
+    expect(canary).not.toContain("throw 'Chocolatey package is not public yet'");
+    expect(canary).not.toContain("-notmatch 'not found|No package found|Unable to find'");
+  });
+
+  it('tests every TestPyPI wheel natively before production PyPI publication', () => {
+    const source = workflowSource('release-publish.yml');
+    const workflow = yaml.load(source) as {
+      jobs: Record<string, {
+        needs?: string[];
+        'runs-on'?: string;
+        strategy?: {matrix?: {target?: Array<{id: string; runner: string}>}};
+      }>;
+    };
+    const lifecycle = workflow.jobs['pypi-test-lifecycle'];
+    expect(lifecycle.needs).toEqual(['pypi-test']);
+    expect(lifecycle['runs-on']).toBe('${{ matrix.target.runner }}');
+    expect(lifecycle.strategy?.matrix?.target).toEqual([
+      {id: 'linux-x64-glibc', runner: 'ubuntu-24.04'},
+      {id: 'linux-arm64-glibc', runner: 'ubuntu-24.04-arm'},
+      {id: 'darwin-arm64', runner: 'macos-15'},
+      {id: 'darwin-x64', runner: 'macos-15-intel'},
+      {id: 'windows-x64', runner: 'windows-2025'},
+    ]);
+    expect(workflow.jobs.pypi.needs).toEqual(['pypi-test-lifecycle']);
+    expect(source).toContain('Test TestPyPI wheel through pip and pipx on ${{ matrix.target.id }}');
+    expect(source).toContain('python -m pipx environment --value PIPX_BIN_DIR');
+    expect(source).toContain('exercise_guardscan guardscan pip');
+    expect(source).toContain('exercise_guardscan "$GUARDSCAN" pipx');
+    expect(source).toContain('"$executable" --help');
+    expect(source).toContain('--no-telemetry scan --offline --no-cve --skip-tests --skip-ai');
+    expect(source).toContain("scan.get('schemaVersion') != 'guardscan.scan.v1'");
+  });
+
+  it('validates and readies the exact same-repository main release PR before candidate tagging', () => {
+    const train = workflowSource('release-train.yml');
+    expect(train).toContain("pr.state !== 'open'");
+    expect(train).toContain("pr.base?.ref !== 'main'");
+    expect(train).toContain('pr.head?.repo?.full_name?.toLowerCase()');
+    expect(train).toContain('process.env.GITHUB_REPOSITORY.toLowerCase()');
+    expect(train).toContain('gh pr ready "${{ inputs.release_pr }}"');
+    expect(train.indexOf('gh pr ready "${{ inputs.release_pr }}"'))
+      .toBeLessThan(train.indexOf('Derive bot-owned RC commit from exact stable PR head'));
+    expect(train).toContain('--match-head-commit "${{ steps.source.outputs.head_sha }}"');
   });
 
   it('builds signed artifacts and publishes through isolated provider environments', () => {
@@ -149,9 +245,15 @@ describe('zero-touch release workflow contracts', () => {
     expect(build).toContain('cosign sign-blob --yes');
     expect(build).toContain('xcrun notarytool submit');
     expect(build).toContain('xcrun stapler staple');
+    expect(build).toContain('security find-identity -v -p codesigning "$KEYCHAIN" | grep -F "$IDENTITY"');
+    expect(build).toContain("if: always() && matrix.os == 'darwin'");
+    expect(build).toContain('security delete-keychain "$RUNNER_TEMP/guardscan-signing.keychain-db" || true');
+    expect(build).toContain('rm -f "$RUNNER_TEMP/certificate.p12" "$RUNNER_TEMP/AuthKey.p8"');
     expect(build).toContain('Azure/artifact-signing-action@');
     expect(build).toContain('actions/attest-build-provenance@');
     expect(build).toContain('release-manifest.json');
+    expect(build).toContain('npm run test:package');
+    expect(build).toContain('npm run test:package-manager');
     expect(publish).toContain('--provenance');
     expect(publish).toContain('RELEASE_NPM_VERSION: 11.5.2');
     expect(publish).toContain('npm install --global "npm@${RELEASE_NPM_VERSION}"');
@@ -161,10 +263,54 @@ describe('zero-touch release workflow contracts', () => {
     expect(publish).toContain('Verify complete PyPI file set');
     expect(publish).toContain('remote == local');
     expect(publish).not.toContain('try:\n          try:');
-    expect(publish).toContain('wingetcreate submit');
+    expect(publish).toContain('wingetcreate.exe submit');
     expect(publish).toContain('choco push');
     expect(combined).toContain('/.github/workflows/release-train.yml@');
     expect(combined).not.toContain('/.github/workflows/release-build.yml@');
+  });
+
+  it('binds moderated submissions to exact provider evidence and fail-closed preflights', () => {
+    const publish = workflowSource('release-publish.yml');
+    const train = workflowSource('release-train.yml');
+    expect(publish).toContain("schemaVersion = 'guardscan.moderated-submission.v1'");
+    expect(publish).toContain('release-winget-evidence-${{ inputs.tag }}');
+    expect(publish).toContain('release-chocolatey-evidence-${{ inputs.tag }}');
+    expect(publish).toContain('RELEASE_WINGETCREATE_VERSION: 1.12.13.0');
+    expect(publish).toContain(
+      'RELEASE_WINGETCREATE_SHA256: 24042bd37915805615e6cf969ac57c6439124c3fe85823327f5f3fb24bd9ffea'
+    );
+    expect(publish).not.toContain('dotnet tool install --global wingetcreate');
+    expect(publish).toContain('Pinned wingetcreate executable failed SHA-256 verification');
+    expect(publish).toContain('repos/microsoft/winget-pkgs/contents/${manifestPath}');
+    expect(publish).toContain('repos/microsoft/winget-pkgs/pulls/$($pullRequest.number)/files');
+    expect(publish).toContain('https://community.chocolatey.org/api/v2/package/guardscan/$version');
+    expect(publish).toContain("throw 'WinGet public manifest integrity conflict'");
+    expect(publish).toContain("throw 'Chocolatey public package integrity conflict'");
+    expect(publish).toContain('protected release ledger prevents a blind duplicate');
+    expect(publish.match(/throw 'Unable to fetch protected release ledger'/g)).toHaveLength(2);
+    expect(train).toContain('release-winget-evidence-${{ needs.prepare.outputs.tag }}');
+    expect(train).toContain('release-chocolatey-evidence-${{ needs.prepare.outputs.tag }}');
+    expect(train).toContain('readModeratedEvidence');
+    expect(train).toContain("evidence.schemaVersion !== 'guardscan.moderated-submission.v1'");
+    expect(train).toContain('evidence.remoteIdentity');
+    expect(train).toContain('evidence.remoteDigest');
+    expect(train).toContain('expectedRemoteIdentity');
+    expect(train).toContain('submission: evidence');
+    expect(train).toContain('releaseTrainChannels(process.env.RELEASE_CHANNEL)');
+    expect(train).not.toMatch(
+      /for \(const channel of \['winget', 'chocolatey'\]\)[\s\S]*?remoteIdentity: `\$\{channel\}:\$\{tag\}`/
+    );
+  });
+
+  it('requires exact public moderated CLI versions after discovery', () => {
+    const canary = workflowSource('release-canary.yml');
+    const publish = workflowSource('release-publish.yml');
+    expect(canary).toContain('$installedVersion = (& guardscan --version | Out-String).Trim()');
+    expect(canary).toContain('$installedVersion -ne \'${{ matrix.train.version }}\'');
+    expect(publish.match(/\$installedVersion -ne '\$\{\{ inputs\.tag \}\}'\.TrimStart\('v'\)/g))
+      .toHaveLength(2);
+    expect(publish).toContain('WinGet is unavailable on the selected Windows runner');
+    expect(publish).toContain('Chocolatey is unavailable on the selected Windows runner');
   });
 
   it('uses one cryptographically bound shared Homebrew and Scoop catalog', () => {

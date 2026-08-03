@@ -21,6 +21,7 @@ const EVENT_TYPES = Object.freeze([
   'canary_recorded',
   'promotion_decided',
   'rollback_started',
+  'action_required',
   'withdrawn',
   'superseded',
   'incident_opened',
@@ -126,6 +127,21 @@ function validateCatalogEvidence(event) {
   }
 }
 
+function validateActionRequired(event) {
+  if (event.type !== 'action_required') return;
+  if (!event.channel) throw new Error('action_required requires a release channel');
+  const payload = event.payload;
+  const keys = Object.keys(payload).sort();
+  const expectedKeys = ['action', 'authority', 'reason'];
+  if (keys.join('\n') !== expectedKeys.join('\n')
+      || expectedKeys.some(key => typeof payload[key] !== 'string' || payload[key].length < 1)) {
+    throw new Error('action_required payload must contain only action, authority, and reason');
+  }
+  if (payload.action.length > 200 || payload.authority.length > 100 || payload.reason.length > 2000) {
+    throw new Error('action_required payload exceeds its bounded field length');
+  }
+}
+
 function validateEvent(event, previous) {
   if (!event || typeof event !== 'object' || Array.isArray(event)) {
     throw new Error('release event must be an object');
@@ -152,6 +168,7 @@ function validateEvent(event, previous) {
     throw new Error('release event payload must be an object');
   }
   validateCatalogEvidence(event);
+  validateActionRequired(event);
   assertCanonicalTimestamp(event.timestamp, 'release event timestamp');
   if (!/^[a-f0-9]{64}$/.test(event.eventHash || '')
       || event.eventHash !== eventDigest(event)) {
@@ -305,6 +322,7 @@ function materializeReleaseState(events) {
     channels: initialChannels(first),
     canaries: {},
     incidents: {},
+    actionRequired: [],
     promotion: undefined,
   };
   for (const event of events) {
@@ -363,6 +381,15 @@ function materializeReleaseState(events) {
       };
     }
     if (event.type === 'promotion_decided') state.promotion = event.payload;
+    if (event.type === 'action_required') {
+      state.actionRequired.push({
+        channel: event.channel,
+        action: event.payload.action,
+        authority: event.payload.authority,
+        reason: event.payload.reason,
+        requestedAt: event.timestamp,
+      });
+    }
   }
   if (!state.manifestSha256) delete state.manifestSha256;
   if (!state.promotion) delete state.promotion;

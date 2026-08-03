@@ -58,10 +58,25 @@ function nextPatchVersion(version) {
   return `${parsed.major}.${parsed.minor}.${parsed.patch + 1}`;
 }
 
-function planRollback(state, knownGoodVersion) {
-  if (knownGoodVersion && !semver.valid(knownGoodVersion)) {
+function planRollback(state, knownGoodVersion, knownGoodCommit) {
+  if (!knownGoodVersion) throw new Error('a verified known-good version is required');
+  if (!semver.valid(knownGoodVersion) || semver.prerelease(knownGoodVersion) !== null) {
     throw new Error('known-good version is invalid');
   }
+  if (!knownGoodCommit) throw new Error('known-good commit is required');
+  if (!/^[a-f0-9]{40}$/.test(knownGoodCommit)) throw new Error('known-good commit is invalid');
+  if (!semver.lt(knownGoodVersion, state.version)) {
+    throw new Error('known-good version must precede the defective release');
+  }
+  const forwardFixVersion = nextPatchVersion(state.version);
+  const forwardFixBranch = `release/forward-fix-v${forwardFixVersion}-from-v${knownGoodVersion}`;
+  const externalAuthority = {
+    npm: 'npm-maintainer',
+    pypi: 'pypi-maintainer',
+    'homebrew-core': 'homebrew-core-maintainer',
+    winget: 'winget-maintainer',
+    chocolatey: 'chocolatey-maintainer',
+  };
   const actions = [];
   for (const [channel, channelState] of Object.entries(state.channels || {})) {
     if (!['published', 'submitted', 'accepted', 'verified'].includes(channelState.status)) continue;
@@ -75,19 +90,39 @@ function planRollback(state, knownGoodVersion) {
         yarn: 'verify-npm-forward-fix',
         bun: 'verify-npm-forward-fix',
         pypi: 'yank-and-forward-fix',
-        homebrew: knownGoodVersion ? 'redirect-to-known-good' : 'remove-new-listing',
+        homebrew: 'redirect-to-known-good',
         'homebrew-core': 'submit-corrective-formula-or-revision',
-        scoop: knownGoodVersion ? 'redirect-to-known-good' : 'remove-new-listing',
+        scoop: 'redirect-to-known-good',
         winget: 'submit-corrective-manifest',
         chocolatey: 'unlist-or-supersede',
       }[channel],
+      automation: externalAuthority[channel]
+        ? 'external-action-required'
+        : 'repository-automated',
+      ...(externalAuthority[channel] ? {authority: externalAuthority[channel]} : {}),
     };
     actions.push(action);
   }
   return {
+    schemaVersion: 'guardscan.rollback-plan.v1',
     version: state.version,
-    knownGoodVersion: knownGoodVersion || null,
-    forwardFixVersion: nextPatchVersion(state.version),
+    tag: state.tag,
+    commit: state.commit,
+    status: 'planned',
+    knownGood: {
+      version: knownGoodVersion,
+      tag: `v${knownGoodVersion}`,
+      commit: knownGoodCommit,
+    },
+    knownGoodVersion,
+    knownGoodCommit,
+    forwardFixVersion,
+    forwardFixBranch,
+    repositoryActions: [
+      {id: 'deactivate-train', action: 'remove-from-active-versions', status: 'planned'},
+      {id: 'forward-fix-pr', action: 'open-or-update-pull-request', status: 'planned'},
+      {id: 'shared-catalog-rollback', action: 'open-or-update-catalog-pull-request', status: 'planned'},
+    ],
     actions: actions.sort((a, b) => a.channel.localeCompare(b.channel)),
   };
 }

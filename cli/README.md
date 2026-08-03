@@ -185,20 +185,21 @@ OS-backed network sandbox and fails the affected checks if the platform sandbox 
 | `guardscan rules` | Custom YAML-based rule engine       |
 | `guardscan cache` | Inspect or clear local AI caches     |
 | `guardscan telemetry` | Inspect, sync, or clear opt-in telemetry |
+| `guardscan capabilities` | Inspect optional runtime capabilities and safe fallbacks |
 
 ### AI-Powered Commands (BYOK)
 
 | Command                     | Description                          |
 | --------------------------- | ------------------------------------ |
-| `guardscan explain <file>`  | Explain how code works               |
-| `guardscan review <file>`   | Comprehensive AI code review         |
-| `guardscan commit`          | Generate commit messages             |
-| `guardscan docs <file>`     | Auto-generate documentation          |
-| `guardscan test-gen <file>` | Generate unit tests                  |
-| `guardscan refactor <file>` | Get refactoring suggestions          |
-| `guardscan threat-model`    | Security architecture analysis       |
-| `guardscan migrate`         | Framework/language migration help    |
-| `guardscan chat`            | Interactive Q&A about codebase (RAG) |
+| `guardscan explain <file>`          | Explain how code works               |
+| `guardscan review --file <path>`    | Comprehensive AI code review         |
+| `guardscan commit`                  | Generate commit messages             |
+| `guardscan docs --type <type>`      | Auto-generate documentation          |
+| `guardscan test-gen --file <path>`  | Generate unit tests                  |
+| `guardscan refactor --file <path>`  | Get refactoring suggestions          |
+| `guardscan threat-model`            | Security architecture analysis       |
+| `guardscan migrate`                 | Framework/language migration help    |
+| `guardscan chat`                    | Interactive Q&A about codebase (RAG) |
 
 ---
 
@@ -307,7 +308,7 @@ GuardScan follows a **privacy-first, client-side architecture** where all code a
 │  ┌─────────────────────────────────────────────────────┐   │
 │  │         GuardScan CLI (Node.js/TypeScript)          │   │
 │  │                                                      │   │
-│  │  • 28 Commands (security, vuln, run, test...)       │   │
+│  │  • 29 Commands (security, vuln, run, test...)       │   │
 │  │  • 30 Core Modules (scanners, parsers, metrics)     │   │
 │  │  • 9 AI Features (explain, review, test-gen, etc.)  │   │
 │  │  • 7 Language Parsers (Python, Java, Go, Rust...)   │   │
