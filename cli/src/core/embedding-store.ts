@@ -15,6 +15,7 @@ import {
   SearchFilters,
   formatBytes,
   EmbeddingProvider,
+  EMBEDDING_INDEX_VERSION,
 } from './embeddings';
 
 export interface StoreStats {
@@ -66,12 +67,12 @@ export class FileBasedEmbeddingStore implements EmbeddingStore {
     // Load existing index if it exists
     let existingIndex = await this.loadIndex();
 
-    if (!existingIndex) {
+    if (!existingIndex || existingIndex.version !== EMBEDDING_INDEX_VERSION) {
       // Create new index
       const providerName = embeddingProvider?.getName();
       const dimensions = embeddings[0]?.embedding.length || 0;
       existingIndex = {
-        version: '1.0.0',
+        version: EMBEDDING_INDEX_VERSION,
         repoId: this.repoId,
         generatedAt: new Date(),
         totalEmbeddings: 0,
@@ -259,11 +260,11 @@ export class FileBasedEmbeddingStore implements EmbeddingStore {
     const index = await this.loadIndex();
     if (!index) {return;}
 
-    const changedSet = new Set(changedFiles);
+    const changedSet = new Set(changedFiles.map(file => file.replace(/\\/g, '/')));
     const original = index.embeddings.length;
 
     index.embeddings = index.embeddings.filter(
-      emb => !changedSet.has(emb.source)
+      emb => !changedSet.has(emb.source.replace(/\\/g, '/'))
     );
 
     const removed = original - index.embeddings.length;
