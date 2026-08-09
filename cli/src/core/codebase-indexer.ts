@@ -803,6 +803,10 @@ export class CodebaseIndexer {
       // Legacy indexes contain platform-native paths and must be rebuilt.
       if ((data as {version?: unknown}).version !== CODEBASE_INDEX_VERSION) {return null;}
 
+      if ((data as { version?: unknown }).version !== CODEBASE_INDEX_VERSION) {
+        return null;
+      }
+
       // Convert arrays back to Maps
       const index: CodebaseIndex = {
         ...data,
