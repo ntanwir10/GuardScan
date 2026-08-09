@@ -8,6 +8,7 @@ import {
   ParsedClass,
 } from "./ast-parser";
 import { configManager } from "./config";
+import { repositoryRelativePath } from "../utils/path-helper";
 
 /**
  * Symbol information in the codebase
@@ -360,7 +361,7 @@ export class CodebaseIndexer {
     const index = await this.loadIndex();
     if (!index) {return null;}
 
-    const relativePath = path.relative(this.repoRoot, filePath);
+    const relativePath = repositoryRelativePath(this.repoRoot, filePath);
     return index.files.get(relativePath) || null;
   }
 
@@ -390,7 +391,7 @@ export class CodebaseIndexer {
     filePath: string,
     index: CodebaseIndex
   ): Promise<void> {
-    const relativePath = path.relative(this.repoRoot, filePath);
+    const relativePath = repositoryRelativePath(this.repoRoot, filePath);
 
     // Parse file
     const parsed = await this.getParsedFile(filePath);
@@ -488,7 +489,7 @@ export class CodebaseIndexer {
    * Remove file from index
    */
   private removeFileFromIndex(filePath: string, index: CodebaseIndex): void {
-    const relativePath = path.relative(this.repoRoot, filePath);
+    const relativePath = repositoryRelativePath(this.repoRoot, filePath);
     const fileIndex = index.files.get(relativePath);
 
     if (!fileIndex) {return;}
