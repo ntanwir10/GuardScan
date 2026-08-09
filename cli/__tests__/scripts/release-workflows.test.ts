@@ -117,6 +117,10 @@ describe('zero-touch release workflow contracts', () => {
     expect(train).not.toContain('stable-promotion-approval');
     expect(canary).toContain('cron: "7 * * * *"');
     expect(canary).toContain('group: release-ledger');
+    expect(canary).toContain('Install default-branch ledger tooling');
+    expect(canary).toMatch(
+      /record:\n[\s\S]*?actions\/setup-node@[a-f0-9]+[\s\S]*?working-directory: cli\n\s+run: npm ci/
+    );
     expect(train).toContain('samples.length >= 24');
     expect(train).toContain("types: [catalog_updated]");
     expect(train).toContain('hinted-channel-lock.json');
