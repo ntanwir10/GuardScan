@@ -435,6 +435,9 @@ describe('zero-touch release workflow contracts', () => {
     expect(canary).toContain('cron: "7 * * * *"');
     expect(canary).toContain('group: release-ledger');
     expect(train).toContain('const decision = createPromotionDecision(input)');
+    expect(canary).toMatch(
+      /record:\n[\s\S]*?actions\/setup-node@[a-f0-9]+[\s\S]*?working-directory: cli\n\s+run: npm ci/
+    );
     expect(train).toContain("types: [catalog_updated]");
     expect(train).toContain('hinted-channel-lock.json');
     expect(train).toContain('channel-preview/v$RELEASE_VERSION');
