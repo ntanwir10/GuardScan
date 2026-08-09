@@ -1,0 +1,424 @@
+name: Withdraw first stable release
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: Defective first stable version
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-ledger
+  cancel-in-progress: false
+
+env:
+  RELEASE_NODE_VERSION: 22.23.1
+  DEFECTIVE_VERSION: ${{ inputs.version }}
+
+jobs:
+  withdraw:
+    name: Withdraw without inventing a known-good baseline
+    if: vars.RELEASE_AUTOMATION_ENABLED == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Validate untrusted request before minting credentials
+        run: |
+          node - <<'NODE'
+          const stable = /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/;
+          if (!stable.test(process.env.DEFECTIVE_VERSION || '')) {
+            throw new Error('first-release withdrawal version is invalid');
+          }
+          NODE
+      - name: Create short-lived cross-repository release app token
+        id: app
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        with:
+          app-id: ${{ vars.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          owner: ntanwir10
+          repositories: GuardScan,homebrew-tap
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: v${{ inputs.version }}
+          fetch-depth: 0
+          token: ${{ steps.app.outputs.token }}
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.RELEASE_NODE_VERSION }}
+      - working-directory: cli
+        run: npm ci
+      - name: Verify protected first-release authority
+        id: authority
+        run: |
+          git fetch origin release-ledger
+          git worktree add ledger-branch origin/release-ledger
+          LEDGER_COMMIT="$(git -C ledger-branch rev-parse HEAD)"
+          export LEDGER_COMMIT
+          node - <<'NODE'
+          const fs = require('fs');
+          const {assertFirstReleaseWithdrawal} = require('./cli/scripts/release/first-release-withdrawal');
+          const authority = assertFirstReleaseWithdrawal(
+            'ledger-branch',
+            process.env.DEFECTIVE_VERSION,
+            process.env.LEDGER_COMMIT
+          );
+          fs.writeFileSync(
+            'first-release-authority.json',
+            `${JSON.stringify(authority, null, 2)}\n`
+          );
+          fs.appendFileSync(
+            process.env.GITHUB_OUTPUT,
+            `completed=${String(authority.alreadyCompleted)}\n`
+          );
+          NODE
+          DEFECTIVE_TAG="v$DEFECTIVE_VERSION"
+          cp "ledger-branch/events/$DEFECTIVE_TAG.jsonl" release-events.jsonl
+          if [ "$(node -p 'String(require("./first-release-authority.json").alreadyCompleted)')" = true ]; then
+            cp "ledger-branch/recoveries/$DEFECTIVE_TAG-plan.json" rollback-plan.json
+            cp "ledger-branch/recoveries/$DEFECTIVE_TAG-evidence.json" rollback-evidence.json
+          fi
+      - name: Generate and persist the first-release withdrawal start
+        if: steps.authority.outputs.completed != 'true'
+        env:
+          RELEASE_APP_TOKEN: ${{ steps.app.outputs.token }}
+        run: |
+          DEFECTIVE_TAG="v$DEFECTIVE_VERSION"
+          ROLLBACK_KEY="rollback:$DEFECTIVE_VERSION"
+          export ROLLBACK_KEY
+          ROLLBACK_TIMESTAMP="$(node - <<'NODE'
+          const {readEvents} = require('./cli/scripts/release/events');
+          const existing = readEvents('release-events.jsonl')
+            .find(event => event.idempotencyKey === process.env.ROLLBACK_KEY);
+          process.stdout.write(existing?.timestamp || new Date().toISOString());
+          NODE
+          )"
+          node cli/scripts/release/index.js rollback \
+            --ledger release-events.jsonl \
+            --timestamp "$ROLLBACK_TIMESTAMP" \
+            --idempotency-key "$ROLLBACK_KEY" \
+            --tag "$DEFECTIVE_TAG" \
+            --first-release-withdrawal \
+            --first-release-authority first-release-authority.json \
+            > rollback-plan.json
+          node - <<'NODE'
+          const plan = require('./rollback-plan.json');
+          if (plan.schemaVersion !== 'guardscan.rollback-plan.v1'
+              || plan.mode !== 'first-release-withdrawal'
+              || plan.version !== process.env.DEFECTIVE_VERSION
+              || plan.knownGood !== undefined
+              || plan.forwardFixBranch !== undefined) {
+            throw new Error('generated first-release withdrawal plan is invalid');
+          }
+          const {readEvents} = require('./cli/scripts/release/events');
+          const events = readEvents('release-events.jsonl');
+          if (!events.some(event => (
+            event.type === 'incident_opened'
+            && event.payload.kind === 'recovery'
+          ))) {
+            throw new Error('first-release withdrawal must retain an open recovery incident');
+          }
+          for (const action of plan.actions.filter(item => item.automation === 'external-action-required')) {
+            if (!events.some(event => (
+              event.type === 'action_required' && event.channel === action.channel
+            ))) {
+              throw new Error(`withdrawal ledger is missing external authority action for ${action.channel}`);
+            }
+          }
+          NODE
+          mkdir -p ledger-branch/events
+          cp release-events.jsonl "ledger-branch/events/$DEFECTIVE_TAG.jsonl"
+          (
+            cd ledger-branch
+            git config user.name guardscan-release-bot
+            git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+            git add "events/$DEFECTIVE_TAG.jsonl"
+            git commit -m "first release withdrawal started: $DEFECTIVE_TAG" || exit 0
+            git push origin HEAD:release-ledger
+          )
+      - name: Remove or verify the exact first-release catalog projection
+        id: catalog
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          ALREADY_COMPLETED: ${{ steps.authority.outputs.completed }}
+        run: |
+          CATALOG_BRANCH="rollback/v$DEFECTIVE_VERSION-remove-first-release"
+          PUBLISH_BRANCH="guardscan/v$DEFECTIVE_VERSION"
+          gh repo clone ntanwir10/homebrew-tap catalog-withdrawal
+          git -C catalog-withdrawal fetch origin main
+          CATALOG_BASE="$(git -C catalog-withdrawal rev-parse origin/main)"
+          PUBLISH_PRS="$(gh pr list --repo ntanwir10/homebrew-tap \
+            --head "$PUBLISH_BRANCH" --base main --state open --limit 20 \
+            --json number,headRefName,baseRefName,headRepository)"
+          export PUBLISH_PRS PUBLISH_BRANCH
+          node - <<'NODE'
+          const prs = JSON.parse(process.env.PUBLISH_PRS || '[]');
+          if (prs.length > 1 || prs.some(pr => (
+            pr.headRefName !== process.env.PUBLISH_BRANCH
+            || pr.baseRefName !== 'main'
+            || pr.headRepository?.nameWithOwner?.toLowerCase() !== 'ntanwir10/homebrew-tap'
+          ))) {
+            throw new Error('catalog publication pull request identity is ambiguous');
+          }
+          NODE
+          PUBLISH_PR="$(node -p 'String(JSON.parse(process.env.PUBLISH_PRS || "[]")[0]?.number || "")')"
+          if [ -n "$PUBLISH_PR" ]; then
+            gh pr close --repo ntanwir10/homebrew-tap "$PUBLISH_PR" \
+              --comment "Closed by the protected first-release withdrawal for v$DEFECTIVE_VERSION."
+          fi
+          test "$(gh pr list --repo ntanwir10/homebrew-tap \
+            --head "$PUBLISH_BRANCH" --base main --state open --limit 1 \
+            --json number --jq length)" = 0
+          if [ "$ALREADY_COMPLETED" = true ]; then
+            for CATALOG_PATH in Formula/guardscan.rb bucket/guardscan.json channel-lock.json; do
+              if git -C catalog-withdrawal cat-file -e "$CATALOG_BASE:$CATALOG_PATH" 2>/dev/null; then
+                echo "completed withdrawal was republished at $CATALOG_PATH" >&2
+                exit 1
+              fi
+            done
+            CATALOG_STATE="$(node -p 'require("./rollback-evidence.json").catalog.state')"
+            CATALOG_BRANCH="$(node -p 'require("./rollback-evidence.json").catalog.branch')"
+            CATALOG_PR="$(node -p 'String(require("./rollback-evidence.json").catalog.pullRequest)')"
+            CATALOG_MERGE_SHA="$(node -p 'require("./rollback-evidence.json").catalog.commit')"
+            git -C catalog-withdrawal fetch origin "$CATALOG_MERGE_SHA"
+            for CATALOG_PATH in Formula/guardscan.rb bucket/guardscan.json channel-lock.json; do
+              if git -C catalog-withdrawal cat-file -e "$CATALOG_MERGE_SHA:$CATALOG_PATH" 2>/dev/null; then
+                echo "stored withdrawal evidence contains $CATALOG_PATH" >&2
+                exit 1
+              fi
+            done
+            echo "state=$CATALOG_STATE" >> "$GITHUB_OUTPUT"
+            echo "branch=$CATALOG_BRANCH" >> "$GITHUB_OUTPUT"
+            echo "pull_request=$CATALOG_PR" >> "$GITHUB_OUTPUT"
+            echo "commit=$CATALOG_MERGE_SHA" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          CATALOG_REMOTE_HEAD=""
+          if git -C catalog-withdrawal fetch origin \
+            "refs/heads/$CATALOG_BRANCH:refs/remotes/origin/$CATALOG_BRANCH"; then
+            CATALOG_REMOTE_HEAD="$(git -C catalog-withdrawal rev-parse "refs/remotes/origin/$CATALOG_BRANCH")"
+          fi
+          git -C catalog-withdrawal switch -c "$CATALOG_BRANCH" "$CATALOG_BASE"
+          export DEFECTIVE_VERSION
+          node - <<'NODE'
+          const fs = require('fs');
+          const {prepareFirstReleaseCatalogWithdrawal} = require('./cli/scripts/release/first-release-withdrawal');
+          const result = prepareFirstReleaseCatalogWithdrawal(
+            'catalog-withdrawal',
+            process.env.DEFECTIVE_VERSION,
+            require('./first-release-authority.json').defectiveCommit
+          );
+          fs.writeFileSync('catalog-withdrawal.json', `${JSON.stringify(result, null, 2)}\n`);
+          NODE
+          git -C catalog-withdrawal add -A -- \
+            Formula/guardscan.rb bucket/guardscan.json channel-lock.json
+          CATALOG_CHANGED_FILES="$(git -C catalog-withdrawal diff --cached --name-status)"
+          if [ -z "$CATALOG_CHANGED_FILES" ]; then
+            test "$(node -p 'require("./catalog-withdrawal.json").state')" = already-absent
+            CATALOG_PR=0
+            CATALOG_MERGE_SHA="$CATALOG_BASE"
+            CATALOG_STATE=already-absent
+          else
+            export CATALOG_CHANGED_FILES
+            node - <<'NODE'
+            const rows = process.env.CATALOG_CHANGED_FILES.split('\n').filter(Boolean).sort();
+            const expected = [
+              'D\tFormula/guardscan.rb',
+              'D\tbucket/guardscan.json',
+              'D\tchannel-lock.json',
+            ];
+            if (JSON.stringify(rows) !== JSON.stringify(expected)) {
+              throw new Error(`catalog withdrawal contains unreviewed changes: ${rows.join(', ')}`);
+            }
+          NODE
+            git -C catalog-withdrawal config user.name guardscan-release-bot
+            git -C catalog-withdrawal config user.email 41898282+github-actions[bot]@users.noreply.github.com
+            git -C catalog-withdrawal commit \
+              -m "withdraw GuardScan v$DEFECTIVE_VERSION first-release catalog"
+            CATALOG_HEAD="$(git -C catalog-withdrawal rev-parse HEAD)"
+            if [ -n "$CATALOG_REMOTE_HEAD" ]; then
+              git -C catalog-withdrawal push \
+                --force-with-lease="refs/heads/$CATALOG_BRANCH:$CATALOG_REMOTE_HEAD" \
+                origin "HEAD:refs/heads/$CATALOG_BRANCH"
+            else
+              git -C catalog-withdrawal push origin "HEAD:refs/heads/$CATALOG_BRANCH"
+            fi
+            CATALOG_PRS="$(gh pr list --repo ntanwir10/homebrew-tap \
+              --head "$CATALOG_BRANCH" --base main --state all --limit 20 \
+              --json number,state,mergedAt,headRefOid,baseRefName,headRepository,mergeCommit)"
+            export CATALOG_HEAD CATALOG_PRS
+            CATALOG_PR="$(node - <<'NODE'
+            const prs = JSON.parse(process.env.CATALOG_PRS || '[]');
+            const matches = prs.filter(pr => pr.baseRefName === 'main');
+            if (matches.some(pr => pr.state === 'CLOSED' && !pr.mergedAt)) {
+              throw new Error('catalog withdrawal branch has a closed-unmerged pull request');
+            }
+            const bound = matches.find(pr => (
+              ['OPEN', 'MERGED'].includes(pr.state)
+              && pr.headRefOid === process.env.CATALOG_HEAD
+              && pr.headRepository?.nameWithOwner?.toLowerCase() === 'ntanwir10/homebrew-tap'
+            ));
+            process.stdout.write(String(bound?.number || ''));
+          NODE
+            )"
+            if [ -z "$CATALOG_PR" ]; then
+              gh pr create \
+                --repo ntanwir10/homebrew-tap \
+                --base main \
+                --head "$CATALOG_BRANCH" \
+                --title "Withdraw GuardScan v$DEFECTIVE_VERSION first-release catalog" \
+                --body "Removes only the generated first-party listings for defective v$DEFECTIVE_VERSION. The immutable release remains auditable."
+              CATALOG_PR="$(gh pr list --repo ntanwir10/homebrew-tap \
+                --head "$CATALOG_BRANCH" --base main --state open --limit 1 --json number --jq '.[0].number')"
+            fi
+            CATALOG_PR_STATE="$(gh pr view --repo ntanwir10/homebrew-tap "$CATALOG_PR" --json state --jq .state)"
+            if [ "$CATALOG_PR_STATE" = OPEN ]; then
+              gh pr checks --repo ntanwir10/homebrew-tap "$CATALOG_PR" --watch --fail-fast
+              gh pr merge --repo ntanwir10/homebrew-tap "$CATALOG_PR" \
+                --squash --match-head-commit "$CATALOG_HEAD"
+            fi
+            CATALOG_PR_STATE="$(gh pr view --repo ntanwir10/homebrew-tap "$CATALOG_PR" --json state --jq .state)"
+            test "$CATALOG_PR_STATE" = MERGED
+            CATALOG_MERGE_SHA="$(gh pr view --repo ntanwir10/homebrew-tap "$CATALOG_PR" \
+              --json mergeCommit --jq .mergeCommit.oid)"
+            CATALOG_STATE=removed
+          fi
+          case "$CATALOG_MERGE_SHA" in
+            ''|*[!a-f0-9]*) echo "catalog withdrawal has no trusted commit" >&2; exit 1 ;;
+          esac
+          test "${#CATALOG_MERGE_SHA}" = 40
+          git -C catalog-withdrawal fetch origin "$CATALOG_MERGE_SHA"
+          for CATALOG_PATH in Formula/guardscan.rb bucket/guardscan.json channel-lock.json; do
+            if git -C catalog-withdrawal cat-file -e "$CATALOG_MERGE_SHA:$CATALOG_PATH" 2>/dev/null; then
+              echo "catalog withdrawal left $CATALOG_PATH published" >&2
+              exit 1
+            fi
+          done
+          echo "state=$CATALOG_STATE" >> "$GITHUB_OUTPUT"
+          echo "branch=$CATALOG_BRANCH" >> "$GITHUB_OUTPUT"
+          echo "pull_request=$CATALOG_PR" >> "$GITHUB_OUTPUT"
+          echo "commit=$CATALOG_MERGE_SHA" >> "$GITHUB_OUTPUT"
+      - name: Complete repository withdrawal and deactivate the train
+        if: steps.authority.outputs.completed != 'true'
+        env:
+          CATALOG_STATE: ${{ steps.catalog.outputs.state }}
+          CATALOG_BRANCH: ${{ steps.catalog.outputs.branch }}
+          CATALOG_PR: ${{ steps.catalog.outputs.pull_request }}
+          CATALOG_COMMIT: ${{ steps.catalog.outputs.commit }}
+        run: |
+          node - <<'NODE'
+          const fs = require('fs');
+          const {appendEvent, readEvents, materializeReleaseState} = require('./cli/scripts/release/events');
+          const plan = require('./rollback-plan.json');
+          const events = readEvents('release-events.jsonl');
+          const state = materializeReleaseState(events);
+          if (state.recovery?.mode !== 'first-release-withdrawal'
+              || !Object.values(state.incidents).some(incident => (
+                incident.kind === 'recovery' && incident.status === 'open'
+              ))) {
+            throw new Error('first-release withdrawal lost its protected recovery state');
+          }
+          const now = new Date().toISOString();
+          const externalActionsPending = plan.actions
+            .filter(action => action.automation === 'external-action-required')
+            .map(action => action.channel)
+            .sort();
+          const evidence = {
+            schemaVersion: 'guardscan.rollback-repository-evidence.v1',
+            mode: 'first-release-withdrawal',
+            defectiveVersion: process.env.DEFECTIVE_VERSION,
+            requiredNextVersion: state.recovery.requiredNextVersion,
+            externalActionsPending,
+            catalog: {
+              state: process.env.CATALOG_STATE,
+              branch: process.env.CATALOG_BRANCH,
+              pullRequest: Number(process.env.CATALOG_PR),
+              commit: process.env.CATALOG_COMMIT,
+            },
+            completedAt: now,
+          };
+          fs.writeFileSync('rollback-evidence.json', `${JSON.stringify(evidence, null, 2)}\n`);
+          const terminal = {
+            github: 'superseded',
+            pnpm: 'superseded',
+            yarn: 'superseded',
+            bun: 'superseded',
+            homebrew: 'withdrawn',
+            scoop: 'withdrawn',
+          };
+          for (const [channel, channelState] of Object.entries(state.channels)) {
+            const type = channelState.status === 'planned'
+              || (channel === 'github' && !channelState.publication)
+              ? 'withdrawn'
+              : terminal[channel];
+            if (!type) continue;
+            appendEvent('release-events.jsonl', {
+              version: state.version,
+              tag: state.tag,
+              commit: state.commit,
+              timestamp: now,
+              type,
+              channel,
+              idempotencyKey: `first-release-withdrawal:${channel}:${state.version}`,
+              payload: {
+                artifactIds: channelState.artifactIds,
+                ...(channelState.remoteIdentity ? {remoteIdentity: channelState.remoteIdentity} : {}),
+                ...(channelState.remoteDigest ? {remoteDigest: channelState.remoteDigest} : {}),
+              },
+            });
+          }
+          appendEvent('release-events.jsonl', {
+            version: state.version,
+            tag: state.tag,
+            commit: state.commit,
+            timestamp: now,
+            type: 'rollback_repository_completed',
+            idempotencyKey: `rollback-repository-completed:${state.version}`,
+            payload: evidence,
+          });
+          const completed = materializeReleaseState(readEvents('release-events.jsonl'));
+          for (const [channel, channelState] of Object.entries(completed.channels)) {
+            if (!externalActionsPending.includes(channel)
+                && !['withdrawn', 'superseded'].includes(channelState.status)) {
+              throw new Error(`repository withdrawal left ${channel} non-terminal`);
+            }
+          }
+          const expectedRecoveryStatus = externalActionsPending.length > 0
+            ? 'provider-actions-pending'
+            : 'repository-completed';
+          if (completed.recovery?.status !== expectedRecoveryStatus) {
+            throw new Error('repository withdrawal completion state is inconsistent');
+          }
+          NODE
+          DEFECTIVE_TAG="v$DEFECTIVE_VERSION"
+          cp release-events.jsonl "ledger-branch/events/$DEFECTIVE_TAG.jsonl"
+          mkdir -p ledger-branch/recoveries
+          cp rollback-plan.json "ledger-branch/recoveries/$DEFECTIVE_TAG-plan.json"
+          cp rollback-evidence.json "ledger-branch/recoveries/$DEFECTIVE_TAG-evidence.json"
+          node - <<'NODE'
+          const fs = require('fs');
+          const file = 'ledger-branch/active-versions.json';
+          const active = JSON.parse(fs.readFileSync(file, 'utf8'));
+          active.trains = active.trains.filter(
+            train => train.version !== process.env.DEFECTIVE_VERSION
+          );
+          fs.writeFileSync(file, `${JSON.stringify(active, null, 2)}\n`);
+          NODE
+          (
+            cd ledger-branch
+            git add events active-versions.json recoveries
+            git commit -m "first release repository withdrawal complete: v$DEFECTIVE_VERSION" || exit 0
+            git push origin HEAD:release-ledger
+          )
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: rollback-plan-v${{ inputs.version }}
+          path: |
+            first-release-authority.json
+            rollback-plan.json
+            rollback-evidence.json
+          if-no-files-found: error
+          retention-days: 90

@@ -52,7 +52,11 @@ required first-release exception.
 - Seed the orphan `release-ledger` branch from
   `.github/release-ledger/active-versions.json`, then protect the branch and
   require the App identity for writes. Do not copy application source onto the
-  ledger branch.
+  ledger branch. Before merging the bootstrap, refetch this branch and require
+  its complete tree to contain only `active-versions.json` with an empty
+  `trains` array. The first source-bound and moderated event contracts have no
+  migration path from experimental pre-release ledger records; any unexpected
+  `events/` path is a launch blocker, not data to coerce.
 - Protect `v*` tags so only the release App can create them.
 - Enable immutable releases for GuardScan.
 - Enable squash merge and auto-merge, and require the full `Release gate`
@@ -232,6 +236,21 @@ about whether `1.1.0` is already prepared. Derive `1.1.0-rc.1` from that exact
 PR head, require the normal release gates, and merge/tag it through the release
 train. After `v1.1.0` is verified, align the Release Please manifest to `1.1.0`
 so subsequent stable release PRs follow the normal automated path.
+
+Because v1.0.5 predates the protected release ledger, it is not a valid
+automated rollback target for this train. Before enabling automation, rehearse
+the first-release withdrawal contract: an empty `known_good` must be accepted
+only when the protected ledger proves there is no completed predecessor; it
+must retain immutable assets, remove or verify the exact empty shared catalog,
+open a recovery incident, record provider-owned actions, and avoid generating
+a forward-fix branch. A separately reviewed v1.1.1 is required after such a
+withdrawal. Later releases must supply a verified ledger-backed `known_good`.
+Repository withdrawal is not provider withdrawal: the protected state remains
+`provider-actions-pending`, with the recovery incident open, until the recorded
+npm, PyPI, WinGet, Chocolatey, or optional Core authorities complete their
+actions. Retrying the workflow re-verifies the empty catalog and closes the
+exact stale catalog publication PR; it does not turn pending provider work into
+success.
 
 ## Expiry monitoring
 

@@ -20,7 +20,7 @@ evidence until it is bound to the selected commit and exact artifact.
 - Missing remote versions are published. Identical remote digests are accepted as retries. Different remote digests open an integrity incident and stop the train.
 - Stable promotion is a machine decision after a full 24-hour window. It requires an unchanged release-PR head, fresh green canaries for every RC channel, and no open release incident.
 - WinGet and Chocolatey remain `submitted` until their public catalogs accept them and a clean public installation passes.
-- Rollback never mutates history or overwrites a release. It appends recovery events and prepares a forward-fix patch.
+- Recovery never mutates history or overwrites a release. Normal rollback restores a verified known-good source through a forward-fix patch; the first stable train instead fails closed into withdrawal when no verified baseline exists.
 
 ## Selected channels
 
@@ -41,6 +41,7 @@ Core requires a separate reviewed enablement and remains nonblocking.
 | `.github/workflows/ci.yml` | Required source, test, coverage, package, package-manager, audit, and five-host SEA gates. It cannot publish. |
 | `.github/workflows/release-please.yml` | Maintains the stable release PR only, using a short-lived GitHub App token. |
 | `.github/workflows/release-train.yml` | Derives RC commits, creates protected tags, dispatches builds/publication, reconciles every 30 minutes, promotes, rolls back, and persists release events. |
+| `.github/workflows/release-first-withdrawal.yml` | Withdraws the first stable train only when the protected ledger proves no verified predecessor exists; it never invents forward-fix source. |
 | `.github/workflows/release-build.yml` | Builds the exact npm tarball and five SEA targets, signs, notarizes, generates SPDX/CycloneDX, creates wheels, attests, archives deterministically, and aggregates the manifest/checksums. |
 | `.github/workflows/release-publish.yml` | Publishes tested registry handoffs through OIDC and opens the generated shared-catalog update PR. |
 | `.github/workflows/release-canary.yml` | Runs hourly public install/invoke/uninstall canaries and polls moderated registries. |
@@ -219,7 +220,11 @@ any active state -> failed
 published/verified -> withdrawn or superseded
 ```
 
-Rollback is represented by `rollback_started`, `withdrawn`, and `superseded` events; no backward state mutation is needed. Integrity, security, and availability incidents use `incident_opened` and `incident_resolved`.
+Rollback is represented by `rollback_started`, `withdrawn`, and `superseded`
+events; no backward state mutation is needed. Integrity, security,
+availability, and recovery incidents use `incident_opened` and
+`incident_resolved`. An `action_required` event records a provider-owned task;
+it does not claim that a package has been withdrawn.
 
 The repository also contains:
 
@@ -232,8 +237,11 @@ The repository also contains:
 
 Before the first candidate, merge the inert automation bootstrap to `main`
 while `RELEASE_AUTOMATION_ENABLED=false`, complete every onboarding check, and
-verify that the release PR head and full gate are unchanged. Then set the
-variable to `true` and start the candidate from the default-branch workflow:
+verify that the release PR head and full gate are unchanged. Refetch the
+protected `release-ledger` branch and fail if its tree contains anything other
+than the empty `active-versions.json` seed; this is the explicit no-migration
+boundary for the first source-bound event schema. Then set the variable to
+`true` and start the candidate from the default-branch workflow:
 
 ```bash
 gh workflow run release-train.yml \
@@ -303,6 +311,42 @@ After stable publication:
 - Chocolatey is unlisted/superseded;
 - WinGet receives a corrective manifest;
 - a higher patch version is prepared from selected known-good source.
+
+The first ledger-backed stable release is the only exception to the
+known-good requirement. Dispatching rollback without `known_good` invokes the
+separate first-release withdrawal workflow. It is authorized only when the
+protected ledger proves that the defective version is the active first stable
+train and that no earlier stable ledger ever reached completion. The workflow:
+
+- retains immutable GitHub assets and marks them superseded;
+- removes only an exact matching `Formula/guardscan.rb`,
+  `bucket/guardscan.json`, and `channel-lock.json`, or records that the catalog
+  was already in the valid empty bootstrap state; it also closes the exact
+  still-open publication PR so that a delayed merge cannot restore the listing;
+- appends provider-owned npm, PyPI, WinGet, Chocolatey, and optional Core
+  actions without claiming they have completed;
+- records `provider-actions-pending` while any of those external actions remain,
+  keeps a recovery incident open, deactivates the train only after repository
+  evidence is persisted, and requires a separately reviewed next patch;
+- makes retries prove the active train is absent, repository-owned channels are
+  terminal, the catalog is still empty, and no publication PR remains open;
+- never creates a forward-fix branch from the defective source.
+
+Once any earlier stable release has reached completion, omitting `known_good`
+fails closed and the normal verified-baseline rollback is mandatory.
+
+```bash
+# First ledger-backed stable release only; protected-ledger proof is mandatory.
+gh workflow run release-train.yml \
+  -f action=rollback \
+  -f version=1.1.0
+
+# Every later stable release requires an exact verified predecessor.
+gh workflow run release-train.yml \
+  -f action=rollback \
+  -f version=DEFECTIVE_VERSION \
+  -f known_good=VERIFIED_PREDECESSOR
+```
 
 A release is complete only when every selected blocking channel materializes
 as `verified`. Optional Homebrew Core submission/acceptance is tracked
