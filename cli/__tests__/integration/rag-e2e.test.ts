@@ -155,6 +155,11 @@ and user management backed by a database.
     expect(indexed.stats.embeddingsGenerated).toBeGreaterThan(2);
     expect(await store.exists()).toBe(true);
 
+    const persistedEmbeddings = await store.loadEmbeddings();
+    expect(persistedEmbeddings.every(embedding => !path.isAbsolute(embedding.source))).toBe(true);
+    expect(persistedEmbeddings.every(embedding => !embedding.source.includes('\\'))).toBe(true);
+    expect(persistedEmbeddings.every(embedding => !embedding.content.includes(repository))).toBe(true);
+
     const auth = await search.search('How does user login authentication verify a password?', {
       k: 5,
       minSimilarity: 0.2,
