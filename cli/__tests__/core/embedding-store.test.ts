@@ -344,7 +344,7 @@ describe('FileBasedEmbeddingStore', () => {
       ];
       await store.saveEmbeddings(embeddings);
 
-      await store.invalidateChangedFiles(['src/a.ts', 'src/c.ts']);
+      await store.invalidateChangedFiles(['src\\a.ts', 'src/c.ts']);
 
       const loaded = await store.loadEmbeddings();
       expect(loaded).toHaveLength(1);
