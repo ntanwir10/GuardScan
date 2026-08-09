@@ -89,7 +89,7 @@
     "fast-glob": "^3.3.2",
     "ignore": "^5.3.0",
     "inquirer": "^8.2.5",
-    "js-yaml": "^4.1.1",
+    "js-yaml": "^4.3.1",
     "marked": "^11.0.0",
     "openai": "^6.9.0",
     "ora": "^5.4.1",
@@ -127,7 +127,7 @@
     "node": ">=22.0.0"
   },
   "overrides": {
-    "brace-expansion@<1.1.16": "1.1.16",
+    "brace-expansion@<1.1.18": "1.1.18",
     "qs": "6.15.3"
   }
 }

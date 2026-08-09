@@ -151,10 +151,6 @@
     "errors": 11,
     "warnings": 0
   },
-  "src/core/cost-guard.ts": {
-    "errors": 1,
-    "warnings": 1
-  },
   "src/core/dependency-scanner.ts": {
     "errors": 6,
     "warnings": 0

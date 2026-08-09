@@ -44,7 +44,7 @@ jobs:
           npm audit --omit=dev --audit-level=high
           npm run test:release
           npm run test:package
-          npm run test:package-manager
+          npm run test:package-manager -- --manager npm
       - run: git diff --check
 
   npm:

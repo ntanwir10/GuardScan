@@ -1,3 +1,5 @@
+import crypto from 'crypto';
+import {execFileSync} from 'child_process';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -5,10 +7,15 @@ import zlib from 'zlib';
 
 const {
   appendEvent,
+  createEvent,
   materializeReleaseState,
   readEvents,
 } = require('../../scripts/release/events') as {
   appendEvent: (file: string, input: Record<string, any>) => Record<string, any>;
+  createEvent: (
+    input: Record<string, any>,
+    previous?: Record<string, any>
+  ) => Record<string, any>;
   materializeReleaseState: (events: Array<Record<string, any>>) => Record<string, any>;
   readEvents: (file: string) => Array<Record<string, any>>;
 };
@@ -33,6 +40,23 @@ const {
   createPromotionDecision: (input: Record<string, any>) => Record<string, any>;
 };
 const {
+  createPublicationEvidence,
+} = require('../../scripts/release/publication-evidence') as {
+  createPublicationEvidence: (input: Record<string, any>) => Record<string, any>;
+};
+const {
+  handlePublication,
+  main,
+} = require('../../scripts/release/index') as {
+  handlePublication: (
+    command: string,
+    source: Record<string, any>,
+    manifest: Record<string, any>,
+    options: Record<string, any>
+  ) => Record<string, any>;
+  main: (argv: string[]) => Promise<void>;
+};
+const {
   classifyRemoteArtifact,
 } = require('../../scripts/release/remote') as {
   classifyRemoteArtifact: (
@@ -41,15 +65,41 @@ const {
   ) => Record<string, any>;
 };
 const {
+  planFirstReleaseWithdrawal,
   planRollback,
   reconcileRelease,
 } = require('../../scripts/release/reconcile') as {
+  planFirstReleaseWithdrawal: (
+    state: Record<string, any>,
+    authority: Record<string, any>
+  ) => Record<string, any>;
   planRollback: (
     state: Record<string, any>,
     knownGoodVersion?: string,
     knownGoodCommit?: string
   ) => Record<string, any>;
   reconcileRelease: (state: Record<string, any>) => Record<string, any>;
+};
+const {
+  assertFirstReleaseWithdrawal,
+  prepareFirstReleaseCatalogWithdrawal,
+} = require('../../scripts/release/first-release-withdrawal') as {
+  assertFirstReleaseWithdrawal: (
+    ledgerRoot: string,
+    defectiveVersion: string,
+    ledgerCommit: string
+  ) => Record<string, any>;
+  prepareFirstReleaseCatalogWithdrawal: (
+    catalogRoot: string,
+    defectiveVersion: string,
+    defectiveCommit: string
+  ) => Record<string, any>;
+};
+const {releaseTrainChannels} = require('../../scripts/release/lib') as {
+  releaseTrainChannels: (
+    channel: string,
+    options?: {homebrewCoreEnabled?: boolean}
+  ) => string[];
 };
 const {
   prepareForwardFixSource,
@@ -98,7 +148,7 @@ function eventInput(
     timestamp: new Date(Date.parse(timestamp) + sequence * 60_000).toISOString(),
     type,
     idempotencyKey: `${type}:${sequence}`,
-    payload: {},
+    payload: type === 'train_started' ? {channels: ['npm']} : {},
     ...overrides,
   };
 }
@@ -195,6 +245,130 @@ function wheel(native: Record<string, any>, digest: string): Record<string, any>
 }
 
 describe('append-only release train', () => {
+  it('canonicalizes provider files with the same code-point ordering used by release workflows', () => {
+    const files = {
+      'guardscan-linux-x64.tar.gz': 'c'.repeat(64),
+      'SHA256SUMS.sigstore.json': 'b'.repeat(64),
+      SHA256SUMS: 'a'.repeat(64),
+    };
+    const evidence = createPublicationEvidence({
+      channel: 'github',
+      version: source.version,
+      tag: source.tag,
+      remoteIdentity: `github:ntanwir10/GuardScan/releases/tag/${source.tag}`,
+      files,
+    });
+    expect(Object.keys(evidence.files)).toEqual(Object.keys(files).sort());
+    expect(createPublicationEvidence({...evidence, files: {...files}})).toEqual(evidence);
+  });
+
+  it('requires exact provider evidence for primary publication events and the CLI', () => {
+    const first = createEvent(eventInput('train_started', 0, {
+      payload: {channels: ['npm']},
+    }));
+    const artifact = {
+      id: `npm:guardscan@${source.version}`,
+      kind: 'npm-tarball',
+      filename: `guardscan-${source.version}.tgz`,
+      sha256: 'b'.repeat(64),
+    };
+    const remoteIdentity = `npm:guardscan@${source.version}`;
+    expect(() => createEvent(eventInput('channel_published', 1, {
+      channel: 'npm',
+      payload: {remoteIdentity, remoteDigest: artifact.sha256},
+    }), first)).toThrow(/requires provider-bound file evidence/);
+
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'guardscan-publication-evidence-'));
+    const ledger = path.join(root, 'ledger.jsonl');
+    const evidenceFile = path.join(root, 'npm-publication-evidence.json');
+    try {
+      fs.writeFileSync(ledger, `${JSON.stringify(first)}\n`);
+      const publication = createPublicationEvidence({
+        channel: 'npm',
+        version: source.version,
+        tag: source.tag,
+        remoteIdentity,
+        files: {[artifact.filename]: artifact.sha256},
+      });
+      fs.writeFileSync(evidenceFile, `${JSON.stringify(publication, null, 2)}\n`);
+      const options = {
+        manifest: path.join(root, 'release-manifest.json'),
+        ledger,
+        channel: 'npm',
+        artifactId: artifact.id,
+        remoteIdentity,
+        remoteDigest: publication.aggregateSha256,
+        timestamp: eventInput('channel_published', 1).timestamp,
+        idempotencyKey: 'published:npm:test',
+      };
+      expect(() => handlePublication('publish', source, {artifacts: [artifact]}, options))
+        .toThrow(/requires --publication-evidence/);
+      expect(handlePublication('publish', source, {artifacts: [artifact]}, {
+        ...options,
+        publicationEvidence: evidenceFile,
+      }).event.payload.publication).toEqual(publication);
+    } finally {
+      fs.rmSync(root, {recursive: true, force: true});
+    }
+  });
+
+  it('rejects unknown train channels and terminal or backward channel transitions', () => {
+    expect(() => createEvent(eventInput('train_started', 0, {
+      payload: {channels: ['npm', 'npm']},
+    }))).toThrow(/non-empty unique supported channel list/);
+    expect(() => createEvent(eventInput('train_started', 0, {
+      payload: {channels: ['unknown']},
+    }))).toThrow(/non-empty unique supported channel list/);
+
+    const first = createEvent(eventInput('train_started', 0, {
+      payload: {channels: ['npm']},
+    }));
+    const publication = createPublicationEvidence({
+      channel: 'npm',
+      version: source.version,
+      tag: source.tag,
+      remoteIdentity: `npm:guardscan@${source.version}`,
+      files: {[`guardscan-${source.version}.tgz`]: 'b'.repeat(64)},
+    });
+    const publishedInput = eventInput('channel_published', 1, {
+      channel: 'npm',
+      payload: {
+        remoteIdentity: publication.remoteIdentity,
+        remoteDigest: publication.aggregateSha256,
+        publication,
+      },
+    });
+    const published = createEvent(publishedInput, first);
+    const verified = createEvent(eventInput('channel_verified', 2, {
+      channel: 'npm',
+    }), published);
+    const regression = createEvent(eventInput('channel_published', 3, {
+      channel: 'npm',
+      payload: publishedInput.payload,
+    }), verified);
+    expect(() => materializeReleaseState([first, published, verified, regression]))
+      .toThrow(/cannot move npm from verified to published/);
+
+    const superseded = createEvent(eventInput('superseded', 3, {
+      channel: 'npm',
+    }), verified);
+    const reopened = createEvent(eventInput('channel_published', 4, {
+      channel: 'npm',
+      payload: publishedInput.payload,
+    }), superseded);
+    expect(() => materializeReleaseState([first, published, verified, superseded, reopened]))
+      .toThrow(/cannot move npm from superseded to published/);
+
+    const catalogStarted = createEvent(eventInput('train_started', 0, {
+      payload: {channels: ['homebrew']},
+    }));
+    const catalogVerified = createEvent(eventInput('channel_verified', 1, {
+      channel: 'homebrew',
+    }), catalogStarted);
+    expect(materializeReleaseState([catalogStarted, catalogVerified]).channels.homebrew.status)
+      .toBe('verified');
+  });
+
   it('prepares deterministic forward-fix source from the exact known-good tree', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'guardscan-forward-fix-'));
     const cli = path.join(root, 'cli');
@@ -257,6 +431,13 @@ describe('append-only release train', () => {
           artifactIds: ['npm:guardscan@1.2.0-rc.1'],
           remoteIdentity: 'guardscan@1.2.0-rc.1',
           remoteDigest: 'b'.repeat(64),
+          publication: createPublicationEvidence({
+            channel: 'npm',
+            version: source.version,
+            tag: source.tag,
+            remoteIdentity: 'guardscan@1.2.0-rc.1',
+            files: {'guardscan-1.2.0-rc.1.tgz': 'b'.repeat(64)},
+          }),
         },
       });
       expect(appendEvent(ledger, published).changed).toBe(true);
@@ -271,6 +452,7 @@ describe('append-only release train', () => {
       }));
       appendEvent(ledger, eventInput('rollback_started', 3, {
         payload: {
+          mode: 'known-good',
           knownGoodVersion: '1.1.9',
           knownGoodCommit: 'b'.repeat(40),
           forwardFixVersion: '1.2.1',
@@ -287,7 +469,11 @@ describe('append-only release train', () => {
       }));
       appendEvent(ledger, eventInput('superseded', 5, {
         channel: 'npm',
-        payload: published.payload,
+        payload: {
+          artifactIds: published.payload.artifactIds,
+          remoteIdentity: published.payload.remoteIdentity,
+          remoteDigest: published.payload.remoteDigest,
+        },
       }));
 
       const state = materializeReleaseState(readEvents(ledger));
@@ -306,6 +492,10 @@ describe('append-only release train', () => {
             status: 'superseded',
             artifactIds: ['npm:guardscan@1.2.0-rc.1'],
             remoteDigest: 'b'.repeat(64),
+            publication: expect.objectContaining({
+              schemaVersion: 'guardscan.provider-publication.v1',
+              aggregateSha256: 'b'.repeat(64),
+            }),
           },
         },
       });
@@ -347,6 +537,62 @@ describe('append-only release train', () => {
       });
       expect(() => planRollback(rollbackInput)).toThrow(/verified known-good version is required/);
       expect(() => planRollback(rollbackInput, '1.1.9')).toThrow(/known-good commit is required/);
+
+      const firstRelease = {
+        ...rollbackInput,
+        version: '1.2.0',
+        tag: 'v1.2.0',
+        channels: {
+          npm: {...rollbackInput.channels.npm, status: 'verified'},
+          homebrew: {status: 'verified'},
+          scoop: {status: 'verified'},
+        },
+      };
+      const firstReleaseAuthority = {
+        schemaVersion: 'guardscan.first-release-withdrawal-authority.v1',
+        verified: true,
+        defectiveVersion: '1.2.0',
+        defectiveTag: 'v1.2.0',
+        defectiveCommit: commit,
+        ledgerCommit: 'c'.repeat(40),
+        priorCompleteStableVersions: [],
+      };
+      expect(planFirstReleaseWithdrawal(firstRelease, firstReleaseAuthority)).toMatchObject({
+        schemaVersion: 'guardscan.rollback-plan.v1',
+        mode: 'first-release-withdrawal',
+        requiredNextVersion: '1.2.1',
+        authority: {
+          ledgerCommit: 'c'.repeat(40),
+          priorCompleteStableVersions: [],
+        },
+        repositoryActions: expect.arrayContaining([
+          expect.objectContaining({id: 'open-recovery-incident'}),
+          expect.objectContaining({id: 'shared-catalog-withdrawal'}),
+          expect.objectContaining({id: 'deactivate-train'}),
+        ]),
+        actions: expect.arrayContaining([
+          expect.objectContaining({
+            channel: 'npm',
+            action: 'deprecate-defective-release',
+            automation: 'external-action-required',
+          }),
+          expect.objectContaining({
+            channel: 'homebrew',
+            action: 'remove-first-release-listing',
+            automation: 'repository-automated',
+          }),
+        ]),
+      });
+      expect(planFirstReleaseWithdrawal(firstRelease, firstReleaseAuthority))
+        .not.toHaveProperty('knownGood');
+      expect(planFirstReleaseWithdrawal(firstRelease, firstReleaseAuthority))
+        .not.toHaveProperty('forwardFixBranch');
+      expect(() => planFirstReleaseWithdrawal(firstRelease, {
+        ...firstReleaseAuthority,
+        priorCompleteStableVersions: ['1.1.9'],
+      })).toThrow(/requires exact protected-ledger authority/);
+      expect(() => planFirstReleaseWithdrawal(rollbackInput, firstReleaseAuthority))
+        .toThrow(/requires a stable defective release/);
     } finally {
       fs.rmSync(root, {recursive: true, force: true});
     }
@@ -359,6 +605,168 @@ describe('append-only release train', () => {
       appendEvent(ledger, eventInput('train_started', 0));
       fs.appendFileSync(ledger, '{"partial":');
       expect(() => readEvents(ledger)).toThrow(/partial final record/);
+    } finally {
+      fs.rmSync(root, {recursive: true, force: true});
+    }
+  });
+
+  it('permits first-release withdrawal only without a verified stable predecessor', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'guardscan-first-withdrawal-'));
+    const eventsRoot = path.join(root, 'events');
+    fs.mkdirSync(eventsRoot);
+    const stableEvent = (
+      version: string,
+      type: string,
+      sequence: number,
+      overrides: Record<string, any> = {}
+    ) => eventInput(type, sequence, {
+      version,
+      tag: `v${version}`,
+      ...overrides,
+    });
+    try {
+      const defectiveLedger = path.join(eventsRoot, 'v1.2.0.jsonl');
+      const stableChannels = releaseTrainChannels('stable');
+      appendEvent(defectiveLedger, stableEvent('1.2.0', 'train_started', 0, {
+        payload: {channels: stableChannels},
+      }));
+      fs.writeFileSync(path.join(root, 'active-versions.json'), `${JSON.stringify({
+        schemaVersion: 'guardscan.active-trains.v1',
+        trains: [{version: '1.2.0', releasePr: 32, channel: 'stable'}],
+      })}\n`);
+      expect(assertFirstReleaseWithdrawal(root, '1.2.0', 'd'.repeat(40))).toEqual({
+        schemaVersion: 'guardscan.first-release-withdrawal-authority.v1',
+        verified: true,
+        defectiveVersion: '1.2.0',
+        defectiveTag: 'v1.2.0',
+        defectiveCommit: commit,
+        ledgerCommit: 'd'.repeat(40),
+        priorCompleteStableVersions: [],
+        alreadyCompleted: false,
+      });
+      appendEvent(defectiveLedger, stableEvent('1.2.0', 'rollback_started', 1, {
+        payload: {mode: 'first-release-withdrawal', requiredNextVersion: '1.2.1'},
+      }));
+      let sequence = 2;
+      for (const channel of stableChannels) {
+        appendEvent(defectiveLedger, stableEvent('1.2.0', 'withdrawn', sequence, {
+          channel,
+          payload: {artifactIds: []},
+        }));
+        sequence += 1;
+      }
+      appendEvent(defectiveLedger, stableEvent('1.2.0', 'rollback_repository_completed', sequence, {
+        payload: {
+          schemaVersion: 'guardscan.rollback-repository-evidence.v1',
+          mode: 'first-release-withdrawal',
+          defectiveVersion: '1.2.0',
+          requiredNextVersion: '1.2.1',
+          externalActionsPending: [],
+          catalog: {
+            state: 'already-absent',
+            branch: 'rollback/v1.2.0-remove-first-release',
+            pullRequest: 0,
+            commit: 'd'.repeat(40),
+          },
+          completedAt: new Date(Date.parse(timestamp) + sequence * 60_000).toISOString(),
+        },
+      }));
+      fs.writeFileSync(path.join(root, 'active-versions.json'), `${JSON.stringify({
+        schemaVersion: 'guardscan.active-trains.v1',
+        trains: [],
+      })}\n`);
+      expect(assertFirstReleaseWithdrawal(root, '1.2.0', 'd'.repeat(40))).toMatchObject({
+        alreadyCompleted: true,
+      });
+      fs.writeFileSync(path.join(root, 'active-versions.json'), `${JSON.stringify({
+        schemaVersion: 'guardscan.active-trains.v1',
+        trains: [{version: '1.2.0', releasePr: 32, channel: 'stable'}],
+      })}\n`);
+      expect(() => assertFirstReleaseWithdrawal(root, '1.2.0', 'd'.repeat(40)))
+        .toThrow(/not an active protected train/);
+      fs.writeFileSync(path.join(root, 'active-versions.json'), `${JSON.stringify({
+        schemaVersion: 'guardscan.active-trains.v1',
+        trains: [],
+      })}\n`);
+
+      const laterLedger = path.join(eventsRoot, 'v1.2.1.jsonl');
+      appendEvent(laterLedger, stableEvent('1.2.1', 'train_started', 0, {
+        payload: {channels: ['pnpm']},
+      }));
+      appendEvent(laterLedger, stableEvent('1.2.1', 'channel_verified', 1, {
+        channel: 'pnpm',
+      }));
+      expect(assertFirstReleaseWithdrawal(root, '1.2.0', 'd'.repeat(40))).toMatchObject({
+        alreadyCompleted: true,
+      });
+
+      const priorLedger = path.join(eventsRoot, 'v1.1.9.jsonl');
+      appendEvent(priorLedger, stableEvent('1.1.9', 'train_started', 0, {
+        payload: {channels: ['pnpm']},
+      }));
+      appendEvent(priorLedger, stableEvent('1.1.9', 'channel_verified', 1, {
+        channel: 'pnpm',
+      }));
+      expect(() => assertFirstReleaseWithdrawal(root, '1.2.0', 'd'.repeat(40)))
+        .toThrow(/verified stable predecessors exist \(1.1.9\)/);
+    } finally {
+      fs.rmSync(root, {recursive: true, force: true});
+    }
+  });
+
+  it('removes only a complete catalog projection for the defective first release', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'guardscan-catalog-withdrawal-'));
+    try {
+      fs.mkdirSync(path.join(root, 'Formula'));
+      fs.mkdirSync(path.join(root, 'bucket'));
+      const formula = 'class Guardscan < Formula\n  version "1.2.0"\nend\n';
+      const scoop = `${JSON.stringify({version: '1.2.0'})}\n`;
+      fs.writeFileSync(path.join(root, 'Formula/guardscan.rb'), formula);
+      fs.writeFileSync(path.join(root, 'bucket/guardscan.json'), scoop);
+      const lock = {
+        schemaVersion: 'guardscan.channel-catalog.v1',
+        source: {
+          repository: 'ntanwir10/GuardScan',
+          version: '1.2.0',
+          tag: 'v1.2.0',
+          commit,
+          manifestUrl: 'https://github.com/ntanwir10/GuardScan/releases/download/v1.2.0/release-manifest.json',
+          manifestSha256: 'f'.repeat(64),
+        },
+        generator: {repository: 'ntanwir10/GuardScan', commit},
+        files: {
+          'Formula/guardscan.rb': {
+            sha256: crypto.createHash('sha256').update(formula).digest('hex'),
+          },
+          'bucket/guardscan.json': {
+            sha256: crypto.createHash('sha256').update(scoop).digest('hex'),
+          },
+        },
+      };
+      fs.writeFileSync(path.join(root, 'channel-lock.json'), `${JSON.stringify({
+        ...lock,
+        files: {
+          ...lock.files,
+          'Formula/guardscan.rb': {sha256: '0'.repeat(64)},
+        },
+      })}\n`);
+      expect(() => prepareFirstReleaseCatalogWithdrawal(root, '1.2.0', commit))
+        .toThrow(/does not exactly identify/);
+      fs.writeFileSync(path.join(root, 'channel-lock.json'), `${JSON.stringify(lock)}\n`);
+      expect(prepareFirstReleaseCatalogWithdrawal(root, '1.2.0', commit)).toEqual({
+        changed: true,
+        state: 'removed',
+        removed: [
+          'Formula/guardscan.rb',
+          'bucket/guardscan.json',
+          'channel-lock.json',
+        ],
+      });
+      expect(prepareFirstReleaseCatalogWithdrawal(root, '1.2.0', commit))
+        .toEqual({changed: false, state: 'already-absent', removed: []});
+      fs.writeFileSync(path.join(root, 'channel-lock.json'), '{}\n');
+      expect(() => prepareFirstReleaseCatalogWithdrawal(root, '1.2.0', commit))
+        .toThrow(/catalog is partial/);
     } finally {
       fs.rmSync(root, {recursive: true, force: true});
     }
@@ -379,6 +787,267 @@ describe('append-only release train', () => {
       fs.rmSync(root, {recursive: true, force: true});
     }
   });
+
+  it('rejects conflicting recovery starts and malformed withdrawal completion evidence', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'guardscan-recovery-conflict-'));
+    const ledger = path.join(root, 'ledger.jsonl');
+    const stable = (type: string, sequence: number, overrides: Record<string, any> = {}) => (
+      eventInput(type, sequence, {
+        version: '1.2.0',
+        tag: 'v1.2.0',
+        ...overrides,
+      })
+    );
+    try {
+      appendEvent(ledger, stable('train_started', 0, {
+        payload: {channels: ['npm']},
+      }));
+      appendEvent(ledger, stable('rollback_started', 1, {
+        payload: {mode: 'first-release-withdrawal', requiredNextVersion: '1.2.1'},
+      }));
+      appendEvent(ledger, stable('rollback_started', 2, {
+        payload: {
+          mode: 'known-good',
+          knownGoodVersion: '1.1.9',
+          knownGoodCommit: 'b'.repeat(40),
+          forwardFixVersion: '1.2.1',
+          forwardFixBranch: 'release/forward-fix-v1.2.1-from-v1.1.9',
+        },
+      }));
+      expect(() => materializeReleaseState(readEvents(ledger)))
+        .toThrow(/recovery cannot be started more than once/);
+
+      const invalidLedger = path.join(root, 'invalid.jsonl');
+      appendEvent(invalidLedger, stable('train_started', 0, {
+        payload: {channels: ['npm']},
+      }));
+      appendEvent(invalidLedger, stable('rollback_started', 1, {
+        payload: {mode: 'first-release-withdrawal', requiredNextVersion: '1.2.1'},
+      }));
+      expect(() => appendEvent(invalidLedger, stable('rollback_repository_completed', 2, {
+        payload: {
+          schemaVersion: 'guardscan.rollback-repository-evidence.v1',
+          mode: 'first-release-withdrawal',
+          defectiveVersion: '1.2.0',
+          requiredNextVersion: '1.2.1',
+          externalActionsPending: [],
+          catalog: {
+            state: 'already-absent',
+            branch: 'rollback/v1.2.0-remove-first-release',
+            pullRequest: 9,
+            commit: 'd'.repeat(40),
+          },
+          completedAt: new Date(Date.parse(timestamp) + 2 * 60_000).toISOString(),
+        },
+      }))).toThrow(/first-release rollback repository evidence is invalid/);
+
+      const legacyLedger = path.join(root, 'legacy.jsonl');
+      appendEvent(legacyLedger, stable('train_started', 0, {
+        payload: {channels: ['npm']},
+      }));
+      appendEvent(legacyLedger, stable('rollback_started', 1, {
+        payload: {
+          knownGoodVersion: '1.1.9',
+          knownGoodCommit: 'b'.repeat(40),
+          forwardFixVersion: '1.2.1',
+          forwardFixBranch: 'release/forward-fix-v1.2.1-from-v1.1.9',
+        },
+      }));
+      expect(materializeReleaseState(readEvents(legacyLedger)).recovery.mode)
+        .toBe('known-good');
+    } finally {
+      fs.rmSync(root, {recursive: true, force: true});
+    }
+  });
+
+  it('runs first-release withdrawal through the CLI idempotently', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'guardscan-withdrawal-cli-'));
+    const ledger = path.join(root, 'ledger.jsonl');
+    const authorityFile = path.join(root, 'authority.json');
+    const repositoryRoot = path.resolve(__dirname, '../../..');
+    const packageRoot = path.join(repositoryRoot, 'cli');
+    const actualCommit = execFileSync('git', ['rev-parse', 'HEAD'], {
+      cwd: repositoryRoot,
+      encoding: 'utf8',
+    }).trim();
+    const cliSource = {
+      version: '1.1.0',
+      tag: 'v1.1.0',
+      commit: actualCommit,
+    };
+    const stdout = jest.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    try {
+      appendEvent(ledger, {
+        ...cliSource,
+        timestamp,
+        type: 'train_started',
+        idempotencyKey: 'train:v1.1.0',
+        payload: {channels: ['npm', 'homebrew']},
+      });
+      fs.writeFileSync(authorityFile, `${JSON.stringify({
+        schemaVersion: 'guardscan.first-release-withdrawal-authority.v1',
+        verified: true,
+        defectiveVersion: '1.1.0',
+        defectiveTag: 'v1.1.0',
+        defectiveCommit: actualCommit,
+        ledgerCommit: 'c'.repeat(40),
+        priorCompleteStableVersions: [],
+      })}\n`);
+      const args = [
+        'rollback',
+        '--package-root', packageRoot,
+        '--repository-root', repositoryRoot,
+        '--commit', actualCommit,
+        '--tag', 'v1.1.0',
+        '--ledger', ledger,
+        '--timestamp', '2026-07-20T00:01:00.000Z',
+        '--idempotency-key', 'rollback:1.1.0',
+        '--first-release-withdrawal',
+        '--first-release-authority', authorityFile,
+      ];
+      await main(args);
+      const first = readEvents(ledger);
+      await main(args);
+      expect(readEvents(ledger)).toEqual(first);
+      expect(materializeReleaseState(first)).toMatchObject({
+        recovery: {
+          status: 'started',
+          mode: 'first-release-withdrawal',
+          requiredNextVersion: '1.1.1',
+        },
+        incidents: {
+          'first-release-withdrawal-v1.1.0': {
+            kind: 'recovery',
+            status: 'open',
+          },
+        },
+      });
+    } finally {
+      stdout.mockRestore();
+      fs.rmSync(root, {recursive: true, force: true});
+    }
+  });
+
+  it('models moderated rejection, correction, and resubmission without losing provider identity', () => {
+    const wingetEvidence = (
+      state: string,
+      pullRequest: number,
+      providerCommit: string,
+      digestCharacter: string,
+      reason?: string
+    ) => {
+      const files = {
+        'NaumanTanwir.GuardScan.installer.yaml': digestCharacter.repeat(64),
+        'NaumanTanwir.GuardScan.locale.en-US.yaml': digestCharacter.repeat(64),
+        'NaumanTanwir.GuardScan.yaml': digestCharacter.repeat(64),
+      };
+      const digestInput = Object.keys(files).sort()
+        .map(name => `${name}\0${files[name as keyof typeof files]}\n`).join('');
+      const remoteDigest = crypto.createHash('sha256').update(digestInput).digest('hex');
+      const providerPath = `manifests/n/NaumanTanwir/GuardScan/${source.version}`;
+      return {
+        schemaVersion: 'guardscan.moderated-submission.v1',
+        channel: 'winget',
+        version: source.version,
+        tag: source.tag,
+        state,
+        packageIdentity: `NaumanTanwir.GuardScan@${source.version}`,
+        remoteIdentity: `github:microsoft/winget-pkgs/pull/${pullRequest}@${providerCommit}#${providerPath}`,
+        remoteDigest,
+        files,
+        provider: {
+          repository: 'microsoft/winget-pkgs',
+          path: providerPath,
+          pullRequest,
+          commit: providerCommit,
+          publicBytesVerified: false,
+          pendingStateQuery: 'digest-bound open pull request, then protected release ledger',
+        },
+        ...(reason ? {reason} : {}),
+      };
+    };
+    const first = eventInput('train_started', 0, {
+      payload: {channels: ['winget']},
+    });
+    const submittedEvidence = wingetEvidence('submitted', 42, 'b'.repeat(40), 'c');
+    const submitted = eventInput('channel_submitted', 1, {
+      channel: 'winget',
+      payload: {
+        artifactIds: ['standalone:windows-x64'],
+        remoteIdentity: submittedEvidence.remoteIdentity,
+        remoteDigest: submittedEvidence.remoteDigest,
+        submission: submittedEvidence,
+      },
+    });
+    const rejectionReason = 'provider pull request closed without merge';
+    const rejectedEvidence = {
+      ...submittedEvidence,
+      state: 'rejected',
+      reason: rejectionReason,
+    };
+    const rejected = eventInput('channel_rejected', 2, {
+      channel: 'winget',
+      payload: {
+        artifactIds: ['standalone:windows-x64'],
+        remoteIdentity: submitted.payload.remoteIdentity,
+        remoteDigest: submitted.payload.remoteDigest,
+        reason: rejectionReason,
+        submission: rejectedEvidence,
+      },
+    });
+    const correctedEvidence = wingetEvidence('corrected', 42, 'd'.repeat(40), 'e');
+    const corrected = eventInput('channel_corrected', 3, {
+      channel: 'winget',
+      payload: {
+        artifactIds: ['standalone:windows-x64'],
+        remoteIdentity: correctedEvidence.remoteIdentity,
+        remoteDigest: correctedEvidence.remoteDigest,
+        submission: correctedEvidence,
+      },
+    });
+    const resubmittedEvidence = wingetEvidence('resubmitted', 43, 'f'.repeat(40), 'e');
+    const resubmitted = eventInput('channel_resubmitted', 4, {
+      channel: 'winget',
+      payload: {
+        artifactIds: ['standalone:windows-x64'],
+        remoteIdentity: resubmittedEvidence.remoteIdentity,
+        remoteDigest: resubmittedEvidence.remoteDigest,
+        submission: resubmittedEvidence,
+      },
+    });
+    const events = [createEvent(first)];
+    for (const input of [submitted, rejected, corrected, resubmitted]) {
+      events.push(createEvent(input, events.at(-1)));
+    }
+    const state = materializeReleaseState(events);
+    expect(state.channels.winget).toMatchObject({
+      status: 'resubmitted',
+      remoteIdentity: resubmitted.payload.remoteIdentity,
+      remoteDigest: resubmitted.payload.remoteDigest,
+      submission: resubmittedEvidence,
+    });
+    expect(reconcileRelease(state)).toMatchObject({
+      complete: false,
+      actions: [{
+        channel: 'winget',
+        required: true,
+        currentStatus: 'resubmitted',
+        action: 'poll-resubmission',
+      }],
+    });
+    expect(() => materializeReleaseState([events[0], events[1], createEvent(
+      eventInput('channel_resubmitted', 2, {
+        channel: 'winget',
+        payload: {
+          artifactIds: ['standalone:windows-x64'],
+          remoteIdentity: resubmittedEvidence.remoteIdentity,
+          remoteDigest: resubmittedEvidence.remoteDigest,
+          submission: resubmittedEvidence,
+        },
+      }),
+      events[1]
+    )])).toThrow(/cannot move winget from submitted to resubmitted/);
+  });
 });
 
 describe('promotion policy and remote idempotency', () => {
@@ -396,8 +1065,11 @@ describe('promotion policy and remote idempotency', () => {
         publishedAt: timestamp,
         sourcePr: 42,
         sourcePrHead: commit,
+        sourcePrBase: 'd'.repeat(40),
+        sourcePrTree: 'e'.repeat(40),
       },
       currentSourcePrHead: commit,
+      currentSourcePrBase: 'd'.repeat(40),
       evaluatedAt: '2026-07-21T00:30:00.000Z',
       requiredChannels: channels,
       canaries,
@@ -413,11 +1085,16 @@ describe('promotion policy and remote idempotency', () => {
     });
     const changed = decisionInput();
     changed.currentSourcePrHead = 'c'.repeat(40);
+    changed.currentSourcePrBase = 'f'.repeat(40);
     changed.incidents = [{incidentId: 'incident-1', kind: 'integrity', status: 'open'}];
     expect(createPromotionDecision(changed)).toMatchObject({
       eligible: false,
       result: 'denied',
-      reasons: expect.arrayContaining(['source_pr_head_changed', 'active_release_incident']),
+      reasons: expect.arrayContaining([
+        'source_pr_head_changed',
+        'source_pr_base_changed',
+        'active_release_incident',
+      ]),
     });
   });
 

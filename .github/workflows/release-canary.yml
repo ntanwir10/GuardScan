@@ -26,6 +26,16 @@ jobs:
     outputs:
       trains: ${{ steps.matrix.outputs.trains }}
     steps:
+      - name: Validate optional manual version before minting credentials
+        env:
+          REQUEST_VERSION: ${{ inputs.version }}
+        run: |
+          node - <<'NODE'
+          const version = process.env.REQUEST_VERSION;
+          if (version && !/^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-rc\.(0|[1-9][0-9]*))?$/.test(version)) {
+            throw new Error('manual canary version is invalid');
+          }
+          NODE
       - name: Create short-lived release app token
         id: app
         if: inputs.version == '' || vars.RELEASE_AUTOMATION_ENABLED == 'true'
@@ -37,11 +47,12 @@ jobs:
         id: matrix
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
+          REQUEST_VERSION: ${{ inputs.version }}
         run: |
-          if [ -n "${{ inputs.version }}" ]; then
+          if [ -n "$REQUEST_VERSION" ]; then
             printf '{"trains":[{"version":"%s","releasePr":0,"channel":"%s"}]}\n' \
-              "${{ inputs.version }}" \
-              "$([[ '${{ inputs.version }}' == *-rc.* ]] && echo rc || echo stable)" \
+              "$REQUEST_VERSION" \
+              "$([[ "$REQUEST_VERSION" == *-rc.* ]] && echo rc || echo stable)" \
               > active.json
           else
             gh api \

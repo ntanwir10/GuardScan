@@ -31,6 +31,10 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: release-payload-${{ inputs.tag }}
@@ -88,6 +92,29 @@ jobs:
             --certificate-identity-regexp "^https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release-train.yml@" \
             --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
             redownload/SHA256SUMS
+      - name: Bind the exact GitHub release asset set to provider evidence
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          node - <<'NODE'
+          const crypto = require('crypto');
+          const fs = require('fs');
+          const path = require('path');
+          const {writePublicationEvidence} = require('./cli/scripts/release/publication-evidence');
+          const files = {};
+          for (const entry of fs.readdirSync('redownload', {withFileTypes: true})) {
+            if (!entry.isFile()) throw new Error('GitHub release evidence contains a non-file');
+            files[entry.name] = crypto.createHash('sha256')
+              .update(fs.readFileSync(path.join('redownload', entry.name))).digest('hex');
+          }
+          writePublicationEvidence('github-publication-evidence.json', {
+            channel: 'github',
+            version: process.env.RELEASE_TAG.slice(1),
+            tag: process.env.RELEASE_TAG,
+            remoteIdentity: `github:${process.env.GITHUB_REPOSITORY}/releases/tag/${process.env.RELEASE_TAG}`,
+            files,
+          });
+          NODE
       - name: Publish verified draft
         env:
           GH_TOKEN: ${{ github.token }}
@@ -95,6 +122,12 @@ jobs:
           if [ "$(gh release view "${{ inputs.tag }}" --repo "${{ github.repository }}" --json isDraft --jq .isDraft)" = true ]; then
             gh release edit "${{ inputs.tag }}" --repo "${{ github.repository }}" --draft=false
           fi
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-github-evidence-${{ inputs.tag }}
+          path: github-publication-evidence.json
+          if-no-files-found: error
+          retention-days: 30
 
   npm:
     name: npm trusted publication
@@ -139,6 +172,28 @@ jobs:
       - name: Verify public registry integrity
         working-directory: cli
         run: npm run release:npm-preflight -- --artifact-dir ../npm-artifact
+      - name: Bind the exact npm tarball to provider evidence
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          node - <<'NODE'
+          const fs = require('fs');
+          const {writePublicationEvidence} = require('./cli/scripts/release/publication-evidence');
+          const artifact = JSON.parse(fs.readFileSync('npm-artifact/npm-artifact.json'));
+          writePublicationEvidence('npm-publication-evidence.json', {
+            channel: 'npm',
+            version: process.env.RELEASE_TAG.slice(1),
+            tag: process.env.RELEASE_TAG,
+            remoteIdentity: `npm:${artifact.packageName}@${artifact.version}`,
+            files: {[artifact.filename]: artifact.sha256},
+          });
+          NODE
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-npm-evidence-${{ inputs.tag }}
+          path: npm-publication-evidence.json
+          if-no-files-found: error
+          retention-days: 30
 
   pypi-test:
     name: TestPyPI trusted publication
@@ -150,6 +205,10 @@ jobs:
       contents: read
       id-token: write
     steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: release-payload-${{ inputs.tag }}
@@ -394,6 +453,36 @@ jobs:
                   raise SystemExit("PyPI did not converge to the complete tested wheel set")
               time.sleep(10)
           PY
+      - name: Bind the exact PyPI wheel set to provider evidence
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          node - <<'NODE'
+          const crypto = require('crypto');
+          const fs = require('fs');
+          const path = require('path');
+          const {writePublicationEvidence} = require('./cli/scripts/release/publication-evidence');
+          const files = {};
+          for (const entry of fs.readdirSync('dist', {withFileTypes: true})) {
+            if (!entry.isFile() || !entry.name.endsWith('.whl')) continue;
+            files[entry.name] = crypto.createHash('sha256')
+              .update(fs.readFileSync(path.join('dist', entry.name))).digest('hex');
+          }
+          const version = process.env.RELEASE_TAG.slice(1);
+          writePublicationEvidence('pypi-publication-evidence.json', {
+            channel: 'pypi',
+            version,
+            tag: process.env.RELEASE_TAG,
+            remoteIdentity: `pypi:guardscan-cli@${version.replace('-rc.', 'rc')}`,
+            files,
+          });
+          NODE
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-pypi-evidence-${{ inputs.tag }}
+          path: pypi-publication-evidence.json
+          if-no-files-found: error
+          retention-days: 30
 
   catalog:
     name: Shared Homebrew and Scoop catalog projection
@@ -645,8 +734,8 @@ jobs:
           [IO.File]::WriteAllText('winget-digest-input.txt', $digestInput, [Text.UTF8Encoding]::new($false))
           $manifestDigest = (Get-FileHash winget-digest-input.txt -Algorithm SHA256).Hash.ToLowerInvariant()
 
-          function Write-WinGetEvidence($state, $remoteIdentity, $pullRequest, $commit, $publicBytesVerified) {
-            [ordered]@{
+          function Write-WinGetEvidence($state, $remoteIdentity, $pullRequest, $commit, $publicBytesVerified, $reason = $null) {
+            $evidence = [ordered]@{
               schemaVersion = 'guardscan.moderated-submission.v1'
               channel = 'winget'
               version = $version
@@ -665,7 +754,9 @@ jobs:
                 pendingStateQuery = 'digest-bound open pull request, then protected release ledger'
               }
               checkedAt = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.fffZ')
-            } | ConvertTo-Json -Depth 8 | Out-File winget-evidence.json -Encoding utf8
+            }
+            if (-not [string]::IsNullOrWhiteSpace($reason)) { $evidence.reason = $reason }
+            $evidence | ConvertTo-Json -Depth 8 | Out-File winget-evidence.json -Encoding utf8
           }
 
           function Assert-WinGetRemoteFiles($remoteFiles) {
@@ -726,6 +817,56 @@ jobs:
             throw 'Unable to query public WinGet catalog reliably'
           }
 
+          git fetch origin release-ledger
+          if ($LASTEXITCODE -ne 0) { throw 'Unable to fetch protected release ledger' }
+          $ledgerPath = "events/$($env:RELEASE_TAG).jsonl"
+          $ledgerEntry = git ls-tree --name-only origin/release-ledger -- $ledgerPath
+          if ($LASTEXITCODE -ne 0) { throw 'Unable to inspect protected release ledger' }
+          if (-not [string]::IsNullOrWhiteSpace(($ledgerEntry | Out-String))) {
+            $ledgerLines = git show "origin/release-ledger:$ledgerPath"
+            if ($LASTEXITCODE -ne 0) { throw 'Unable to read protected release ledger' }
+            $existing = $ledgerLines | ForEach-Object { $_ | ConvertFrom-Json } |
+              Where-Object {
+                $_.channel -eq 'winget' -and $_.type -in @(
+                  'channel_submitted', 'channel_accepted', 'channel_rejected', 'channel_corrected', 'channel_resubmitted'
+                )
+              } | Select-Object -Last 1
+            if ($null -ne $existing) {
+              if ($existing.payload.remoteDigest -ne $manifestDigest) {
+                throw 'WinGet protected-ledger digest conflicts with rendered manifests'
+              }
+              if ($null -eq $existing.payload.submission) {
+                throw 'WinGet protected-ledger evidence is incomplete'
+              }
+              $recordedPull = $existing.payload.submission.provider.pullRequest
+              if ($null -eq $recordedPull -or $recordedPull -le 0) {
+                throw 'WinGet protected-ledger pull request identity is invalid'
+              }
+              $pullJson = gh api "repos/microsoft/winget-pkgs/pulls/$recordedPull"
+              if ($LASTEXITCODE -ne 0) { throw 'Unable to query recorded WinGet pull request' }
+              $pullRequest = ($pullJson | Out-String | ConvertFrom-Json)
+              $remoteIdentity = "github:microsoft/winget-pkgs/pull/$($pullRequest.number)@$($pullRequest.head.sha)#$manifestPath"
+              if ($pullRequest.merged) {
+                Assert-WinGetPullRequest $pullRequest
+                Write-WinGetEvidence 'accepted' $remoteIdentity $($pullRequest.number) $($pullRequest.head.sha) $false
+                exit 0
+              }
+              if ($pullRequest.state -eq 'closed') {
+                $labels = @($pullRequest.labels | ForEach-Object { $_.name } | Sort-Object) -join ','
+                $reason = "provider pull request closed without merge; labels=$labels"
+                Write-WinGetEvidence 'rejected' $remoteIdentity $($pullRequest.number) $($pullRequest.head.sha) $false $reason
+                exit 0
+              }
+              Assert-WinGetPullRequest $pullRequest
+              $state = if ($existing.type -in @('channel_rejected', 'channel_corrected')) {
+                'resubmitted'
+              } else { 'pending-ledger' }
+              Write-WinGetEvidence $state $remoteIdentity $($pullRequest.number) $($pullRequest.head.sha) $false
+              Write-Host 'WinGet provider state was resolved from the recorded pull request; the protected release ledger prevents a blind duplicate.'
+              exit 0
+            }
+          }
+
           $submitter = (gh api user --jq .login).Trim()
           if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($submitter)) {
             throw 'Unable to resolve WinGet submitting identity'
@@ -736,30 +877,6 @@ jobs:
             Assert-WinGetPullRequest $pullRequest
             Write-WinGetEvidence 'pending' "github:microsoft/winget-pkgs/pull/$($pullRequest.number)@$($pullRequest.head.sha)#$manifestPath" $($pullRequest.number) $($pullRequest.head.sha) $false
             exit 0
-          }
-
-          git fetch origin release-ledger
-          if ($LASTEXITCODE -ne 0) { throw 'Unable to fetch protected release ledger' }
-          $ledgerPath = "events/$($env:RELEASE_TAG).jsonl"
-          $ledgerEntry = git ls-tree --name-only origin/release-ledger -- $ledgerPath
-          if ($LASTEXITCODE -ne 0) { throw 'Unable to inspect protected release ledger' }
-          if (-not [string]::IsNullOrWhiteSpace(($ledgerEntry | Out-String))) {
-            $ledgerLines = git show "origin/release-ledger:$ledgerPath"
-            if ($LASTEXITCODE -ne 0) { throw 'Unable to read protected release ledger' }
-            $existing = $ledgerLines | ForEach-Object { $_ | ConvertFrom-Json } |
-              Where-Object { $_.type -eq 'channel_submitted' -and $_.channel -eq 'winget' } |
-              Select-Object -Last 1
-            if ($null -ne $existing) {
-              if ($existing.payload.remoteDigest -ne $manifestDigest) {
-                throw 'WinGet protected-ledger digest conflicts with rendered manifests'
-              }
-              if ($null -eq $existing.payload.submission) {
-                throw 'WinGet protected-ledger evidence is incomplete'
-              }
-              $existing.payload.submission | ConvertTo-Json -Depth 8 | Out-File winget-evidence.json -Encoding utf8
-              Write-Host 'WinGet pending provider state is not stronger than recorded evidence; the protected release ledger prevents a blind duplicate.'
-              exit 0
-            }
           }
 
           $wingetCreateUrl = "https://github.com/microsoft/winget-create/releases/download/v$env:RELEASE_WINGETCREATE_VERSION/wingetcreate.exe"
@@ -839,8 +956,8 @@ jobs:
           $packageIdentity = "guardscan@$version"
           $publicUrl = "https://community.chocolatey.org/api/v2/package/guardscan/$version"
 
-          function Write-ChocolateyEvidence($state, $remoteIdentity, $publicBytesVerified) {
-            [ordered]@{
+          function Write-ChocolateyEvidence($state, $remoteIdentity, $publicBytesVerified, $reason = $null) {
+            $evidence = [ordered]@{
               schemaVersion = 'guardscan.moderated-submission.v1'
               channel = 'chocolatey'
               version = $version
@@ -856,7 +973,9 @@ jobs:
                 pendingStateQuery = 'public package bytes only; protected release ledger prevents a blind duplicate after recorded submission'
               }
               checkedAt = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.fffZ')
-            } | ConvertTo-Json -Depth 8 | Out-File chocolatey-evidence.json -Encoding utf8
+            }
+            if (-not [string]::IsNullOrWhiteSpace($reason)) { $evidence.reason = $reason }
+            $evidence | ConvertTo-Json -Depth 8 | Out-File chocolatey-evidence.json -Encoding utf8
           }
 
           $public = $false
@@ -887,16 +1006,38 @@ jobs:
             $ledgerLines = git show "origin/release-ledger:$ledgerPath"
             if ($LASTEXITCODE -ne 0) { throw 'Unable to read protected release ledger' }
             $existing = $ledgerLines | ForEach-Object { $_ | ConvertFrom-Json } |
-              Where-Object { $_.type -eq 'channel_submitted' -and $_.channel -eq 'chocolatey' } |
+              Where-Object {
+                $_.channel -eq 'chocolatey' -and $_.type -in @(
+                  'channel_submitted', 'channel_accepted', 'channel_rejected', 'channel_corrected', 'channel_resubmitted'
+                )
+              } |
               Select-Object -Last 1
             if ($null -ne $existing) {
               if ($existing.payload.remoteDigest -ne $packageDigest) {
                 throw 'Chocolatey protected-ledger digest conflicts with rendered package'
               }
-              if ($null -eq $existing.payload.submission) {
+              $submission = if ($null -ne $existing.payload.submission) {
+                $existing.payload.submission
+              } else {
+                ($ledgerLines | ForEach-Object { $_ | ConvertFrom-Json } |
+                  Where-Object { $_.channel -eq 'chocolatey' -and $null -ne $_.payload.submission } |
+                  Select-Object -Last 1).payload.submission
+              }
+              if ($null -eq $submission) {
                 throw 'Chocolatey protected-ledger evidence is incomplete'
               }
-              $existing.payload.submission | ConvertTo-Json -Depth 8 | Out-File chocolatey-evidence.json -Encoding utf8
+              $submittedAt = [DateTimeOffset]::Parse($existing.timestamp)
+              if ($existing.type -eq 'channel_rejected') {
+                $reason = $existing.payload.reason ?? 'provider moderation requires maintainer correction'
+                Write-ChocolateyEvidence 'rejected' "chocolatey:$packageIdentity" $false $reason
+                exit 0
+              }
+              if (([DateTimeOffset]::UtcNow - $submittedAt).TotalDays -ge 35) {
+                $reason = 'public package remained absent through the documented 35-day no-response moderation window; maintainer confirmation is required'
+                Write-ChocolateyEvidence 'rejected' "chocolatey:$packageIdentity" $false $reason
+                exit 0
+              }
+              $submission | ConvertTo-Json -Depth 8 | Out-File chocolatey-evidence.json -Encoding utf8
               Write-Host 'Chocolatey pending moderation cannot be queried reliably; the protected release ledger prevents a blind duplicate.'
               exit 0
             }

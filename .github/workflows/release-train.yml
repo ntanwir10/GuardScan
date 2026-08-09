@@ -145,6 +145,10 @@ jobs:
       && vars.RELEASE_AUTOMATION_ENABLED == 'true'
       && (inputs.action == 'candidate' || inputs.action == 'promote')
     runs-on: ubuntu-24.04
+    env:
+      REQUEST_ACTION: ${{ inputs.action }}
+      REQUEST_VERSION: ${{ inputs.version }}
+      REQUEST_RELEASE_PR: ${{ inputs.release_pr }}
     concurrency:
       group: release-ledger
       cancel-in-progress: false
@@ -155,7 +159,25 @@ jobs:
       channel: ${{ steps.result.outputs.channel }}
       release_pr: ${{ steps.result.outputs.release_pr }}
       source_pr_head: ${{ steps.result.outputs.source_pr_head }}
+      source_pr_base: ${{ steps.result.outputs.source_pr_base }}
+      source_pr_tree: ${{ steps.result.outputs.source_pr_tree }}
     steps:
+      - name: Validate untrusted release request syntax before minting credentials
+        run: |
+          node - <<'NODE'
+          const action = process.env.REQUEST_ACTION;
+          const version = process.env.REQUEST_VERSION;
+          const releasePr = process.env.REQUEST_RELEASE_PR;
+          if (!['candidate', 'promote'].includes(action)) {
+            throw new Error('prepare request action is invalid');
+          }
+          if (!/^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-rc\.(0|[1-9][0-9]*))?$/.test(version || '')) {
+            throw new Error('release request version is invalid');
+          }
+          if (!/^[1-9][0-9]*$/.test(releasePr || '') || !Number.isSafeInteger(Number(releasePr))) {
+            throw new Error('release request PR is invalid');
+          }
+          NODE
       - name: Create short-lived release app token
         id: app
         uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
@@ -167,14 +189,21 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
         run: |
-          test -n "${{ inputs.release_pr }}"
           gh api \
             -H "Accept: application/vnd.github.raw+json" \
             "repos/${GITHUB_REPOSITORY}/contents/active-versions.json?ref=release-ledger" \
             > active-versions.json
           node - <<'NODE'
           const active = require('./active-versions.json').trains || [];
-          const incompleteStable = active.filter(train => train.channel === 'stable');
+          const stableVersion = (process.env.REQUEST_VERSION || '').replace(/-rc\.[0-9]+$/, '');
+          const incompleteStable = active.filter(train => (
+            train.channel === 'stable'
+            && !(
+              process.env.REQUEST_ACTION === 'promote'
+              && train.version === stableVersion
+              && train.releasePr === Number(process.env.REQUEST_RELEASE_PR)
+            )
+          ));
           if (incompleteStable.length > 0) {
             throw new Error(
               `cannot start or promote while a stable train remains incomplete: ${
@@ -183,11 +212,15 @@ jobs:
             );
           }
           NODE
-          gh api "repos/${GITHUB_REPOSITORY}/pulls/${{ inputs.release_pr }}" > release-pr.json
+          gh api "repos/${GITHUB_REPOSITORY}/pulls/$REQUEST_RELEASE_PR" > release-pr.json
           HEAD_SHA="$(node - <<'NODE'
           const pr = require('./release-pr.json');
-          if (pr.state !== 'open') {
-            throw new Error('release PR must be OPEN');
+          const resumableMergedPromotion = process.env.REQUEST_ACTION === 'promote'
+            && pr.state === 'closed'
+            && pr.merged === true
+            && /^[a-f0-9]{40}$/.test(pr.merge_commit_sha || '');
+          if (pr.state !== 'open' && !resumableMergedPromotion) {
+            throw new Error('release PR must be OPEN or an already-merged resumable promotion');
           }
           if (pr.base?.ref !== 'main') {
             throw new Error('release PR must target main');
@@ -204,18 +237,31 @@ jobs:
           process.stdout.write(pr.head.sha);
           NODE
           )"
+          BASE_SHA="$(node -p 'require("./release-pr.json").base.sha')"
+          TREE_SHA="$(gh api "repos/${GITHUB_REPOSITORY}/git/commits/$HEAD_SHA" --jq .tree.sha)"
+          for SHA in "$BASE_SHA" "$TREE_SHA"; do
+            case "$SHA" in
+              *[!a-f0-9]*|'') echo "Release PR commit identity is invalid" >&2; exit 1 ;;
+            esac
+            test "${#SHA}" = 40
+          done
           echo "head_sha=$HEAD_SHA" >> "$GITHUB_OUTPUT"
+          echo "base_sha=$BASE_SHA" >> "$GITHUB_OUTPUT"
+          echo "tree_sha=$TREE_SHA" >> "$GITHUB_OUTPUT"
           echo "is_draft=$(node -p 'String(require("./release-pr.json").draft)')" >> "$GITHUB_OUTPUT"
+          echo "pr_state=$(node -p 'require("./release-pr.json").merged ? "MERGED" : "OPEN"')" >> "$GITHUB_OUTPUT"
+          echo "merge_sha=$(node -p 'require("./release-pr.json").merge_commit_sha || ""')" >> "$GITHUB_OUTPUT"
       - name: Mark validated release PR ready and recheck candidate source
         if: inputs.action == 'candidate'
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
           EXPECTED_HEAD: ${{ steps.source.outputs.head_sha }}
+          SOURCE_IS_DRAFT: ${{ steps.source.outputs.is_draft }}
         run: |
-          if [ "${{ steps.source.outputs.is_draft }}" = true ]; then
-            gh pr ready "${{ inputs.release_pr }}" --repo "${GITHUB_REPOSITORY}"
+          if [ "$SOURCE_IS_DRAFT" = true ]; then
+            gh pr ready "$REQUEST_RELEASE_PR" --repo "$GITHUB_REPOSITORY"
           fi
-          CURRENT_HEAD="$(gh pr view "${{ inputs.release_pr }}" \
+          CURRENT_HEAD="$(gh pr view "$REQUEST_RELEASE_PR" \
             --repo "${GITHUB_REPOSITORY}" --json headRefOid --jq .headRefOid)"
           test "$CURRENT_HEAD" = "$EXPECTED_HEAD"
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -233,8 +279,11 @@ jobs:
         if: inputs.action == 'candidate'
         env:
           RELEASE_APP_TOKEN: ${{ steps.app.outputs.token }}
+          SOURCE_PR_HEAD: ${{ steps.source.outputs.head_sha }}
+          SOURCE_PR_BASE: ${{ steps.source.outputs.base_sha }}
+          SOURCE_PR_TREE: ${{ steps.source.outputs.tree_sha }}
         run: |
-          case "${{ inputs.version }}" in
+          case "$REQUEST_VERSION" in
             *-rc.[0-9]*) ;;
             *) echo "Candidate version must end in -rc.N" >&2; exit 1 ;;
           esac
@@ -244,45 +293,97 @@ jobs:
             process.stdout.write(new Date(value).toISOString());
           ')"
           node cli/scripts/release/index.js candidate \
-            --candidate-version "${{ inputs.version }}" \
-            --source-pr "${{ inputs.release_pr }}" \
-            --source-pr-head "${{ steps.source.outputs.head_sha }}" \
+            --candidate-version "$REQUEST_VERSION" \
+            --source-pr "$REQUEST_RELEASE_PR" \
+            --source-pr-head "$SOURCE_PR_HEAD" \
+            --source-pr-base "$SOURCE_PR_BASE" \
+            --source-pr-tree "$SOURCE_PR_TREE" \
             --timestamp "$CREATED_AT"
-          npm --prefix cli run release:validate -- --tag "v${{ inputs.version }}"
+          npm --prefix cli run release:validate -- --tag "v$REQUEST_VERSION"
           git config user.name guardscan-release-bot
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add cli/package.json cli/package-lock.json cli/CHANGELOG.md .release-candidate.json
           GIT_AUTHOR_DATE="$CREATED_AT" GIT_COMMITTER_DATE="$CREATED_AT" \
-            git commit -m "chore(release): candidate ${{ inputs.version }}"
-          if git rev-parse --verify "refs/tags/v${{ inputs.version }}" >/dev/null 2>&1; then
-            test "$(git rev-list -n 1 "v${{ inputs.version }}")" = "$(git rev-parse HEAD)"
+            git commit -m "chore(release): candidate $REQUEST_VERSION"
+          if git rev-parse --verify "refs/tags/v$REQUEST_VERSION" >/dev/null 2>&1; then
+            test "$(git rev-list -n 1 "v$REQUEST_VERSION")" = "$(git rev-parse HEAD)"
           else
-            git tag "v${{ inputs.version }}"
+            git tag "v$REQUEST_VERSION"
           fi
-          git push origin "HEAD:refs/heads/release-candidate/v${{ inputs.version }}"
-          git push origin "refs/tags/v${{ inputs.version }}"
+          git push origin "HEAD:refs/heads/release-candidate/v$REQUEST_VERSION"
+          git push origin "refs/tags/v$REQUEST_VERSION"
       - name: Emit candidate build identity
         if: inputs.action == 'candidate'
         id: candidate
         run: |
           echo "ref=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-          echo "tag=v${{ inputs.version }}" >> "$GITHUB_OUTPUT"
+          echo "tag=v$REQUEST_VERSION" >> "$GITHUB_OUTPUT"
 
-      - name: Materialize machine promotion decision
+      - name: Materialize or recover the persisted machine promotion decision
         if: inputs.action == 'promote'
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
           CURRENT_HEAD: ${{ steps.source.outputs.head_sha }}
+          CURRENT_BASE: ${{ steps.source.outputs.base_sha }}
+          PR_STATE: ${{ steps.source.outputs.pr_state }}
         run: |
           git fetch origin release-ledger
-          git show "origin/release-ledger:events/v${{ inputs.version }}.jsonl" > release-events.jsonl
-          RC_TAG="v${{ inputs.version }}"
+          git worktree add decision-ledger origin/release-ledger
+          git show "origin/release-ledger:events/v$REQUEST_VERSION.jsonl" > release-events.jsonl
+          RC_TAG="v$REQUEST_VERSION"
           git fetch origin "refs/tags/$RC_TAG:refs/tags/$RC_TAG"
           git switch --detach "$RC_TAG"
           npm --prefix cli ci
-          CURRENT_HEAD="$(gh pr view "${{ inputs.release_pr }}" \
-            --repo "${GITHUB_REPOSITORY}" --json headRefOid --jq .headRefOid)"
-          node - <<'NODE'
+          if [ "$PR_STATE" = MERGED ]; then
+            node - <<'NODE'
+          const crypto = require('crypto');
+          const fs = require('fs');
+          const path = require('path');
+          const {readEvents, materializeReleaseState} = require('./cli/scripts/release/events');
+          const {validateDocument} = require('./cli/scripts/release/lib');
+          const events = readEvents('release-events.jsonl');
+          const state = materializeReleaseState(events);
+          const candidate = JSON.parse(fs.readFileSync('.release-candidate.json'));
+          const pr = JSON.parse(fs.readFileSync('release-pr.json'));
+          const promotion = [...events].reverse().find(event => (
+            event.type === 'promotion_decided'
+            && event.payload.eligible === true
+            && event.payload.result === 'permitted'
+            && /^[a-f0-9]{64}$/.test(event.payload.decisionSha256 || '')
+          ));
+          if (!promotion) throw new Error('merged release PR has no permitted persisted promotion decision');
+          const matches = fs.readdirSync('decision-ledger/decisions')
+            .filter(name => name.endsWith('.json'))
+            .map(name => path.join('decision-ledger/decisions', name))
+            .filter(file => crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex')
+              === promotion.payload.decisionSha256);
+          if (matches.length !== 1) {
+            throw new Error('persisted promotion decision cannot be resolved uniquely by digest');
+          }
+          const decision = validateDocument('decision', matches[0], 'cli');
+          if (!decision.eligible
+              || decision.result !== 'permitted'
+              || decision.rc.version !== state.version
+              || decision.rc.tag !== state.tag
+              || decision.rc.commit !== state.commit
+              || decision.rc.manifestSha256 !== state.manifestSha256
+              || decision.stable.sourcePr !== Number(process.env.REQUEST_RELEASE_PR)
+              || decision.stable.sourcePrHead !== candidate.sourcePrHead
+              || decision.stable.sourcePrBase !== candidate.sourcePrBase
+              || decision.stable.sourcePrTree !== candidate.sourcePrTree
+              || pr.head.sha !== candidate.sourcePrHead
+              || pr.merged !== true
+              || !/^[a-f0-9]{40}$/.test(pr.merge_commit_sha || '')) {
+            throw new Error('persisted promotion decision does not bind the merged release source');
+          }
+          fs.copyFileSync(matches[0], 'promotion-decision.json');
+          NODE
+          else
+            CURRENT_HEAD="$(gh pr view "$REQUEST_RELEASE_PR" \
+              --repo "$GITHUB_REPOSITORY" --json headRefOid --jq .headRefOid)"
+            CURRENT_BASE="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/$REQUEST_RELEASE_PR" --jq .base.sha)"
+            export CURRENT_HEAD CURRENT_BASE
+            node - <<'NODE'
           const fs = require('fs');
           const {readEvents, materializeReleaseState} = require('./cli/scripts/release/events');
           const events = readEvents('release-events.jsonl');
@@ -293,7 +394,8 @@ jobs:
           const canaries = Object.entries(state.canaries).flatMap(([channel, samples]) =>
             samples.map(sample => ({channel, status: sample.status, checkedAt: sample.checkedAt}))
           );
-          const incidents = Object.entries(state.incidents).map(([incidentId, value]) => ({incidentId, ...value}));
+          const incidents = Object.entries(state.incidents)
+            .map(([incidentId, value]) => ({incidentId, ...value}));
           const input = {
             rc: {
               version: state.version,
@@ -303,8 +405,11 @@ jobs:
               publishedAt: published.timestamp,
               sourcePr: candidate.sourcePr,
               sourcePrHead: candidate.sourcePrHead,
+              sourcePrBase: candidate.sourcePrBase,
+              sourcePrTree: candidate.sourcePrTree,
             },
             currentSourcePrHead: process.env.CURRENT_HEAD,
+            currentSourcePrBase: process.env.CURRENT_BASE,
             evaluatedAt: new Date().toISOString(),
             requiredChannels: ['npm', 'pnpm', 'yarn', 'bun', 'github', 'homebrew', 'scoop', 'pypi'],
             canaries,
@@ -312,54 +417,76 @@ jobs:
           };
           fs.writeFileSync('promotion-input.json', `${JSON.stringify(input, null, 2)}\n`);
           NODE
-          node cli/scripts/release/index.js promote \
-            --promotion-input promotion-input.json \
-            --output promotion-decision.json \
-            --ledger release-events.jsonl \
-            --idempotency-key "promotion:${{ inputs.version }}:${GITHUB_RUN_ID}:${GITHUB_RUN_ATTEMPT}" \
-            --tag "$RC_TAG"
-          git worktree add decision-ledger origin/release-ledger
-          mkdir -p decision-ledger/events decision-ledger/decisions
-          cp release-events.jsonl "decision-ledger/events/v${{ inputs.version }}.jsonl"
-          cp promotion-decision.json \
-            "decision-ledger/decisions/v${{ inputs.version }}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.json"
-          (
-            cd decision-ledger
-            git config user.name guardscan-release-bot
-            git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-            git add events decisions
-            git commit -m "promotion decision: v${{ inputs.version }}"
-            git push origin HEAD:release-ledger
-          )
+            node cli/scripts/release/index.js promote \
+              --promotion-input promotion-input.json \
+              --output promotion-decision.json \
+              --ledger release-events.jsonl \
+              --idempotency-key "promotion:$REQUEST_VERSION:${GITHUB_RUN_ID}:${GITHUB_RUN_ATTEMPT}" \
+              --tag "$RC_TAG"
+            mkdir -p decision-ledger/events decision-ledger/decisions
+            cp release-events.jsonl "decision-ledger/events/v$REQUEST_VERSION.jsonl"
+            cp promotion-decision.json \
+              "decision-ledger/decisions/v$REQUEST_VERSION-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.json"
+            (
+              cd decision-ledger
+              git config user.name guardscan-release-bot
+              git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+              git add events decisions
+              git commit -m "promotion decision: v$REQUEST_VERSION"
+              git push origin HEAD:release-ledger
+            )
+          fi
       - name: Auto-merge unchanged stable release PR and create stable tag
         if: inputs.action == 'promote'
         id: stable
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
+          PR_STATE: ${{ steps.source.outputs.pr_state }}
+          RECORDED_MERGE_SHA: ${{ steps.source.outputs.merge_sha }}
+          EXPECTED_HEAD: ${{ steps.source.outputs.head_sha }}
         run: |
           STABLE_VERSION="$(node -p 'require("./promotion-decision.json").stable.version')"
-          gh pr merge "${{ inputs.release_pr }}" \
-            --repo "${GITHUB_REPOSITORY}" \
-            --auto --squash --match-head-commit "${{ steps.source.outputs.head_sha }}"
-          for ATTEMPT in $(seq 1 60); do
-            STATE="$(gh pr view "${{ inputs.release_pr }}" --repo "${GITHUB_REPOSITORY}" --json state --jq .state)"
-            if [ "$STATE" = MERGED ]; then break; fi
-            sleep 10
-          done
-          test "$STATE" = MERGED
-          MERGE_SHA="$(gh pr view "${{ inputs.release_pr }}" \
-            --repo "${GITHUB_REPOSITORY}" --json mergeCommit --jq .mergeCommit.oid)"
+          if [ "$PR_STATE" = OPEN ]; then
+            EXPECTED_BASE="$(node -p 'require("./promotion-decision.json").stable.sourcePrBase')"
+            CURRENT_BASE="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$REQUEST_RELEASE_PR" --jq .base.sha)"
+            test "$CURRENT_BASE" = "$EXPECTED_BASE"
+            CURRENT_HEAD="$(gh pr view "$REQUEST_RELEASE_PR" \
+              --repo "$GITHUB_REPOSITORY" --json headRefOid --jq .headRefOid)"
+            test "$CURRENT_HEAD" = "$EXPECTED_HEAD"
+            gh pr merge "$REQUEST_RELEASE_PR" \
+              --repo "$GITHUB_REPOSITORY" \
+              --squash --match-head-commit "$EXPECTED_HEAD"
+            for ATTEMPT in $(seq 1 60); do
+              STATE="$(gh pr view "$REQUEST_RELEASE_PR" --repo "$GITHUB_REPOSITORY" --json state --jq .state)"
+              if [ "$STATE" = MERGED ]; then break; fi
+              sleep 10
+            done
+            test "$STATE" = MERGED
+            MERGE_SHA="$(gh pr view "$REQUEST_RELEASE_PR" \
+              --repo "$GITHUB_REPOSITORY" --json mergeCommit --jq .mergeCommit.oid)"
+          else
+            MERGE_SHA="$RECORDED_MERGE_SHA"
+          fi
           git fetch origin "$MERGE_SHA"
+          git fetch origin main
+          git merge-base --is-ancestor "$MERGE_SHA" origin/main
           git switch --detach "$MERGE_SHA"
           test "$(node -p 'require("./cli/package.json").version')" = "$STABLE_VERSION"
-          git tag "v$STABLE_VERSION"
-          git push origin "refs/tags/v$STABLE_VERSION"
+          EXPECTED_TREE="$(node -p 'require("./promotion-decision.json").stable.sourcePrTree')"
+          test "$(git rev-parse "$MERGE_SHA^{tree}")" = "$EXPECTED_TREE"
+          if git ls-remote --exit-code --tags origin "refs/tags/v$STABLE_VERSION" >/dev/null 2>&1; then
+            git fetch origin "refs/tags/v$STABLE_VERSION:refs/tags/v$STABLE_VERSION"
+            test "$(git rev-list -n 1 "v$STABLE_VERSION")" = "$MERGE_SHA"
+          else
+            git tag "v$STABLE_VERSION"
+            git push origin "refs/tags/v$STABLE_VERSION"
+          fi
           echo "ref=$MERGE_SHA" >> "$GITHUB_OUTPUT"
           echo "tag=v$STABLE_VERSION" >> "$GITHUB_OUTPUT"
       - name: Select build result
         id: result
         run: |
-          if [ "${{ inputs.action }}" = candidate ]; then
+          if [ "$REQUEST_ACTION" = candidate ]; then
             echo "ref=${{ steps.candidate.outputs.ref }}" >> "$GITHUB_OUTPUT"
             echo "tag=${{ steps.candidate.outputs.tag }}" >> "$GITHUB_OUTPUT"
             echo "channel=rc" >> "$GITHUB_OUTPUT"
@@ -369,8 +496,10 @@ jobs:
             echo "channel=stable" >> "$GITHUB_OUTPUT"
           fi
           echo "build=true" >> "$GITHUB_OUTPUT"
-          echo "release_pr=${{ inputs.release_pr }}" >> "$GITHUB_OUTPUT"
+          echo "release_pr=$REQUEST_RELEASE_PR" >> "$GITHUB_OUTPUT"
           echo "source_pr_head=${{ steps.source.outputs.head_sha }}" >> "$GITHUB_OUTPUT"
+          echo "source_pr_base=${{ steps.source.outputs.base_sha }}" >> "$GITHUB_OUTPUT"
+          echo "source_pr_tree=${{ steps.source.outputs.tree_sha }}" >> "$GITHUB_OUTPUT"
 
   build:
     name: Build exact tagged release
@@ -428,6 +557,18 @@ jobs:
           path: payload
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
+          name: release-github-evidence-${{ needs.prepare.outputs.tag }}
+          path: provider-evidence/github
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-npm-evidence-${{ needs.prepare.outputs.tag }}
+          path: provider-evidence/npm
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-pypi-evidence-${{ needs.prepare.outputs.tag }}
+          path: provider-evidence/pypi
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
           name: release-catalog-${{ needs.prepare.outputs.tag }}
           path: catalog-evidence
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
@@ -446,6 +587,8 @@ jobs:
           RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
           RELEASE_PR: ${{ needs.prepare.outputs.release_pr }}
           SOURCE_PR_HEAD: ${{ needs.prepare.outputs.source_pr_head }}
+          SOURCE_PR_BASE: ${{ needs.prepare.outputs.source_pr_base }}
+          SOURCE_PR_TREE: ${{ needs.prepare.outputs.source_pr_tree }}
           RELEASE_CHANNEL: ${{ needs.prepare.outputs.channel }}
         run: |
           git fetch origin release-ledger
@@ -457,6 +600,7 @@ jobs:
           const cp = require('child_process');
           const {appendEvent, readEvents} = require('./cli/scripts/release/events');
           const {releaseTrainChannels} = require('./cli/scripts/release/lib');
+          const {createPublicationEvidence} = require('./cli/scripts/release/publication-evidence');
           const tag = process.env.RELEASE_TAG;
           const version = tag.slice(1);
           const commit = cp.execFileSync('git', ['rev-parse', 'HEAD'], {encoding: 'utf8'}).trim();
@@ -484,6 +628,8 @@ jobs:
                 profile: 'full',
                 releasePr: Number(process.env.RELEASE_PR),
                 sourcePrHead: process.env.SOURCE_PR_HEAD,
+                sourcePrBase: process.env.SOURCE_PR_BASE,
+                sourcePrTree: process.env.SOURCE_PR_TREE,
                 channels,
               },
             });
@@ -505,6 +651,43 @@ jobs:
               artifact.kind === 'standalone' && artifact.platform.os === 'windows'
             ).map(artifact => artifact.id),
           };
+          const sha256File = file => crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+          const canonicalEntries = entries => entries.sort(([left], [right]) => (
+            left < right ? -1 : left > right ? 1 : 0
+          ));
+          const expectedProviderFiles = {
+            github: Object.fromEntries(canonicalEntries(fs.readdirSync('payload').map(filename => [
+              filename,
+              sha256File(`payload/${filename}`),
+            ]))),
+            npm: Object.fromEntries(canonicalEntries(manifestDocument.artifacts
+              .filter(artifact => artifact.kind === 'npm-tarball')
+              .map(artifact => [artifact.filename, artifact.sha256]))),
+            pypi: Object.fromEntries(canonicalEntries(manifestDocument.artifacts
+              .filter(artifact => artifact.kind === 'python-wheel')
+              .map(artifact => [artifact.filename, artifact.sha256]))),
+          };
+          const providerEvidence = Object.fromEntries(['github', 'npm', 'pypi'].map(channel => {
+            const filename = `provider-evidence/${channel}/${channel}-publication-evidence.json`;
+            const evidence = JSON.parse(fs.readFileSync(filename, 'utf8'));
+            const normalized = createPublicationEvidence(evidence);
+            if (JSON.stringify(normalized) !== JSON.stringify(evidence)
+                || evidence.channel !== channel
+                || evidence.version !== version
+                || evidence.tag !== tag
+                || JSON.stringify(evidence.files) !== JSON.stringify(expectedProviderFiles[channel])) {
+              throw new Error(`${channel} publication evidence does not match exact release artifacts`);
+            }
+            const expectedIdentity = {
+              github: `github:${process.env.GITHUB_REPOSITORY}/releases/tag/${tag}`,
+              npm: `npm:guardscan@${version}`,
+              pypi: `pypi:guardscan-cli@${version.replace('-rc.', 'rc')}`,
+            }[channel];
+            if (evidence.remoteIdentity !== expectedIdentity) {
+              throw new Error(`${channel} publication evidence has an unexpected remote identity`);
+            }
+            return [channel, evidence];
+          }));
           const readModeratedEvidence = channel => {
             const file = `moderated-evidence/${channel}/${channel}-evidence.json`;
             const evidence = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, ''));
@@ -517,7 +700,10 @@ jobs:
                 || typeof evidence.remoteIdentity !== 'string'
                 || evidence.remoteIdentity.length === 0
                 || !/^[a-f0-9]{64}$/.test(evidence.remoteDigest || '')
-                || !['submitted', 'pending', 'pending-ledger', 'public-exact'].includes(evidence.state)
+                || ![
+                  'submitted', 'pending', 'pending-ledger', 'accepted', 'public-exact',
+                  'rejected', 'corrected', 'resubmitted',
+                ].includes(evidence.state)
                 || typeof evidence.provider?.pendingStateQuery !== 'string') {
               throw new Error(`${channel} submission evidence is invalid or belongs to another release`);
             }
@@ -563,18 +749,19 @@ jobs:
             }
             const normalized = {...evidence};
             delete normalized.checkedAt;
-            normalized.state = evidence.state === 'public-exact' ? 'public-exact' : 'pending';
             return normalized;
           };
           for (const channel of ['github', 'npm', 'pypi']) {
+            const evidence = providerEvidence[channel];
             const idempotencyKey = `published:${channel}:${tag}`;
             appendEvent(ledger, {
               ...base, timestamp: timestampFor(idempotencyKey), type: 'channel_published', channel,
               idempotencyKey,
               payload: {
                 artifactIds: artifactIds[channel],
-                remoteIdentity: `${channel}:${tag}`,
-                remoteDigest: manifestSha256,
+                remoteIdentity: evidence.remoteIdentity,
+                remoteDigest: evidence.aggregateSha256,
+                publication: evidence,
               },
             });
           }
@@ -611,19 +798,29 @@ jobs:
           if (process.env.RELEASE_CHANNEL === 'stable') {
             for (const channel of ['winget', 'chocolatey']) {
               const evidence = readModeratedEvidence(channel);
+              const eventType = {
+                accepted: 'channel_accepted',
+                'public-exact': 'channel_accepted',
+                rejected: 'channel_rejected',
+                corrected: 'channel_corrected',
+                resubmitted: 'channel_resubmitted',
+              }[evidence.state] || 'channel_submitted';
               const identityKey = crypto.createHash('sha256')
                 .update(evidence.remoteIdentity)
                 .digest('hex')
                 .slice(0, 16);
-              const idempotencyKey = `submitted:${channel}:${tag}:${evidence.remoteDigest}:${identityKey}`;
+              const idempotencyKey = `${eventType}:${channel}:${tag}:${evidence.remoteDigest}:${identityKey}`;
               appendEvent(ledger, {
-                ...base, timestamp: timestampFor(idempotencyKey), type: 'channel_submitted', channel,
+                ...base, timestamp: timestampFor(idempotencyKey), type: eventType, channel,
                 idempotencyKey,
                 payload: {
                   artifactIds: artifactIds.scoop,
                   remoteIdentity: evidence.remoteIdentity,
                   remoteDigest: evidence.remoteDigest,
                   submission: evidence,
+                  ...(eventType === 'channel_rejected'
+                    ? {reason: evidence.reason || 'provider rejected the moderated submission'}
+                    : {}),
                 },
               });
             }
@@ -667,10 +864,24 @@ jobs:
     name: Reconcile remote state and trigger eligible promotion
     if: github.event_name == 'workflow_dispatch' && inputs.action == 'reconcile'
     runs-on: ubuntu-24.04
+    env:
+      RELEASE_VERSION: ${{ inputs.version }}
+      RELEASE_PR: ${{ inputs.release_pr }}
     concurrency:
       group: release-ledger
       cancel-in-progress: false
     steps:
+      - name: Validate untrusted reconciliation request before minting credentials
+        run: |
+          node - <<'NODE'
+          if (!/^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-rc\.(0|[1-9][0-9]*))?$/.test(process.env.RELEASE_VERSION || '')) {
+            throw new Error('reconciliation version is invalid');
+          }
+          if (!/^[1-9][0-9]*$/.test(process.env.RELEASE_PR || '')
+              || !Number.isSafeInteger(Number(process.env.RELEASE_PR))) {
+            throw new Error('reconciliation release PR is invalid');
+          }
+          NODE
       - name: Create short-lived cross-repository release app token
         id: app
         uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
@@ -694,16 +905,15 @@ jobs:
           GH_TOKEN: ${{ steps.app.outputs.token }}
         run: |
           git fetch origin release-ledger
-          git show "origin/release-ledger:events/v${{ inputs.version }}.jsonl" > release-events.jsonl
+          git show "origin/release-ledger:events/v$RELEASE_VERSION.jsonl" > release-events.jsonl
           node cli/scripts/release/index.js reconcile \
             --ledger release-events.jsonl \
-            --tag "v${{ inputs.version }}" > reconciliation.json
+            --tag "v$RELEASE_VERSION" > reconciliation.json
           cat reconciliation.json
       - name: Authoritatively refetch and reconcile the shared catalog
         id: catalog
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
-          RELEASE_VERSION: ${{ inputs.version }}
           AUTOMATION_ENABLED: ${{ vars.RELEASE_AUTOMATION_ENABLED }}
         run: |
           ACTIVE_CHANNEL="$(gh api \
@@ -852,8 +1062,6 @@ jobs:
           echo "exact=true" >> "$GITHUB_OUTPUT"
       - name: Persist refetched catalog publication evidence
         if: vars.RELEASE_AUTOMATION_ENABLED == 'true' && steps.catalog.outputs.exact == 'true'
-        env:
-          RELEASE_VERSION: ${{ inputs.version }}
         run: |
           node - <<'NODE'
           const fs = require('fs');
@@ -899,13 +1107,13 @@ jobs:
           }
           NODE
           git worktree add ledger-branch origin/release-ledger
-          cp release-events.jsonl "ledger-branch/events/v${{ inputs.version }}.jsonl"
+          cp release-events.jsonl "ledger-branch/events/v$RELEASE_VERSION.jsonl"
           (
             cd ledger-branch
             git config user.name guardscan-release-bot
             git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-            git add "events/v${{ inputs.version }}.jsonl"
-            git commit -m "catalog reconciled: v${{ inputs.version }}" || exit 0
+            git add "events/v$RELEASE_VERSION.jsonl"
+            git commit -m "catalog reconciled: v$RELEASE_VERSION" || exit 0
             git push origin HEAD:release-ledger
           )
       - name: Trigger promotion when the machine policy is eligible
@@ -929,9 +1137,24 @@ jobs:
             gh workflow run release-train.yml \
               --repo "${GITHUB_REPOSITORY}" \
               -f action=promote \
-              -f version="${{ inputs.version }}" \
-              -f release_pr="${{ inputs.release_pr }}"
+              -f version="$RELEASE_VERSION" \
+              -f release_pr="$RELEASE_PR"
           fi
+
+  first-release-withdrawal:
+    name: Withdraw first stable release without a known-good baseline
+    if: >-
+      github.event_name == 'workflow_dispatch'
+      && vars.RELEASE_AUTOMATION_ENABLED == 'true'
+      && inputs.action == 'rollback'
+      && inputs.known_good == ''
+    permissions:
+      contents: read
+      pull-requests: read
+    uses: ./.github/workflows/release-first-withdrawal.yml
+    with:
+      version: ${{ inputs.version }}
+    secrets: inherit
 
   rollback:
     name: Append rollback and prepare forward fix
@@ -939,17 +1162,34 @@ jobs:
       github.event_name == 'workflow_dispatch'
       && vars.RELEASE_AUTOMATION_ENABLED == 'true'
       && inputs.action == 'rollback'
+      && inputs.known_good != ''
     runs-on: ubuntu-24.04
+    env:
+      DEFECTIVE_VERSION: ${{ inputs.version }}
+      KNOWN_GOOD_VERSION: ${{ inputs.known_good }}
     concurrency:
       group: release-ledger
       cancel-in-progress: false
     steps:
-      - name: Create short-lived release app token
+      - name: Validate untrusted rollback request before minting credentials
+        run: |
+          node - <<'NODE'
+          const stable = /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/;
+          if (!stable.test(process.env.DEFECTIVE_VERSION || '')) {
+            throw new Error('rollback defective version is invalid');
+          }
+          if (!stable.test(process.env.KNOWN_GOOD_VERSION || '')) {
+            throw new Error('verified known-good release is required');
+          }
+          NODE
+      - name: Create short-lived cross-repository release app token
         id: app
         uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
         with:
           app-id: ${{ vars.RELEASE_APP_ID }}
           private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          owner: ntanwir10
+          repositories: GuardScan,homebrew-tap
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: v${{ inputs.version }}
@@ -960,26 +1200,527 @@ jobs:
           node-version: ${{ env.RELEASE_NODE_VERSION }}
       - working-directory: cli
         run: npm ci
-      - name: Generate append-only recovery plan
+      - name: Verify the exact known-good release and protected ledger
+        id: known-good
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        run: |
+          git fetch origin release-ledger \
+            "refs/tags/v$KNOWN_GOOD_VERSION:refs/tags/v$KNOWN_GOOD_VERSION"
+          KNOWN_GOOD_TAG="v$KNOWN_GOOD_VERSION"
+          KNOWN_GOOD_COMMIT="$(git rev-list -n 1 "$KNOWN_GOOD_TAG")"
+          case "$KNOWN_GOOD_COMMIT" in
+            *[!a-f0-9]*|'') echo "known-good tag has no valid commit" >&2; exit 1 ;;
+          esac
+          test "${#KNOWN_GOOD_COMMIT}" = 40
+          if ! git show "origin/release-ledger:events/$KNOWN_GOOD_TAG.jsonl" \
+            > known-good-events.jsonl; then
+            echo "known-good release ledger is incomplete" >&2
+            exit 1
+          fi
+          mkdir known-good-release
+          gh release download "$KNOWN_GOOD_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --dir known-good-release \
+            --pattern release-manifest.json
+          export KNOWN_GOOD_COMMIT KNOWN_GOOD_TAG
+          node - <<'NODE'
+          const crypto = require('crypto');
+          const fs = require('fs');
+          const {readEvents, materializeReleaseState} = require('./cli/scripts/release/events');
+          const {reconcileRelease} = require('./cli/scripts/release/reconcile');
+          const events = readEvents('known-good-events.jsonl');
+          const state = materializeReleaseState(events);
+          const manifestFile = fs.readFileSync('known-good-release/release-manifest.json');
+          const manifest = JSON.parse(manifestFile);
+          const manifestDigest = crypto.createHash('sha256').update(manifestFile).digest('hex');
+          if (state.version !== process.env.KNOWN_GOOD_VERSION
+              || state.tag !== process.env.KNOWN_GOOD_TAG
+              || state.commit !== process.env.KNOWN_GOOD_COMMIT
+              || manifest.version !== state.version
+              || manifest.tag !== state.tag
+              || manifest.commit !== state.commit) {
+            throw new Error('known-good release identity does not match its protected ledger');
+          }
+          if (state.manifestSha256 !== manifestDigest) {
+            throw new Error('known-good manifest digest does not match its protected ledger');
+          }
+          if (!reconcileRelease(state).complete) {
+            throw new Error('known-good release ledger is incomplete');
+          }
+          const catalogCommits = ['homebrew', 'scoop']
+            .map(channel => state.channels[channel]?.catalog?.commit)
+            .filter(Boolean);
+          if (catalogCommits.length !== 2 || new Set(catalogCommits).size !== 1) {
+            throw new Error('known-good catalog evidence is incomplete or inconsistent');
+          }
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, [
+            `commit=${process.env.KNOWN_GOOD_COMMIT}`,
+            `catalog_commit=${catalogCommits[0]}`,
+            `manifest_sha256=${manifestDigest}`,
+            '',
+          ].join('\n'));
+          NODE
+      - name: Generate and persist the append-only recovery start
         env:
           RELEASE_APP_TOKEN: ${{ steps.app.outputs.token }}
+          KNOWN_GOOD_COMMIT: ${{ steps.known-good.outputs.commit }}
         run: |
           git fetch origin release-ledger
-          git show "origin/release-ledger:events/v${{ inputs.version }}.jsonl" > release-events.jsonl
-          ARGS=(--ledger release-events.jsonl \
-            --timestamp "$(date -u +%Y-%m-%dT%H:%M:%S.000Z)" \
-            --idempotency-key "rollback:${{ inputs.version }}:${GITHUB_RUN_ID}" \
-            --tag "v${{ inputs.version }}")
-          if [ -n "${{ inputs.known_good }}" ]; then ARGS+=(--known-good "${{ inputs.known_good }}"); fi
-          node cli/scripts/release/index.js rollback "${ARGS[@]}" > rollback-plan.json
+          DEFECTIVE_TAG="v$DEFECTIVE_VERSION"
+          git show "origin/release-ledger:events/$DEFECTIVE_TAG.jsonl" > release-events.jsonl
+          ROLLBACK_KEY="rollback:$DEFECTIVE_VERSION"
+          export ROLLBACK_KEY
+          ROLLBACK_TIMESTAMP="$(node - <<'NODE'
+          const {readEvents} = require('./cli/scripts/release/events');
+          const existing = readEvents('release-events.jsonl')
+            .find(event => event.idempotencyKey === process.env.ROLLBACK_KEY);
+          process.stdout.write(existing?.timestamp || new Date().toISOString());
+          NODE
+          )"
+          node cli/scripts/release/index.js rollback \
+            --ledger release-events.jsonl \
+            --timestamp "$ROLLBACK_TIMESTAMP" \
+            --idempotency-key "$ROLLBACK_KEY" \
+            --tag "$DEFECTIVE_TAG" \
+            --known-good "$KNOWN_GOOD_VERSION" \
+            --known-good-commit "$KNOWN_GOOD_COMMIT" \
+            > rollback-plan.json
           cat rollback-plan.json
+          node - <<'NODE'
+          const plan = require('./rollback-plan.json');
+          if (plan.schemaVersion !== 'guardscan.rollback-plan.v1'
+              || plan.mode !== 'known-good'
+              || plan.version !== process.env.DEFECTIVE_VERSION
+              || plan.knownGood.version !== process.env.KNOWN_GOOD_VERSION
+              || plan.knownGood.commit !== process.env.KNOWN_GOOD_COMMIT) {
+            throw new Error('generated rollback plan does not match verified recovery authority');
+          }
+          const {readEvents} = require('./cli/scripts/release/events');
+          const events = readEvents('release-events.jsonl');
+          for (const action of plan.actions.filter(item => item.automation === 'external-action-required')) {
+            if (!events.some(event => event.type === 'action_required' && event.channel === action.channel)) {
+              throw new Error(`rollback ledger is missing external authority action for ${action.channel}`);
+            }
+          }
+          NODE
           git worktree add ledger-branch origin/release-ledger
-          cp release-events.jsonl "ledger-branch/events/v${{ inputs.version }}.jsonl"
+          mkdir -p ledger-branch/events
+          cp release-events.jsonl "ledger-branch/events/$DEFECTIVE_TAG.jsonl"
           (
             cd ledger-branch
             git config user.name guardscan-release-bot
             git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-            git add "events/v${{ inputs.version }}.jsonl"
-            git commit -m "rollback started: v${{ inputs.version }}"
+            git add "events/$DEFECTIVE_TAG.jsonl"
+            git commit -m "rollback started: $DEFECTIVE_TAG" || exit 0
             git push origin HEAD:release-ledger
           )
+      - name: Prepare or verify the deterministic forward-fix pull request
+        id: forward-fix
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          KNOWN_GOOD_COMMIT: ${{ steps.known-good.outputs.commit }}
+        run: |
+          FORWARD_FIX_VERSION="$(node -p 'require("./rollback-plan.json").forwardFixVersion')"
+          FORWARD_FIX_BRANCH="$(node -p 'require("./rollback-plan.json").forwardFixBranch')"
+          test "$(git rev-list -n 1 "v$KNOWN_GOOD_VERSION")" = "$KNOWN_GOOD_COMMIT"
+          FORWARD_FIX_REMOTE_HEAD=""
+          if git fetch origin "refs/heads/$FORWARD_FIX_BRANCH:refs/remotes/origin/$FORWARD_FIX_BRANCH"; then
+            FORWARD_FIX_REMOTE_HEAD="$(git rev-parse "refs/remotes/origin/$FORWARD_FIX_BRANCH")"
+          fi
+          git worktree add forward-fix-source "v$KNOWN_GOOD_VERSION"
+          git -C forward-fix-source switch -c "$FORWARD_FIX_BRANCH"
+          export FORWARD_FIX_VERSION
+          node - <<'NODE'
+          const {prepareForwardFixSource} = require('./cli/scripts/release/recovery-source');
+          const result = prepareForwardFixSource('forward-fix-source', {
+            knownGoodVersion: process.env.KNOWN_GOOD_VERSION,
+            defectiveVersion: process.env.DEFECTIVE_VERSION,
+            forwardFixVersion: process.env.FORWARD_FIX_VERSION,
+          });
+          process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+          NODE
+          git -C forward-fix-source config user.name guardscan-release-bot
+          git -C forward-fix-source config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git -C forward-fix-source add cli/CHANGELOG.md cli/package.json cli/package-lock.json
+          if ! git -C forward-fix-source diff --cached --quiet; then
+            FORWARD_FIX_CREATED_AT="$(git show -s --format=%cI "$KNOWN_GOOD_COMMIT")"
+            GIT_AUTHOR_DATE="$FORWARD_FIX_CREATED_AT" GIT_COMMITTER_DATE="$FORWARD_FIX_CREATED_AT" \
+              git -C forward-fix-source commit \
+              -m "fix(release): forward fix v$FORWARD_FIX_VERSION from v$KNOWN_GOOD_VERSION"
+          fi
+          CHANGED_FILES="$(git -C forward-fix-source diff --name-only "$KNOWN_GOOD_COMMIT...HEAD")"
+          export CHANGED_FILES
+          node - <<'NODE'
+          const actual = process.env.CHANGED_FILES.split('\n').filter(Boolean).sort();
+          const expected = ['cli/CHANGELOG.md', 'cli/package-lock.json', 'cli/package.json'];
+          if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+            throw new Error(`forward-fix branch contains unreviewed paths: ${actual.join(', ')}`);
+          }
+          NODE
+          FORWARD_FIX_HEAD="$(git -C forward-fix-source rev-parse HEAD)"
+          FORWARD_FIX_PRS_BEFORE="$(gh pr list --repo "$GITHUB_REPOSITORY" \
+            --head "$FORWARD_FIX_BRANCH" --base main --state all --limit 20 \
+            --json number,state,mergedAt,headRefOid,baseRefName,headRepository)"
+          export FORWARD_FIX_HEAD FORWARD_FIX_PRS_BEFORE
+          node - <<'NODE'
+          const prs = JSON.parse(process.env.FORWARD_FIX_PRS_BEFORE || '[]');
+          const repository = process.env.GITHUB_REPOSITORY.toLowerCase();
+          const matches = prs.filter(pr => pr.baseRefName === 'main');
+          if (matches.some(pr => pr.state === 'CLOSED' && !pr.mergedAt)) {
+            throw new Error('forward-fix branch has a closed-unmerged pull request');
+          }
+          const merged = matches.find(pr => pr.state === 'MERGED');
+          if (merged && (
+            merged.headRefOid !== process.env.FORWARD_FIX_HEAD
+            || merged.headRepository?.nameWithOwner?.toLowerCase() !== repository
+          )) {
+            throw new Error('merged forward-fix pull request does not match the deterministic trusted tree');
+          }
+          NODE
+          if [ -n "$FORWARD_FIX_REMOTE_HEAD" ]; then
+            git -C forward-fix-source push \
+              --force-with-lease="refs/heads/$FORWARD_FIX_BRANCH:$FORWARD_FIX_REMOTE_HEAD" \
+              origin "HEAD:refs/heads/$FORWARD_FIX_BRANCH"
+          else
+            git -C forward-fix-source push origin "HEAD:refs/heads/$FORWARD_FIX_BRANCH"
+          fi
+          FORWARD_FIX_HEAD="$(git -C forward-fix-source rev-parse HEAD)"
+          FORWARD_FIX_PRS="$(gh pr list --repo "$GITHUB_REPOSITORY" \
+            --head "$FORWARD_FIX_BRANCH" --base main --state all --limit 20 \
+            --json number,state,mergedAt,headRefOid,baseRefName,headRepository)"
+          export FORWARD_FIX_HEAD FORWARD_FIX_PRS
+          FORWARD_FIX_PR="$(node - <<'NODE'
+          const prs = JSON.parse(process.env.FORWARD_FIX_PRS || '[]');
+          const repository = process.env.GITHUB_REPOSITORY.toLowerCase();
+          const matches = prs.filter(pr => (
+            pr.baseRefName === 'main'
+          ));
+          if (matches.some(pr => pr.state === 'CLOSED' && !pr.mergedAt)) {
+            throw new Error('forward-fix branch has a closed-unmerged pull request');
+          }
+          const open = matches.find(pr => pr.state === 'OPEN');
+          const merged = matches.find(pr => pr.state === 'MERGED'
+            && pr.headRefOid === process.env.FORWARD_FIX_HEAD);
+          if (open && (
+            open.headRefOid !== process.env.FORWARD_FIX_HEAD
+            || open.headRepository?.nameWithOwner?.toLowerCase() !== repository
+          )) {
+            throw new Error('forward-fix pull request is not bound to the pushed head');
+          }
+          process.stdout.write(String(open?.number || merged?.number || ''));
+          NODE
+          )"
+          if [ -z "$FORWARD_FIX_PR" ]; then
+            FORWARD_FIX_PR_ARGS=(
+              --repo "$GITHUB_REPOSITORY"
+              --base main
+              --head "$FORWARD_FIX_BRANCH"
+              --title "Forward fix GuardScan v$DEFECTIVE_VERSION from verified v$KNOWN_GOOD_VERSION"
+              --body "Restores the verified known-good source as v$FORWARD_FIX_VERSION. Immutable defective artifacts remain auditable and are superseded through the release ledger."
+            )
+            gh pr create "${FORWARD_FIX_PR_ARGS[@]}"
+            FORWARD_FIX_PRS="$(gh pr list --repo "$GITHUB_REPOSITORY" \
+              --head "$FORWARD_FIX_BRANCH" --base main --state open --limit 20 \
+              --json number,state,mergedAt,headRefOid,baseRefName,headRepository)"
+            export FORWARD_FIX_PRS
+          fi
+          FORWARD_FIX_PR="$(node - <<'NODE'
+          const prs = JSON.parse(process.env.FORWARD_FIX_PRS || '[]');
+          const repository = process.env.GITHUB_REPOSITORY.toLowerCase();
+          const open = prs.find(pr => pr.state === 'OPEN'
+            && pr.baseRefName === 'main'
+            && pr.headRepository?.nameWithOwner?.toLowerCase() === repository
+            && pr.headRefOid === process.env.FORWARD_FIX_HEAD);
+          const merged = prs.find(pr => pr.state === 'MERGED'
+            && pr.baseRefName === 'main'
+            && pr.headRefOid === process.env.FORWARD_FIX_HEAD);
+          if (!open && !merged) throw new Error('forward-fix pull request is not bound to the pushed head');
+          process.stdout.write(String(open?.number || merged?.number || ''));
+          NODE
+          )"
+          echo "version=$FORWARD_FIX_VERSION" >> "$GITHUB_OUTPUT"
+          echo "branch=$FORWARD_FIX_BRANCH" >> "$GITHUB_OUTPUT"
+          echo "pull_request=$FORWARD_FIX_PR" >> "$GITHUB_OUTPUT"
+          echo "commit=$FORWARD_FIX_HEAD" >> "$GITHUB_OUTPUT"
+      - name: Restore the shared catalog to the exact known-good projection
+        id: catalog-rollback
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          KNOWN_GOOD_CATALOG_COMMIT: ${{ steps.known-good.outputs.catalog_commit }}
+        run: |
+          CATALOG_BRANCH="rollback/v$DEFECTIVE_VERSION-to-v$KNOWN_GOOD_VERSION"
+          gh repo clone ntanwir10/homebrew-tap catalog-rollback
+          git -C catalog-rollback fetch origin main
+          git -C catalog-rollback fetch origin "$KNOWN_GOOD_CATALOG_COMMIT"
+          CATALOG_BASE="$(git -C catalog-rollback rev-parse origin/main)"
+          CATALOG_REMOTE_HEAD=""
+          if git -C catalog-rollback fetch origin \
+            "refs/heads/$CATALOG_BRANCH:refs/remotes/origin/$CATALOG_BRANCH"; then
+            CATALOG_REMOTE_HEAD="$(git -C catalog-rollback rev-parse "refs/remotes/origin/$CATALOG_BRANCH")"
+          fi
+          git -C catalog-rollback switch -c "$CATALOG_BRANCH" "$CATALOG_BASE"
+          git -C catalog-rollback restore --source "$KNOWN_GOOD_CATALOG_COMMIT" -- \
+            Formula/guardscan.rb bucket/guardscan.json channel-lock.json
+          git -C catalog-rollback config user.name guardscan-release-bot
+          git -C catalog-rollback config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git -C catalog-rollback add Formula/guardscan.rb bucket/guardscan.json channel-lock.json
+          if ! git -C catalog-rollback diff --cached --quiet; then
+            git -C catalog-rollback commit \
+              -m "rollback GuardScan v$DEFECTIVE_VERSION catalog to v$KNOWN_GOOD_VERSION"
+          fi
+          CATALOG_CHANGED_FILES="$(git -C catalog-rollback diff --name-only "$CATALOG_BASE...HEAD")"
+          CATALOG_ALREADY_RESTORED=false
+          if [ -z "$CATALOG_CHANGED_FILES" ]; then
+            if [ -z "$CATALOG_REMOTE_HEAD" ]; then
+              echo "catalog rollback has no projection changes or existing merged recovery" >&2
+              exit 1
+            fi
+            CATALOG_HEAD="$CATALOG_REMOTE_HEAD"
+            CATALOG_PRS="$(gh pr list --repo ntanwir10/homebrew-tap \
+              --head "$CATALOG_BRANCH" --base main --state all --limit 20 \
+              --json number,state,mergedAt,headRefOid,baseRefName,headRepository,mergeCommit)"
+            export CATALOG_HEAD CATALOG_PRS
+            CATALOG_PR_INFO="$(node - <<'NODE'
+            const prs = JSON.parse(process.env.CATALOG_PRS || '[]');
+            const merged = prs.find(pr => pr.state === 'MERGED'
+              && pr.baseRefName === 'main'
+              && pr.headRepository?.nameWithOwner?.toLowerCase() === 'ntanwir10/homebrew-tap'
+              && pr.headRefOid === process.env.CATALOG_HEAD
+              && /^[a-f0-9]{40}$/.test(pr.mergeCommit?.oid || ''));
+            if (!merged) throw new Error('catalog already-restored path has no bound merged pull request');
+            process.stdout.write(JSON.stringify({
+              state: 'MERGED', number: merged.number, mergeCommit: merged.mergeCommit.oid,
+            }));
+          NODE
+            )"
+            export CATALOG_PR_INFO
+            CATALOG_PR_STATE=MERGED
+            CATALOG_PR="$(node -p 'String(JSON.parse(process.env.CATALOG_PR_INFO).number)')"
+            CATALOG_MERGE_SHA="$(node -p 'JSON.parse(process.env.CATALOG_PR_INFO).mergeCommit')"
+            CATALOG_ALREADY_RESTORED=true
+          fi
+          if [ "$CATALOG_ALREADY_RESTORED" != true ]; then
+            export CATALOG_CHANGED_FILES
+            node - <<'NODE'
+            const actual = process.env.CATALOG_CHANGED_FILES.split('\n').filter(Boolean).sort();
+            const allowed = ['Formula/guardscan.rb', 'bucket/guardscan.json', 'channel-lock.json'];
+            if (actual.some(file => !allowed.includes(file))) {
+              throw new Error(`catalog rollback branch contains unreviewed paths: ${actual.join(', ')}`);
+            }
+          NODE
+          if [ -n "$CATALOG_REMOTE_HEAD" ]; then
+            git -C catalog-rollback push \
+              --force-with-lease="refs/heads/$CATALOG_BRANCH:$CATALOG_REMOTE_HEAD" \
+              origin "HEAD:refs/heads/$CATALOG_BRANCH"
+          else
+            git -C catalog-rollback push origin "HEAD:refs/heads/$CATALOG_BRANCH"
+          fi
+          CATALOG_HEAD="$(git -C catalog-rollback rev-parse HEAD)"
+          CATALOG_PRS="$(gh pr list --repo ntanwir10/homebrew-tap \
+            --head "$CATALOG_BRANCH" --base main --state all --limit 20 \
+            --json number,state,mergedAt,headRefOid,baseRefName,headRepository,mergeCommit)"
+          export CATALOG_HEAD CATALOG_PRS
+          CATALOG_PR_INFO="$(node - <<'NODE'
+          const prs = JSON.parse(process.env.CATALOG_PRS || '[]');
+          const repository = 'ntanwir10/homebrew-tap';
+          const matches = prs.filter(pr => (
+            pr.baseRefName === 'main'
+          ));
+          if (matches.some(pr => pr.state === 'CLOSED' && !pr.mergedAt)) {
+            throw new Error('catalog rollback branch has a closed-unmerged pull request');
+          }
+          const open = matches.find(pr => pr.state === 'OPEN');
+          const merged = matches.find(pr => pr.state === 'MERGED'
+            && pr.headRefOid === process.env.CATALOG_HEAD
+            && /^[a-f0-9]{40}$/.test(pr.mergeCommit?.oid || ''));
+          if (open && (
+            open.headRefOid !== process.env.CATALOG_HEAD
+            || open.headRepository?.nameWithOwner?.toLowerCase() !== repository
+          )) {
+            throw new Error('catalog rollback pull request is not bound to the pushed head');
+          }
+          process.stdout.write(JSON.stringify({
+            state: open ? 'OPEN' : merged ? 'MERGED' : '',
+            number: open?.number || merged?.number || '',
+            mergeCommit: merged?.mergeCommit?.oid || '',
+          }));
+          NODE
+          )"
+          export CATALOG_PR_INFO
+          CATALOG_PR_STATE="$(node -p 'JSON.parse(process.env.CATALOG_PR_INFO).state')"
+          CATALOG_PR="$(node -p 'String(JSON.parse(process.env.CATALOG_PR_INFO).number)')"
+          CATALOG_MERGE_SHA="$(node -p 'JSON.parse(process.env.CATALOG_PR_INFO).mergeCommit')"
+          if [ -z "$CATALOG_PR" ]; then
+            gh pr create \
+              --repo ntanwir10/homebrew-tap \
+              --base main \
+              --head "$CATALOG_BRANCH" \
+              --title "Rollback GuardScan v$DEFECTIVE_VERSION catalog to v$KNOWN_GOOD_VERSION" \
+              --body "Restores the exact cryptographically locked catalog projection from verified v$KNOWN_GOOD_VERSION."
+            CATALOG_PRS="$(gh pr list --repo ntanwir10/homebrew-tap \
+              --head "$CATALOG_BRANCH" --base main --state open --limit 20 \
+              --json number,state,mergedAt,headRefOid,baseRefName,headRepository,mergeCommit)"
+            export CATALOG_PRS
+          fi
+          CATALOG_PR_INFO="$(node - <<'NODE'
+          const prs = JSON.parse(process.env.CATALOG_PRS || '[]');
+          const repository = 'ntanwir10/homebrew-tap';
+          const matches = prs.filter(pr => (
+            pr.baseRefName === 'main'
+          ));
+          if (matches.some(pr => pr.state === 'CLOSED' && !pr.mergedAt)) {
+            throw new Error('catalog rollback branch has a closed-unmerged pull request');
+          }
+          const open = matches.find(pr => pr.state === 'OPEN');
+          const merged = matches.find(pr => pr.state === 'MERGED'
+            && pr.headRefOid === process.env.CATALOG_HEAD
+            && /^[a-f0-9]{40}$/.test(pr.mergeCommit?.oid || ''));
+          if (open && (
+            open.headRefOid !== process.env.CATALOG_HEAD
+            || open.headRepository?.nameWithOwner?.toLowerCase() !== repository
+          )) {
+            throw new Error('catalog rollback pull request is not bound to the pushed head');
+          }
+          if (!open && !merged) {
+            throw new Error('catalog rollback pull request is not bound to the pushed head');
+          }
+          process.stdout.write(JSON.stringify({
+            state: open ? 'OPEN' : 'MERGED',
+            number: open?.number || merged?.number,
+            mergeCommit: merged?.mergeCommit?.oid || '',
+          }));
+          NODE
+          )"
+          export CATALOG_PR_INFO
+          CATALOG_PR_STATE="$(node -p 'JSON.parse(process.env.CATALOG_PR_INFO).state')"
+          CATALOG_PR="$(node -p 'String(JSON.parse(process.env.CATALOG_PR_INFO).number)')"
+          CATALOG_MERGE_SHA="$(node -p 'JSON.parse(process.env.CATALOG_PR_INFO).mergeCommit')"
+          if [ "$CATALOG_PR_STATE" = OPEN ]; then
+            gh pr merge --repo ntanwir10/homebrew-tap "$CATALOG_PR" --squash
+            for ATTEMPT in $(seq 1 60); do
+              CATALOG_PR_STATE="$(gh pr view --repo ntanwir10/homebrew-tap "$CATALOG_PR" --json state --jq .state)"
+              if [ "$CATALOG_PR_STATE" = MERGED ]; then break; fi
+              sleep 10
+            done
+            test "$CATALOG_PR_STATE" = MERGED
+            CATALOG_MERGE_SHA="$(gh pr view --repo ntanwir10/homebrew-tap "$CATALOG_PR" \
+              --json mergeCommit --jq .mergeCommit.oid)"
+          fi
+          fi
+          case "$CATALOG_MERGE_SHA" in
+            ''|*[!a-f0-9]*) echo "catalog rollback has no actual merge commit" >&2; exit 1 ;;
+          esac
+          test "${#CATALOG_MERGE_SHA}" = 40
+          git -C catalog-rollback fetch origin "$CATALOG_MERGE_SHA"
+          for CATALOG_PATH in Formula/guardscan.rb bucket/guardscan.json channel-lock.json; do
+            test "$(git -C catalog-rollback rev-parse "$CATALOG_MERGE_SHA:$CATALOG_PATH")" = \
+              "$(git -C catalog-rollback rev-parse "$KNOWN_GOOD_CATALOG_COMMIT:$CATALOG_PATH")"
+          done
+          echo "branch=$CATALOG_BRANCH" >> "$GITHUB_OUTPUT"
+          echo "pull_request=$CATALOG_PR" >> "$GITHUB_OUTPUT"
+          echo "commit=$CATALOG_MERGE_SHA" >> "$GITHUB_OUTPUT"
+      - name: Complete repository recovery and deactivate the defective train
+        env:
+          FORWARD_FIX_VERSION: ${{ steps.forward-fix.outputs.version }}
+          FORWARD_FIX_BRANCH: ${{ steps.forward-fix.outputs.branch }}
+          FORWARD_FIX_PR: ${{ steps.forward-fix.outputs.pull_request }}
+          FORWARD_FIX_COMMIT: ${{ steps.forward-fix.outputs.commit }}
+          CATALOG_BRANCH: ${{ steps.catalog-rollback.outputs.branch }}
+          CATALOG_PR: ${{ steps.catalog-rollback.outputs.pull_request }}
+          CATALOG_COMMIT: ${{ steps.catalog-rollback.outputs.commit }}
+        run: |
+          node - <<'NODE'
+          const fs = require('fs');
+          const {appendEvent, readEvents, materializeReleaseState} = require('./cli/scripts/release/events');
+          const events = readEvents('release-events.jsonl');
+          const state = materializeReleaseState(events);
+          const now = new Date().toISOString();
+          const completionKey = `rollback-repository-completed:${process.env.DEFECTIVE_VERSION}`;
+          const existingCompletion = events.find(event => event.idempotencyKey === completionKey);
+          const currentEvidence = {
+            schemaVersion: 'guardscan.rollback-repository-evidence.v1',
+            mode: 'known-good',
+            defectiveVersion: process.env.DEFECTIVE_VERSION,
+            knownGoodVersion: process.env.KNOWN_GOOD_VERSION,
+            forwardFix: {
+              version: process.env.FORWARD_FIX_VERSION,
+              branch: process.env.FORWARD_FIX_BRANCH,
+              pullRequest: Number(process.env.FORWARD_FIX_PR),
+              commit: process.env.FORWARD_FIX_COMMIT,
+            },
+            catalog: {
+              branch: process.env.CATALOG_BRANCH,
+              pullRequest: Number(process.env.CATALOG_PR),
+              commit: process.env.CATALOG_COMMIT,
+            },
+            completedAt: now,
+          };
+          const evidence = existingCompletion?.payload || currentEvidence;
+          if (existingCompletion) {
+            const comparable = value => JSON.stringify({...value, completedAt: undefined});
+            if (comparable(evidence) !== comparable(currentEvidence)) {
+              throw new Error('repository rollback retry conflicts with protected completion evidence');
+            }
+          }
+          fs.writeFileSync('rollback-evidence.json', `${JSON.stringify(evidence, null, 2)}\n`);
+          appendEvent('release-events.jsonl', {
+            version: state.version,
+            tag: state.tag,
+            commit: state.commit,
+            timestamp: existingCompletion?.timestamp || now,
+            type: 'rollback_repository_completed',
+            idempotencyKey: completionKey,
+            payload: evidence,
+          });
+          const refreshed = readEvents('release-events.jsonl');
+          for (const [channel, channelState] of Object.entries(state.channels)) {
+            if (!['github', 'pnpm', 'yarn', 'bun', 'homebrew', 'scoop'].includes(channel)
+                || !['published', 'submitted', 'accepted', 'verified'].includes(channelState.status)) {
+              continue;
+            }
+            const key = `rollback-superseded:${channel}:${process.env.DEFECTIVE_VERSION}`;
+            const existing = refreshed.find(event => event.idempotencyKey === key);
+            appendEvent('release-events.jsonl', {
+              version: state.version,
+              tag: state.tag,
+              commit: state.commit,
+              timestamp: existing?.timestamp || now,
+              type: 'superseded',
+              channel,
+              idempotencyKey: key,
+              payload: {
+                artifactIds: channelState.artifactIds,
+                ...(channelState.remoteIdentity ? {remoteIdentity: channelState.remoteIdentity} : {}),
+                ...(channelState.remoteDigest ? {remoteDigest: channelState.remoteDigest} : {}),
+              },
+            });
+          }
+          NODE
+          cp release-events.jsonl "ledger-branch/events/v$DEFECTIVE_VERSION.jsonl"
+          mkdir -p ledger-branch/recoveries
+          cp rollback-plan.json "ledger-branch/recoveries/v$DEFECTIVE_VERSION-plan.json"
+          cp rollback-evidence.json "ledger-branch/recoveries/v$DEFECTIVE_VERSION-evidence.json"
+          node - <<'NODE'
+          const fs = require('fs');
+          const file = 'ledger-branch/active-versions.json';
+          const active = JSON.parse(fs.readFileSync(file, 'utf8'));
+          active.trains = active.trains.filter(
+            train => train.version !== process.env.DEFECTIVE_VERSION
+          );
+          fs.writeFileSync(file, `${JSON.stringify(active, null, 2)}\n`);
+          NODE
+          (
+            cd ledger-branch
+            git add events active-versions.json recoveries
+            git commit -m "rollback repository recovery complete: v$DEFECTIVE_VERSION" || exit 0
+            git push origin HEAD:release-ledger
+          )
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: rollback-plan-v${{ inputs.version }}
+          path: |
+            rollback-plan.json
+            rollback-evidence.json
+          if-no-files-found: error
+          retention-days: 90

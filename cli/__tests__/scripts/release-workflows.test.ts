@@ -11,6 +11,7 @@ const catalogWorkflow = path.join(
 const releaseWorkflows = [
   'release-build.yml',
   'release-canary.yml',
+  'release-first-withdrawal.yml',
   'release-please.yml',
   'release-publish.yml',
   'release-train.yml',
@@ -57,6 +58,11 @@ describe('zero-touch release workflow contracts', () => {
         expect(match[2]).toMatch(/^[a-f0-9]{40}$/);
       }
     }
+  });
+
+  it('passes an explicit package manager to the reusable release quality gate', () => {
+    expect(workflowSource('release-build.yml'))
+      .toContain('npm run test:package-manager -- --manager npm');
   });
 
   it('keeps workflow heredoc terminators at shell column zero', () => {
@@ -133,13 +139,16 @@ describe('zero-touch release workflow contracts', () => {
 
   it('fails closed and persists an idempotent repository-side rollback recovery', () => {
     const train = workflowSource('release-train.yml');
+    const publish = workflowSource('release-publish.yml');
     expect(train).toContain('repositories: GuardScan,homebrew-tap');
-    expect(train).toContain("schemaVersion: 'guardscan.rollback-plan.v1'");
+    expect(train).toContain("plan.schemaVersion !== 'guardscan.rollback-plan.v1'");
     expect(train).toContain('verified known-good release is required');
     expect(train).toContain('known-good release ledger is incomplete');
     expect(train).toContain('known-good manifest digest does not match its protected ledger');
-    expect(train).toContain('release/forward-fix-v${FORWARD_FIX_VERSION}-from-v${KNOWN_GOOD_VERSION}');
-    expect(train).toContain('Rollback GuardScan v${{ inputs.version }} catalog to v${{ inputs.known_good }}');
+    expect(train).toContain('DEFECTIVE_VERSION: ${{ inputs.version }}');
+    expect(train).toContain('KNOWN_GOOD_VERSION: ${{ inputs.known_good }}');
+    expect(train).toContain('require("./rollback-plan.json").forwardFixBranch');
+    expect(train).toContain('Rollback GuardScan v$DEFECTIVE_VERSION catalog to v$KNOWN_GOOD_VERSION');
     expect(train).toContain('gh pr create "${FORWARD_FIX_PR_ARGS[@]}"');
     expect(train).toContain('gh pr merge --repo ntanwir10/homebrew-tap');
     expect(train).toContain("event.type === 'action_required'");
@@ -147,8 +156,77 @@ describe('zero-touch release workflow contracts', () => {
     expect(train).toContain('rollback-plan-v${{ inputs.version }}');
     expect(train).toContain('rollback-plan.json');
     expect(train).toContain('rollback-evidence.json');
+    expect(train).toContain('ROLLBACK_KEY="rollback:$DEFECTIVE_VERSION"');
+    expect(train).not.toContain('ROLLBACK_KEY="rollback:$DEFECTIVE_VERSION:$GITHUB_RUN_ID"');
+    expect(train).toContain('test "$(git rev-list -n 1 "v$KNOWN_GOOD_VERSION")" = "$KNOWN_GOOD_COMMIT"');
+    expect(train).toContain('git worktree add forward-fix-source "v$KNOWN_GOOD_VERSION"');
+    expect(train).toContain('FORWARD_FIX_CREATED_AT="$(git show -s --format=%cI "$KNOWN_GOOD_COMMIT")"');
+    expect(train).toContain('merged forward-fix pull request does not match the deterministic trusted tree');
+    expect(train).toContain('--force-with-lease="refs/heads/$FORWARD_FIX_BRANCH:$FORWARD_FIX_REMOTE_HEAD"');
+    expect(train).toContain('forward-fix branch has a closed-unmerged pull request');
+    expect(train).toContain('forward-fix pull request is not bound to the pushed head');
+    expect(train).toContain('const expected = [\'cli/CHANGELOG.md\', \'cli/package-lock.json\', \'cli/package.json\'];');
+    expect(train).toContain('git -C catalog-rollback fetch origin main');
+    expect(train).toContain('git -C catalog-rollback switch -c "$CATALOG_BRANCH" "$CATALOG_BASE"');
+    expect(train).toContain('--force-with-lease="refs/heads/$CATALOG_BRANCH:$CATALOG_REMOTE_HEAD"');
+    expect(train).toContain('catalog rollback branch contains unreviewed paths');
+    expect(train).toContain("const allowed = ['Formula/guardscan.rb', 'bucket/guardscan.json', 'channel-lock.json'];");
+    expect(train).toContain('catalog already-restored path has no bound merged pull request');
+    expect(train).toContain('catalog rollback pull request is not bound to the pushed head');
+    expect(train).toContain('gh pr merge --repo ntanwir10/homebrew-tap "$CATALOG_PR" --squash');
+    expect(train).not.toContain('gh pr merge --repo ntanwir10/homebrew-tap "$CATALOG_PR" --auto --squash');
+    expect(train).toContain('test "$CATALOG_PR_STATE" = MERGED');
+    expect(train).toContain('catalog rollback has no actual merge commit');
+    expect(train).toContain('git -C catalog-rollback rev-parse "$CATALOG_MERGE_SHA:$CATALOG_PATH"');
+    expect(train).toContain('echo "commit=$CATALOG_MERGE_SHA" >> "$GITHUB_OUTPUT"');
+    expect(train).toContain('EXPECTED_BASE="$(node -p \'require("./promotion-decision.json").stable.sourcePrBase\')"');
+    expect(train).toContain('CURRENT_BASE="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$REQUEST_RELEASE_PR" --jq .base.sha)"');
+    expect(train).toContain('--squash --match-head-commit "$EXPECTED_HEAD"');
+    expect(train).not.toContain('--auto --squash --match-head-commit "$EXPECTED_HEAD"');
+    expect(train).toContain('const canonicalEntries = entries => entries.sort(([left], [right])');
+    expect(train).toContain('npm: Object.fromEntries(canonicalEntries(');
+    expect(train).toContain('pypi: Object.fromEntries(canonicalEntries(');
+    expect(publish).toMatch(
+      /channel_accepted', 'channel_rejected', 'channel_corrected', 'channel_resubmitted'/
+    );
+    expect(publish.match(/channel_accepted', 'channel_rejected', 'channel_corrected', 'channel_resubmitted'/g))
+      .toHaveLength(2);
     expect(train).not.toContain('NPM_TOKEN');
     expect(train).not.toContain('PYPI_TOKEN');
+  });
+
+  it('withdraws the first stable release only with protected-ledger authority', () => {
+    const train = workflowSource('release-train.yml');
+    const withdrawal = workflowSource('release-first-withdrawal.yml');
+    expect(train).toContain("inputs.known_good == ''");
+    expect(train).toContain("inputs.known_good != ''");
+    expect(train).toContain('uses: ./.github/workflows/release-first-withdrawal.yml');
+    expect(withdrawal).toContain('assertFirstReleaseWithdrawal');
+    expect(withdrawal).toContain('first-release-authority.json');
+    expect(withdrawal).toContain('--first-release-withdrawal');
+    expect(withdrawal).toContain('--first-release-authority first-release-authority.json');
+    expect(withdrawal).toContain("plan.mode !== 'first-release-withdrawal'");
+    expect(withdrawal).toContain("event.payload.kind === 'recovery'");
+    expect(withdrawal).toContain('prepareFirstReleaseCatalogWithdrawal');
+    expect(withdrawal).toContain('PUBLISH_BRANCH="guardscan/v$DEFECTIVE_VERSION"');
+    expect(withdrawal).toContain('gh pr close --repo ntanwir10/homebrew-tap');
+    expect(withdrawal).toContain('completed withdrawal was republished at $CATALOG_PATH');
+    expect(withdrawal).toContain("'D\\tFormula/guardscan.rb'");
+    expect(withdrawal).toContain("'D\\tbucket/guardscan.json'");
+    expect(withdrawal).toContain("'D\\tchannel-lock.json'");
+    expect(withdrawal).toContain('catalog withdrawal left $CATALOG_PATH published');
+    expect(withdrawal).toContain("github: 'superseded'");
+    expect(withdrawal).toContain("homebrew: 'withdrawn'");
+    expect(withdrawal).toContain("scoop: 'withdrawn'");
+    expect(withdrawal).toContain('externalActionsPending');
+    expect(withdrawal).toContain("'provider-actions-pending'");
+    expect(withdrawal).not.toContain('git worktree add forward-fix-source');
+    expect(withdrawal).not.toContain('known-good-release');
+    expect(withdrawal).not.toContain('gh release delete');
+    expect(withdrawal).not.toContain('npm unpublish');
+    expect(train).toContain('sourcePrBase: process.env.SOURCE_PR_BASE');
+    expect(train).toContain('sourcePrTree: process.env.SOURCE_PR_TREE');
+    expect(train).not.toMatch(/Persist refetched catalog publication evidence\n\s+if:[^\n]+\n\s+env:\s*\n/);
   });
 
   it('uses default-branch canary tooling while every matrix entry verifies its own version', () => {
@@ -220,10 +298,13 @@ describe('zero-touch release workflow contracts', () => {
     expect(train).toContain("pr.base?.ref !== 'main'");
     expect(train).toContain('pr.head?.repo?.full_name?.toLowerCase()');
     expect(train).toContain('process.env.GITHUB_REPOSITORY.toLowerCase()');
-    expect(train).toContain('gh pr ready "${{ inputs.release_pr }}"');
-    expect(train.indexOf('gh pr ready "${{ inputs.release_pr }}"'))
+    expect(train).toContain('REQUEST_RELEASE_PR: ${{ inputs.release_pr }}');
+    expect(train).toContain('EXPECTED_HEAD: ${{ steps.source.outputs.head_sha }}');
+    expect(train).toContain('gh pr ready "$REQUEST_RELEASE_PR"');
+    expect(train.indexOf('gh pr ready "$REQUEST_RELEASE_PR"'))
       .toBeLessThan(train.indexOf('Derive bot-owned RC commit from exact stable PR head'));
-    expect(train).toContain('--match-head-commit "${{ steps.source.outputs.head_sha }}"');
+    expect(train).toContain('--match-head-commit "$EXPECTED_HEAD"');
+    expect(train).not.toContain('gh pr ready "${{ inputs.release_pr }}"');
   });
 
   it('builds signed artifacts and publishes through isolated provider environments', () => {

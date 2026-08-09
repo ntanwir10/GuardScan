@@ -4,21 +4,31 @@
  * Tests the full decorator stack and end-to-end scenarios.
  */
 
-import { describe, expect, it, jest } from '@jest/globals';
+import { afterEach, describe, expect, it, jest } from '@jest/globals';
 import { ProviderFactory } from '../../src/providers/factory';
 import { AIProvider, AIMessage } from '../../src/providers/base';
 import { MetricsCollector } from '../../src/core/metrics-collector';
 import { Config } from '../../src/core/config';
+import { RetryProvider } from '../../src/providers/decorators/retry-provider';
+import {
+  CircuitBreakerProvider,
+  CircuitState,
+} from '../../src/providers/decorators/circuit-breaker-provider';
+import { CachedProvider } from '../../src/providers/decorators/cached-provider';
+import { RateLimitedProvider } from '../../src/providers/decorators/rate-limited-provider';
+import { ObservableProvider } from '../../src/providers/decorators/observable-provider';
 
 // Mock provider for testing
 class TestProvider extends AIProvider {
   private failureCount = 0;
   private maxFailures: number;
   private callCount = 0;
+  private providerName: string;
 
-  constructor(maxFailures: number = 0) {
+  constructor(maxFailures: number = 0, providerName: string = 'Test') {
     super();
     this.maxFailures = maxFailures;
+    this.providerName = providerName;
   }
 
   async chat(messages: AIMessage[]) {
@@ -55,7 +65,7 @@ class TestProvider extends AIProvider {
   }
 
   getName() {
-    return 'Test';
+    return this.providerName;
   }
 
   async testConnection() {
@@ -77,6 +87,15 @@ class TestProvider extends AIProvider {
 }
 
 describe('Enhanced AI Provider Integration', () => {
+  const uniqueId = (prefix: string) => (
+    `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}`
+  );
+  const messages: AIMessage[] = [{ role: 'user', content: 'Explain this code path.' }];
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
   describe('decorator stack', () => {
     it('should create provider with all decorators', () => {
       const config: Config = {
@@ -130,37 +149,137 @@ describe('Enhanced AI Provider Integration', () => {
 
   describe('retry with circuit breaker', () => {
     it('should retry failures and track in circuit breaker', async () => {
-      // This test verifies retry and circuit breaker work together
-      // In practice, this would use mocked providers
-      expect(true).toBe(true); // Placeholder
+      const warning = jest.spyOn(console, 'warn').mockImplementation(() => {});
+      const base = new TestProvider(1, uniqueId('retry-circuit'));
+      const retry = new RetryProvider(base, {
+        maxRetries: 1,
+        baseDelayMs: 0,
+        maxDelayMs: 0,
+        jitterFactor: 0,
+      });
+      const circuit = new CircuitBreakerProvider(retry, {
+        failureThreshold: 1,
+        resetTimeoutMs: 60_000,
+        halfOpenSuccessThreshold: 1,
+        monitoredErrors: ['500'],
+      });
+
+      await expect(circuit.chat(messages)).resolves.toMatchObject({ content: 'Success' });
+      expect(base.getCallCount()).toBe(2);
+      expect(circuit.getState()).toBe(CircuitState.CLOSED);
+      expect(circuit.getStats()).toMatchObject({
+        totalFailures: 0,
+        totalSuccesses: 1,
+        circuitOpenCount: 0,
+      });
+      expect(warning).toHaveBeenCalledTimes(1);
     });
   });
 
   describe('caching with observability', () => {
     it('should track cache hits in metrics', async () => {
-      // This test verifies cache hits are properly tracked by observability
-      expect(true).toBe(true); // Placeholder
+      const id = uniqueId('cache-observability');
+      const base = new TestProvider(0, id);
+      const cached = new CachedProvider(base, id, undefined, {
+        useSemanticSimilarity: false,
+      });
+      const metrics = new MetricsCollector(id);
+      const observable = new ObservableProvider(cached, metrics);
+
+      const first = await observable.chat(messages);
+      const second = await observable.chat(messages);
+
+      expect(first.content).toBe('Success');
+      expect(second.model).toContain('cached');
+      expect(base.getCallCount()).toBe(1);
+      expect(cached.getCacheStats()).toMatchObject({ hits: 1, misses: 1 });
+      expect(metrics.getMetrics()).toMatchObject({
+        totalCalls: 2,
+        successRate: 100,
+        cacheHitRate: 50,
+      });
+      expect(metrics.getSpans().map(span => span.cacheHit)).toEqual([false, true]);
+
+      await cached.clearCache();
     });
   });
 
   describe('rate limiting with retry', () => {
     it('should rate limit and retry on failures', async () => {
-      // This test verifies rate limiting and retry work together
-      expect(true).toBe(true); // Placeholder
+      const warning = jest.spyOn(console, 'warn').mockImplementation(() => {});
+      const base = new TestProvider(1, uniqueId('rate-retry'));
+      const retry = new RetryProvider(base, {
+        maxRetries: 1,
+        baseDelayMs: 0,
+        maxDelayMs: 0,
+        jitterFactor: 0,
+      });
+      const rateLimited = new RateLimitedProvider(retry, {
+        maxTokens: 100,
+        refillRate: 1,
+        costMultiplier: 1,
+      });
+
+      await expect(rateLimited.chat(messages)).resolves.toMatchObject({ content: 'Success' });
+      expect(base.getCallCount()).toBe(2);
+      expect(rateLimited.getStats()).toMatchObject({
+        maxTokens: 100,
+        totalWaits: 0,
+      });
+      expect(rateLimited.getStats().currentTokens).toBeLessThan(100);
+      expect(warning).toHaveBeenCalledTimes(1);
     });
   });
 
   describe('full stack end-to-end', () => {
     it('should handle complex scenario with all features', async () => {
-      // This test runs a full scenario:
-      // 1. Request made
-      // 2. Rate limited (waits)
-      // 3. Fails first time
-      // 4. Retries successfully
-      // 5. Cached for next request
-      // 6. All tracked by observability
-      // 7. Circuit breaker stays closed
-      expect(true).toBe(true); // Placeholder
+      const warning = jest.spyOn(console, 'warn').mockImplementation(() => {});
+      const id = uniqueId('full-stack');
+      const base = new TestProvider(1, id);
+      const retry = new RetryProvider(base, {
+        maxRetries: 1,
+        baseDelayMs: 0,
+        maxDelayMs: 0,
+        jitterFactor: 0,
+      });
+      const rateLimited = new RateLimitedProvider(retry, {
+        maxTokens: 1_000,
+        refillRate: 1,
+        costMultiplier: 1,
+      });
+      const circuit = new CircuitBreakerProvider(rateLimited, {
+        failureThreshold: 1,
+        resetTimeoutMs: 60_000,
+        halfOpenSuccessThreshold: 1,
+        monitoredErrors: ['500'],
+      });
+      const cached = new CachedProvider(circuit, id, undefined, {
+        useSemanticSimilarity: false,
+      });
+      const metrics = new MetricsCollector(id);
+      const enhanced = new ObservableProvider(cached, metrics);
+
+      const first = await enhanced.chat(messages);
+      const second = await enhanced.chat(messages);
+
+      expect(first.content).toBe('Success');
+      expect(second.model).toContain('cached');
+      expect(base.getCallCount()).toBe(2);
+      expect(rateLimited.getStats().currentTokens).toBeLessThan(1_000);
+      expect(circuit.getStats()).toMatchObject({
+        state: CircuitState.CLOSED,
+        totalFailures: 0,
+        totalSuccesses: 1,
+      });
+      expect(cached.getCacheStats()).toMatchObject({ hits: 1, misses: 1 });
+      expect(metrics.getMetrics()).toMatchObject({
+        totalCalls: 2,
+        successRate: 100,
+        cacheHitRate: 50,
+      });
+      expect(warning).toHaveBeenCalledTimes(1);
+
+      await cached.clearCache();
     });
   });
 });
