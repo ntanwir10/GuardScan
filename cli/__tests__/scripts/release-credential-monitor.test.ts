@@ -75,14 +75,18 @@ describe('release credential and provider health workflow', () => {
     ]));
     expect(source).toContain('guardscan.credential-health.v1');
     expect(source).toContain('ntanwir10/homebrew-tap');
-    expect(source).toContain('permission-workflows: write');
+    expect(source).toContain('permission-contents: read');
+    expect(source).toContain('permission-metadata: read');
+    expect(source).not.toMatch(/permission-(actions|pull-requests|issues):/);
+    expect(source).not.toContain('permission-workflows: write');
+    expect(source).not.toMatch(/permission-[a-z-]+: write/);
     expect(source).toContain("run('xcrun', [");
     expect(source).toContain("'notarytool', 'history'");
     expect(source).toContain('APPLE_CERTIFICATE_P12');
     expect(source).toContain('azure/login@');
     expect(source).toContain('AZURE_SIGNING_PROFILE');
     expect(source).toContain('github-authentication-token-expiration');
-    expect(source).toContain('WINGET_GITHUB_TOKEN');
+    expect(source).toContain('WINGET_CREATE_GITHUB_TOKEN');
     expect(source).toContain('CHOCO_API_KEY');
     expect(source).toContain("claStatus: {status: 'unknown'");
     expect(source).toContain("expiry: {status: 'unknown'");
@@ -105,8 +109,8 @@ describe('release credential and provider health workflow', () => {
     ]) {
       expect(source.toLowerCase()).not.toContain(forbidden);
     }
-    expect(source).not.toMatch(/echo[^\n]*(RELEASE_APP_PRIVATE_KEY|APPLE_CERTIFICATE_P12|APPLE_NOTARY_PRIVATE_KEY|WINGET_GITHUB_TOKEN|CHOCO_API_KEY)/i);
-    expect(source).not.toMatch(/Write-(Host|Output)[^\n]*(WINGET_GITHUB_TOKEN|CHOCO_API_KEY)/i);
+    expect(source).not.toMatch(/echo[^\n]*(RELEASE_APP_PRIVATE_KEY|APPLE_CERTIFICATE_P12|APPLE_NOTARY_PRIVATE_KEY|WINGET_CREATE_GITHUB_TOKEN|CHOCO_API_KEY)/i);
+    expect(source).not.toMatch(/Write-(Host|Output)[^\n]*(WINGET_CREATE_GITHUB_TOKEN|CHOCO_API_KEY)/i);
   });
 
   it('keeps every embedded Node evidence generator syntactically valid', () => {
