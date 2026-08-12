@@ -37,10 +37,11 @@ function isMissingChartDependency(error: unknown): boolean {
     return false;
   }
   const code = (error as NodeJS.ErrnoException).code;
-  return ((code === 'MODULE_NOT_FOUND' || code === 'ERR_MODULE_NOT_FOUND')
-    && error.message.includes('chartjs-node-canvas'))
-    || (code === 'ERR_UNKNOWN_BUILTIN_MODULE'
-      && error.message === 'No such built-in module: chartjs-node-canvas');
+  if (code === 'ERR_UNKNOWN_BUILTIN_MODULE') {
+    return /^No such built-in module: (?:node:)?chartjs-node-canvas$/.test(error.message);
+  }
+  return (code === 'MODULE_NOT_FOUND' || code === 'ERR_MODULE_NOT_FOUND')
+    && error.message.includes('chartjs-node-canvas');
 }
 
 /**
