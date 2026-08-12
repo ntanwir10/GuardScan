@@ -195,15 +195,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           if ! gh release view "${{ inputs.tag }}" --repo "${{ github.repository }}" >/dev/null 2>&1; then
-            PRERELEASE=()
-            if [ "${{ inputs.channel }}" = rc ]; then PRERELEASE+=(--prerelease); fi
-            node cli/scripts/release/canonical-payload.js notes payload "${{ inputs.tag }}" > "$RUNNER_TEMP/canonical-release-notes"
-            gh release create "${{ inputs.tag }}" \
-              --repo "${{ github.repository }}" \
-              --verify-tag --draft "${PRERELEASE[@]}" \
-              --title "GuardScan ${{ inputs.tag }}" \
-              --notes-file "$RUNNER_TEMP/canonical-release-notes" \
-              --generate-notes
+            echo "::error::Release-integrity incident: publication has no persisted checkpoint release"
+            exit 1
           fi
           RELEASE_JSON="$(gh release view "${{ inputs.tag }}" \
             --repo "${{ github.repository }}" --json isDraft,isPrerelease)"
@@ -264,6 +257,10 @@ jobs:
           gh release download "${{ inputs.tag }}" \
             --repo "${{ github.repository }}" \
             --dir redownload
+          mkdir checkpoint-redownload
+          find redownload -maxdepth 1 -type f \
+            -name 'guardscan-release-checkpoint-*' \
+            -exec mv {} checkpoint-redownload/ \;
           diff -u <(find payload -maxdepth 1 -type f -printf '%f\n' | sort) \
             <(find redownload -maxdepth 1 -type f -printf '%f\n' | sort)
           cosign verify-blob \
@@ -296,6 +293,21 @@ jobs:
             files,
           });
           NODE
+      - name: Remove private checkpoint only after the expanded draft is complete
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          if [ "$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)" = true ]; then
+            gh api "repos/${GITHUB_REPOSITORY}/releases/tags/$RELEASE_TAG" \
+              --jq '.assets[] | select(.name | startswith("guardscan-release-checkpoint-")) | .id' \
+              > checkpoint-asset-ids.txt
+            while IFS= read -r ASSET_ID; do
+              if [ -n "$ASSET_ID" ]; then
+                gh api --method DELETE "repos/${GITHUB_REPOSITORY}/releases/assets/$ASSET_ID"
+              fi
+            done < checkpoint-asset-ids.txt
+          fi
       - name: Publish verified draft
         env:
           GH_TOKEN: ${{ github.token }}
@@ -1055,7 +1067,7 @@ jobs:
       - name: Preflight and submit WinGet manifests with exact evidence
         shell: pwsh
         env:
-          GH_TOKEN: ${{ secrets.WINGET_GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.WINGET_CREATE_GITHUB_TOKEN }}
           RELEASE_TAG: ${{ inputs.tag }}
           WINGET_GITHUB_TOKEN: ${{ secrets.WINGET_GITHUB_TOKEN }}
           RELEASE_VERSION: ${{ inputs.tag }}
@@ -1238,19 +1250,31 @@ jobs:
         run: npm ci
       - working-directory: cli
         run: npm run release:render -- --manifest ../payload/release-manifest.json --output-dir ../adapters
-      - name: Pack and test Chocolatey from a local feed
+      - name: Pack and test Chocolatey install, upgrade, invoke, and uninstall from a local feed
         shell: pwsh
         run: |
           if ($null -eq (Get-Command choco -ErrorAction SilentlyContinue)) {
             throw 'Chocolatey is unavailable on the selected Windows runner'
           }
           New-Item -ItemType Directory -Force local-feed | Out-Null
+          Push-Location cli\__tests__\fixtures\chocolatey-prior
+          choco pack guardscan.nuspec --output-directory ..\..\..\..\local-feed
+          if ($LASTEXITCODE -ne 0) { throw 'Chocolatey prior-version fixture creation failed' }
+          Pop-Location
           Push-Location adapters\chocolatey
           choco pack guardscan.nuspec --output-directory ..\..\local-feed
           if ($LASTEXITCODE -ne 0) { throw 'Chocolatey package creation failed' }
           Pop-Location
-          choco install guardscan --source "$(Resolve-Path local-feed)" --yes
-          if ($LASTEXITCODE -ne 0) { throw 'Chocolatey local-feed installation failed' }
+          $feed = Resolve-Path local-feed
+          choco install guardscan --source "$feed" --version 1.0.5 --yes
+          if ($LASTEXITCODE -ne 0) { throw 'Chocolatey prior-version installation failed' }
+          $priorVersion = (& guardscan --version | Out-String).Trim()
+          if ($LASTEXITCODE -ne 0 -or $priorVersion -ne '1.0.5') {
+            throw 'Chocolatey prior-version fixture invocation failed'
+          }
+          $candidateVersion = '${{ inputs.tag }}'.TrimStart('v')
+          choco upgrade guardscan --source "$feed" --version "$candidateVersion" --yes
+          if ($LASTEXITCODE -ne 0) { throw 'Chocolatey local-feed upgrade failed' }
           $installedVersion = (& guardscan --version | Out-String).Trim()
           if ($LASTEXITCODE -ne 0 -or $installedVersion -ne '${{ inputs.tag }}'.TrimStart('v')) {
             throw 'Chocolatey local-feed invocation or version check failed'

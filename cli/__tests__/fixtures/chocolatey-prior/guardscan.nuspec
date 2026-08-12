@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://schemas.microsoft.com/packaging/2015/06/nuspec.xsd">
+  <metadata>
+    <id>guardscan</id>
+    <version>1.0.5</version>
+    <title>GuardScan upgrade rehearsal fixture</title>
+    <authors>GuardScan</authors>
+    <projectUrl>https://github.com/ntanwir10/GuardScan</projectUrl>
+    <license type="expression">MIT</license>
+    <requireLicenseAcceptance>false</requireLicenseAcceptance>
+    <description>Local-only fixture used to verify Chocolatey upgrades to a release candidate package.</description>
+    <tags>guardscan fixture</tags>
+  </metadata>
+  <files>
+    <file src="tools\**" target="tools" />
+  </files>
+</package>
