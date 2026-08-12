@@ -12,6 +12,10 @@ on:
       channel:
         type: string
         required: true
+      mode:
+        type: string
+        required: false
+        default: production
 
 permissions:
   contents: read
@@ -22,6 +26,7 @@ env:
 jobs:
   quality:
     name: Exact-source release gate
+    if: inputs.mode == 'production'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -49,6 +54,7 @@ jobs:
 
   npm:
     name: Exact npm tarball
+    if: inputs.mode == 'production'
     runs-on: ubuntu-24.04
     needs: [quality]
     permissions:
@@ -124,6 +130,7 @@ jobs:
 
   native:
     name: Signed native ${{ matrix.id }}
+    if: inputs.mode == 'production'
     runs-on: ${{ matrix.runner }}
     needs: [quality]
     environment: ${{ matrix.os == 'darwin' && 'apple-notarization' || matrix.os == 'windows' && 'windows-signing' || inputs.channel == 'rc' && 'release-rc' || 'release-stable' }}
@@ -221,9 +228,11 @@ jobs:
           APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
           APPLE_NOTARY_PRIVATE_KEY: ${{ secrets.APPLE_NOTARY_PRIVATE_KEY }}
         run: |
-          IDENTITY="Developer ID Application: Nauman Tanwir ($APPLE_TEAM_ID)"
           KEYCHAIN="$RUNNER_TEMP/guardscan-signing.keychain-db"
-          security find-identity -v -p codesigning "$KEYCHAIN" | grep -F "$IDENTITY"
+          IDENTITY="$(security find-identity -v -p codesigning "$KEYCHAIN" \
+            | awk -v team="($APPLE_TEAM_ID)" 'index($0, "Developer ID Application:") && index($0, team) {print $2}')"
+          test -n "$IDENTITY"
+          test "$(printf '%s\n' "$IDENTITY" | wc -l | tr -d ' ')" = 1
           codesign --force --options runtime --timestamp --sign "$IDENTITY" standalone/guardscan
           codesign --verify --deep --strict --verbose=2 standalone/guardscan
           printf '%s' "$APPLE_NOTARY_PRIVATE_KEY" > "$RUNNER_TEMP/AuthKey.p8"
@@ -501,6 +510,7 @@ jobs:
 
   aggregate:
     name: Manifest and signed aggregate checksum
+    if: inputs.mode == 'production'
     runs-on: ubuntu-24.04
     needs: [npm, native]
     permissions:
@@ -609,3 +619,177 @@ jobs:
           path: release/
           if-no-files-found: error
           retention-days: 30
+
+  provider-rehearsal:
+    name: Provider rehearsal ${{ matrix.id }}
+    if: inputs.mode == 'rehearsal'
+    runs-on: ${{ matrix.runner }}
+    environment: ${{ matrix.os == 'darwin' && 'apple-notarization' || 'windows-signing' }}
+    permissions:
+      contents: read
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: darwin-arm64
+            runner: macos-15
+            os: darwin
+            arch: arm64
+            libc: ""
+            executable: guardscan
+          - id: windows-x64
+            runner: windows-2025
+            os: windows
+            arch: x64
+            libc: ""
+            executable: guardscan.exe
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.RELEASE_NODE_VERSION }}
+      - working-directory: cli
+        run: npm ci
+      - working-directory: cli
+        run: npm run build
+      - name: Build transient standalone rehearsal artifact
+        working-directory: cli
+        run: npm run release:build -- --kind standalone --output-dir ../rehearsal-standalone
+
+      - name: Import Apple Developer ID certificate
+        if: matrix.os == 'darwin'
+        shell: bash
+        env:
+          APPLE_CERTIFICATE_P12: ${{ secrets.APPLE_CERTIFICATE_P12 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          KEYCHAIN="$RUNNER_TEMP/guardscan-rehearsal.keychain-db"
+          printf '%s' "$APPLE_CERTIFICATE_P12" | openssl base64 -d -A > "$RUNNER_TEMP/rehearsal-certificate.p12"
+          security create-keychain -p "$RUNNER_TEMP" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$RUNNER_TEMP" "$KEYCHAIN"
+          security import "$RUNNER_TEMP/rehearsal-certificate.p12" -P "$APPLE_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN"
+          security list-keychain -d user -s "$KEYCHAIN"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$RUNNER_TEMP" "$KEYCHAIN"
+
+      - name: Sign, notarize, staple, and verify macOS rehearsal executable
+        if: matrix.os == 'darwin'
+        shell: bash
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+          APPLE_NOTARY_PRIVATE_KEY: ${{ secrets.APPLE_NOTARY_PRIVATE_KEY }}
+        run: |
+          KEYCHAIN="$RUNNER_TEMP/guardscan-rehearsal.keychain-db"
+          IDENTITY="$(security find-identity -v -p codesigning "$KEYCHAIN" \
+            | awk -v team="($APPLE_TEAM_ID)" 'index($0, "Developer ID Application:") && index($0, team) {print $2}')"
+          test -n "$IDENTITY"
+          test "$(printf '%s\n' "$IDENTITY" | wc -l | tr -d ' ')" = 1
+          codesign --force --options runtime --timestamp --sign "$IDENTITY" rehearsal-standalone/guardscan
+          codesign --verify --deep --strict --verbose=2 rehearsal-standalone/guardscan
+          printf '%s' "$APPLE_NOTARY_PRIVATE_KEY" > "$RUNNER_TEMP/rehearsal-AuthKey.p8"
+          mkdir "$RUNNER_TEMP/rehearsal-volume"
+          cp rehearsal-standalone/guardscan "$RUNNER_TEMP/rehearsal-volume/guardscan"
+          hdiutil create -volname "GuardScan rehearsal" -srcfolder "$RUNNER_TEMP/rehearsal-volume" -format UDZO "$RUNNER_TEMP/guardscan-rehearsal.dmg"
+          xcrun notarytool submit "$RUNNER_TEMP/guardscan-rehearsal.dmg" \
+            --key "$RUNNER_TEMP/rehearsal-AuthKey.p8" \
+            --key-id "$APPLE_NOTARY_KEY_ID" \
+            --issuer "$APPLE_NOTARY_ISSUER_ID" \
+            --wait --output-format json > "$RUNNER_TEMP/rehearsal-notary-submission.json"
+          SUBMISSION_ID="$(node -p 'require(process.argv[1]).id' "$RUNNER_TEMP/rehearsal-notary-submission.json")"
+          xcrun notarytool log "$SUBMISSION_ID" \
+            --key "$RUNNER_TEMP/rehearsal-AuthKey.p8" \
+            --key-id "$APPLE_NOTARY_KEY_ID" \
+            --issuer "$APPLE_NOTARY_ISSUER_ID" \
+            "$RUNNER_TEMP/rehearsal-notary-log.json"
+          node -e '
+            const submission = require(process.argv[1]);
+            const log = require(process.argv[2]);
+            if (submission.status !== "Accepted" || log.status !== "Accepted") {
+              throw new Error(`rehearsal notarization was not accepted: ${submission.status || log.status}`);
+            }
+          ' "$RUNNER_TEMP/rehearsal-notary-submission.json" "$RUNNER_TEMP/rehearsal-notary-log.json"
+          xcrun stapler staple "$RUNNER_TEMP/guardscan-rehearsal.dmg"
+          xcrun stapler validate "$RUNNER_TEMP/guardscan-rehearsal.dmg"
+          spctl --assess --type open --context context:primary-signature --verbose=4 "$RUNNER_TEMP/guardscan-rehearsal.dmg"
+          spctl --assess --type execute --verbose=4 rehearsal-standalone/guardscan
+          cp "$RUNNER_TEMP/rehearsal-notary-submission.json" rehearsal-standalone/notary-submission.json
+          cp "$RUNNER_TEMP/rehearsal-notary-log.json" rehearsal-standalone/notary-log.json
+          codesign -dvvv rehearsal-standalone/guardscan 2> rehearsal-standalone/apple-code-signing.txt
+
+      - name: Remove ephemeral Apple rehearsal material
+        if: always() && matrix.os == 'darwin'
+        shell: bash
+        run: |
+          security delete-keychain "$RUNNER_TEMP/guardscan-rehearsal.keychain-db" || true
+          rm -f "$RUNNER_TEMP/rehearsal-certificate.p12" "$RUNNER_TEMP/rehearsal-AuthKey.p8"
+
+      - name: Azure OIDC login for Windows rehearsal
+        if: matrix.os == 'windows'
+        uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: Authenticode-sign Windows rehearsal executable
+        if: matrix.os == 'windows'
+        uses: Azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2
+        with:
+          endpoint: ${{ vars.AZURE_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ vars.AZURE_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ vars.AZURE_SIGNING_PROFILE }}
+          files: ${{ github.workspace }}\rehearsal-standalone\guardscan.exe
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+          cache-dependencies: false
+      - name: Verify Windows Authenticode rehearsal signature and timestamp
+        if: matrix.os == 'windows'
+        shell: pwsh
+        run: |
+          $signature = Get-AuthenticodeSignature rehearsal-standalone\guardscan.exe
+          if ($signature.Status -ne 'Valid') { throw "Invalid rehearsal Authenticode status: $($signature.Status)" }
+          if ($null -eq $signature.TimeStamperCertificate) { throw 'Rehearsal Authenticode timestamp is missing' }
+          $signature | Format-List * | Out-File rehearsal-standalone\authenticode.txt
+
+      - name: Write non-production provider rehearsal evidence
+        shell: bash
+        env:
+          REHEARSAL_REF: ${{ inputs.ref }}
+          REHEARSAL_MODE: ${{ inputs.mode }}
+          REHEARSAL_PLATFORM: ${{ matrix.id }}
+        run: |
+          node - <<'NODE'
+          const fs = require('fs');
+          const cp = require('child_process');
+          const prototype = JSON.parse(fs.readFileSync('rehearsal-standalone/standalone-prototype.json'));
+          if (prototype.productionReady !== false) throw new Error('provider rehearsal artifact must not be production-ready');
+          const commit = cp.execFileSync('git', ['rev-parse', 'HEAD'], {encoding: 'utf8'}).trim();
+          if (commit !== process.env.REHEARSAL_REF) throw new Error('provider rehearsal source ref mismatch');
+          const evidence = {
+            schemaVersion: 'guardscan.provider-rehearsal.v1',
+            productionReady: false,
+            source: {repository: process.env.GITHUB_REPOSITORY, commit, ref: process.env.REHEARSAL_REF},
+            workflow: {runId: process.env.GITHUB_RUN_ID, mode: process.env.REHEARSAL_MODE},
+            platform: process.env.REHEARSAL_PLATFORM,
+            checks: {
+              standaloneBuild: true,
+              appleSigningAndNotarization: process.env.REHEARSAL_PLATFORM.startsWith('darwin'),
+              azureAuthenticodeSigning: process.env.REHEARSAL_PLATFORM.startsWith('windows'),
+            },
+            publication: {tag: false, release: false, package: false, catalog: false, ledger: false},
+          };
+          fs.writeFileSync('rehearsal-standalone/provider-rehearsal-evidence.json', `${JSON.stringify(evidence, null, 2)}\n`);
+          NODE
+          rm -f rehearsal-standalone/guardscan rehearsal-standalone/guardscan.exe
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: provider-rehearsal-${{ matrix.id }}
+          path: rehearsal-standalone/
+          if-no-files-found: error
+          retention-days: 14

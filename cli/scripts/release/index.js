@@ -50,6 +50,7 @@ const {writeArtifactSboms} = require('./artifact-sbom');
 const {buildStandaloneArtifact} = require('./standalone-artifact');
 const {createReleaseCandidate} = require('./candidate');
 const {createPublicationEvidence} = require('./publication-evidence');
+const {createCheckpoint, verifyCheckpoint} = require('./checkpoint');
 
 const BOOLEAN_OPTIONS = new Set([
   'accepted',
@@ -80,6 +81,8 @@ const COMMANDS = new Set([
   'verify-npm-artifact',
   'npm-preflight',
   'advance',
+  'checkpoint',
+  'verify-checkpoint',
 ]);
 
 function parseOptions(args) {
@@ -122,6 +125,7 @@ function printHelp() {
     'Foundation and compatibility commands:',
     '  validate, plan, prepare, dry-run, render, validate-adapters',
     '  package, verify-npm-artifact, npm-preflight, standalone-prototype',
+    '  checkpoint, verify-checkpoint',
     '  advance (legacy mutable-state compatibility only), resume',
     '',
     'Common options:',
@@ -486,6 +490,32 @@ async function main(argv) {
 
   if (command === 'build') {
     process.stdout.write(`${JSON.stringify(await handleBuild(source, options), null, 2)}\n`);
+    return;
+  }
+
+  if (command === 'checkpoint') {
+    requireOptions('checkpoint', options, ['outputDir', 'files', 'producer', 'timestamp']);
+    const producer = JSON.parse(readBounded(path.resolve(options.producer), 'checkpoint producer'));
+    const result = createCheckpoint(source, {
+      outputDir: options.outputDir,
+      root: options.root || source.repositoryRoot,
+      files: options.files.split(',').map(value => value.trim()).filter(Boolean),
+      producer,
+      timestamp: options.timestamp,
+    });
+    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+    return;
+  }
+
+  if (command === 'verify-checkpoint') {
+    requireOptions('verify-checkpoint', options, ['archiveFile', 'sidecarFile']);
+    const result = verifyCheckpoint(source, {
+      archiveFile: options.archiveFile,
+      sidecarFile: options.sidecarFile,
+      ...(options.root ? {root: options.root} : {}),
+      extractDir: options.extractDir,
+    });
+    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
     return;
   }
 

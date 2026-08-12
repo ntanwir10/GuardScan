@@ -11,9 +11,11 @@ const catalogWorkflow = path.join(
 const releaseWorkflows = [
   'release-build.yml',
   'release-canary.yml',
+  'release-credential-health.yml',
   'release-first-withdrawal.yml',
   'release-please.yml',
   'release-publish.yml',
+  'release-provider-rehearsal.yml',
   'release-train.yml',
 ];
 
@@ -65,6 +67,35 @@ describe('zero-touch release workflow contracts', () => {
   it('passes an explicit package manager to the reusable release quality gate', () => {
     expect(workflowSource('release-build.yml'))
       .toContain('npm run test:package-manager -- --manager npm');
+  });
+
+  it('keeps provider rehearsal explicit, non-publishing, and head-bound', () => {
+    const rehearsal = workflowSource('release-provider-rehearsal.yml');
+    const build = workflowSource('release-build.yml');
+    expect(rehearsal).toContain('workflow_dispatch:');
+    expect(rehearsal).toContain('expected_head:');
+    expect(rehearsal).toContain("vars.RELEASE_AUTOMATION_ENABLED != 'true'");
+    expect(rehearsal).toContain("vars.RELEASE_PROVIDER_REHEARSAL_ENABLED == 'true'");
+    expect(rehearsal).toContain("/^[1-9][0-9]*$/.test(pr || '')");
+    expect(rehearsal).toContain("/^[a-f0-9]{40}$/.test(head || '')");
+    expect(rehearsal).toContain("pr.state !== 'open'");
+    expect(rehearsal).toContain("pr.base?.ref !== 'main'");
+    expect(rehearsal).toContain('pr.head?.repo?.full_name?.toLowerCase()');
+    expect(rehearsal).toContain('pr.head?.sha !== expected');
+    expect(rehearsal).toContain('mode: rehearsal');
+    expect(rehearsal).not.toContain('gh release');
+    expect(rehearsal).not.toContain('npm publish');
+    expect(rehearsal).not.toContain('pypa/gh-action-pypi-publish');
+    expect(rehearsal).not.toContain('choco push');
+    expect(rehearsal).not.toContain('wingetcreate');
+    expect(build).toContain('mode:');
+    expect(build).toContain("if: inputs.mode == 'production'");
+    expect(build).toContain("if: inputs.mode == 'rehearsal'");
+    expect(build).toContain('provider-rehearsal.v1');
+    expect(build).toContain('Developer ID Application:');
+    expect(build).not.toContain('Developer ID Application: Nauman Tanwir');
+    expect(build).toContain('productionReady: false');
+    expect(build).toContain('publication: {tag: false, release: false, package: false, catalog: false, ledger: false}');
   });
 
   it('keeps workflow heredoc terminators at shell column zero', () => {
@@ -141,6 +172,52 @@ describe('zero-touch release workflow contracts', () => {
     expect(train).toMatch(
       /publish:\n[\s\S]*?permissions:\n\s+actions: read\n\s+contents: write\n\s+id-token: write/
     );
+  });
+
+  it('gates every release mutation and checkpoints signed bytes before publication', () => {
+    const trainSource = workflowSource('release-train.yml');
+    const publishSource = workflowSource('release-publish.yml');
+    const train = yaml.load(trainSource) as {jobs: Record<string, {if?: string; needs?: string[]}>};
+    const publish = yaml.load(publishSource) as {jobs: Record<string, {if?: string}>};
+    for (const job of [
+      'scheduler', 'catalog-hint', 'prepare', 'build', 'checkpoint',
+      'pypi-test', 'pypi', 'publish', 'record', 'reconcile',
+      'first-release-withdrawal', 'rollback',
+    ]) {
+      expect(train.jobs[job].if).toContain("vars.RELEASE_AUTOMATION_ENABLED == 'true'");
+    }
+    for (const job of ['github', 'npm', 'catalog', 'winget', 'chocolatey']) {
+      expect(publish.jobs[job].if).toContain("vars.RELEASE_AUTOMATION_ENABLED == 'true'");
+    }
+    const canary = yaml.load(workflowSource('release-canary.yml')) as {
+      jobs: Record<string, {if?: string}>;
+    };
+    const withdrawal = yaml.load(workflowSource('release-first-withdrawal.yml')) as {
+      jobs: Record<string, {if?: string}>;
+    };
+    expect(canary.jobs.record.if).toContain("vars.RELEASE_AUTOMATION_ENABLED == 'true'");
+    expect(withdrawal.jobs.withdraw.if).toContain("vars.RELEASE_AUTOMATION_ENABLED == 'true'");
+
+    expect(train.jobs.build.needs).toEqual(['prepare', 'resolve-checkpoint']);
+    expect(train.jobs.checkpoint.needs).toEqual(['prepare', 'resolve-checkpoint', 'build']);
+    expect(train.jobs['payload-ready'].needs).toEqual([
+      'prepare', 'resolve-checkpoint', 'build', 'checkpoint',
+    ]);
+    expect(train.jobs.publish.needs).toEqual(['prepare', 'payload-ready']);
+    expect(trainSource).toContain('guardscan-release-checkpoint-');
+    expect(trainSource).toContain("grep -Eq 'HTTP 404([ )]|$)' release-state.error");
+    expect(trainSource).toContain('Could not classify the remote release state');
+    expect(trainSource).toContain('mode=checkpoint');
+    expect(trainSource).toContain('mode=expanded');
+    expect(trainSource).toContain('mode=public');
+    expect(trainSource).toContain('verify-checkpoint');
+    expect(trainSource).toContain('cp checkpoint-npm/npm-artifact.json checkpoint-root/npm-artifact/');
+    expect(trainSource).toContain("new Date(process.argv[1]).toISOString()");
+    expect(trainSource).toContain('published release exposes partial checkpoint assets');
+    expect(trainSource).toContain("-name 'guardscan-release-checkpoint-*'");
+    expect(trainSource).toContain('expanded or published asset inventory is incomplete or unexpected');
+    expect(publishSource).toContain('publication has no persisted checkpoint release');
+    expect(publishSource).toContain('Remove private checkpoint only after the expanded draft is complete');
   });
 
   it('fails closed and persists an idempotent repository-side rollback recovery', () => {
@@ -270,16 +347,19 @@ describe('zero-touch release workflow contracts', () => {
   });
 
   it('tests every TestPyPI wheel natively before production PyPI publication', () => {
-    const source = workflowSource('release-publish.yml');
+    const source = workflowSource('release-train.yml');
+    const reusable = workflowSource('release-publish.yml');
     const workflow = yaml.load(source) as {
       jobs: Record<string, {
         needs?: string[];
+        environment?: string;
+        permissions?: Record<string, string>;
         'runs-on'?: string;
         strategy?: {matrix?: {target?: Array<{id: string; runner: string}>}};
       }>;
     };
     const lifecycle = workflow.jobs['pypi-test-lifecycle'];
-    expect(lifecycle.needs).toEqual(['pypi-test']);
+    expect(lifecycle.needs).toEqual(['prepare', 'pypi-test']);
     expect(lifecycle['runs-on']).toBe('${{ matrix.target.runner }}');
     expect(lifecycle.strategy?.matrix?.target).toEqual([
       {id: 'linux-x64-glibc', runner: 'ubuntu-24.04'},
@@ -288,7 +368,15 @@ describe('zero-touch release workflow contracts', () => {
       {id: 'darwin-x64', runner: 'macos-15-intel'},
       {id: 'windows-x64', runner: 'windows-2025'},
     ]);
-    expect(workflow.jobs.pypi.needs).toEqual(['pypi-test-lifecycle']);
+    expect(workflow.jobs['pypi-test'].environment).toBe('testpypi');
+    expect(workflow.jobs['pypi-test'].needs).toEqual(['prepare', 'publish']);
+    expect(workflow.jobs['pypi-test'].permissions).toEqual({contents: 'read', 'id-token': 'write'});
+    expect(workflow.jobs.pypi.environment).toBe('pypi');
+    expect(workflow.jobs.pypi.needs).toEqual(['prepare', 'pypi-test-lifecycle']);
+    expect(workflow.jobs.pypi.permissions).toEqual({contents: 'read', 'id-token': 'write'});
+    expect(workflow.jobs.record.needs).toEqual(['prepare', 'publish', 'pypi']);
+    expect(source).toContain('pypa/gh-action-pypi-publish@');
+    expect(reusable).not.toContain('pypa/gh-action-pypi-publish@');
     expect(source).toContain('Test TestPyPI wheel through pip and pipx on ${{ matrix.target.id }}');
     expect(source).toContain('python -m pipx environment --value PIPX_BIN_DIR');
     expect(source).toContain('exercise_guardscan guardscan pip');
@@ -321,6 +409,7 @@ describe('zero-touch release workflow contracts', () => {
       'release-rc',
       'release-stable',
       'npm-publish',
+      'testpypi',
       'pypi',
       'apple-notarization',
       'windows-signing',
@@ -332,7 +421,9 @@ describe('zero-touch release workflow contracts', () => {
     expect(build).toContain('cosign sign-blob --yes');
     expect(build).toContain('xcrun notarytool submit');
     expect(build).toContain('xcrun stapler staple');
-    expect(build).toContain('security find-identity -v -p codesigning "$KEYCHAIN" | grep -F "$IDENTITY"');
+    expect(build).toContain('security find-identity -v -p codesigning "$KEYCHAIN"');
+    expect(build).toContain('awk -v team="($APPLE_TEAM_ID)"');
+    expect(build).toContain('test -n "$IDENTITY"');
     expect(build).toContain("if: always() && matrix.os == 'darwin'");
     expect(build).toContain('security delete-keychain "$RUNNER_TEMP/guardscan-signing.keychain-db" || true');
     expect(build).toContain('rm -f "$RUNNER_TEMP/certificate.p12" "$RUNNER_TEMP/AuthKey.p8"');
@@ -344,14 +435,19 @@ describe('zero-touch release workflow contracts', () => {
     expect(publish).toContain('--provenance');
     expect(publish).toContain('RELEASE_NPM_VERSION: 11.5.2');
     expect(publish).toContain('npm install --global "npm@${RELEASE_NPM_VERSION}"');
-    expect(publish).toContain('pypa/gh-action-pypi-publish@');
-    expect(publish).toContain('cp payload/*.whl dist/');
-    expect(publish).toContain('Verify complete TestPyPI file set');
-    expect(publish).toContain('Verify complete PyPI file set');
-    expect(publish).toContain('remote == local');
-    expect(publish).not.toContain('try:\n          try:');
+    expect(combined).toContain('pypa/gh-action-pypi-publish@');
+    expect(combined).toContain('cp payload/*.whl dist/');
+    expect(combined).toContain('Verify complete TestPyPI file set');
+    expect(combined).toContain('Verify complete PyPI file set');
+    expect(combined).toContain('remote == local');
+    expect(combined).not.toContain('try:\n          try:');
     expect(publish).toContain('wingetcreate.exe submit');
+    expect(publish).toContain('WINGET_CREATE_GITHUB_TOKEN');
+    expect(publish).not.toContain('WINGET_GITHUB_TOKEN');
+    expect(publish).not.toContain('wingetcreate.exe submit --prtitle "$pullTitle" --no-open --token');
     expect(publish).toContain('choco push');
+    expect(publish).toContain('choco install guardscan --source "$feed" --version 1.0.5');
+    expect(publish).toContain('choco upgrade guardscan --source "$feed" --version "$candidateVersion"');
     expect(combined).toContain('/.github/workflows/release-train.yml@');
     expect(combined).not.toContain('/.github/workflows/release-build.yml@');
   });
@@ -457,5 +553,6 @@ describe('zero-touch release workflow contracts', () => {
     ]) {
       expect(source).toContain(`  ${command}`);
     }
+    expect(source).toContain('  checkpoint, verify-checkpoint');
   });
 });

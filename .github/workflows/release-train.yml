@@ -501,10 +501,201 @@ jobs:
           echo "source_pr_base=${{ steps.source.outputs.base_sha }}" >> "$GITHUB_OUTPUT"
           echo "source_pr_tree=${{ steps.source.outputs.tree_sha }}" >> "$GITHUB_OUTPUT"
 
+  resolve-checkpoint:
+    name: Resolve immutable release payload checkpoint
+    if: >-
+      vars.RELEASE_AUTOMATION_ENABLED == 'true'
+      && needs.prepare.outputs.build == 'true'
+    needs: [prepare]
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      mode: ${{ steps.remote.outputs.mode }}
+    steps:
+      - name: Classify remote checkpoint state
+        id: remote
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+        run: |
+          VERSION="${RELEASE_TAG#v}"
+          ARCHIVE="guardscan-release-checkpoint-$VERSION.tar.gz"
+          SIDECAR="$ARCHIVE.metadata.json"
+          if ! gh api "repos/${GITHUB_REPOSITORY}/releases/tags/$RELEASE_TAG" \
+            > release-state.json 2> release-state.error; then
+            if grep -Eq 'HTTP 404([ )]|$)' release-state.error; then
+              echo "mode=build" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            cat release-state.error >&2
+            echo "::error::Could not classify the remote release state"
+            exit 1
+          fi
+          export ARCHIVE SIDECAR
+          node - <<'NODE'
+          const fs = require('fs');
+          const state = JSON.parse(fs.readFileSync('release-state.json'));
+          const names = new Set((state.assets || []).map(asset => asset.name));
+          const hasArchive = names.has(process.env.ARCHIVE);
+          const hasSidecar = names.has(process.env.SIDECAR);
+          if (hasArchive && hasSidecar) {
+            if (!state.draft) throw new Error('release-integrity incident: published release exposes checkpoint assets');
+            fs.appendFileSync(process.env.GITHUB_OUTPUT, 'mode=checkpoint\n');
+            process.exit(0);
+          }
+          if (state.draft) {
+            if (names.size === 0) {
+              fs.appendFileSync(process.env.GITHUB_OUTPUT, 'mode=build\n');
+              process.exit(0);
+            }
+            fs.appendFileSync(process.env.GITHUB_OUTPUT, 'mode=expanded\n');
+            process.exit(0);
+          }
+          if (hasArchive || hasSidecar) {
+            throw new Error('release-integrity incident: published release exposes partial checkpoint assets');
+          }
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, 'mode=public\n');
+          NODE
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        if: steps.remote.outputs.mode != 'build'
+        with:
+          ref: ${{ needs.prepare.outputs.ref }}
+          fetch-depth: 0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        if: steps.remote.outputs.mode != 'build'
+        with:
+          node-version: ${{ env.RELEASE_NODE_VERSION }}
+      - name: Install exact-source checkpoint tooling
+        if: steps.remote.outputs.mode != 'build'
+        working-directory: cli
+        run: npm ci
+      - name: Download and verify checkpoint archive
+        if: steps.remote.outputs.mode == 'checkpoint'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_REF: ${{ needs.prepare.outputs.ref }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+        run: |
+          VERSION="${RELEASE_TAG#v}"
+          ARCHIVE="guardscan-release-checkpoint-$VERSION.tar.gz"
+          SIDECAR="$ARCHIVE.metadata.json"
+          mkdir checkpoint-assets
+          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+            --pattern "$ARCHIVE" --pattern "$SIDECAR" --dir checkpoint-assets
+          node cli/scripts/release/index.js verify-checkpoint \
+            --package-root cli --tag "$RELEASE_TAG" --commit "$RELEASE_REF" \
+            --archive-file "checkpoint-assets/$ARCHIVE" \
+            --sidecar-file "checkpoint-assets/$SIDECAR" \
+            --extract-dir rehydrated
+      - uses: sigstore/cosign-installer@d58896d6a1865668819e1d91763c7751a165e159 # v3.9.2
+        if: steps.remote.outputs.mode == 'public' || steps.remote.outputs.mode == 'expanded'
+      - name: Download and verify complete expanded or published asset inventory
+        if: steps.remote.outputs.mode == 'public' || steps.remote.outputs.mode == 'expanded'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_REF: ${{ needs.prepare.outputs.ref }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+        run: |
+          mkdir -p rehydrated/payload
+          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --dir rehydrated/payload
+          if [ "${{ steps.remote.outputs.mode }}" = expanded ]; then
+            mkdir -p rehydrated/checkpoint-leftovers
+            find rehydrated/payload -maxdepth 1 -type f \
+              -name 'guardscan-release-checkpoint-*' \
+              -exec mv {} rehydrated/checkpoint-leftovers/ \;
+          fi
+          if find rehydrated/payload -mindepth 1 ! -type f -print -quit | grep -q .; then
+            echo "::error::Release contains a non-file asset"
+            exit 1
+          fi
+          (cd rehydrated/payload && sha256sum --check SHA256SUMS)
+          cosign verify-blob \
+            --bundle rehydrated/payload/SHA256SUMS.sigstore.json \
+            --certificate-identity-regexp "^https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release-train.yml@" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            rehydrated/payload/SHA256SUMS
+          node - <<'NODE'
+          const fs = require('fs');
+          const path = require('path');
+          const root = 'rehydrated/payload';
+          const checksumLines = fs.readFileSync(path.join(root, 'SHA256SUMS'), 'utf8')
+            .trim().split('\n').filter(Boolean);
+          const expected = new Set(['SHA256SUMS', 'SHA256SUMS.sigstore.json']);
+          for (const line of checksumLines) {
+            const match = /^([a-f0-9]{64})  ([A-Za-z0-9][A-Za-z0-9._+-]*)$/.exec(line);
+            if (!match) throw new Error('release-integrity incident: malformed published checksum inventory');
+            expected.add(match[2]);
+          }
+          const actual = fs.readdirSync(root).sort();
+          if (actual.length !== expected.size || actual.some(name => !expected.has(name))) {
+            throw new Error('release-integrity incident: expanded or published asset inventory is incomplete or unexpected');
+          }
+          NODE
+          node cli/scripts/release/index.js validate \
+            --package-root cli --tag "$RELEASE_TAG" --commit "$RELEASE_REF" \
+            --manifest rehydrated/payload/release-manifest.json
+      - name: Restore and verify the exact npm handoff
+        if: steps.remote.outputs.mode != 'build'
+        env:
+          RELEASE_REF: ${{ needs.prepare.outputs.ref }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+        run: |
+          mkdir -p rehydrated/npm-artifact
+          TARBALLS=(rehydrated/payload/*.tgz)
+          test "${#TARBALLS[@]}" = 1
+          cp "${TARBALLS[0]}" rehydrated/npm-artifact/
+          if [ ! -f rehydrated/npm-artifact/npm-artifact.json ]; then
+            node - <<'NODE'
+          const crypto = require('crypto');
+          const fs = require('fs');
+          const path = require('path');
+          const cp = require('child_process');
+          const directory = 'rehydrated/npm-artifact';
+          const filename = fs.readdirSync(directory).find(name => name.endsWith('.tgz'));
+          const bytes = fs.readFileSync(path.join(directory, filename));
+          const version = process.env.RELEASE_TAG.slice(1);
+          const metadata = {
+            schemaVersion: 'guardscan.npm-artifact.v1',
+            packageName: 'guardscan',
+            version,
+            tag: process.env.RELEASE_TAG,
+            commit: process.env.RELEASE_REF,
+            createdAt: new Date(cp.execFileSync('git', ['show', '-s', '--format=%cI', process.env.RELEASE_REF], {encoding: 'utf8'}).trim()).toISOString(),
+            filename,
+            size: bytes.length,
+            sha256: crypto.createHash('sha256').update(bytes).digest('hex'),
+            integrity: `sha512-${crypto.createHash('sha512').update(bytes).digest('base64')}`,
+          };
+          fs.writeFileSync(path.join(directory, 'npm-artifact.json'), `${JSON.stringify(metadata, null, 2)}\n`);
+          NODE
+          fi
+          node cli/scripts/release/index.js verify-npm-artifact \
+            --package-root cli --tag "$RELEASE_TAG" --commit "$RELEASE_REF" \
+            --artifact-dir rehydrated/npm-artifact
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: steps.remote.outputs.mode != 'build'
+        with:
+          name: release-payload-${{ needs.prepare.outputs.tag }}
+          path: rehydrated/payload/
+          if-no-files-found: error
+          retention-days: 30
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: steps.remote.outputs.mode != 'build'
+        with:
+          name: release-npm-${{ needs.prepare.outputs.tag }}
+          path: rehydrated/npm-artifact/
+          if-no-files-found: error
+          retention-days: 30
+
   build:
     name: Build exact tagged release
-    if: needs.prepare.outputs.build == 'true'
-    needs: [prepare]
+    if: >-
+      vars.RELEASE_AUTOMATION_ENABLED == 'true'
+      && needs.prepare.outputs.build == 'true'
+      && needs.resolve-checkpoint.outputs.mode == 'build'
+    needs: [prepare, resolve-checkpoint]
     permissions:
       contents: read
       id-token: write
@@ -516,10 +707,433 @@ jobs:
       channel: ${{ needs.prepare.outputs.channel }}
     secrets: inherit
 
+  checkpoint:
+    name: Persist verified payload before publication
+    if: >-
+      vars.RELEASE_AUTOMATION_ENABLED == 'true'
+      && needs.resolve-checkpoint.outputs.mode == 'build'
+    needs: [prepare, resolve-checkpoint, build]
+    runs-on: ubuntu-24.04
+    environment: ${{ needs.prepare.outputs.channel == 'rc' && 'release-rc' || 'release-stable' }}
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.prepare.outputs.ref }}
+          fetch-depth: 0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.RELEASE_NODE_VERSION }}
+      - working-directory: cli
+        run: npm ci
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-payload-${{ needs.prepare.outputs.tag }}
+          path: checkpoint-root/payload
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-npm-${{ needs.prepare.outputs.tag }}
+          path: checkpoint-npm
+      - name: Create and locally verify deterministic checkpoint
+        env:
+          RELEASE_REF: ${{ needs.prepare.outputs.ref }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+        run: |
+          mkdir -p checkpoint-root/npm-artifact checkpoint-assets
+          cp checkpoint-npm/npm-artifact.json checkpoint-root/npm-artifact/
+          if find checkpoint-root -mindepth 1 ! -type f ! -type d -print -quit | grep -q .; then
+            echo "::error::Checkpoint input contains a link or special file"
+            exit 1
+          fi
+          FILES="$(find checkpoint-root -type f -printf '%P\n' | sort | paste -sd, -)"
+          test -n "$FILES"
+          COMMIT_TIMESTAMP="$(git show -s --format=%cI "$RELEASE_REF")"
+          TIMESTAMP="$(node -p 'new Date(process.argv[1]).toISOString()' "$COMMIT_TIMESTAMP")"
+          node - <<'NODE'
+          const fs = require('fs');
+          fs.writeFileSync('checkpoint-producer.json', `${JSON.stringify({
+            provider: 'github-actions',
+            repository: process.env.GITHUB_REPOSITORY,
+            workflow: '.github/workflows/release-train.yml',
+            runId: process.env.GITHUB_RUN_ID,
+            runAttempt: Number(process.env.GITHUB_RUN_ATTEMPT),
+            sourceRef: `refs/tags/${process.env.RELEASE_TAG}`,
+          }, null, 2)}\n`);
+          NODE
+          node cli/scripts/release/index.js checkpoint \
+            --package-root cli --tag "$RELEASE_TAG" --commit "$RELEASE_REF" \
+            --root checkpoint-root --files "$FILES" \
+            --producer checkpoint-producer.json --timestamp "$TIMESTAMP" \
+            --output-dir checkpoint-assets
+      - name: Create or reuse empty draft and upload checkpoint atomically
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+        run: |
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+            --json isDraft,assets > release-state.json 2>/dev/null; then
+            node - <<'NODE'
+          const state = require('./release-state.json');
+          if (!state.isDraft || (state.assets || []).length !== 0) {
+            throw new Error('release-integrity incident: checkpoint target is not an empty draft');
+          }
+          NODE
+          else
+            PRERELEASE=()
+            if [ "${{ needs.prepare.outputs.channel }}" = rc ]; then PRERELEASE+=(--prerelease); fi
+            gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+              --verify-tag --draft "${PRERELEASE[@]}" \
+              --title "GuardScan $RELEASE_TAG" --generate-notes
+          fi
+          gh release upload "$RELEASE_TAG" checkpoint-assets/* --repo "$GITHUB_REPOSITORY"
+      - name: Redownload and verify persisted checkpoint bytes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_REF: ${{ needs.prepare.outputs.ref }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+        run: |
+          mkdir checkpoint-redownload checkpoint-verify
+          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+            --pattern 'guardscan-release-checkpoint-*' --dir checkpoint-redownload
+          diff -u <(find checkpoint-assets -type f -printf '%f\n' | sort) \
+            <(find checkpoint-redownload -type f -printf '%f\n' | sort)
+          for FILE in checkpoint-assets/*; do
+            cmp --silent "$FILE" "checkpoint-redownload/$(basename "$FILE")"
+          done
+          ARCHIVE="$(find checkpoint-redownload -name '*.tar.gz' -print -quit)"
+          SIDECAR="$(find checkpoint-redownload -name '*.metadata.json' -print -quit)"
+          node cli/scripts/release/index.js verify-checkpoint \
+            --package-root cli --tag "$RELEASE_TAG" --commit "$RELEASE_REF" \
+            --archive-file "$ARCHIVE" --sidecar-file "$SIDECAR" \
+            --extract-dir checkpoint-verify
+
+  payload-ready:
+    name: Require one verified immutable payload path
+    if: >-
+      always()
+      && vars.RELEASE_AUTOMATION_ENABLED == 'true'
+      && needs.prepare.outputs.build == 'true'
+    needs: [prepare, resolve-checkpoint, build, checkpoint]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require fresh checkpoint or verified rehydration
+        env:
+          MODE: ${{ needs.resolve-checkpoint.outputs.mode }}
+          RESOLVE_RESULT: ${{ needs.resolve-checkpoint.result }}
+          BUILD_RESULT: ${{ needs.build.result }}
+          CHECKPOINT_RESULT: ${{ needs.checkpoint.result }}
+        run: |
+          test "$RESOLVE_RESULT" = success
+          if [ "$MODE" = build ]; then
+            test "$BUILD_RESULT" = success
+            test "$CHECKPOINT_RESULT" = success
+          else
+            test "$MODE" = checkpoint -o "$MODE" = expanded -o "$MODE" = public
+            test "$BUILD_RESULT" = skipped
+            test "$CHECKPOINT_RESULT" = skipped
+          fi
+
+  pypi-test:
+    name: TestPyPI trusted publication
+    if: vars.RELEASE_AUTOMATION_ENABLED == 'true'
+    runs-on: ubuntu-24.04
+    needs: [prepare, publish]
+    environment: testpypi
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.prepare.outputs.ref }}
+          fetch-depth: 0
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-payload-${{ needs.prepare.outputs.tag }}
+          path: payload
+      - name: Select every tested platform wheel
+        run: |
+          mkdir dist
+          cp payload/*.whl dist/
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.13"
+      - name: Reject conflicting TestPyPI files
+        env:
+          REGISTRY_JSON_BASE: https://test.pypi.org/pypi/guardscan-cli
+          RELEASE_VERSION: ${{ needs.prepare.outputs.tag }}
+        run: |
+          python - <<'PY'
+          import hashlib, json, os, pathlib, urllib.error, urllib.request
+
+          version = os.environ["RELEASE_VERSION"].removeprefix("v").replace("-rc.", "rc")
+          url = f'{os.environ["REGISTRY_JSON_BASE"]}/{version}/json'
+          try:
+              with urllib.request.urlopen(url, timeout=30) as response:
+                  remote = json.load(response)
+          except urllib.error.HTTPError as error:
+              if error.code != 404:
+                  raise
+              remote = {"urls": []}
+          remote_files = {item["filename"]: item["digests"]["sha256"] for item in remote["urls"]}
+          local_files = {
+              wheel.name: hashlib.sha256(wheel.read_bytes()).hexdigest()
+              for wheel in pathlib.Path("dist").glob("*.whl")
+          }
+          unexpected = sorted(set(remote_files) - set(local_files))
+          if unexpected:
+              raise SystemExit(f"TestPyPI has unexpected files for this version: {unexpected}")
+          for filename, digest in local_files.items():
+              if filename in remote_files and remote_files[filename] != digest:
+                  raise SystemExit(f"TestPyPI integrity conflict for {filename}")
+          PY
+      - uses: pypa/gh-action-pypi-publish@ba38be9e461d3875417946c167d0b5f3d385a247 # v1.14.1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          packages-dir: dist
+          skip-existing: true
+          print-hash: true
+      - name: Verify complete TestPyPI file set
+        env:
+          REGISTRY_JSON_BASE: https://test.pypi.org/pypi/guardscan-cli
+          RELEASE_VERSION: ${{ needs.prepare.outputs.tag }}
+        run: |
+          python - <<'PY'
+          import hashlib, json, os, pathlib, time, urllib.error, urllib.request
+
+          version = os.environ["RELEASE_VERSION"].removeprefix("v").replace("-rc.", "rc")
+          url = f'{os.environ["REGISTRY_JSON_BASE"]}/{version}/json'
+          local = {
+              wheel.name: hashlib.sha256(wheel.read_bytes()).hexdigest()
+              for wheel in pathlib.Path("dist").glob("*.whl")
+          }
+          for attempt in range(30):
+              try:
+                  with urllib.request.urlopen(url, timeout=30) as response:
+                      remote = {
+                          item["filename"]: item["digests"]["sha256"]
+                          for item in json.load(response)["urls"]
+                      }
+              except urllib.error.HTTPError as error:
+                  if error.code != 404:
+                      raise
+                  remote = {}
+              if remote == local:
+                  break
+              if set(remote) - set(local):
+                  raise SystemExit("TestPyPI returned unexpected files for this version")
+              if any(local.get(name) != digest for name, digest in remote.items()):
+                  raise SystemExit("TestPyPI returned a conflicting wheel digest")
+              if attempt == 29:
+                  raise SystemExit("TestPyPI did not converge to the complete tested wheel set")
+              time.sleep(10)
+          PY
+
+  pypi-test-lifecycle:
+    name: TestPyPI lifecycle on ${{ matrix.target.id }}
+    if: vars.RELEASE_AUTOMATION_ENABLED == 'true'
+    needs: [prepare, pypi-test]
+    runs-on: ${{ matrix.target.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - id: linux-x64-glibc
+            runner: ubuntu-24.04
+          - id: linux-arm64-glibc
+            runner: ubuntu-24.04-arm
+          - id: darwin-arm64
+            runner: macos-15
+          - id: darwin-x64
+            runner: macos-15-intel
+          - id: windows-x64
+            runner: windows-2025
+    steps:
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.13"
+      - name: Test TestPyPI wheel through pip and pipx on ${{ matrix.target.id }}
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+        run: |
+          VERSION="${RELEASE_TAG#v}"
+          PYPI_VERSION="${VERSION/-rc./rc}"
+          exercise_guardscan() {
+            executable="$1"
+            label="$2"
+            project="$PWD/testpypi-$label"
+            rm -rf "$project"
+            mkdir -p "$project"
+            printf '{"name":"guardscan-testpypi","version":"1.0.0","private":true}\n' \
+              > "$project/package.json"
+            printf 'module.exports = 42;\n' > "$project/index.js"
+            (
+              cd "$project"
+              test "$("$executable" --version | tr -d '\r')" = "$VERSION"
+              "$executable" --help > help.txt
+              grep -q scan help.txt
+              "$executable" --no-telemetry scan --offline --no-cve --skip-tests --skip-ai \
+                --format json --output scan.json
+              python - <<'PY'
+          import json
+          scan = json.load(open('scan.json', encoding='utf-8'))
+          if (
+              scan.get('schemaVersion') != 'guardscan.scan.v1'
+              or scan.get('run', {}).get('executionMode') != 'static-analysis'
+              or scan.get('run', {}).get('offline') is not True
+          ):
+              raise SystemExit('TestPyPI offline scan contract failed')
+          PY
+            )
+          }
+
+          python -m pip install --index-url https://test.pypi.org/simple/ \
+            --no-deps "guardscan-cli==$PYPI_VERSION"
+          exercise_guardscan guardscan pip
+          python -m pip uninstall -y guardscan-cli
+
+          python -m pip install pipx
+          python -m pipx install --index-url https://test.pypi.org/simple/ \
+            --pip-args=--no-deps "guardscan-cli==$PYPI_VERSION"
+          PIPX_BIN_DIR="$(python -m pipx environment --value PIPX_BIN_DIR)"
+          GUARDSCAN="$PIPX_BIN_DIR/guardscan"
+          if [ -f "$GUARDSCAN.exe" ]; then GUARDSCAN="$GUARDSCAN.exe"; fi
+          exercise_guardscan "$GUARDSCAN" pipx
+          python -m pipx runpip guardscan-cli show guardscan-cli
+          python -m pipx uninstall guardscan-cli
+
+  pypi:
+    name: PyPI trusted publication
+    if: vars.RELEASE_AUTOMATION_ENABLED == 'true'
+    runs-on: ubuntu-24.04
+    needs: [prepare, pypi-test-lifecycle]
+    environment: pypi
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.prepare.outputs.ref }}
+          fetch-depth: 0
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-payload-${{ needs.prepare.outputs.tag }}
+          path: dist
+      - name: Keep only wheel distributions
+        run: find dist -maxdepth 1 -type f ! -name '*.whl' -delete
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.13"
+      - name: Reject conflicting PyPI files
+        env:
+          REGISTRY_JSON_BASE: https://pypi.org/pypi/guardscan-cli
+          RELEASE_VERSION: ${{ needs.prepare.outputs.tag }}
+        run: |
+          python - <<'PY'
+          import hashlib, json, os, pathlib, urllib.error, urllib.request
+
+          version = os.environ["RELEASE_VERSION"].removeprefix("v").replace("-rc.", "rc")
+          url = f'{os.environ["REGISTRY_JSON_BASE"]}/{version}/json'
+          try:
+              with urllib.request.urlopen(url, timeout=30) as response:
+                  remote = json.load(response)
+          except urllib.error.HTTPError as error:
+              if error.code != 404:
+                  raise
+              remote = {"urls": []}
+          remote_files = {item["filename"]: item["digests"]["sha256"] for item in remote["urls"]}
+          local_files = {
+              wheel.name: hashlib.sha256(wheel.read_bytes()).hexdigest()
+              for wheel in pathlib.Path("dist").glob("*.whl")
+          }
+          unexpected = sorted(set(remote_files) - set(local_files))
+          if unexpected:
+              raise SystemExit(f"PyPI has unexpected files for this version: {unexpected}")
+          for filename, digest in local_files.items():
+              if filename in remote_files and remote_files[filename] != digest:
+                  raise SystemExit(f"PyPI integrity conflict for {filename}")
+          PY
+      - uses: pypa/gh-action-pypi-publish@ba38be9e461d3875417946c167d0b5f3d385a247 # v1.14.1
+        with:
+          packages-dir: dist
+          skip-existing: true
+          print-hash: true
+      - name: Verify complete PyPI file set
+        env:
+          REGISTRY_JSON_BASE: https://pypi.org/pypi/guardscan-cli
+          RELEASE_VERSION: ${{ needs.prepare.outputs.tag }}
+        run: |
+          python - <<'PY'
+          import hashlib, json, os, pathlib, time, urllib.error, urllib.request
+
+          version = os.environ["RELEASE_VERSION"].removeprefix("v").replace("-rc.", "rc")
+          url = f'{os.environ["REGISTRY_JSON_BASE"]}/{version}/json'
+          local = {
+              wheel.name: hashlib.sha256(wheel.read_bytes()).hexdigest()
+              for wheel in pathlib.Path("dist").glob("*.whl")
+          }
+          for attempt in range(30):
+              try:
+                  with urllib.request.urlopen(url, timeout=30) as response:
+                      remote = {
+                          item["filename"]: item["digests"]["sha256"]
+                          for item in json.load(response)["urls"]
+                      }
+              except urllib.error.HTTPError as error:
+                  if error.code != 404:
+                      raise
+                  remote = {}
+              if remote == local:
+                  break
+              if set(remote) - set(local):
+                  raise SystemExit("PyPI returned unexpected files for this version")
+              if any(local.get(name) != digest for name, digest in remote.items()):
+                  raise SystemExit("PyPI returned a conflicting wheel digest")
+              if attempt == 29:
+                  raise SystemExit("PyPI did not converge to the complete tested wheel set")
+              time.sleep(10)
+          PY
+      - name: Bind the exact PyPI wheel set to provider evidence
+        env:
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+        run: |
+          node - <<'NODE'
+          const crypto = require('crypto');
+          const fs = require('fs');
+          const path = require('path');
+          const {writePublicationEvidence} = require('./cli/scripts/release/publication-evidence');
+          const files = {};
+          for (const entry of fs.readdirSync('dist', {withFileTypes: true})) {
+            if (!entry.isFile() || !entry.name.endsWith('.whl')) continue;
+            files[entry.name] = crypto.createHash('sha256')
+              .update(fs.readFileSync(path.join('dist', entry.name))).digest('hex');
+          }
+          const version = process.env.RELEASE_TAG.slice(1);
+          writePublicationEvidence('pypi-publication-evidence.json', {
+            channel: 'pypi',
+            version,
+            tag: process.env.RELEASE_TAG,
+            remoteIdentity: `pypi:guardscan-cli@${version.replace('-rc.', 'rc')}`,
+            files,
+          });
+          NODE
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-pypi-evidence-${{ needs.prepare.outputs.tag }}
+          path: pypi-publication-evidence.json
+          if-no-files-found: error
+          retention-days: 30
+
   publish:
     name: Publish every automated channel
-    if: needs.prepare.outputs.build == 'true'
-    needs: [prepare, build]
+    if: >-
+      vars.RELEASE_AUTOMATION_ENABLED == 'true'
+      && needs.prepare.outputs.build == 'true'
+    needs: [prepare, payload-ready]
     permissions:
       actions: read
       contents: write
@@ -533,8 +1147,10 @@ jobs:
 
   record:
     name: Append publication evidence to protected ledger
-    if: needs.prepare.outputs.build == 'true'
-    needs: [prepare, publish]
+    if: >-
+      vars.RELEASE_AUTOMATION_ENABLED == 'true'
+      && needs.prepare.outputs.build == 'true'
+    needs: [prepare, publish, pypi]
     runs-on: ubuntu-24.04
     concurrency:
       group: release-ledger
@@ -862,7 +1478,10 @@ jobs:
 
   reconcile:
     name: Reconcile remote state and trigger eligible promotion
-    if: github.event_name == 'workflow_dispatch' && inputs.action == 'reconcile'
+    if: >-
+      github.event_name == 'workflow_dispatch'
+      && vars.RELEASE_AUTOMATION_ENABLED == 'true'
+      && inputs.action == 'reconcile'
     runs-on: ubuntu-24.04
     env:
       RELEASE_VERSION: ${{ inputs.version }}
