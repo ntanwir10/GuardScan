@@ -40,6 +40,11 @@ jobs:
       - name: Audit production dependency graph
         working-directory: cli
         run: npm audit --omit=dev --audit-level=high
+      - name: Build without optional native dependencies
+        working-directory: cli
+        run: |
+          npm ci --omit=optional
+          npm run build
 
   lint:
     name: Typecheck and lint ratchet
