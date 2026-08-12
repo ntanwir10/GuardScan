@@ -3,32 +3,53 @@ name: CI/CD Pipeline
 on:
   push:
     branches: [main, develop]
-    tags:
-      - "v*"
   pull_request:
     branches: [main, develop]
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
+  release-bootstrap:
+    name: Release bootstrap contract
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: cli/package-lock.json
+      - name: Install locked YAML parser
+        working-directory: cli
+        run: npm ci
+      - name: Verify inert bootstrap provenance and contracts
+        run: node --test .github/scripts/verify-inert-release-bootstrap.test.js
+      - name: Reject whitespace and patch corruption
+        run: git diff --check
+
   lint:
-    name: Lint Code
+    name: Typecheck unchanged 1.0.5 source
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "18"
-          cache: "npm"
+          cache: npm
           cache-dependency-path: "**/package-lock.json"
-
       - name: Install CLI dependencies
-        working-directory: ./cli
+        working-directory: cli
         run: npm ci
-
-      - name: Run ESLint on CLI
-        working-directory: ./cli
-        run: npm run lint
+      - name: Typecheck CLI
+        working-directory: cli
+        run: npm run typecheck
 
   test-cli:
     name: Test CLI
@@ -37,69 +58,55 @@ jobs:
       matrix:
         node-version: [20]
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup Node.js ${{ matrix.node-version }}
-        uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: ${{ matrix.node-version }}
-          cache: "npm"
-          cache-dependency-path: "cli/package-lock.json"
-
+          cache: npm
+          cache-dependency-path: cli/package-lock.json
       - name: Install dependencies
-        working-directory: ./cli
+        working-directory: cli
         run: npm ci
-
       - name: Build TypeScript (required for E2E tests)
-        working-directory: ./cli
+        working-directory: cli
         run: npm run build
-
       - name: Run tests with coverage
-        working-directory: ./cli
+        working-directory: cli
         run: npm test -- --coverage
-        # Coverage threshold enforced via jest.config.js (70%)
-
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v3
+        if: matrix.node-version == 20 && always()
+        continue-on-error: true
+        uses: codecov/codecov-action@0fb7174895f61a3b6b78fc075e0cd60383518dac # v5
         with:
           files: ./cli/coverage/lcov.info
           flags: cli
           name: cli-coverage
           fail_ci_if_error: false
           token: ${{ secrets.CODECOV_TOKEN }}
-        if: matrix.node-version == 20 && always()
-        continue-on-error: true
 
   build-cli:
     name: Build CLI
     runs-on: ubuntu-latest
     needs: [test-cli]
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "18"
-          cache: "npm"
-          cache-dependency-path: "cli/package-lock.json"
-
+          cache: npm
+          cache-dependency-path: cli/package-lock.json
       - name: Install dependencies
-        working-directory: ./cli
+        working-directory: cli
         run: npm ci
-
       - name: Build TypeScript
-        working-directory: ./cli
+        working-directory: cli
         run: npm run build
-
       - name: Verify build artifacts
-        working-directory: ./cli
+        working-directory: cli
         run: |
           ls -la dist/
           test -f dist/index.js
-
-      - name: Upload build artifacts
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: cli-dist
           path: cli/dist/
@@ -108,10 +115,9 @@ jobs:
     name: Security Scan
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Run npm audit (CLI)
-        working-directory: ./cli
+        working-directory: cli
         run: npm audit --audit-level=moderate || true
         continue-on-error: true
 
@@ -121,258 +127,27 @@ jobs:
     needs: [build-cli]
     if: always()
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "18"
-
       - name: Install CLI dependencies
-        working-directory: ./cli
+        working-directory: cli
         run: npm ci
-
       - name: Build CLI
-        working-directory: ./cli
+        working-directory: cli
         run: npm run build
-
       - name: Link CLI globally
-        working-directory: ./cli
+        working-directory: cli
         run: npm link
         continue-on-error: true
-
       - name: Test CLI commands
         run: |
           guardscan --version || echo "guardscan --version failed"
           guardscan --help || echo "guardscan --help failed"
           guardscan init --no-telemetry || echo "guardscan init failed"
         continue-on-error: true
-
       - name: Run self-scan
-        run: |
-          cd cli
-          guardscan security --files "src/**/*.ts" --no-telemetry || echo "Self-scan failed"
+        working-directory: cli
+        run: guardscan security --files "src/**/*.ts" --no-telemetry || echo "Self-scan failed"
         continue-on-error: true
-
-  publish-npm:
-    name: Publish to NPM
-    runs-on: ubuntu-latest
-    needs: [build-cli, integration-test]
-    if: |
-      github.event_name == 'push' &&
-      startsWith(github.ref, 'refs/tags/v') &&
-      needs.build-cli.result == 'success'
-    environment:
-      name: npm-publish
-      url: https://www.npmjs.com/package/guardscan
-    permissions:
-      id-token: write # Required for Trusted Publishing (OIDC)
-      contents: read
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "18"
-          registry-url: "https://registry.npmjs.org"
-
-      - name: Install dependencies
-        working-directory: ./cli
-        run: npm ci
-
-      - name: Build
-        working-directory: ./cli
-        run: npm run build
-
-      - name: Extract version from package.json
-        id: version
-        working-directory: ./cli
-        run: |
-          VERSION=$(node -p "require('./package.json').version")
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "tag=v$VERSION" >> $GITHUB_OUTPUT
-          echo "Package version: $VERSION"
-
-      - name: Verify tag matches package version
-        working-directory: ./cli
-        run: |
-          PACKAGE_VERSION=$(node -p "require('./package.json').version")
-          TAG_VERSION=${GITHUB_REF#refs/tags/v}
-          if [ "$PACKAGE_VERSION" != "$TAG_VERSION" ]; then
-            echo "Error: Tag version ($TAG_VERSION) doesn't match package version ($PACKAGE_VERSION)"
-            exit 1
-          fi
-          echo "✓ Tag version matches package version: $PACKAGE_VERSION"
-
-      - name: Verify NPM authentication and permissions
-        id: verify_npm
-        working-directory: ./cli
-        run: |
-          PACKAGE_NAME=$(node -p "require('./package.json').name")
-          PACKAGE_VERSION=$(node -p "require('./package.json').version")
-
-          echo "Using Trusted Publishing with environment: npm-publish"
-
-          # Check if using Trusted Publishing (no token needed) or Granular Access Token
-          if [ -n "${{ secrets.NPM_TOKEN }}" ]; then
-            echo "Using NPM_TOKEN (Granular Access Token method) as fallback"
-            # Verify authentication with token
-            echo "Verifying NPM authentication..."
-            NPM_USER=$(npm whoami --registry=https://registry.npmjs.org 2>&1) || {
-              echo "Error: NPM authentication failed"
-              echo "Please verify your NPM_TOKEN is a valid Granular Access Token with 'Publish' permissions"
-              echo "Create one at: https://www.npmjs.com/settings/[YOUR_USERNAME]/tokens"
-              exit 1
-            }
-            echo "✓ Authenticated as: $NPM_USER"
-          else
-            echo "Using Trusted Publishing (OIDC)"
-            echo "✓ Trusted Publishing configured - no token needed"
-          fi
-
-          echo "Checking package: $PACKAGE_NAME"
-
-          # Try to check if package exists
-          if npm view "$PACKAGE_NAME" version > /dev/null 2>&1; then
-            echo "✓ Package exists on NPM"
-          else
-            echo "ℹ Package doesn't exist yet, will be created on first publish"
-          fi
-
-          # Check if version already exists
-          if npm view "$PACKAGE_NAME@$PACKAGE_VERSION" version > /dev/null 2>&1; then
-            echo "Error: Version $PACKAGE_VERSION already exists on NPM"
-            echo "Please bump the version in package.json before publishing"
-            exit 1
-          fi
-
-          echo "✓ Pre-publish checks completed"
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-
-      - name: Publish to NPM
-        working-directory: ./cli
-        run: npm publish
-        env:
-          # Trusted Publishing uses OIDC (no token needed)
-          # Fallback to NPM_TOKEN if Trusted Publishing is not configured
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-
-  # Worker deployment lives in https://github.com/ntanwir10/GuardScan-Monitoring.
-
-  create-release:
-    name: Create GitHub Release
-    runs-on: ubuntu-latest
-    needs: [publish-npm]
-    if: |
-      github.event_name == 'push' &&
-      startsWith(github.ref, 'refs/tags/v') &&
-      needs.publish-npm.result == 'success'
-    permissions:
-      contents: write
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "18"
-
-      - name: Extract version from tag
-        id: tag
-        run: |
-          TAG=${GITHUB_REF#refs/tags/}
-          VERSION=${TAG#v}
-          echo "tag=$TAG" >> $GITHUB_OUTPUT
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "Tag: $TAG"
-          echo "Version: $VERSION"
-
-      - name: Verify package is published on NPM
-        run: |
-          PACKAGE_NAME="guardscan"
-          PACKAGE_VERSION="${{ steps.tag.outputs.version }}"
-          echo "Checking ${PACKAGE_NAME}@${PACKAGE_VERSION} on NPM..."
-          # Give NPM registry a moment to reflect the new version
-          sleep 10
-          if npm view "${PACKAGE_NAME}@${PACKAGE_VERSION}" version > /dev/null 2>&1; then
-            echo "✓ Package ${PACKAGE_NAME}@${PACKAGE_VERSION} is published on NPM"
-          else
-            echo "Error: Package ${PACKAGE_NAME}@${PACKAGE_VERSION} not found on NPM"
-            echo "Release will not be created until package is published"
-            exit 1
-          fi
-
-      - name: Extract changelog entry
-        id: changelog
-        working-directory: ./cli
-        run: |
-          VERSION="${{ steps.tag.outputs.version }}"
-          CHANGELOG_FILE="CHANGELOG.md"
-
-          if [ ! -f "$CHANGELOG_FILE" ]; then
-            echo "Error: $CHANGELOG_FILE not found"
-            exit 1
-          fi
-
-          # Extract the changelog section for this version
-          # Look for pattern: ## [VERSION] - DATE
-          # Extract until next version section or end of file
-          awk -v version="$VERSION" '
-            BEGIN { in_section = 0; found = 0 }
-            /^## \[/ {
-              if (in_section) exit
-              if ($0 ~ "\\[" version "\\]") {
-                in_section = 1
-                found = 1
-                print
-                next
-              }
-            }
-            in_section {
-              if (/^## \[/) exit
-              print
-            }
-            END {
-              if (!found) {
-                print "## Changelog entry not found for version " version
-                print ""
-                print "Please ensure CHANGELOG.md contains an entry for version " version
-              }
-            }
-          ' "$CHANGELOG_FILE" > /tmp/changelog_entry.txt
-
-          CHANGELOG_CONTENT=$(cat /tmp/changelog_entry.txt)
-
-          if [ -z "$CHANGELOG_CONTENT" ] || echo "$CHANGELOG_CONTENT" | grep -q "Changelog entry not found"; then
-            CHANGELOG_CONTENT="## GuardScan ${{ steps.tag.outputs.tag }}
-
-          Release notes for version ${{ steps.tag.outputs.version }}.
-
-          See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/${{ github.ref }}/cli/CHANGELOG.md) for details."
-          fi
-
-          {
-            echo "content<<EOF"
-            echo "$CHANGELOG_CONTENT"
-            echo "EOF"
-          } >> $GITHUB_OUTPUT
-
-          echo "Extracted changelog entry:"
-          cat /tmp/changelog_entry.txt
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v1
-        with:
-          tag_name: ${{ steps.tag.outputs.tag }}
-          name: GuardScan ${{ steps.tag.outputs.tag }}
-          body: ${{ steps.changelog.outputs.content }}
-          draft: false
-          prerelease: false
-          generate_release_notes: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

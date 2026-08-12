@@ -1,0 +1,795 @@
+name: Reusable signed release build
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        type: string
+        required: true
+      tag:
+        type: string
+        required: true
+      channel:
+        type: string
+        required: true
+      mode:
+        type: string
+        required: false
+        default: production
+
+permissions:
+  contents: read
+
+env:
+  RELEASE_NODE_VERSION: 22.23.1
+
+jobs:
+  quality:
+    name: Exact-source release gate
+    if: inputs.mode == 'production'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.RELEASE_NODE_VERSION }}
+      - working-directory: cli
+        run: npm ci
+      - name: Run complete local release gate
+        working-directory: cli
+        run: |
+          npm run release:validate -- --tag "${{ inputs.tag }}"
+          npm run typecheck
+          npm run build
+          npm test -- --coverage --runInBand
+          npm run lint:ratchet
+          npm audit --omit=dev --audit-level=high
+          npm run test:release
+          npm run test:package
+          npm run test:package-manager -- --manager npm
+      - run: git diff --check
+
+  npm:
+    name: Exact npm tarball
+    if: inputs.mode == 'production'
+    runs-on: ubuntu-24.04
+    needs: [quality]
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.RELEASE_NODE_VERSION }}
+      - working-directory: cli
+        run: npm ci
+      - working-directory: cli
+        run: npm run release:package -- --output-dir ../npm-artifact
+      - working-directory: cli
+        run: npm run release:verify-npm -- --artifact-dir ../npm-artifact
+      - name: Attest exact npm tarball
+        id: attest-npm
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
+        with:
+          subject-path: npm-artifact/*.tgz
+      - name: Bind npm tarball to source and provenance
+        env:
+          ATTESTATION_URL: ${{ steps.attest-npm.outputs.attestation-url }}
+        run: |
+          node - <<'NODE'
+          const fs = require('fs');
+          const metadata = JSON.parse(fs.readFileSync('npm-artifact/npm-artifact.json'));
+          const artifact = {
+            id: 'npm:guardscan',
+            kind: 'npm-tarball',
+            filename: metadata.filename,
+            size: metadata.size,
+            sha256: metadata.sha256,
+            source: {
+              version: metadata.version,
+              tag: metadata.tag,
+              commit: metadata.commit,
+            },
+            capabilities: {
+              coreScan: true,
+              sbom: true,
+              chartRendering: true,
+              accurateTokenCounting: true,
+            },
+            url: `https://registry.npmjs.org/guardscan/-/${metadata.filename}`,
+            integrity: metadata.integrity,
+            provenance: {
+              type: 'slsa',
+              url: process.env.ATTESTATION_URL,
+              verified: true,
+            },
+          };
+          fs.writeFileSync('npm-artifact/npm-artifact.metadata.json', `${JSON.stringify({
+            schemaVersion: 'guardscan.artifact-metadata.v1',
+            version: metadata.version,
+            tag: metadata.tag,
+            commit: metadata.commit,
+            createdAt: metadata.createdAt,
+            artifact,
+          }, null, 2)}\n`);
+          NODE
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-npm-${{ inputs.tag }}
+          path: npm-artifact/
+          if-no-files-found: error
+          retention-days: 30
+
+  native:
+    name: Signed native ${{ matrix.id }}
+    if: inputs.mode == 'production'
+    runs-on: ${{ matrix.runner }}
+    needs: [quality]
+    environment: ${{ matrix.os == 'darwin' && 'apple-notarization' || matrix.os == 'windows' && 'windows-signing' || inputs.channel == 'rc' && 'release-rc' || 'release-stable' }}
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: linux-x64-glibc
+            runner: ubuntu-24.04
+            os: linux
+            arch: x64
+            libc: glibc
+            executable: guardscan
+          - id: linux-arm64-glibc
+            runner: ubuntu-24.04-arm
+            os: linux
+            arch: arm64
+            libc: glibc
+            executable: guardscan
+          - id: darwin-arm64
+            runner: macos-15
+            os: darwin
+            arch: arm64
+            libc: ""
+            executable: guardscan
+          - id: darwin-x64
+            runner: macos-15-intel
+            os: darwin
+            arch: x64
+            libc: ""
+            executable: guardscan
+          - id: windows-x64
+            runner: windows-2025
+            os: windows
+            arch: x64
+            libc: ""
+            executable: guardscan.exe
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.RELEASE_NODE_VERSION }}
+      - working-directory: cli
+        run: npm ci
+      - working-directory: cli
+        run: npm run build
+      - name: Build and smoke unsigned SEA
+        working-directory: cli
+        run: npm run release:build -- --kind standalone --output-dir ../standalone
+
+      - name: Install Sigstore cosign
+        if: matrix.os == 'linux'
+        uses: sigstore/cosign-installer@d58896d6a1865668819e1d91763c7751a165e159 # v3.9.2
+      - name: Keyless-sign Linux executable
+        if: matrix.os == 'linux'
+        shell: bash
+        run: |
+          cosign sign-blob --yes \
+            --bundle standalone/guardscan.sigstore.json \
+            standalone/guardscan
+          cosign verify-blob \
+            --bundle standalone/guardscan.sigstore.json \
+            --certificate-identity-regexp "^https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release-train.yml@" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            standalone/guardscan
+
+      - name: Import Apple Developer ID certificate
+        if: matrix.os == 'darwin'
+        shell: bash
+        env:
+          APPLE_CERTIFICATE_P12: ${{ secrets.APPLE_CERTIFICATE_P12 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          KEYCHAIN="$RUNNER_TEMP/guardscan-signing.keychain-db"
+          printf '%s' "$APPLE_CERTIFICATE_P12" | openssl base64 -d -A > "$RUNNER_TEMP/certificate.p12"
+          security create-keychain -p "$RUNNER_TEMP" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$RUNNER_TEMP" "$KEYCHAIN"
+          security import "$RUNNER_TEMP/certificate.p12" -P "$APPLE_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN"
+          security list-keychain -d user -s "$KEYCHAIN"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$RUNNER_TEMP" "$KEYCHAIN"
+      - name: Sign, notarize, staple, and verify macOS executable
+        if: matrix.os == 'darwin'
+        shell: bash
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+          APPLE_NOTARY_PRIVATE_KEY: ${{ secrets.APPLE_NOTARY_PRIVATE_KEY }}
+        run: |
+          KEYCHAIN="$RUNNER_TEMP/guardscan-signing.keychain-db"
+          IDENTITY="$(security find-identity -v -p codesigning "$KEYCHAIN" \
+            | awk -v team="($APPLE_TEAM_ID)" 'index($0, "Developer ID Application:") && index($0, team) {print $2}')"
+          test -n "$IDENTITY"
+          test "$(printf '%s\n' "$IDENTITY" | wc -l | tr -d ' ')" = 1
+          codesign --force --options runtime --timestamp --sign "$IDENTITY" standalone/guardscan
+          codesign --verify --deep --strict --verbose=2 standalone/guardscan
+          printf '%s' "$APPLE_NOTARY_PRIVATE_KEY" > "$RUNNER_TEMP/AuthKey.p8"
+          mkdir "$RUNNER_TEMP/notarization-volume"
+          cp standalone/guardscan "$RUNNER_TEMP/notarization-volume/guardscan"
+          hdiutil create \
+            -volname "GuardScan" \
+            -srcfolder "$RUNNER_TEMP/notarization-volume" \
+            -format UDZO \
+            "$RUNNER_TEMP/guardscan-notarization.dmg"
+          xcrun notarytool submit "$RUNNER_TEMP/guardscan-notarization.dmg" \
+            --key "$RUNNER_TEMP/AuthKey.p8" \
+            --key-id "$APPLE_NOTARY_KEY_ID" \
+            --issuer "$APPLE_NOTARY_ISSUER_ID" \
+            --wait --output-format json > "$RUNNER_TEMP/notary-submission.json"
+          SUBMISSION_ID="$(node -p 'require(process.argv[1]).id' "$RUNNER_TEMP/notary-submission.json")"
+          xcrun notarytool log "$SUBMISSION_ID" \
+            --key "$RUNNER_TEMP/AuthKey.p8" \
+            --key-id "$APPLE_NOTARY_KEY_ID" \
+            --issuer "$APPLE_NOTARY_ISSUER_ID" \
+            "$RUNNER_TEMP/apple-notarization.json"
+          node -e '
+            const submission = require(process.argv[1]);
+            const log = require(process.argv[2]);
+            if (submission.status !== "Accepted" || log.status !== "Accepted") {
+              throw new Error(`notarization was not accepted: ${submission.status || log.status}`);
+            }
+          ' "$RUNNER_TEMP/notary-submission.json" "$RUNNER_TEMP/apple-notarization.json"
+          xcrun stapler staple "$RUNNER_TEMP/guardscan-notarization.dmg"
+          xcrun stapler validate "$RUNNER_TEMP/guardscan-notarization.dmg"
+          spctl --assess --type open --context context:primary-signature --verbose=4 "$RUNNER_TEMP/guardscan-notarization.dmg"
+          spctl --assess --type execute --verbose=4 standalone/guardscan
+          cp "$RUNNER_TEMP/apple-notarization.json" standalone/apple-notarization.json
+          cp "$RUNNER_TEMP/guardscan-notarization.dmg" standalone/stapled-notarization.dmg
+          codesign -dvvv standalone/guardscan 2> standalone/apple-code-signing.txt
+
+      - name: Remove ephemeral Apple signing material
+        if: always() && matrix.os == 'darwin'
+        shell: bash
+        run: |
+          security delete-keychain "$RUNNER_TEMP/guardscan-signing.keychain-db" || true
+          rm -f "$RUNNER_TEMP/certificate.p12" "$RUNNER_TEMP/AuthKey.p8"
+
+      - name: Azure OIDC login
+        if: matrix.os == 'windows'
+        uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: Authenticode-sign through Azure Artifact Signing
+        if: matrix.os == 'windows'
+        uses: Azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2
+        with:
+          endpoint: ${{ vars.AZURE_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ vars.AZURE_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ vars.AZURE_SIGNING_PROFILE }}
+          files: ${{ github.workspace }}\standalone\guardscan.exe
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+          cache-dependencies: false
+      - name: Verify Authenticode signature and timestamp
+        if: matrix.os == 'windows'
+        shell: pwsh
+        run: |
+          $signature = Get-AuthenticodeSignature standalone\guardscan.exe
+          if ($signature.Status -ne 'Valid') { throw "Invalid Authenticode status: $($signature.Status)" }
+          if ($null -eq $signature.TimeStamperCertificate) { throw 'Authenticode timestamp is missing' }
+          $signature | Format-List * | Out-File standalone\authenticode.txt
+
+      - name: Generate executable SPDX and CycloneDX SBOMs
+        working-directory: cli
+        shell: bash
+        run: |
+          ARGS=(--kind artifact-sbom --output-dir ../standalone-sbom \
+            --executable "../standalone/${{ matrix.executable }}" \
+            --platform-os "${{ matrix.os }}" --platform-arch "${{ matrix.arch }}" \
+            --timestamp "$(git show -s --format=%cI "${{ inputs.ref }}")")
+          if [ -n "${{ matrix.libc }}" ]; then ARGS+=(--platform-libc "${{ matrix.libc }}"); fi
+          npm run release:build -- "${ARGS[@]}"
+
+      - name: Attest signed executable
+        id: attest-executable
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
+        with:
+          subject-path: standalone/${{ matrix.executable }}
+
+      - name: Create verified evidence descriptor
+        shell: bash
+        env:
+          ARTIFACT_TAG: ${{ inputs.tag }}
+          ARTIFACT_VERSION: ${{ inputs.tag }}
+          ARTIFACT_OS: ${{ matrix.os }}
+          ARTIFACT_ARCH: ${{ matrix.arch }}
+          ARTIFACT_LIBC: ${{ matrix.libc }}
+          ARTIFACT_ID: ${{ matrix.id }}
+          ATTESTATION_URL: ${{ steps.attest-executable.outputs.attestation-url }}
+        run: |
+          node - <<'NODE'
+          const fs = require('fs');
+          const cp = require('child_process');
+          const version = process.env.ARTIFACT_VERSION.replace(/^v/, '');
+          const tag = process.env.ARTIFACT_TAG;
+          const base = `https://github.com/${process.env.GITHUB_REPOSITORY}/releases/download/${tag}`;
+          const sbom = JSON.parse(fs.readFileSync('standalone-sbom/artifact-sbom.json'));
+          const prototype = JSON.parse(fs.readFileSync('standalone/standalone-prototype.json'));
+          const commit = cp.execFileSync('git', ['rev-parse', 'HEAD'], {encoding: 'utf8'}).trim();
+          for (const [field, expected] of Object.entries({version, tag, commit})) {
+            if (prototype[field] !== expected) {
+              throw new Error(`standalone prototype ${field} does not match release source`);
+            }
+          }
+          if (prototype.platform?.os !== process.env.ARTIFACT_OS
+              || prototype.platform?.arch !== process.env.ARTIFACT_ARCH) {
+            throw new Error('standalone prototype platform does not match native target');
+          }
+          const smoke = prototype.smoke;
+          const optionalCapabilities = smoke?.optionalCapabilities;
+          if (smoke?.valid !== true
+              || smoke.nodeAbsentFromPath !== true
+              || smoke.packageManagersAbsentFromPath !== true
+              || smoke.optionalCapabilitiesUnavailableSafely !== true
+              || !optionalCapabilities) {
+            throw new Error('standalone prototype lacks complete isolated smoke evidence');
+          }
+          if (prototype.capabilities?.chartRendering
+                !== optionalCapabilities.chartRendering?.dependencyAvailable
+              || prototype.capabilities?.accurateTokenCounting
+                !== (optionalCapabilities.tokenCounting?.mode === 'accurate')) {
+            throw new Error('standalone prototype capability metadata conflicts with smoke evidence');
+          }
+          const signatureTypes = process.env.ARTIFACT_OS === 'darwin'
+            ? ['apple-code-signing', 'apple-notarization']
+            : [process.env.ARTIFACT_OS === 'windows' ? 'authenticode' : 'sigstore'];
+          const signatureFile = type => ({
+            'apple-code-signing': 'apple-code-signing.txt',
+            'apple-notarization': 'apple-notarization.json',
+            'authenticode': 'authenticode.txt',
+            'sigstore': 'guardscan.sigstore.json',
+          })[type];
+          const evidence = {
+            schemaVersion: 'guardscan.standalone-evidence.v1',
+            version,
+            tag,
+            commit,
+            platform: {
+              os: process.env.ARTIFACT_OS,
+              arch: process.env.ARTIFACT_ARCH,
+              ...(process.env.ARTIFACT_LIBC ? {libc: process.env.ARTIFACT_LIBC} : {}),
+            },
+            optionalCapabilities,
+            signatures: signatureTypes.map(type => ({
+              type,
+              url: `${base}/${process.env.ARTIFACT_ID}.${signatureFile(type)}`,
+              verified: true,
+            })),
+            sboms: sbom.files.map(file => ({
+              type: file.format,
+              url: `${base}/${file.filename}`,
+              sha256: file.sha256,
+              verified: true,
+            })),
+            provenance: {
+              type: 'slsa',
+              url: process.env.ATTESTATION_URL,
+              verified: true,
+            },
+          };
+          fs.writeFileSync('standalone/evidence.json', `${JSON.stringify(evidence, null, 2)}\n`);
+          NODE
+
+      - name: Archive signed executable deterministically
+        working-directory: cli
+        shell: bash
+        run: |
+          ARGS=(--kind archive --output-dir "../native-output" \
+            --executable "../standalone/${{ matrix.executable }}" \
+            --evidence "../standalone/evidence.json" \
+            --platform-os "${{ matrix.os }}" --platform-arch "${{ matrix.arch }}" \
+            --timestamp "$(git show -s --format=%cI "${{ inputs.ref }}")")
+          if [ -n "${{ matrix.libc }}" ]; then ARGS+=(--platform-libc "${{ matrix.libc }}"); fi
+          npm run release:build -- "${ARGS[@]}"
+          cp ../standalone-sbom/guardscan-*.json ../native-output/
+          node - <<'NODE'
+          const fs = require('fs');
+          const id = '${{ matrix.id }}';
+          for (const name of [
+            'guardscan.sigstore.json',
+            'apple-code-signing.txt',
+            'apple-notarization.json',
+            'authenticode.txt',
+          ]) {
+            const source = `../standalone/${name}`;
+            if (fs.existsSync(source)) fs.copyFileSync(source, `../native-output/${id}.${name}`);
+          }
+          NODE
+
+      - name: Attest signed archive
+        id: attest-archive
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
+        with:
+          subject-path: native-output/guardscan-*
+
+      - name: Bind archive metadata to archive attestation
+        shell: bash
+        env:
+          ATTESTATION_URL: ${{ steps.attest-archive.outputs.attestation-url }}
+        run: |
+          node - <<'NODE'
+          const fs = require('fs');
+          const file = fs.readdirSync('native-output').find(name => name.endsWith('.metadata.json'));
+          const metadata = JSON.parse(fs.readFileSync(`native-output/${file}`));
+          metadata.artifact.provenance.url = process.env.ATTESTATION_URL;
+          fs.writeFileSync(`native-output/${file}`, `${JSON.stringify(metadata, null, 2)}\n`);
+          NODE
+
+      - name: Validate Linux wheel compatibility floor
+        if: matrix.os == 'linux'
+        shell: bash
+        run: |
+          MAX_GLIBC="$(readelf --version-info standalone/guardscan \
+            | grep -Eo 'GLIBC_[0-9]+(\.[0-9]+)+' \
+            | sed 's/^GLIBC_//' \
+            | sort -Vu \
+            | tail -n 1)"
+          test -n "$MAX_GLIBC"
+          test "$(printf '%s\n' "$MAX_GLIBC" 2.28 | sort -V | tail -n 1)" = 2.28
+      - name: Validate macOS wheel compatibility floor
+        if: matrix.os == 'darwin'
+        shell: bash
+        run: |
+          MIN_MACOS="$(otool -l standalone/guardscan | awk '$1 == "minos" {print $2; exit}')"
+          test -n "$MIN_MACOS"
+          test "$(printf '%s\n' "$MIN_MACOS" 11.0 | sort -V | tail -n 1)" = 11.0
+      - name: Build wheel containing the exact signed executable
+        working-directory: cli
+        shell: bash
+        run: |
+          ARGS=(--kind python-wheel --output-dir "../wheel-output" \
+            --executable "../standalone/${{ matrix.executable }}" \
+            --platform-os "${{ matrix.os }}" --platform-arch "${{ matrix.arch }}" \
+            --timestamp "$(git show -s --format=%cI "${{ inputs.ref }}")")
+          if [ -n "${{ matrix.libc }}" ]; then ARGS+=(--platform-libc "${{ matrix.libc }}"); fi
+          npm run release:build -- "${ARGS[@]}"
+
+      - name: Attest Python wheel
+        id: attest-wheel
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
+        with:
+          subject-path: wheel-output/*.whl
+
+      - name: Bind wheel to standalone and provenance
+        working-directory: cli
+        shell: bash
+        env:
+          WHEEL_ATTESTATION_URL: ${{ steps.attest-wheel.outputs.attestation-url }}
+        run: |
+          WHEEL_META="$(find ../wheel-output -name '*.whl.json' -print -quit)"
+          STANDALONE_META="$(find ../native-output -name '*.metadata.json' -print -quit)"
+          npm run release:build -- --kind python-wheel-artifact \
+            --wheel-metadata "$WHEEL_META" \
+            --standalone-metadata "$STANDALONE_META" \
+            --provenance-url "$WHEEL_ATTESTATION_URL" \
+            --output "../wheel-output/python-wheel.metadata.json"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-native-${{ matrix.id }}-${{ inputs.tag }}
+          path: |
+            native-output/
+            wheel-output/
+          if-no-files-found: error
+          retention-days: 30
+
+  aggregate:
+    name: Manifest and signed aggregate checksum
+    if: inputs.mode == 'production'
+    runs-on: ubuntu-24.04
+    needs: [npm, native]
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.RELEASE_NODE_VERSION }}
+      - working-directory: cli
+        run: npm ci
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: release-native-*-${{ inputs.tag }}
+          path: collected
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-npm-${{ inputs.tag }}
+          path: collected/npm
+      - name: Reject unexpected links and collect release assets
+        shell: bash
+        run: |
+          if find collected -type l -print -quit | grep -q .; then exit 1; fi
+          mkdir release
+          find collected -type f \( \
+              -name '*.tar.gz' -o -name '*.zip' -o -name '*.whl' -o -name '*.tgz' \
+              -o -name 'guardscan-*.spdx.json' -o -name 'guardscan-*.cyclonedx.json' \
+              -o -name '*.sigstore.json' -o -name '*.notarization.json' -o -name '*.txt' \
+            \) \
+            -exec cp {} release/ \;
+      - name: Build production manifest from all native and wheel metadata
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          node - <<'NODE'
+          const fs = require('fs');
+          const path = require('path');
+          const cp = require('child_process');
+          const files = [];
+          const walk = dir => fs.readdirSync(dir, {withFileTypes: true}).forEach(entry => {
+            const file = path.join(dir, entry.name);
+            if (entry.isDirectory()) walk(file);
+            else if (entry.name.endsWith('.metadata.json')) files.push(path.relative('collected', file));
+          });
+          walk('collected');
+          const descriptor = {
+            schemaVersion: 'guardscan.release-manifest-input.v1',
+            profile: 'full',
+            createdAt: new Date(cp.execFileSync('git', ['show', '-s', '--format=%cI', 'HEAD'], {encoding: 'utf8'}).trim()).toISOString(),
+            producer: {
+              provider: 'github-actions',
+              repository: 'ntanwir10/GuardScan',
+              workflow: '.github/workflows/release-build.yml',
+              runId: process.env.GITHUB_RUN_ID,
+              runAttempt: Number(process.env.GITHUB_RUN_ATTEMPT),
+              sourceRef: `refs/tags/${process.env.RELEASE_TAG}`,
+            },
+            toolchain: {
+              node: process.version.slice(1),
+              packageManager: {name: 'npm', version: cp.execFileSync('npm', ['--version'], {encoding: 'utf8'}).trim()},
+              tools: [
+                {name: 'esbuild', version: require('./cli/node_modules/esbuild/package.json').version},
+                {name: 'postject', version: require('./cli/node_modules/postject/package.json').version},
+              ],
+            },
+            artifactFiles: files,
+          };
+          fs.writeFileSync('collected/release-manifest-input.json', `${JSON.stringify(descriptor, null, 2)}\n`);
+          NODE
+          cd cli
+          npm run release:manifest -- \
+            --descriptor ../collected/release-manifest-input.json \
+            --output ../release/release-manifest.json \
+            --tag "${{ inputs.tag }}"
+      - name: Produce aggregate checksums including the release manifest
+        shell: bash
+        run: |
+          find release -type f ! -name 'SHA256SUMS*' -print0 \
+            | sort -z \
+            | xargs -0 sha256sum \
+            | sed 's#  release/#  #' > release/SHA256SUMS
+      - uses: sigstore/cosign-installer@d58896d6a1865668819e1d91763c7751a165e159 # v3.9.2
+      - name: Keyless-sign aggregate checksums
+        run: |
+          cosign sign-blob --yes --bundle release/SHA256SUMS.sigstore.json release/SHA256SUMS
+          cosign verify-blob \
+            --bundle release/SHA256SUMS.sigstore.json \
+            --certificate-identity-regexp "^https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release-train.yml@" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            release/SHA256SUMS
+      - name: Attest complete release payload
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
+        with:
+          subject-path: |
+            release/release-manifest.json
+            release/SHA256SUMS
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-payload-${{ inputs.tag }}
+          path: release/
+          if-no-files-found: error
+          retention-days: 30
+
+  provider-rehearsal:
+    name: Provider rehearsal ${{ matrix.id }}
+    if: inputs.mode == 'rehearsal'
+    runs-on: ${{ matrix.runner }}
+    environment: ${{ matrix.os == 'darwin' && 'apple-notarization' || 'windows-signing' }}
+    permissions:
+      contents: read
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: darwin-arm64
+            runner: macos-15
+            os: darwin
+            arch: arm64
+            libc: ""
+            executable: guardscan
+          - id: windows-x64
+            runner: windows-2025
+            os: windows
+            arch: x64
+            libc: ""
+            executable: guardscan.exe
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.RELEASE_NODE_VERSION }}
+      - working-directory: cli
+        run: npm ci
+      - working-directory: cli
+        run: npm run build
+      - name: Build transient standalone rehearsal artifact
+        working-directory: cli
+        run: npm run release:build -- --kind standalone --output-dir ../rehearsal-standalone
+
+      - name: Import Apple Developer ID certificate
+        if: matrix.os == 'darwin'
+        shell: bash
+        env:
+          APPLE_CERTIFICATE_P12: ${{ secrets.APPLE_CERTIFICATE_P12 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          KEYCHAIN="$RUNNER_TEMP/guardscan-rehearsal.keychain-db"
+          printf '%s' "$APPLE_CERTIFICATE_P12" | openssl base64 -d -A > "$RUNNER_TEMP/rehearsal-certificate.p12"
+          security create-keychain -p "$RUNNER_TEMP" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$RUNNER_TEMP" "$KEYCHAIN"
+          security import "$RUNNER_TEMP/rehearsal-certificate.p12" -P "$APPLE_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN"
+          security list-keychain -d user -s "$KEYCHAIN"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$RUNNER_TEMP" "$KEYCHAIN"
+
+      - name: Sign, notarize, staple, and verify macOS rehearsal executable
+        if: matrix.os == 'darwin'
+        shell: bash
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+          APPLE_NOTARY_PRIVATE_KEY: ${{ secrets.APPLE_NOTARY_PRIVATE_KEY }}
+        run: |
+          KEYCHAIN="$RUNNER_TEMP/guardscan-rehearsal.keychain-db"
+          IDENTITY="$(security find-identity -v -p codesigning "$KEYCHAIN" \
+            | awk -v team="($APPLE_TEAM_ID)" 'index($0, "Developer ID Application:") && index($0, team) {print $2}')"
+          test -n "$IDENTITY"
+          test "$(printf '%s\n' "$IDENTITY" | wc -l | tr -d ' ')" = 1
+          codesign --force --options runtime --timestamp --sign "$IDENTITY" rehearsal-standalone/guardscan
+          codesign --verify --deep --strict --verbose=2 rehearsal-standalone/guardscan
+          printf '%s' "$APPLE_NOTARY_PRIVATE_KEY" > "$RUNNER_TEMP/rehearsal-AuthKey.p8"
+          mkdir "$RUNNER_TEMP/rehearsal-volume"
+          cp rehearsal-standalone/guardscan "$RUNNER_TEMP/rehearsal-volume/guardscan"
+          hdiutil create -volname "GuardScan rehearsal" -srcfolder "$RUNNER_TEMP/rehearsal-volume" -format UDZO "$RUNNER_TEMP/guardscan-rehearsal.dmg"
+          xcrun notarytool submit "$RUNNER_TEMP/guardscan-rehearsal.dmg" \
+            --key "$RUNNER_TEMP/rehearsal-AuthKey.p8" \
+            --key-id "$APPLE_NOTARY_KEY_ID" \
+            --issuer "$APPLE_NOTARY_ISSUER_ID" \
+            --wait --output-format json > "$RUNNER_TEMP/rehearsal-notary-submission.json"
+          SUBMISSION_ID="$(node -p 'require(process.argv[1]).id' "$RUNNER_TEMP/rehearsal-notary-submission.json")"
+          xcrun notarytool log "$SUBMISSION_ID" \
+            --key "$RUNNER_TEMP/rehearsal-AuthKey.p8" \
+            --key-id "$APPLE_NOTARY_KEY_ID" \
+            --issuer "$APPLE_NOTARY_ISSUER_ID" \
+            "$RUNNER_TEMP/rehearsal-notary-log.json"
+          node -e '
+            const submission = require(process.argv[1]);
+            const log = require(process.argv[2]);
+            if (submission.status !== "Accepted" || log.status !== "Accepted") {
+              throw new Error(`rehearsal notarization was not accepted: ${submission.status || log.status}`);
+            }
+          ' "$RUNNER_TEMP/rehearsal-notary-submission.json" "$RUNNER_TEMP/rehearsal-notary-log.json"
+          xcrun stapler staple "$RUNNER_TEMP/guardscan-rehearsal.dmg"
+          xcrun stapler validate "$RUNNER_TEMP/guardscan-rehearsal.dmg"
+          spctl --assess --type open --context context:primary-signature --verbose=4 "$RUNNER_TEMP/guardscan-rehearsal.dmg"
+          spctl --assess --type execute --verbose=4 rehearsal-standalone/guardscan
+          cp "$RUNNER_TEMP/rehearsal-notary-submission.json" rehearsal-standalone/notary-submission.json
+          cp "$RUNNER_TEMP/rehearsal-notary-log.json" rehearsal-standalone/notary-log.json
+          codesign -dvvv rehearsal-standalone/guardscan 2> rehearsal-standalone/apple-code-signing.txt
+
+      - name: Remove ephemeral Apple rehearsal material
+        if: always() && matrix.os == 'darwin'
+        shell: bash
+        run: |
+          security delete-keychain "$RUNNER_TEMP/guardscan-rehearsal.keychain-db" || true
+          rm -f "$RUNNER_TEMP/rehearsal-certificate.p12" "$RUNNER_TEMP/rehearsal-AuthKey.p8"
+
+      - name: Azure OIDC login for Windows rehearsal
+        if: matrix.os == 'windows'
+        uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: Authenticode-sign Windows rehearsal executable
+        if: matrix.os == 'windows'
+        uses: Azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2
+        with:
+          endpoint: ${{ vars.AZURE_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ vars.AZURE_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ vars.AZURE_SIGNING_PROFILE }}
+          files: ${{ github.workspace }}\rehearsal-standalone\guardscan.exe
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+          cache-dependencies: false
+      - name: Verify Windows Authenticode rehearsal signature and timestamp
+        if: matrix.os == 'windows'
+        shell: pwsh
+        run: |
+          $signature = Get-AuthenticodeSignature rehearsal-standalone\guardscan.exe
+          if ($signature.Status -ne 'Valid') { throw "Invalid rehearsal Authenticode status: $($signature.Status)" }
+          if ($null -eq $signature.TimeStamperCertificate) { throw 'Rehearsal Authenticode timestamp is missing' }
+          $signature | Format-List * | Out-File rehearsal-standalone\authenticode.txt
+
+      - name: Write non-production provider rehearsal evidence
+        shell: bash
+        env:
+          REHEARSAL_REF: ${{ inputs.ref }}
+          REHEARSAL_MODE: ${{ inputs.mode }}
+          REHEARSAL_PLATFORM: ${{ matrix.id }}
+        run: |
+          node - <<'NODE'
+          const fs = require('fs');
+          const cp = require('child_process');
+          const prototype = JSON.parse(fs.readFileSync('rehearsal-standalone/standalone-prototype.json'));
+          if (prototype.productionReady !== false) throw new Error('provider rehearsal artifact must not be production-ready');
+          const commit = cp.execFileSync('git', ['rev-parse', 'HEAD'], {encoding: 'utf8'}).trim();
+          if (commit !== process.env.REHEARSAL_REF) throw new Error('provider rehearsal source ref mismatch');
+          const evidence = {
+            schemaVersion: 'guardscan.provider-rehearsal.v1',
+            productionReady: false,
+            source: {repository: process.env.GITHUB_REPOSITORY, commit, ref: process.env.REHEARSAL_REF},
+            workflow: {runId: process.env.GITHUB_RUN_ID, mode: process.env.REHEARSAL_MODE},
+            platform: process.env.REHEARSAL_PLATFORM,
+            checks: {
+              standaloneBuild: true,
+              appleSigningAndNotarization: process.env.REHEARSAL_PLATFORM.startsWith('darwin'),
+              azureAuthenticodeSigning: process.env.REHEARSAL_PLATFORM.startsWith('windows'),
+            },
+            publication: {tag: false, release: false, package: false, catalog: false, ledger: false},
+          };
+          fs.writeFileSync('rehearsal-standalone/provider-rehearsal-evidence.json', `${JSON.stringify(evidence, null, 2)}\n`);
+          NODE
+          rm -f rehearsal-standalone/guardscan rehearsal-standalone/guardscan.exe
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: provider-rehearsal-${{ matrix.id }}
+          path: rehearsal-standalone/
+          if-no-files-found: error
+          retention-days: 14

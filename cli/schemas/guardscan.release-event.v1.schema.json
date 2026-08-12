@@ -1,0 +1,267 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://guardscancli.com/schemas/guardscan.release-event.v1.schema.json",
+  "title": "GuardScan append-only release event",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "version",
+    "tag",
+    "commit",
+    "sequence",
+    "previousHash",
+    "timestamp",
+    "type",
+    "idempotencyKey",
+    "payload",
+    "eventHash"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "guardscan.release-event.v1" },
+    "version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:-[0-9A-Za-z.-]+)?$" },
+    "tag": { "type": "string", "pattern": "^v[0-9]+\\.[0-9]+\\.[0-9]+(?:-[0-9A-Za-z.-]+)?$" },
+    "commit": { "type": "string", "pattern": "^[a-f0-9]{40}$" },
+    "sequence": { "type": "integer", "minimum": 1 },
+    "previousHash": {
+      "oneOf": [
+        { "type": "null" },
+        { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+      ]
+    },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "type": {
+      "enum": [
+        "train_started",
+        "artifact_built",
+        "artifact_signed",
+        "manifest_created",
+        "channel_published",
+        "channel_submitted",
+        "channel_accepted",
+        "channel_verified",
+        "channel_failed",
+        "channel_rejected",
+        "channel_corrected",
+        "channel_resubmitted",
+        "canary_recorded",
+        "promotion_decided",
+        "rollback_started",
+        "rollback_repository_completed",
+        "action_required",
+        "withdrawn",
+        "superseded",
+        "incident_opened",
+        "incident_resolved"
+      ]
+    },
+    "channel": {
+      "enum": [
+        "npm",
+        "pnpm",
+        "yarn",
+        "bun",
+        "github",
+        "homebrew",
+        "homebrew-core",
+        "scoop",
+        "winget",
+        "chocolatey",
+        "pypi"
+      ]
+    },
+    "idempotencyKey": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "payload": { "type": "object", "maxProperties": 30 },
+    "eventHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "type": { "const": "train_started" } },
+        "required": ["type"]
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "oneOf": [
+              { "$ref": "#/definitions/legacyTrainStart" },
+              { "$ref": "#/definitions/sourceBoundTrainStart" }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "type": { "const": "rollback_started" } },
+        "required": ["type"]
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "oneOf": [
+              { "$ref": "#/definitions/knownGoodRollbackStart" },
+              { "$ref": "#/definitions/legacyKnownGoodRollbackStart" },
+              { "$ref": "#/definitions/firstReleaseWithdrawalStart" }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "type": { "const": "rollback_repository_completed" } },
+        "required": ["type"]
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "oneOf": [
+              { "$ref": "#/definitions/knownGoodRepositoryEvidence" },
+              { "$ref": "#/definitions/firstReleaseRepositoryEvidence" }
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "definitions": {
+    "releaseChannels": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "npm", "pnpm", "yarn", "bun", "github", "homebrew",
+          "homebrew-core", "scoop", "winget", "chocolatey", "pypi"
+        ]
+      }
+    },
+    "legacyTrainStart": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["channels"],
+      "properties": {
+        "channels": { "$ref": "#/definitions/releaseChannels" }
+      }
+    },
+    "sourceBoundTrainStart": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "profile", "releasePr", "sourcePrHead", "sourcePrBase", "sourcePrTree", "channels"
+      ],
+      "properties": {
+        "profile": { "const": "full" },
+        "releasePr": { "type": "integer", "minimum": 1 },
+        "sourcePrHead": { "type": "string", "pattern": "^[a-f0-9]{40}$" },
+        "sourcePrBase": { "type": "string", "pattern": "^[a-f0-9]{40}$" },
+        "sourcePrTree": { "type": "string", "pattern": "^[a-f0-9]{40}$" },
+        "channels": { "$ref": "#/definitions/releaseChannels" }
+      }
+    },
+    "knownGoodRollbackStart": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode",
+        "knownGoodVersion",
+        "knownGoodCommit",
+        "forwardFixVersion",
+        "forwardFixBranch"
+      ],
+      "properties": {
+        "mode": { "const": "known-good" },
+        "knownGoodVersion": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" },
+        "knownGoodCommit": { "type": "string", "pattern": "^[a-f0-9]{40}$" },
+        "forwardFixVersion": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" },
+        "forwardFixBranch": { "type": "string", "minLength": 1, "maxLength": 200 }
+      }
+    },
+    "legacyKnownGoodRollbackStart": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "knownGoodVersion",
+        "knownGoodCommit",
+        "forwardFixVersion",
+        "forwardFixBranch"
+      ],
+      "properties": {
+        "knownGoodVersion": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" },
+        "knownGoodCommit": { "type": "string", "pattern": "^[a-f0-9]{40}$" },
+        "forwardFixVersion": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" },
+        "forwardFixBranch": { "type": "string", "minLength": 1, "maxLength": 200 }
+      }
+    },
+    "firstReleaseWithdrawalStart": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "requiredNextVersion"],
+      "properties": {
+        "mode": { "const": "first-release-withdrawal" },
+        "requiredNextVersion": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" }
+      }
+    },
+    "knownGoodRepositoryEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "mode",
+        "defectiveVersion",
+        "knownGoodVersion",
+        "forwardFix",
+        "catalog",
+        "completedAt"
+      ],
+      "properties": {
+        "schemaVersion": { "const": "guardscan.rollback-repository-evidence.v1" },
+        "mode": { "const": "known-good" },
+        "defectiveVersion": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" },
+        "knownGoodVersion": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" },
+        "forwardFix": { "type": "object" },
+        "catalog": { "type": "object" },
+        "completedAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "firstReleaseRepositoryEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "mode",
+        "defectiveVersion",
+        "requiredNextVersion",
+        "externalActionsPending",
+        "catalog",
+        "completedAt"
+      ],
+      "properties": {
+        "schemaVersion": { "const": "guardscan.rollback-repository-evidence.v1" },
+        "mode": { "const": "first-release-withdrawal" },
+        "defectiveVersion": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" },
+        "requiredNextVersion": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" },
+        "externalActionsPending": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "enum": ["npm", "pypi", "homebrew-core", "winget", "chocolatey"]
+          }
+        },
+        "catalog": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["state", "branch", "pullRequest", "commit"],
+          "properties": {
+            "state": { "enum": ["already-absent", "removed"] },
+            "branch": { "type": "string", "minLength": 1, "maxLength": 200 },
+            "pullRequest": { "type": "integer", "minimum": 0 },
+            "commit": { "type": "string", "pattern": "^[a-f0-9]{40}$" }
+          }
+        },
+        "completedAt": { "type": "string", "format": "date-time" }
+      }
+    }
+  }
+}

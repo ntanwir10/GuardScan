@@ -1,0 +1,138 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://guardscancli.com/schemas/guardscan.promotion-decision.v1.schema.json",
+  "title": "GuardScan machine promotion decision",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "rc",
+    "stable",
+    "evaluatedAt",
+    "policy",
+    "canaries",
+    "activeIncidents",
+    "result",
+    "eligible",
+    "reasons"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "guardscan.promotion-decision.v1" },
+    "rc": { "$ref": "#/definitions/rc" },
+    "stable": { "$ref": "#/definitions/stable" },
+    "evaluatedAt": { "type": "string", "format": "date-time" },
+    "policy": { "$ref": "#/definitions/policy" },
+    "canaries": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": { "$ref": "#/definitions/canarySummary" }
+    },
+    "activeIncidents": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["incidentId", "kind"],
+        "properties": {
+          "incidentId": { "type": "string", "minLength": 1, "maxLength": 200 },
+          "kind": { "enum": ["integrity", "security", "availability"] }
+        }
+      }
+    },
+    "result": { "enum": ["permitted", "denied"] },
+    "eligible": { "type": "boolean" },
+    "reasons": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1, "maxLength": 200 }
+    }
+  },
+  "definitions": {
+    "commit": { "type": "string", "pattern": "^[a-f0-9]{40}$" },
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "rc": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "tag",
+        "commit",
+        "manifestSha256",
+        "publishedAt",
+        "eligibleAt",
+        "sourcePr",
+        "sourcePrHead",
+        "sourcePrBase",
+        "sourcePrTree"
+      ],
+      "properties": {
+        "version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+-rc\\.[0-9]+$" },
+        "tag": { "type": "string", "pattern": "^v[0-9]+\\.[0-9]+\\.[0-9]+-rc\\.[0-9]+$" },
+        "commit": { "$ref": "#/definitions/commit" },
+        "manifestSha256": { "$ref": "#/definitions/sha256" },
+        "publishedAt": { "type": "string", "format": "date-time" },
+        "eligibleAt": { "type": "string", "format": "date-time" },
+        "sourcePr": { "type": "integer", "minimum": 1 },
+        "sourcePrHead": { "$ref": "#/definitions/commit" },
+        "sourcePrBase": { "$ref": "#/definitions/commit" },
+        "sourcePrTree": { "$ref": "#/definitions/commit" }
+      }
+    },
+    "stable": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "tag",
+        "sourcePr",
+        "sourcePrHead",
+        "sourcePrBase",
+        "sourcePrTree"
+      ],
+      "properties": {
+        "version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" },
+        "tag": { "type": "string", "pattern": "^v[0-9]+\\.[0-9]+\\.[0-9]+$" },
+        "sourcePr": { "type": "integer", "minimum": 1 },
+        "sourcePrHead": { "$ref": "#/definitions/commit" },
+        "sourcePrBase": { "$ref": "#/definitions/commit" },
+        "sourcePrTree": { "$ref": "#/definitions/commit" }
+      }
+    },
+    "policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "soakHours",
+        "minimumSamplesPerChannel",
+        "maximumCanaryAgeMinutes",
+        "requiredChannels"
+      ],
+      "properties": {
+        "soakHours": { "const": 24 },
+        "minimumSamplesPerChannel": { "type": "integer", "minimum": 1 },
+        "maximumCanaryAgeMinutes": { "type": "integer", "minimum": 1 },
+        "requiredChannels": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1, "maxLength": 50 }
+        }
+      }
+    },
+    "canarySummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sampleCount", "passed", "failures", "coversPublication", "fresh"],
+      "properties": {
+        "sampleCount": { "type": "integer", "minimum": 0 },
+        "passed": { "type": "boolean" },
+        "firstCheckedAt": { "type": "string", "format": "date-time" },
+        "lastCheckedAt": { "type": "string", "format": "date-time" },
+        "failures": { "type": "integer", "minimum": 0 },
+        "coversPublication": { "type": "boolean" },
+        "fresh": { "type": "boolean" }
+      }
+    }
+  }
+}

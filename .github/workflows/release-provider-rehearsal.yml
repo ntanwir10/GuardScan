@@ -1,0 +1,77 @@
+name: Release provider rehearsal
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_pr:
+        description: Open release pull request number targeting main
+        required: true
+        type: string
+      expected_head:
+        description: Exact 40-character release pull request head SHA
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: release-provider-rehearsal-${{ inputs.release_pr }}-${{ inputs.expected_head }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate exact same-repository main PR
+    if: vars.RELEASE_AUTOMATION_ENABLED != 'true' && vars.RELEASE_PROVIDER_REHEARSAL_ENABLED == 'true'
+    runs-on: ubuntu-24.04
+    outputs:
+      head: ${{ steps.source.outputs.head }}
+    steps:
+      - name: Validate request syntax
+        env:
+          REQUEST_RELEASE_PR: ${{ inputs.release_pr }}
+          REQUEST_EXPECTED_HEAD: ${{ inputs.expected_head }}
+        run: |
+          node - <<'NODE'
+          const pr = process.env.REQUEST_RELEASE_PR;
+          const head = process.env.REQUEST_EXPECTED_HEAD;
+          if (!/^[1-9][0-9]*$/.test(pr || '') || !Number.isSafeInteger(Number(pr))) {
+            throw new Error('release rehearsal PR number is invalid');
+          }
+          if (!/^[a-f0-9]{40}$/.test(head || '')) throw new Error('release rehearsal head SHA is invalid');
+          NODE
+      - name: Validate open same-repository PR targeting main and exact head
+        id: source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUEST_RELEASE_PR: ${{ inputs.release_pr }}
+          REQUEST_EXPECTED_HEAD: ${{ inputs.expected_head }}
+        run: |
+          gh api "repos/${GITHUB_REPOSITORY}/pulls/$REQUEST_RELEASE_PR" > pull-request.json
+          node - <<'NODE'
+          const fs = require('fs');
+          const pr = JSON.parse(fs.readFileSync('pull-request.json'));
+          const expected = process.env.REQUEST_EXPECTED_HEAD;
+          if (pr.state !== 'open' || pr.base?.ref !== 'main') throw new Error('rehearsal PR must be open and target main');
+          if (pr.head?.repo?.full_name?.toLowerCase() !== process.env.GITHUB_REPOSITORY.toLowerCase()) {
+            throw new Error('rehearsal PR must originate in the same repository');
+          }
+          if (pr.head?.sha !== expected) throw new Error('rehearsal PR head changed');
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `head=${pr.head.sha}\n`);
+          NODE
+
+  rehearsal:
+    name: Run non-production provider rehearsal
+    if: vars.RELEASE_AUTOMATION_ENABLED != 'true' && vars.RELEASE_PROVIDER_REHEARSAL_ENABLED == 'true'
+    needs: [validate]
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/release-build.yml
+    with:
+      ref: ${{ needs.validate.outputs.head }}
+      tag: provider-rehearsal
+      channel: rehearsal
+      mode: rehearsal
+    secrets: inherit
