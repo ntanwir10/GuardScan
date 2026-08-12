@@ -1,0 +1,32 @@
+{
+  "schemaVersion": "guardscan.release-bootstrap-provenance.v1",
+  "baseCommit": "ae98219e10d0f0bf9118c0ed00b024f429fea3e7",
+  "sourceCommit": "eb3adbe99b62614b000cb17e7802c11331afc3d0",
+  "publicVersion": "1.0.5",
+  "requiredRepositoryVariables": {
+    "RELEASE_AUTOMATION_ENABLED": "false",
+    "RELEASE_PLEASE_ENABLED": "false",
+    "RELEASE_PROVIDER_REHEARSAL_ENABLED": "false"
+  },
+  "sourceRoots": [
+    ".github/release-ledger",
+    ".github/workflows/release-build.yml",
+    ".github/workflows/release-canary.yml",
+    ".github/workflows/release-credential-health.yml",
+    ".github/workflows/release-first-withdrawal.yml",
+    ".github/workflows/release-please.yml",
+    ".github/workflows/release-provider-rehearsal.yml",
+    ".github/workflows/release-publish.yml",
+    ".github/workflows/release-train.yml",
+    "catalog/homebrew-tap",
+    "cli/schemas",
+    "cli/scripts/release",
+    "docs/FUNCTIONAL_ACCEPTANCE.md",
+    "docs/RELEASE_AUTOMATION.md",
+    "docs/RELEASE_ONBOARDING.md",
+    "docs/adrs/006-node-sea-standalone-distribution.md",
+    "release-please-config.json"
+  ],
+  "sourceFileCount": 54,
+  "sourceTreeSha256": "440f6e27a6e091345b13be162a92783c0c90ce4376ddc10b3270f2e5129e2d1d"
+}

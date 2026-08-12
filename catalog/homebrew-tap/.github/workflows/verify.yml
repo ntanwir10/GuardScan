@@ -1,0 +1,306 @@
+name: Verify GuardScan channel catalog
+
+on:
+  pull_request:
+    paths:
+      - Formula/**
+      - bucket/**
+      - channel-lock.json
+      - .github/workflows/verify.yml
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: channel-catalog-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  RELEASE_NODE_VERSION: 22.23.1
+  SCOOP_INSTALL_COMMIT: b0ee913725139b816f9178163af0aecdba07a7ed
+  SCOOP_COMMIT: b588a06e41d920d2123ec70aee682bae14935939
+
+jobs:
+  integrity:
+    name: Source and lock integrity
+    runs-on: ubuntu-24.04
+    outputs:
+      published: ${{ steps.lock.outputs.published }}
+      source_commit: ${{ steps.lock.outputs.source_commit }}
+      manifest_url: ${{ steps.lock.outputs.manifest_url }}
+      manifest_sha256: ${{ steps.lock.outputs.manifest_sha256 }}
+      generator_repository: ${{ steps.lock.outputs.generator_repository }}
+      generator_commit: ${{ steps.lock.outputs.generator_commit }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Validate the untrusted lock before using it
+        id: lock
+        shell: bash
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+          const fail = message => { throw new Error(message); };
+          const sha = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
+          const commit = value => typeof value === 'string' && /^[a-f0-9]{40}$/.test(value);
+          const catalogFiles = [
+            'channel-lock.json',
+            'Formula/guardscan.rb',
+            'bucket/guardscan.json',
+          ];
+          const present = catalogFiles.filter(file => fs.existsSync(file));
+          if (present.length === 0) {
+            fs.appendFileSync(process.env.GITHUB_OUTPUT, 'published=false\n');
+            process.stdout.write('Catalog is initialized but has no published GuardScan release.\n');
+            process.exit(0);
+          }
+          if (present.length !== catalogFiles.length) {
+            fail(`catalog metadata is partially initialized: ${present.join(', ')}`);
+          }
+          const lock = JSON.parse(fs.readFileSync('channel-lock.json', 'utf8'));
+          if (lock.schemaVersion !== 'guardscan.channel-catalog.v1') fail('unsupported channel lock');
+          if (lock.source?.repository !== 'ntanwir10/GuardScan') fail('unexpected source repository');
+          if (lock.generator?.repository !== 'ntanwir10/GuardScan') fail('unexpected generator repository');
+          if (!commit(lock.source?.commit) || !commit(lock.generator?.commit)) fail('invalid commit identity');
+          if (lock.source.commit !== lock.generator.commit) fail('generator must come from the release source commit');
+          if (lock.source?.tag !== `v${lock.source?.version}`) fail('tag and version do not match');
+          const expectedUrl =
+            `https://github.com/ntanwir10/GuardScan/releases/download/${lock.source.tag}/release-manifest.json`;
+          if (lock.source?.manifestUrl !== expectedUrl) fail('manifest URL is not canonical');
+          if (!sha(lock.source?.manifestSha256)) fail('invalid manifest digest');
+          const expectedFiles = ['Formula/guardscan.rb', 'bucket/guardscan.json'];
+          if (JSON.stringify(Object.keys(lock.files || {}).sort()) !== JSON.stringify(expectedFiles)) {
+            fail('channel lock has unexpected generated files');
+          }
+          for (const filename of expectedFiles) {
+            if (!sha(lock.files[filename]?.sha256)) fail(`invalid digest for ${filename}`);
+          }
+          const output = [
+            'published=true',
+            `source_commit=${lock.source.commit}`,
+            `manifest_url=${lock.source.manifestUrl}`,
+            `manifest_sha256=${lock.source.manifestSha256}`,
+            `generator_repository=${lock.generator.repository}`,
+            `generator_commit=${lock.generator.commit}`,
+          ].join('\n');
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `${output}\n`);
+          NODE
+
+      - name: Download and authenticate the immutable release manifest
+        if: steps.lock.outputs.published == 'true'
+        env:
+          MANIFEST_URL: ${{ steps.lock.outputs.manifest_url }}
+          MANIFEST_SHA256: ${{ steps.lock.outputs.manifest_sha256 }}
+          SOURCE_COMMIT: ${{ steps.lock.outputs.source_commit }}
+        shell: bash
+        run: |
+          curl --fail --location --proto '=https' --tlsv1.2 \
+            --output release-manifest.json "$MANIFEST_URL"
+          node <<'NODE'
+          const crypto = require('crypto');
+          const fs = require('fs');
+          const manifestBytes = fs.readFileSync('release-manifest.json');
+          const actual = crypto.createHash('sha256').update(manifestBytes).digest('hex');
+          if (actual !== process.env.MANIFEST_SHA256) throw new Error('release manifest digest mismatch');
+          const manifest = JSON.parse(manifestBytes);
+          const lock = JSON.parse(fs.readFileSync('channel-lock.json', 'utf8'));
+          if (manifest.version !== lock.source.version
+              || manifest.tag !== lock.source.tag
+              || manifest.commit !== process.env.SOURCE_COMMIT) {
+            throw new Error('release manifest source identity mismatch');
+          }
+          NODE
+
+      - name: Check out the exact GuardScan generator
+        if: steps.lock.outputs.published == 'true'
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: ntanwir10/GuardScan
+          ref: ${{ steps.lock.outputs.source_commit }}
+          path: .guardscan-source
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        if: steps.lock.outputs.published == 'true'
+        with:
+          node-version: ${{ env.RELEASE_NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: .guardscan-source/cli/package-lock.json
+
+      - name: Reproduce every generated byte
+        if: steps.lock.outputs.published == 'true'
+        working-directory: .guardscan-source/cli
+        env:
+          CATALOG_ROOT: ${{ github.workspace }}
+          GENERATOR_REPOSITORY: ${{ steps.lock.outputs.generator_repository }}
+          GENERATOR_COMMIT: ${{ steps.lock.outputs.generator_commit }}
+          MANIFEST_URL: ${{ steps.lock.outputs.manifest_url }}
+          MANIFEST_SHA256: ${{ steps.lock.outputs.manifest_sha256 }}
+        shell: bash
+        run: |
+          npm ci
+          node scripts/release/index.js catalog \
+            --manifest "$CATALOG_ROOT/release-manifest.json" \
+            --output-dir "$CATALOG_ROOT" \
+            --manifest-url "$MANIFEST_URL" \
+            --manifest-sha256 "$MANIFEST_SHA256" \
+            --generator-repository "$GENERATOR_REPOSITORY" \
+            --generator-commit "$GENERATOR_COMMIT" \
+            --check
+          cmp "$CATALOG_ROOT/.github/workflows/verify.yml" \
+            "$CATALOG_ROOT/.guardscan-source/catalog/homebrew-tap/.github/workflows/verify.yml"
+
+  homebrew:
+    name: Homebrew lifecycle
+    needs: integrity
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Confirm the catalog is awaiting its first stable release
+        if: needs.integrity.outputs.published != 'true'
+        run: echo "Homebrew lifecycle will activate with the first generated catalog release."
+      - name: Style, audit, install, invoke, test, and uninstall
+        if: needs.integrity.outputs.published == 'true'
+        shell: bash
+        run: |
+          brew style Formula/guardscan.rb
+          brew audit --strict Formula/guardscan.rb
+          brew install --formula "$GITHUB_WORKSPACE/Formula/guardscan.rb"
+          guardscan --version
+          brew test guardscan
+          brew uninstall guardscan
+
+  scoop:
+    name: Scoop lifecycle
+    needs: integrity
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Confirm the catalog is awaiting its first stable release
+        if: needs.integrity.outputs.published != 'true'
+        shell: pwsh
+        run: Write-Output 'Scoop lifecycle will activate with the first generated catalog release.'
+      - name: Check out the pinned Scoop installer
+        if: needs.integrity.outputs.published == 'true'
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: ScoopInstaller/Install
+          ref: ${{ env.SCOOP_INSTALL_COMMIT }}
+          path: .scoop-installer
+          persist-credentials: false
+      - name: Install the pinned Scoop CLI
+        if: needs.integrity.outputs.published == 'true'
+        shell: pwsh
+        run: |
+          $scoopRoot = Join-Path $env:RUNNER_TEMP 'scoop'
+          & .\.scoop-installer\install.ps1 -RunAsAdmin -ScoopDir $scoopRoot
+          if (-not $?) { throw 'Pinned Scoop installer failed' }
+          git -C "$scoopRoot\apps\scoop\current" fetch origin $env:SCOOP_COMMIT --depth 1
+          if ($LASTEXITCODE -ne 0) { throw 'Unable to fetch the pinned Scoop CLI' }
+          git -C "$scoopRoot\apps\scoop\current" checkout --detach $env:SCOOP_COMMIT
+          if ($LASTEXITCODE -ne 0) { throw 'Unable to select the pinned Scoop CLI' }
+          "$scoopRoot\shims" | Out-File $env:GITHUB_PATH -Append
+      - name: Validate, install, invoke, and remove the portable archive
+        if: needs.integrity.outputs.published == 'true'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $manifest = Get-Content -Raw -LiteralPath bucket/guardscan.json | ConvertFrom-Json
+          if ($manifest.version -notmatch '^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$') {
+            throw 'Invalid Scoop version'
+          }
+          $download = Join-Path $env:RUNNER_TEMP 'guardscan.zip'
+          Invoke-WebRequest -Uri $manifest.architecture.'64bit'.url -OutFile $download
+          $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $download).Hash.ToLowerInvariant()
+          if ($actual -ne $manifest.architecture.'64bit'.hash) {
+            throw 'Scoop archive digest mismatch'
+          }
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $archive = [System.IO.Compression.ZipFile]::OpenRead($download)
+          try {
+            foreach ($entry in $archive.Entries) {
+              $name = $entry.FullName.Replace('\', '/')
+              if ($name.StartsWith('/') -or $name -match '(^|/)\.\.(/|$)' -or $name.Contains(':')) {
+                throw "Unsafe archive entry: $name"
+              }
+            }
+          } finally {
+            $archive.Dispose()
+          }
+          $install = Join-Path $env:RUNNER_TEMP 'guardscan-scoop-install'
+          Expand-Archive -LiteralPath $download -DestinationPath $install
+          $executables = @(Get-ChildItem -LiteralPath $install -Recurse -Filter guardscan.exe)
+          if ($executables.Count -ne 1) { throw 'Expected one guardscan.exe' }
+          $reported = & $executables[0].FullName --version
+          if ($LASTEXITCODE -ne 0 -or $reported -notmatch [regex]::Escape($manifest.version)) {
+            throw 'Installed Scoop executable failed its version check'
+          }
+          Remove-Item -LiteralPath $install -Recurse -Force
+      - name: Install, update-check, invoke, and uninstall through Scoop
+        if: needs.integrity.outputs.published == 'true'
+        shell: pwsh
+        run: |
+          scoop bucket add guardscan-catalog $env:GITHUB_WORKSPACE
+          if ($LASTEXITCODE -ne 0) { throw 'Unable to add the local GuardScan bucket' }
+          scoop install guardscan-catalog/guardscan
+          if ($LASTEXITCODE -ne 0) { throw 'Scoop installation failed' }
+          guardscan --version
+          if ($LASTEXITCODE -ne 0) { throw 'Scoop invocation failed' }
+          scoop update guardscan
+          if ($LASTEXITCODE -ne 0) { throw 'Scoop update check failed' }
+          scoop uninstall guardscan
+          if ($LASTEXITCODE -ne 0) { throw 'Scoop uninstall failed' }
+          scoop bucket rm guardscan-catalog
+          if ($LASTEXITCODE -ne 0) { throw 'Unable to remove the local GuardScan bucket' }
+
+  notify:
+    name: Notify authoritative release ledger
+    if: >-
+      github.event_name == 'push'
+      && github.ref == 'refs/heads/main'
+      && needs.integrity.outputs.published == 'true'
+    needs: [integrity, homebrew, scoop]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Create a short-lived cross-repository app token
+        id: app
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        with:
+          app-id: ${{ vars.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          owner: ntanwir10
+          repositories: GuardScan,homebrew-tap
+      - name: Send a non-authoritative catalog update hint
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          CATALOG_COMMIT: ${{ github.sha }}
+        shell: bash
+        run: |
+          node <<'NODE' > dispatch.json
+          const crypto = require('crypto');
+          const fs = require('fs');
+          const lock = fs.readFileSync('channel-lock.json');
+          const lockDocument = JSON.parse(lock);
+          process.stdout.write(JSON.stringify({
+            event_type: 'catalog_updated',
+            client_payload: {
+              repository: process.env.GITHUB_REPOSITORY,
+              version: lockDocument.source.version,
+              catalog_commit: process.env.CATALOG_COMMIT,
+              lock_sha256: crypto.createHash('sha256').update(lock).digest('hex'),
+            },
+          }));
+          NODE
+          gh api --method POST repos/ntanwir10/GuardScan/dispatches --input dispatch.json
