@@ -50,6 +50,11 @@ jobs:
       - name: Audit locked dependency graph
         working-directory: cli
         run: npm audit --audit-level=moderate
+      - name: Build without optional native dependencies
+        working-directory: cli
+        run: |
+          npm ci --omit=optional
+          npm run build
 
   lint:
     name: Typecheck and lint ratchet
