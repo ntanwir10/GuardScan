@@ -37,6 +37,9 @@ function isMissingChartDependency(error: unknown): boolean {
     return false;
   }
   const code = (error as NodeJS.ErrnoException).code;
+  if (code === 'ERR_UNKNOWN_BUILTIN_MODULE') {
+    return /^No such built-in module: (?:node:)?chartjs-node-canvas$/.test(error.message);
+  }
   return (code === 'MODULE_NOT_FOUND' || code === 'ERR_MODULE_NOT_FOUND')
     && error.message.includes('chartjs-node-canvas');
 }
