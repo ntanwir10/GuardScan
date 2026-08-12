@@ -141,6 +141,7 @@ test('legacy tag-triggered publication is removed from CI', () => {
   assert.ok(document.jobs['release-bootstrap']);
   assert.equal(document.jobs['publish-npm'], undefined);
   assert.equal(document.jobs['create-release'], undefined);
+  assert.equal(document.jobs.lint.name, 'Typecheck unchanged 1.0.5 source');
   assert.doesNotMatch(source, /npm publish|gh release (?:create|edit|upload)|action-gh-release/);
 });
 

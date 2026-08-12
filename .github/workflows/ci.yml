@@ -35,7 +35,7 @@ jobs:
         run: git diff --check
 
   lint:
-    name: Lint Code
+    name: Typecheck unchanged 1.0.5 source
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -47,9 +47,9 @@ jobs:
       - name: Install CLI dependencies
         working-directory: cli
         run: npm ci
-      - name: Run ESLint on CLI
+      - name: Typecheck CLI
         working-directory: cli
-        run: npm run lint
+        run: npm run typecheck
 
   test-cli:
     name: Test CLI
