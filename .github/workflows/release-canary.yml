@@ -793,7 +793,9 @@ jobs:
             else if (entry.name.endsWith('.json')) files.push(file);
           });
           walk('reports');
-          const reports = files.map(file => ({file, report: JSON.parse(fs.readFileSync(file))}))
+          const reports = files.filter(file => path.relative('reports', file).split(path.sep)[0]
+            .startsWith(`canary-${process.env.TRAIN_VERSION}-`))
+            .map(file => ({file, report: JSON.parse(fs.readFileSync(file))}))
             .filter(({report}) => report.version === process.env.TRAIN_VERSION)
             .sort((a, b) => a.report.checkedAt.localeCompare(b.report.checkedAt)
               || a.file.localeCompare(b.file));
