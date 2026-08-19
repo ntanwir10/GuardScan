@@ -11,6 +11,7 @@ function fixture(overrides: Record<string, any> = {}) {
   const pullRequestOverrides = overrides.pullRequest || {};
   return {
     expectedHead: overrides.expectedHead ?? head,
+    allowMerged: overrides.allowMerged ?? false,
     pullRequest: {
       number: 123,
       state: 'open',
@@ -59,6 +60,25 @@ describe('pull request release authorization policy', () => {
         {name: 'Release gate', head_sha: head, status: 'completed', conclusion: 'success'},
       ],
     }))).toMatchObject({head});
+  });
+
+  it('allows only an explicitly permitted, valid merged PR for promotion recovery', () => {
+    expect(authorizePullRequest(fixture({
+      allowMerged: true,
+      pullRequest: {
+        state: 'closed',
+        merged: true,
+        merge_commit_sha: 'c'.repeat(40),
+      },
+    }))).toMatchObject({head});
+    expect(() => authorizePullRequest(fixture({
+      allowMerged: true,
+      pullRequest: {state: 'closed', merged: false, merge_commit_sha: 'c'.repeat(40)},
+    }))).toThrow(/OPEN or an explicitly allowed merged release/);
+    expect(() => authorizePullRequest(fixture({
+      allowMerged: true,
+      pullRequest: {state: 'closed', merged: true, merge_commit_sha: 'not-a-sha'},
+    }))).toThrow(/OPEN or an explicitly allowed merged release/);
   });
 
   it.each([
