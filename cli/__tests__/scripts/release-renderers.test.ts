@@ -457,4 +457,28 @@ describe('release adapter rendering', () => {
       fs.rmSync(root, {recursive: true, force: true});
     }
   });
+
+  it('reports an unavailable Python validator as skipped unless native checks are required', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'guardscan-adapter-python-'));
+    try {
+      const output = path.join(root, 'adapters');
+      const manifest = makeManifest();
+      writeRenderedOutput(manifest, renderAdapters(manifest, 'pypi'), output);
+      const unavailable = Object.assign(new Error('python is unavailable'), {code: 'ENOENT'});
+      const options = {
+        native: true,
+        platform: 'linux',
+        runner: () => ({error: unavailable, status: null}),
+      };
+      expect(validateAdapters(manifest, output, 'pypi', options)).toMatchObject({
+        native: [{channel: 'pypi', skipped: true, reason: expect.stringContaining('unavailable')}],
+      });
+      expect(() => validateAdapters(manifest, output, 'pypi', {
+        ...options,
+        requireNative: true,
+      })).toThrow(/pypi.*unavailable/i);
+    } finally {
+      fs.rmSync(root, {recursive: true, force: true});
+    }
+  });
 });

@@ -7,6 +7,7 @@ const path = require('path');
 const zlib = require('zlib');
 const Ajv = require('ajv');
 const addFormats = require('ajv-formats');
+const {compareUtf8} = require('./deterministic');
 const {
   MAX_ARCHIVE_BYTES,
   MAX_ARCHIVE_ENTRIES,
@@ -38,7 +39,7 @@ function canonicalize(value) {
   if (Array.isArray(value)) return value.map(canonicalize);
   if (value && typeof value === 'object') {
     return Object.fromEntries(
-      Object.keys(value).sort().map(key => [key, canonicalize(value[key])])
+      Object.keys(value).sort(compareUtf8).map(key => [key, canonicalize(value[key])])
     );
   }
   return value;
@@ -100,7 +101,7 @@ function normalizePaths(files) {
     if (seen.has(folded)) throw new Error(`checkpoint contains duplicate file: ${normalized}`);
     seen.add(folded);
     return normalized;
-  }).sort((left, right) => left.localeCompare(right));
+  }).sort(compareUtf8);
 }
 
 function assertRegularPath(root, relative) {
@@ -244,7 +245,7 @@ function assertSidecar(source, sidecar) {
     throw new Error('checkpoint sidecar schema is unsupported');
   }
   const expectedFields = ['archive', 'commit', 'createdAt', 'files', 'producer', 'schemaVersion', 'tag', 'version'];
-  if (Object.keys(sidecar).sort().join('\n') !== expectedFields.join('\n')) {
+  if (Object.keys(sidecar).sort(compareUtf8).join('\n') !== expectedFields.join('\n')) {
     throw new Error('checkpoint sidecar contains unknown or missing fields');
   }
   for (const field of ['version', 'tag', 'commit']) {
@@ -252,7 +253,7 @@ function assertSidecar(source, sidecar) {
   }
   assertTimestamp(sidecar.createdAt);
   assertProducer(sidecar.producer, source);
-  if (!sidecar.archive || Object.keys(sidecar.archive).sort().join('\n') !== 'filename\nformat\nsha256\nsize'
+  if (!sidecar.archive || Object.keys(sidecar.archive).sort(compareUtf8).join('\n') !== 'filename\nformat\nsha256\nsize'
       || !/^[A-Za-z0-9][A-Za-z0-9._+-]*\.tar\.gz$/.test(sidecar.archive.filename || '')
       || sidecar.archive.format !== ARCHIVE_FORMAT
       || !Number.isSafeInteger(sidecar.archive.size) || sidecar.archive.size <= 0
@@ -267,7 +268,7 @@ function assertSidecar(source, sidecar) {
     throw new Error('checkpoint files are not sorted');
   }
   for (const file of sidecar.files) {
-    if (!file || Object.keys(file).sort().join('\n') !== 'mode\npath\nsha256\nsize') {
+    if (!file || Object.keys(file).sort(compareUtf8).join('\n') !== 'mode\npath\nsha256\nsize') {
       throw new Error('checkpoint file metadata contains unknown or missing fields');
     }
     if (!Number.isSafeInteger(file.size) || file.size < 0

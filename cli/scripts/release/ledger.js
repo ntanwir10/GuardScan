@@ -4,6 +4,7 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const {readBounded} = require('./lib');
+const {compareUtf8} = require('./deterministic');
 
 const STATUS_ORDER = Object.freeze({
   planned: 0,
@@ -72,7 +73,7 @@ function normalizeArtifactIds(value, fallback) {
     throw new Error('artifactIds must contain non-empty strings');
   }
   if (new Set(artifactIds).size !== artifactIds.length) throw new Error('artifactIds must be unique');
-  return artifactIds.sort();
+  return artifactIds.sort(compareUtf8);
 }
 
 function channelStateMatches(current, next) {
@@ -80,10 +81,13 @@ function channelStateMatches(current, next) {
     && current.updatedAt === next.updatedAt
     && current.remoteIdentity === next.remoteIdentity
     && current.error === next.error
-    && [...current.artifactIds].sort().join('\n') === next.artifactIds.join('\n');
+    && [...current.artifactIds].sort(compareUtf8).join('\n') === next.artifactIds.join('\n');
 }
 
 function transitionState(state, options) {
+  if (state?.schemaVersion === 'guardscan.release-state.v2') {
+    throw new Error('legacy mutable-state advance rejects release-state.v2; use append-only release ledger events');
+  }
   const channel = options.channel;
   const current = state.channels[channel];
   if (!current) throw new Error(`release state does not contain channel ${channel}`);

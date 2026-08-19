@@ -43,6 +43,8 @@ jobs:
         with:
           app-id: ${{ vars.RELEASE_APP_ID }}
           private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          permission-contents: read
+          permission-metadata: read
       - name: Load protected active-train index
         id: matrix
         env:
@@ -232,8 +234,20 @@ jobs:
             --dir release \
             --pattern "guardscan-$VERSION-$TARGET.$ARCHIVE" \
             --pattern "SHA256SUMS" \
-            --pattern "SHA256SUMS.sigstore.json"
-          (cd release && sha256sum --check --ignore-missing SHA256SUMS)
+            --pattern "SHA256SUMS.sigstore.json" \
+            --pattern "release-build-provenance.json"
+          (
+            cd release
+            if command -v sha256sum >/dev/null 2>&1; then
+              sha256sum --check --ignore-missing SHA256SUMS
+            else
+              shasum -a 256 --check SHA256SUMS
+            fi
+          )
+          RELEASE_BUILD_WORKFLOW_SHA="$(node -p 'require("./release/release-build-provenance.json").sha')"
+          test "$(node -p 'require("./release/release-build-provenance.json").workflow')" = .github/workflows/release-build.yml
+          test "$(node -p 'require("./release/release-build-provenance.json").ref')" = refs/heads/main
+          export RELEASE_BUILD_WORKFLOW_SHA
           if [ "$ARCHIVE" = zip ]; then
             python -m zipfile -e "release/guardscan-$VERSION-$TARGET.$ARCHIVE" executable
           else
@@ -252,7 +266,9 @@ jobs:
             --dir release --pattern "$TARGET.guardscan.sigstore.json"
           cosign verify-blob \
             --bundle "release/$TARGET.guardscan.sigstore.json" \
-            --certificate-identity-regexp "^https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release-train.yml@" \
+            --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release-build.yml@refs/heads/main" \
+            --certificate-github-workflow-ref "refs/heads/main" \
+            --certificate-github-workflow-sha "$RELEASE_BUILD_WORKFLOW_SHA" \
             --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
             executable/guardscan
       - name: Verify macOS signing and Gatekeeper
@@ -558,17 +574,20 @@ jobs:
         with:
           app-id: ${{ vars.RELEASE_APP_ID }}
           private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-metadata: read
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: ${{ github.event.repository.default_branch }}
+          ref: ${{ github.workflow_sha }}
           fetch-depth: 0
-          token: ${{ steps.app.outputs.token }}
+          token: ${{ github.token }}
+          persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: ${{ env.RELEASE_NODE_VERSION }}
       - name: Install default-branch ledger tooling
         working-directory: cli
-        run: npm ci
+        run: npm ci --ignore-scripts
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           pattern: canary-*
@@ -577,13 +596,12 @@ jobs:
       - name: Append hash-chained canary and verification events
         env:
           RELEASE_APP_TOKEN: ${{ steps.app.outputs.token }}
+          ACTIVE_TRAINS: ${{ needs.discover.outputs.trains }}
         run: |
-          git fetch origin release-ledger
+          git -c "http.extraheader=AUTHORIZATION: bearer $RELEASE_APP_TOKEN" fetch origin release-ledger
           node - <<'NODE'
           const fs = require('fs');
           const path = require('path');
-          const cp = require('child_process');
-          const {appendEvent, readEvents} = require('./cli/scripts/release/events');
           const files = [];
           const walk = dir => fs.readdirSync(dir, {withFileTypes: true}).forEach(entry => {
             const file = path.join(dir, entry.name);
@@ -591,88 +609,63 @@ jobs:
             else if (entry.name.endsWith('.json')) files.push(file);
           });
           walk('reports');
-          const reports = files.map(file => ({file, report: JSON.parse(fs.readFileSync(file))}))
-            .filter(({report}) => typeof report.version === 'string')
-            .sort((a, b) => a.report.version.localeCompare(b.report.version)
-              || a.report.checkedAt.localeCompare(b.report.checkedAt)
-              || a.file.localeCompare(b.file));
-          const versions = [...new Set(reports.map(({report}) => report.version))];
-          const expectedTargetCounts = {
-            npm: 1,
-            pnpm: 1,
-            yarn: 2,
-            bun: 1,
-            github: 5,
-            pypi: 5,
-            homebrew: 2,
-            scoop: 1,
-            winget: 1,
-            chocolatey: 1,
+          const reports = files.map(file => JSON.parse(fs.readFileSync(file, 'utf8')))
+            .filter(report => typeof report.version === 'string')
+            .sort((left, right) => left.version.localeCompare(right.version)
+              || left.channel.localeCompare(right.channel)
+              || left.target.localeCompare(right.target));
+          const expectedTargets = {
+            npm: ['npm'],
+            pnpm: ['pnpm'],
+            yarn: ['yarn-classic', 'yarn-modern'],
+            bun: ['bun'],
+            github: ['linux-x64-glibc', 'linux-arm64-glibc', 'darwin-arm64', 'darwin-x64', 'windows-x64'],
+            pypi: ['linux-x64', 'linux-arm64', 'darwin-arm64', 'darwin-x64', 'windows-x64'],
+            homebrew: ['Linux', 'macOS'],
+            scoop: ['Windows'],
+            winget: ['Windows'],
+            chocolatey: ['Windows'],
           };
+          fs.writeFileSync('canary-reports.json', `${JSON.stringify(reports)}\n`);
+          fs.writeFileSync('canary-expected-targets.json', `${JSON.stringify(expectedTargets)}\n`);
+          let recordStatus = 0;
           fs.mkdirSync('ledgers', {recursive: true});
+          const activeTrains = JSON.parse(process.env.ACTIVE_TRAINS || '[]');
+          const versions = new Set([
+            ...reports.map(report => report.version),
+            ...activeTrains.map(train => train.version),
+          ]);
           for (const version of versions) {
             const tag = `v${version}`;
             const ledger = `ledgers/${tag}.jsonl`;
-            const contents = cp.execFileSync(
-              'git',
-              ['show', `origin/release-ledger:events/${tag}.jsonl`],
-              {encoding: 'utf8'}
+            const contents = require('child_process').execFileSync(
+              'git', ['show', `origin/release-ledger:events/${tag}.jsonl`], {encoding: 'utf8'}
             );
             fs.writeFileSync(ledger, contents);
-            const existing = readEvents(ledger);
-            if (existing.length === 0) throw new Error(`release ledger is empty for ${tag}`);
-            const commit = existing[0].commit;
-            const versionReports = reports.filter(item => item.report.version === version);
-            for (const {file, report} of versionReports) {
-              if (report.status === 'pending') continue;
-              const suffix = `${process.env.GITHUB_RUN_ID}:${process.env.GITHUB_RUN_ATTEMPT}:${report.channel}:${report.target}:${path.basename(path.dirname(file))}`;
-              appendEvent(ledger, {
-                version, tag, commit,
-                timestamp: report.checkedAt,
-                type: 'canary_recorded',
-                channel: report.channel,
-                idempotencyKey: `canary:${suffix}`,
-                payload: {status: report.status, evidenceUrl: report.evidenceUrl},
-              });
-            }
-            const versionAggregateTimestamp = versionReports
-              .filter(({report}) => report.status !== 'pending')
-              .map(({report}) => report.checkedAt)
-              .sort()
-              .at(-1);
-            for (const [channel, expectedCount] of Object.entries(expectedTargetCounts)) {
-              const channelReports = versionReports.filter(({report}) => report.channel === channel);
-              const resolved = channelReports.filter(({report}) => report.status !== 'pending');
-              if (resolved.length === 0) continue;
-              const suffix = `${process.env.GITHUB_RUN_ID}:${process.env.GITHUB_RUN_ATTEMPT}:${channel}`;
-              if (resolved.some(({report}) => report.status !== 'passed')) {
-                appendEvent(ledger, {
-                  version, tag, commit,
-                  timestamp: versionAggregateTimestamp,
-                  type: 'channel_failed',
-                  channel,
-                  idempotencyKey: `channel-failed:${suffix}`,
-                  payload: {error: 'one or more current public canary targets failed'},
-                });
-                continue;
-              }
-              if (resolved.length === expectedCount) {
-                const types = ['winget', 'chocolatey'].includes(channel)
-                  ? ['channel_accepted', 'channel_verified']
-                  : ['channel_verified'];
-                for (const type of types) {
-                  appendEvent(ledger, {
-                    version, tag, commit,
-                    timestamp: versionAggregateTimestamp,
-                    type,
-                    channel,
-                    idempotencyKey: `${type}:${suffix}`,
-                    payload: {},
-                  });
-                }
-              }
-            }
+            const {materializeReleaseState, readEvents} = require('./cli/scripts/release/events');
+            const state = materializeReleaseState(readEvents(ledger));
+            const selectedTargets = Object.fromEntries(
+              Object.entries(expectedTargets).filter(([channel]) => state.channels[channel])
+            );
+            const versionReports = reports.filter(report => (
+              report.version === version && selectedTargets[report.channel]
+            ));
+            const reportsFile = `canary-reports-${version}.json`;
+            const targetsFile = `canary-expected-targets-${version}.json`;
+            fs.writeFileSync(reportsFile, `${JSON.stringify(versionReports)}\n`);
+            fs.writeFileSync(targetsFile, `${JSON.stringify(selectedTargets)}\n`);
+            const evaluatedAt = versionReports
+              .map(report => report.checkedAt).sort().at(-1) || new Date().toISOString();
+            const result = require('child_process').spawnSync('node', [
+              'cli/scripts/release/index.js', 'record-canary',
+              '--package-root', 'cli', '--repository-root', '.',
+              '--ledger', ledger, '--reports', reportsFile,
+              '--expected-targets', targetsFile,
+              '--evaluated-at', evaluatedAt,
+            ], {stdio: 'inherit'});
+            if (result.error || result.status !== 0) recordStatus = recordStatus || result.status || 1;
           }
+          fs.writeFileSync('.canary-record-status', `${recordStatus}\n`);
           NODE
           git worktree add ledger-branch origin/release-ledger
           cp ledgers/*.jsonl ledger-branch/events/
@@ -696,6 +689,15 @@ jobs:
             git config user.name guardscan-release-bot
             git config user.email 41898282+github-actions[bot]@users.noreply.github.com
             git add events active-versions.json
-            git commit -m "canary evidence: run $GITHUB_RUN_ID"
-            git push origin HEAD:release-ledger
+            if git diff --cached --quiet; then
+              echo 'Canary evidence already persisted; no ledger diff to commit.'
+            else
+              git commit -m "canary evidence: run $GITHUB_RUN_ID"
+            fi
+            git -c "http.extraheader=AUTHORIZATION: bearer $RELEASE_APP_TOKEN" push origin HEAD:release-ledger
           )
+          CANARY_RECORD_STATUS="$(cat .canary-record-status)"
+          if [ "$CANARY_RECORD_STATUS" -ne 0 ]; then
+            echo 'One or more canary target sets were incomplete; incident evidence was persisted.' >&2
+            exit "$CANARY_RECORD_STATUS"
+          fi

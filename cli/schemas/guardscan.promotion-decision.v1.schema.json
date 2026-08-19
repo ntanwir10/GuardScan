@@ -110,20 +110,32 @@
       ],
       "properties": {
         "soakHours": { "const": 24 },
-        "minimumSamplesPerChannel": { "type": "integer", "minimum": 1 },
+        "minimumSamplesPerChannel": { "type": "integer", "minimum": 24 },
         "maximumCanaryAgeMinutes": { "type": "integer", "minimum": 1 },
         "requiredChannels": {
           "type": "array",
-          "minItems": 1,
+          "minItems": 8,
           "uniqueItems": true,
-          "items": { "type": "string", "minLength": 1, "maxLength": 50 }
+          "items": {
+            "enum": ["npm", "pnpm", "yarn", "bun", "github", "homebrew", "homebrew-core", "scoop", "winget", "chocolatey", "pypi"]
+          },
+          "allOf": [
+            { "contains": { "const": "npm" } },
+            { "contains": { "const": "pnpm" } },
+            { "contains": { "const": "yarn" } },
+            { "contains": { "const": "bun" } },
+            { "contains": { "const": "github" } },
+            { "contains": { "const": "homebrew" } },
+            { "contains": { "const": "scoop" } },
+            { "contains": { "const": "pypi" } }
+          ]
         }
       }
     },
     "canarySummary": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["sampleCount", "passed", "failures", "coversPublication", "fresh"],
+      "required": ["sampleCount", "passed", "failures", "coversPublication", "coversSoak", "fresh"],
       "properties": {
         "sampleCount": { "type": "integer", "minimum": 0 },
         "passed": { "type": "boolean" },
@@ -131,6 +143,7 @@
         "lastCheckedAt": { "type": "string", "format": "date-time" },
         "failures": { "type": "integer", "minimum": 0 },
         "coversPublication": { "type": "boolean" },
+        "coversSoak": { "type": "boolean" },
         "fresh": { "type": "boolean" }
       }
     }

@@ -12,6 +12,11 @@ on:
       channel:
         type: string
         required: true
+    secrets:
+      WINGET_CREATE_GITHUB_TOKEN:
+        required: false
+      CHOCO_API_KEY:
+        required: false
 
 permissions:
   contents: read
@@ -21,6 +26,9 @@ env:
   RELEASE_NPM_VERSION: 11.5.2
   RELEASE_WINGETCREATE_VERSION: 1.12.13.0
   RELEASE_WINGETCREATE_SHA256: 24042bd37915805615e6cf969ac57c6439124c3fe85823327f5f3fb24bd9ffea
+  RELEASE_INPUT_REF: ${{ inputs.ref }}
+  RELEASE_INPUT_TAG: ${{ inputs.tag }}
+  RELEASE_INPUT_CHANNEL: ${{ inputs.channel }}
 
 jobs:
   github:
@@ -33,8 +41,10 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: ${{ inputs.ref }}
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
           fetch-depth: 0
+          persist-credentials: false
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: release-payload-${{ inputs.tag }}
@@ -44,15 +54,15 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if ! gh release view "${{ inputs.tag }}" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+          if ! gh release view "$RELEASE_INPUT_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             echo "::error::Release-integrity incident: publication has no persisted checkpoint release"
             exit 1
           fi
-          IS_DRAFT="$(gh release view "${{ inputs.tag }}" \
-            --repo "${{ github.repository }}" --json isDraft --jq .isDraft)"
+          IS_DRAFT="$(gh release view "$RELEASE_INPUT_TAG" \
+            --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)"
           while IFS= read -r -d '' FILE; do
             NAME="$(basename "$FILE")"
-            ASSET_ID="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${{ inputs.tag }}" \
+            ASSET_ID="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/$RELEASE_INPUT_TAG" \
               --jq ".assets[] | select(.name == \"$NAME\") | .id" | head -n 1)"
             if [ -n "$ASSET_ID" ]; then
               gh api \
@@ -68,7 +78,7 @@ jobs:
                 echo "::error::Published release is missing required immutable asset $NAME"
                 exit 1
               fi
-              gh release upload "${{ inputs.tag }}" "$FILE" --repo "${{ github.repository }}"
+              gh release upload "$RELEASE_INPUT_TAG" "$FILE" --repo "$GITHUB_REPOSITORY"
             fi
           done < <(find payload -maxdepth 1 -type f -print0 | sort -z)
       - name: Redownload and verify every draft asset before publication
@@ -76,7 +86,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           mkdir redownload
-          gh release download "${{ inputs.tag }}" \
+          gh release download "$RELEASE_INPUT_TAG" \
             --repo "${{ github.repository }}" \
             --dir redownload
           mkdir checkpoint-redownload
@@ -85,10 +95,23 @@ jobs:
             -exec mv {} checkpoint-redownload/ \;
           diff -u <(find payload -maxdepth 1 -type f -printf '%f\n' | sort) \
             <(find redownload -maxdepth 1 -type f -printf '%f\n' | sort)
-          (cd redownload && sha256sum --check SHA256SUMS)
+          (
+            cd redownload
+            if command -v sha256sum >/dev/null 2>&1; then
+              sha256sum --check SHA256SUMS
+            else
+              shasum -a 256 --check SHA256SUMS
+            fi
+          )
+          RELEASE_BUILD_WORKFLOW_SHA="$(node -p 'require("./redownload/release-build-provenance.json").sha')"
+          test "$(node -p 'require("./redownload/release-build-provenance.json").workflow')" = .github/workflows/release-build.yml
+          test "$(node -p 'require("./redownload/release-build-provenance.json").ref')" = refs/heads/main
+          export RELEASE_BUILD_WORKFLOW_SHA
           cosign verify-blob \
             --bundle redownload/SHA256SUMS.sigstore.json \
-            --certificate-identity-regexp "^https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release-train.yml@" \
+            --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release-build.yml@refs/heads/main" \
+            --certificate-github-workflow-ref "refs/heads/main" \
+            --certificate-github-workflow-sha "$RELEASE_BUILD_WORKFLOW_SHA" \
             --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
             redownload/SHA256SUMS
       - name: Bind the exact GitHub release asset set to provider evidence
@@ -129,12 +152,37 @@ jobs:
               fi
             done < checkpoint-asset-ids.txt
           fi
+      - name: Revalidate exact release asset IDs and digests immediately before publication
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "repos/${GITHUB_REPOSITORY}/releases/tags/$RELEASE_INPUT_TAG" > release-before-publication.json
+          node - <<'NODE'
+          const crypto = require('crypto');
+          const cp = require('child_process');
+          const fs = require('fs');
+          const path = require('path');
+          const release = JSON.parse(fs.readFileSync('release-before-publication.json'));
+          if (!release.draft) throw new Error('release became public before final asset verification');
+          const assets = new Map((release.assets || []).map(asset => [asset.name, asset]));
+          for (const name of fs.readdirSync('redownload')) {
+            const asset = assets.get(name);
+            if (!asset || !Number.isSafeInteger(asset.id)) throw new Error(`release asset identity is missing for ${name}`);
+            const bytes = cp.execFileSync('gh', [
+              'api', '-H', 'Accept: application/octet-stream',
+              `repos/${process.env.GITHUB_REPOSITORY}/releases/assets/${asset.id}`,
+            ], {maxBuffer: 128 * 1024 * 1024});
+            const digest = crypto.createHash('sha256').update(bytes).digest('hex');
+            const expected = crypto.createHash('sha256').update(fs.readFileSync(path.join('redownload', name))).digest('hex');
+            if (digest !== expected) throw new Error(`release asset bytes changed before publication: ${name}`);
+          }
+          NODE
       - name: Publish verified draft
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if [ "$(gh release view "${{ inputs.tag }}" --repo "${{ github.repository }}" --json isDraft --jq .isDraft)" = true ]; then
-            gh release edit "${{ inputs.tag }}" --repo "${{ github.repository }}" --draft=false
+          if [ "$(gh release view "$RELEASE_INPUT_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)" = true ]; then
+            gh release edit "$RELEASE_INPUT_TAG" --repo "$GITHUB_REPOSITORY" --draft=false
           fi
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -155,12 +203,25 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
           ref: ${{ inputs.ref }}
-          fetch-depth: 0
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+          path: source
+          fetch-depth: 1
+          persist-credentials: false
+      - id: download-npm-artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: release-npm-${{ inputs.tag }}
           path: npm-artifact
+      - name: Require artifact-service digest before npm publication
+        env:
+          ARTIFACT_DIGEST: ${{ steps.download-npm-artifact.outputs.artifact-digest }}
+        run: test -n "$ARTIFACT_DIGEST"
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: ${{ env.RELEASE_NODE_VERSION }}
@@ -170,22 +231,38 @@ jobs:
           npm install --global "npm@${RELEASE_NPM_VERSION}"
           test "$(npm --version)" = "$RELEASE_NPM_VERSION"
       - working-directory: cli
-        run: npm ci
+        run: npm ci --ignore-scripts
       - name: Verify and classify registry state
         id: preflight
-        working-directory: cli
-        run: npm run release:npm-preflight -- --artifact-dir ../npm-artifact --github-output "$GITHUB_OUTPUT"
+        env:
+          EXPECTED_TAG: ${{ inputs.tag }}
+          EXPECTED_REF: ${{ inputs.ref }}
+        run: |
+          node cli/scripts/release/index.js npm-preflight \
+            --package-root "$GITHUB_WORKSPACE/source/cli" \
+            --repository-root "$GITHUB_WORKSPACE/source" \
+            --schema-root "$GITHUB_WORKSPACE/cli" \
+            --tag "$EXPECTED_TAG" --commit "$EXPECTED_REF" \
+            --artifact-dir "$GITHUB_WORKSPACE/npm-artifact" --github-output "$GITHUB_OUTPUT"
       - name: Publish exact tested tarball
         if: steps.preflight.outputs.publish-required == 'true'
         working-directory: cli
         run: |
           DIST_TAG=latest
-          if [ "${{ inputs.channel }}" = rc ]; then DIST_TAG=next; fi
+          if [ "$RELEASE_INPUT_CHANNEL" = rc ]; then DIST_TAG=next; fi
           npm publish "../npm-artifact/${{ steps.preflight.outputs.filename }}" \
             --access public --provenance --tag "$DIST_TAG"
       - name: Verify public registry integrity
-        working-directory: cli
-        run: npm run release:npm-preflight -- --artifact-dir ../npm-artifact
+        env:
+          EXPECTED_TAG: ${{ inputs.tag }}
+          EXPECTED_REF: ${{ inputs.ref }}
+        run: |
+          node cli/scripts/release/index.js npm-preflight \
+            --package-root "$GITHUB_WORKSPACE/source/cli" \
+            --repository-root "$GITHUB_WORKSPACE/source" \
+            --schema-root "$GITHUB_WORKSPACE/cli" \
+            --tag "$EXPECTED_TAG" --commit "$EXPECTED_REF" \
+            --artifact-dir "$GITHUB_WORKSPACE/npm-artifact"
       - name: Bind the exact npm tarball to provider evidence
         env:
           RELEASE_TAG: ${{ inputs.tag }}
@@ -217,17 +294,18 @@ jobs:
     permissions:
       contents: read
     steps:
-      - name: Create short-lived release app token
-        id: app
-        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          app-id: ${{ vars.RELEASE_APP_ID }}
-          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
-          owner: ntanwir10
-          repositories: homebrew-tap
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          fetch-depth: 1
+          persist-credentials: false
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ inputs.ref }}
+          path: source
+          fetch-depth: 1
+          persist-credentials: false
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: release-payload-${{ inputs.tag }}
@@ -236,21 +314,27 @@ jobs:
         with:
           node-version: ${{ env.RELEASE_NODE_VERSION }}
       - working-directory: cli
-        run: npm ci
+        run: npm ci --ignore-scripts
       - name: Render the cryptographically bound shared catalog projection
-        working-directory: cli
         env:
           RELEASE_REF: ${{ inputs.ref }}
           RELEASE_TAG: ${{ inputs.tag }}
         run: |
-          MANIFEST_SHA256="$(sha256sum ../payload/release-manifest.json | cut -d ' ' -f 1)"
-          node scripts/release/index.js catalog \
-            --manifest ../payload/release-manifest.json \
-            --output-dir ../catalog-output \
+          if command -v sha256sum >/dev/null 2>&1; then
+            MANIFEST_SHA256="$(sha256sum payload/release-manifest.json | cut -d ' ' -f 1)"
+          else
+            MANIFEST_SHA256="$(shasum -a 256 payload/release-manifest.json | cut -d ' ' -f 1)"
+          fi
+          node cli/scripts/release/index.js catalog \
+            --manifest payload/release-manifest.json \
+            --output-dir catalog-output \
             --manifest-url "https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/release-manifest.json" \
             --manifest-sha256 "$MANIFEST_SHA256" \
             --generator-repository "$GITHUB_REPOSITORY" \
-            --generator-commit "$RELEASE_REF"
+            --generator-commit "$RELEASE_REF" \
+            --package-root "$GITHUB_WORKSPACE/source/cli" \
+            --repository-root "$GITHUB_WORKSPACE/source" \
+            --schema-root "$GITHUB_WORKSPACE/cli"
       - name: Validate complete generated catalog projection
         run: |
           test -f catalog-output/Formula/guardscan.rb
@@ -275,6 +359,17 @@ jobs:
             }
           }
           NODE
+      - name: Create short-lived release app token after projection validation
+        id: app
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        with:
+          app-id: ${{ vars.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          owner: ntanwir10
+          repositories: homebrew-tap
+          permission-contents: write
+          permission-pull-requests: write
+          permission-metadata: read
       - name: Push one deterministic catalog update
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
@@ -304,6 +399,27 @@ jobs:
                 fi
               done
             }
+            assert_exact_projection_branch() {
+              git merge-base --is-ancestor origin/main HEAD || {
+                echo "::error::Release-integrity incident: $BRANCH is not based on catalog main"
+                exit 1
+              }
+              CHANGED_PATHS="$(git diff --name-only origin/main...HEAD | sort)"
+              EXPECTED_PATHS="$(printf '%s\n' \
+                .github/workflows/verify.yml \
+                Formula/guardscan.rb \
+                bucket/guardscan.json \
+                channel-lock.json)"
+              test "$CHANGED_PATHS" = "$EXPECTED_PATHS" || {
+                echo "::error::Release-integrity incident: $BRANCH contains an unexpected diff"
+                printf '%s\n' "$CHANGED_PATHS" >&2
+                exit 1
+              }
+              projection_matches || {
+                echo "::error::Release-integrity incident: $BRANCH projection bytes differ"
+                exit 1
+              }
+            }
             MAIN_ALREADY_CURRENT=false
             if [ "$RELEASE_CHANNEL" = stable ] && projection_matches; then
               MAIN_ALREADY_CURRENT=true
@@ -320,12 +436,9 @@ jobs:
               PR_STATE=MERGED
             elif git show-ref --verify --quiet "refs/remotes/origin/$BRANCH"; then
               git switch --detach "origin/$BRANCH"
-              if ! projection_matches; then
-                echo "::error::Release-integrity incident: $CATALOG_REPOSITORY@$BRANCH differs"
-                exit 1
-              fi
+              assert_exact_projection_branch
             else
-              git switch -c "$BRANCH"
+              git switch -c "$BRANCH" origin/main
               mkdir -p Formula bucket .github/workflows
               cp ../catalog-output/Formula/guardscan.rb Formula/guardscan.rb
               cp ../catalog-output/bucket/guardscan.json bucket/guardscan.json
@@ -333,7 +446,9 @@ jobs:
               cp ../catalog/homebrew-tap/.github/workflows/verify.yml .github/workflows/verify.yml
               git add Formula/guardscan.rb bucket/guardscan.json channel-lock.json .github/workflows/verify.yml
               git commit -m "guardscan $RELEASE_TAG"
-              git push origin "$BRANCH"
+              assert_exact_projection_branch
+              git -c "http.extraheader=AUTHORIZATION: bearer $GH_TOKEN" push \
+                --force-with-lease="refs/heads/$BRANCH" origin HEAD:"$BRANCH"
             fi
             CATALOG_COMMIT="$(git rev-parse HEAD)"
             if [ "$MAIN_ALREADY_CURRENT" = true ]; then
@@ -405,7 +520,16 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
           ref: ${{ inputs.ref }}
+          path: source
+          fetch-depth: 1
+          persist-credentials: false
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: release-payload-${{ inputs.tag }}
@@ -414,9 +538,13 @@ jobs:
         with:
           node-version: ${{ env.RELEASE_NODE_VERSION }}
       - working-directory: cli
-        run: npm ci
-      - working-directory: cli
-        run: npm run release:render -- --manifest ../payload/release-manifest.json --output-dir ../adapters
+        run: npm ci --ignore-scripts
+      - name: Render WinGet adapter with trusted tooling
+        env:
+          EXPECTED_TAG: ${{ inputs.tag }}
+          EXPECTED_REF: ${{ inputs.ref }}
+        run: |
+          node cli/scripts/release/index.js render --manifest payload/release-manifest.json --output-dir adapters --package-root "$GITHUB_WORKSPACE/source/cli" --repository-root "$GITHUB_WORKSPACE/source" --schema-root "$GITHUB_WORKSPACE/cli"
       - name: Validate and install WinGet local manifest
         shell: pwsh
         run: |
@@ -431,7 +559,7 @@ jobs:
           winget install --manifest $manifestDirectory --accept-package-agreements --accept-source-agreements
           if ($LASTEXITCODE -ne 0) { throw 'WinGet local manifest installation failed' }
           $installedVersion = (& guardscan --version | Out-String).Trim()
-          if ($LASTEXITCODE -ne 0 -or $installedVersion -ne '${{ inputs.tag }}'.TrimStart('v')) {
+          if ($LASTEXITCODE -ne 0 -or $installedVersion -ne ($env:RELEASE_INPUT_TAG).TrimStart('v')) {
             throw 'WinGet local manifest invocation or version check failed'
           }
           winget uninstall --exact --id NaumanTanwir.GuardScan
@@ -636,7 +764,16 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
           ref: ${{ inputs.ref }}
+          path: source
+          fetch-depth: 1
+          persist-credentials: false
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: release-payload-${{ inputs.tag }}
@@ -645,9 +782,10 @@ jobs:
         with:
           node-version: ${{ env.RELEASE_NODE_VERSION }}
       - working-directory: cli
-        run: npm ci
-      - working-directory: cli
-        run: npm run release:render -- --manifest ../payload/release-manifest.json --output-dir ../adapters
+        run: npm ci --ignore-scripts
+      - name: Render Chocolatey adapter with trusted tooling
+        run: |
+          node cli/scripts/release/index.js render --manifest payload/release-manifest.json --output-dir adapters --package-root "$GITHUB_WORKSPACE/source/cli" --repository-root "$GITHUB_WORKSPACE/source" --schema-root "$GITHUB_WORKSPACE/cli"
       - name: Pack and test Chocolatey install, upgrade, invoke, and uninstall from a local feed
         shell: pwsh
         run: |
@@ -670,11 +808,11 @@ jobs:
           if ($LASTEXITCODE -ne 0 -or $priorVersion -ne '1.0.5') {
             throw 'Chocolatey prior-version fixture invocation failed'
           }
-          $candidateVersion = '${{ inputs.tag }}'.TrimStart('v')
+          $candidateVersion = ($env:RELEASE_INPUT_TAG).TrimStart('v')
           choco upgrade guardscan --source "$feed" --version "$candidateVersion" --yes
           if ($LASTEXITCODE -ne 0) { throw 'Chocolatey local-feed upgrade failed' }
           $installedVersion = (& guardscan --version | Out-String).Trim()
-          if ($LASTEXITCODE -ne 0 -or $installedVersion -ne '${{ inputs.tag }}'.TrimStart('v')) {
+          if ($LASTEXITCODE -ne 0 -or $installedVersion -ne ($env:RELEASE_INPUT_TAG).TrimStart('v')) {
             throw 'Chocolatey local-feed invocation or version check failed'
           }
           choco uninstall guardscan --yes
@@ -687,8 +825,13 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $version = $env:RELEASE_TAG.TrimStart('v')
-          $package = Get-ChildItem local-feed\*.nupkg | Select-Object -First 1
-          if ($null -eq $package) { throw 'Chocolatey package is missing' }
+          $candidateVersion = ($env:RELEASE_INPUT_TAG).TrimStart('v')
+          $expectedPackageName = "guardscan.$candidateVersion.nupkg"
+          $packages = @(Get-ChildItem local-feed\*.nupkg | Where-Object { $_.Name -ceq $expectedPackageName })
+          if ($packages.Count -ne 1) {
+            throw "Expected exactly one Chocolatey package named $expectedPackageName, found $($packages.Count)"
+          }
+          $package = $packages[0]
           $packageDigest = (Get-FileHash $package.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
           $packageIdentity = "guardscan@$version"
           $publicUrl = "https://community.chocolatey.org/api/v2/package/guardscan/$version"

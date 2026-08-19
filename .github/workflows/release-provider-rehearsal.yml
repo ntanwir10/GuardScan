@@ -15,12 +15,29 @@ on:
 permissions:
   contents: read
   pull-requests: read
+  checks: read
 
 concurrency:
   group: release-provider-rehearsal-${{ inputs.release_pr }}-${{ inputs.expected_head }}
   cancel-in-progress: false
 
 jobs:
+  manual-guard:
+    name: Refuse provider rehearsal unless explicitly enabled
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require rehearsal-only enablement and disabled production automation
+        env:
+          AUTOMATION_ENABLED: ${{ vars.RELEASE_AUTOMATION_ENABLED }}
+          REHEARSAL_ENABLED: ${{ vars.RELEASE_PROVIDER_REHEARSAL_ENABLED }}
+        run: |
+          test "$AUTOMATION_ENABLED" != true
+          test "$REHEARSAL_ENABLED" = true || {
+            echo 'Provider rehearsal is disabled; manual rehearsal dispatch refused.' >&2
+            exit 1
+          }
+
   validate:
     name: Validate exact same-repository main PR
     if: vars.RELEASE_AUTOMATION_ENABLED != 'true' && vars.RELEASE_PROVIDER_REHEARSAL_ENABLED == 'true'
@@ -58,7 +75,31 @@ jobs:
             throw new Error('rehearsal PR must originate in the same repository');
           }
           if (pr.head?.sha !== expected) throw new Error('rehearsal PR head changed');
+          if (pr.draft === true) throw new Error('rehearsal PR must be ready, not draft');
           fs.appendFileSync(process.env.GITHUB_OUTPUT, `head=${pr.head.sha}\n`);
+          NODE
+          gh api "repos/${GITHUB_REPOSITORY}/commits/$REQUEST_EXPECTED_HEAD/check-runs?per_page=100&filter=latest" \
+            > release-check-runs.json
+          gh api "repos/${GITHUB_REPOSITORY}/pulls/$REQUEST_RELEASE_PR/reviews?per_page=100" \
+            > release-reviews.json
+          node - <<'NODE'
+          const fs = require('fs');
+          const pr = JSON.parse(fs.readFileSync('pull-request.json'));
+          const head = process.env.REQUEST_EXPECTED_HEAD;
+          const checks = JSON.parse(fs.readFileSync('release-check-runs.json')).check_runs || [];
+          if (!checks.some(check => check.name === 'Release gate' && check.head_sha === head && check.conclusion === 'success')) {
+            throw new Error('Release gate has not succeeded for the expected rehearsal head');
+          }
+          const author = pr.user?.login?.toLowerCase();
+          const reviews = JSON.parse(fs.readFileSync('release-reviews.json'));
+          if (!reviews.some(review => (
+            review.state === 'APPROVED'
+            && review.commit_id === head
+            && review.user?.login?.toLowerCase()
+            && review.user.login.toLowerCase() !== author
+          ))) {
+            throw new Error('expected at least one non-author approval bound to the exact rehearsal head');
+          }
           NODE
 
   rehearsal:
@@ -74,4 +115,10 @@ jobs:
       tag: provider-rehearsal
       channel: rehearsal
       mode: rehearsal
-    secrets: inherit
+    secrets:
+      APPLE_CERTIFICATE_P12: ${{ secrets.APPLE_CERTIFICATE_P12 }}
+      APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+      APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+      APPLE_NOTARY_PRIVATE_KEY: ${{ secrets.APPLE_NOTARY_PRIVATE_KEY }}

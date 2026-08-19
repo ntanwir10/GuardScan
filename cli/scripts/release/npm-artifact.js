@@ -5,6 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const {spawnSync} = require('child_process');
 const {readJson, resolveGitTimestamp} = require('./lib');
+const {compareUtf8} = require('./deterministic');
 
 const METADATA_FILE = 'npm-artifact.json';
 const METADATA_SCHEMA = 'guardscan.npm-artifact.v1';
@@ -53,8 +54,8 @@ function hashFile(file, algorithm) {
 
 function assertExactKeys(value, expected, label) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`${label} must be an object`);
-  const actual = Object.keys(value).sort();
-  const wanted = [...expected].sort();
+  const actual = Object.keys(value).sort(compareUtf8);
+  const wanted = [...expected].sort(compareUtf8);
   if (actual.join('\n') !== wanted.join('\n')) throw new Error(`${label} contains missing or unknown fields`);
 }
 
@@ -77,7 +78,7 @@ function verifyNpmArtifact(source, outputDir) {
   }
   const expectedEntries = [METADATA_FILE, metadata.filename];
   const allowedEntries = [...expectedEntries, 'npm-artifact.metadata.json'];
-  const actualEntries = entries.map(entry => entry.name).sort();
+  const actualEntries = entries.map(entry => entry.name).sort(compareUtf8);
   if (actualEntries.some(entry => !allowedEntries.includes(entry))
       || expectedEntries.some(entry => !actualEntries.includes(entry))) {
     throw new Error('npm artifact directory contains unexpected files');
@@ -125,9 +126,7 @@ function buildNpmArtifact(source, outputDir, options = {}) {
     if (result.status !== 0) throw new Error(`npm pack failed: ${result.stderr.trim()}`);
     let packed;
     try {
-      const parsed = JSON.parse(result.stdout);
-      if (!Array.isArray(parsed) || parsed.length !== 1) throw new Error('unexpected pack result count');
-      [packed] = parsed;
+      packed = parseNpmPackResult(result.stdout);
     } catch (error) {
       throw new Error(`npm pack did not emit valid single-artifact JSON: ${error.message}`);
     }
@@ -173,6 +172,19 @@ function classifyNpmRemote(localArtifact, remoteIntegrity) {
   return {exists: true, matching: true, publishRequired: false};
 }
 
+function parseNpmPackResult(stdout) {
+  const parsed = JSON.parse(stdout);
+  const results = Array.isArray(parsed)
+    ? parsed
+    : parsed && typeof parsed === 'object'
+      ? Object.values(parsed)
+      : [];
+  if (results.length !== 1 || !results[0] || typeof results[0] !== 'object') {
+    throw new Error('unexpected pack result count');
+  }
+  return results[0];
+}
+
 function queryNpmRemote(localArtifact, options = {}) {
   const result = spawnSync(options.npmCommand || npmCommand(), [
     'view', `${localArtifact.packageName}@${localArtifact.version}`, 'dist.integrity', '--json',
@@ -206,6 +218,7 @@ module.exports = {
   buildNpmArtifact,
   classifyNpmRemote,
   hashFile,
+  parseNpmPackResult,
   queryNpmRemote,
   verifyNpmArtifact,
 };

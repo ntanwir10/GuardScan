@@ -123,6 +123,19 @@
           }
         }
       }
+    },
+    {
+      "if": {
+        "properties": { "type": { "const": "canary_recorded" } },
+        "required": ["type"]
+      },
+      "then": {
+        "required": ["channel"],
+        "properties": {
+          "channel": { "type": "string", "minLength": 1 },
+          "payload": { "$ref": "#/definitions/canaryRecorded" }
+        }
+      }
     }
   ],
   "definitions": {
@@ -261,6 +274,16 @@
           }
         },
         "completedAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "canaryRecorded": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "evidenceUrl"],
+      "properties": {
+        "status": { "enum": ["passed", "failed"] },
+        "target": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "evidenceUrl": { "type": "string", "format": "uri", "pattern": "^https://" }
       }
     }
   }

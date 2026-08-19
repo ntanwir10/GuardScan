@@ -44,7 +44,7 @@ The host-platform feasibility stage emits explicitly non-publishable prototype m
 
 `tiktoken` and `chartjs-node-canvas` remain external optional capabilities. The standalone executable reports token estimates and omits chart images when those modules are unavailable. Core static scanning, dependency inventory, vulnerability snapshot use, and SPDX/CycloneDX SBOM generation remain required capabilities.
 
-Python wheels, if approved, bundle the exact already-tested platform executable. The Python package contains only a small launcher and metadata; it does not contain a second GuardScan implementation and does not download a runtime during installation or first use.
+Python wheels bundle the exact already-tested platform executable. The Python package contains only a small launcher and metadata; it does not contain a second GuardScan implementation and does not download a runtime during installation or first use.
 
 ## Rationale
 

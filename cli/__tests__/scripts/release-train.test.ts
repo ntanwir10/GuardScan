@@ -1052,7 +1052,7 @@ describe('append-only release train', () => {
 
 describe('promotion policy and remote idempotency', () => {
   function decisionInput(): Record<string, any> {
-    const channels = ['npm', 'github', 'pypi'];
+    const channels = ['npm', 'pnpm', 'yarn', 'bun', 'github', 'homebrew', 'scoop', 'pypi'];
     const canaries = channels.flatMap(channel => Array.from({length: 24}, (_, index) => ({
       channel,
       status: 'passed',

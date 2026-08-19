@@ -5,6 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const semver = require('semver');
 const {readJson} = require('./lib');
+const {compareUtf8} = require('./deterministic');
 
 const RENDER_SCHEMA = 'guardscan.release-render.v1';
 const MARKER_FILE = '.guardscan-release-render.json';
@@ -360,7 +361,7 @@ function renderPyPI(manifest) {
       size: wheel.size,
       sha256: wheel.sha256,
       platform: wheel.platform,
-    })).sort((a, b) => a.filename.localeCompare(b.filename)),
+    })).sort((a, b) => compareUtf8(a.filename, b.filename)),
   }, null, 2)}\n`;
 }
 
@@ -482,12 +483,12 @@ function listManagedCatalogFiles(outputDir) {
   for (const directory of ['Formula', 'bucket']) {
     visit(path.join(outputDir, directory), directory);
   }
-  return files.sort();
+  return files.sort(compareUtf8);
 }
 
 function compareCatalogOutput(outputDir, rendered) {
   const managedFiles = listManagedCatalogFiles(outputDir);
-  if (managedFiles.join('\n') !== [...CATALOG_FILES].sort().join('\n')) return false;
+  if (managedFiles.join('\n') !== [...CATALOG_FILES].sort(compareUtf8).join('\n')) return false;
   return Object.entries(rendered.files).every(([relative, contents]) => {
     assertSafeCatalogTarget(outputDir, relative);
     const target = path.join(outputDir, ...relative.split('/'));
@@ -514,7 +515,7 @@ function writeChannelCatalogOutput(rendered, outputDir, checkOnly = false) {
       changed: false,
       checked: checkOnly,
       outputDir: resolved,
-      files: Object.keys(rendered.files).sort(),
+      files: Object.keys(rendered.files).sort(compareUtf8),
       lockSha256: sha256(rendered.files['channel-lock.json']),
     };
   }
@@ -538,7 +539,7 @@ function writeChannelCatalogOutput(rendered, outputDir, checkOnly = false) {
     changed: true,
     checked: false,
     outputDir: resolved,
-    files: Object.keys(rendered.files).sort(),
+    files: Object.keys(rendered.files).sort(compareUtf8),
     lockSha256: sha256(rendered.files['channel-lock.json']),
   };
 }
@@ -554,7 +555,7 @@ function readCatalogLock(catalogRoot) {
 
 function hasExactKeys(value, keys) {
   return value && typeof value === 'object' && !Array.isArray(value)
-    && Object.keys(value).sort().join('\n') === [...keys].sort().join('\n');
+    && Object.keys(value).sort(compareUtf8).join('\n') === [...keys].sort(compareUtf8).join('\n');
 }
 
 function isSelfConsistentCatalog(lock, catalogRoot) {
@@ -584,7 +585,7 @@ function isSelfConsistentCatalog(lock, catalogRoot) {
       return false;
     }
     const managedFiles = listManagedCatalogFiles(path.resolve(catalogRoot));
-    if (managedFiles.join('\n') !== [...CATALOG_FILES].sort().join('\n')) return false;
+    if (managedFiles.join('\n') !== [...CATALOG_FILES].sort(compareUtf8).join('\n')) return false;
     for (const relative of CATALOG_FILES) {
       if (!hasExactKeys(lock.files[relative], ['sha256'])
           || !SHA256_PATTERN.test(lock.files[relative].sha256 || '')) {
@@ -693,7 +694,7 @@ function classifyChannelCatalog(rendered, catalogRoot) {
 }
 
 function expectedOutput(manifest, rendered) {
-  const paths = Object.keys(rendered.files).sort();
+  const paths = Object.keys(rendered.files).sort(compareUtf8);
   const marker = {
     schemaVersion: RENDER_SCHEMA,
     version: manifest.version,
@@ -719,13 +720,13 @@ function listFiles(root) {
     }
   }
   visit(root);
-  return files.sort();
+  return files.sort(compareUtf8);
 }
 
 function compareOutput(outputDir, expected) {
   if (!fs.existsSync(outputDir) || !fs.statSync(outputDir).isDirectory()) return false;
   const actualFiles = listFiles(outputDir);
-  const expectedFiles = Object.keys(expected).sort();
+  const expectedFiles = Object.keys(expected).sort(compareUtf8);
   if (actualFiles.join('\n') !== expectedFiles.join('\n')) return false;
   return expectedFiles.every(file => fs.readFileSync(path.join(outputDir, file), 'utf8') === expected[file]);
 }
@@ -738,7 +739,7 @@ function assertOwnedOutput(outputDir) {
     throw new Error(`render output has an invalid ownership marker: ${outputDir}`);
   }
   const actual = listFiles(outputDir);
-  const owned = [...marker.files, MARKER_FILE].sort();
+  const owned = [...marker.files, MARKER_FILE].sort(compareUtf8);
   if (actual.join('\n') !== owned.join('\n')) {
     throw new Error(`render output contains files outside its ownership marker: ${outputDir}`);
   }
@@ -759,10 +760,10 @@ function writeRenderedOutput(manifest, rendered, outputDir, checkOnly = false) {
   const expected = expectedOutput(manifest, rendered);
   if (checkOnly) {
     if (!compareOutput(resolved, expected)) throw new Error(`rendered adapters are missing or stale: ${resolved}`);
-    return {changed: false, checked: true, outputDir: resolved, files: Object.keys(rendered.files).sort()};
+    return {changed: false, checked: true, outputDir: resolved, files: Object.keys(rendered.files).sort(compareUtf8)};
   }
   if (compareOutput(resolved, expected)) {
-    return {changed: false, checked: false, outputDir: resolved, files: Object.keys(rendered.files).sort()};
+    return {changed: false, checked: false, outputDir: resolved, files: Object.keys(rendered.files).sort(compareUtf8)};
   }
   if (fs.existsSync(resolved)) assertOwnedOutput(resolved);
   const parent = path.dirname(resolved);
@@ -785,7 +786,7 @@ function writeRenderedOutput(manifest, rendered, outputDir, checkOnly = false) {
   } finally {
     fs.rmSync(stage, {recursive: true, force: true});
   }
-  return {changed: true, checked: false, outputDir: resolved, files: Object.keys(rendered.files).sort()};
+  return {changed: true, checked: false, outputDir: resolved, files: Object.keys(rendered.files).sort(compareUtf8)};
 }
 
 module.exports = {

@@ -7,6 +7,7 @@ const {spawnSync} = require('child_process');
 const Ajv = require('ajv');
 const addFormats = require('ajv-formats');
 const semver = require('semver');
+const {compareUtf8} = require('./deterministic');
 
 const MAX_RELEASE_FILE_BYTES = 1024 * 1024;
 const COMMIT_PATTERN = /^[a-f0-9]{40}$/;
@@ -108,6 +109,7 @@ function resolveGitTimestamp(repositoryRoot, commit) {
 
 function validateSource(options = {}) {
   const packageRoot = path.resolve(options.packageRoot || path.resolve(__dirname, '..', '..'));
+  const schemaRoot = path.resolve(options.schemaRoot || packageRoot);
   const repositoryRoot = path.resolve(options.repositoryRoot || path.resolve(packageRoot, '..'));
   const packageJson = readJson(path.join(packageRoot, 'package.json'), 'package.json');
   const packageLock = readJson(path.join(packageRoot, 'package-lock.json'), 'package-lock.json');
@@ -164,6 +166,7 @@ function validateSource(options = {}) {
 
   return Object.freeze({
     packageRoot,
+    schemaRoot,
     repositoryRoot,
     packageName: packageJson.name,
     version: packageJson.version,
@@ -256,8 +259,8 @@ function prepareRelease(source, options = {}) {
   };
 
   if (fs.existsSync(outputDir)) {
-    const entries = fs.readdirSync(outputDir).sort();
-    if (entries.join('\n') !== Object.keys(files).sort().join('\n')) {
+    const entries = fs.readdirSync(outputDir).sort(compareUtf8);
+    if (entries.join('\n') !== Object.keys(files).sort(compareUtf8).join('\n')) {
       throw new Error(`release output already exists with unexpected contents: ${outputDir}`);
     }
     for (const [name, contents] of Object.entries(files)) {
@@ -378,6 +381,7 @@ function summarizeState(state) {
 
 module.exports = {
   CHANNELS,
+  REQUIRED_RC_CHANNELS,
   MAX_RELEASE_FILE_BYTES,
   assertDocumentMatchesSource,
   assertStateReferencesManifest,

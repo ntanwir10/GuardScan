@@ -215,7 +215,13 @@ function validateAdapters(manifest, outputDir, channelInput, options = {}) {
           continue;
         }
         const result = (options.runner || defaultRunner)(command);
-        if (result.error) throw result.error;
+        if (result.error) {
+          if (result.error.code !== 'ENOENT') throw result.error;
+          const reason = `${command.channel} native validator is unavailable: ${command.command}`;
+          if (options.requireNative) throw new Error(reason);
+          native.push({channel: command.channel, skipped: true, reason});
+          continue;
+        }
         if (result.status !== 0) {
           throw new Error(
             `${command.channel} native validation failed (${result.status}): `

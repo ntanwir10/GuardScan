@@ -43,7 +43,7 @@ describe('deterministic release checkpoints', () => {
       const one = createCheckpoint(source, {...options, outputDir: first.output, root: first.root});
       const two = createCheckpoint(source, {...options, outputDir: second.output, root: second.root});
       expect(fs.readFileSync(one.archiveFile).equals(fs.readFileSync(two.archiveFile))).toBe(true);
-      expect(one.sidecar.files.map((file: any) => file.path)).toEqual(['nested/file.txt', 'README.md']);
+      expect(one.sidecar.files.map((file: any) => file.path)).toEqual(['README.md', 'nested/file.txt']);
       expect(verifyCheckpoint(source, {
         archiveFile: one.archiveFile,
         sidecarFile: one.sidecarFile,

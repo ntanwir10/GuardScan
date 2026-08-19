@@ -7,6 +7,9 @@ on:
         description: Defective first stable version
         required: true
         type: string
+    secrets:
+      RELEASE_APP_PRIVATE_KEY:
+        required: true
 
 permissions:
   contents: read
@@ -41,16 +44,25 @@ jobs:
           private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
           owner: ntanwir10
           repositories: GuardScan,homebrew-tap
+          permission-contents: write
+          permission-pull-requests: write
+          permission-metadata: read
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: v${{ inputs.version }}
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
           fetch-depth: 0
-          token: ${{ steps.app.outputs.token }}
+          token: ${{ github.token }}
+          persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: ${{ env.RELEASE_NODE_VERSION }}
       - working-directory: cli
-        run: npm ci
+        run: npm ci --ignore-scripts
+      - name: Fetch defective release tag as data only
+        env:
+          DEFECTIVE_VERSION: ${{ inputs.version }}
+        run: git fetch origin "refs/tags/v$DEFECTIVE_VERSION:refs/tags/v$DEFECTIVE_VERSION"
       - name: Verify protected first-release authority
         id: authority
         run: |
@@ -136,8 +148,13 @@ jobs:
             git config user.name guardscan-release-bot
             git config user.email 41898282+github-actions[bot]@users.noreply.github.com
             git add "events/$DEFECTIVE_TAG.jsonl"
-            git commit -m "first release withdrawal started: $DEFECTIVE_TAG" || exit 0
-            git push origin HEAD:release-ledger
+            if git diff --cached --quiet; then
+              echo 'First-release withdrawal start already persisted.'
+            else
+              git commit -m "first release withdrawal started: $DEFECTIVE_TAG"
+            fi
+            git -c "http.extraheader=AUTHORIZATION: bearer $RELEASE_APP_TOKEN" \
+              push origin HEAD:release-ledger
           )
       - name: Remove or verify the exact first-release catalog projection
         id: catalog
@@ -240,11 +257,14 @@ jobs:
               -m "withdraw GuardScan v$DEFECTIVE_VERSION first-release catalog"
             CATALOG_HEAD="$(git -C catalog-withdrawal rev-parse HEAD)"
             if [ -n "$CATALOG_REMOTE_HEAD" ]; then
-              git -C catalog-withdrawal push \
+              git -C catalog-withdrawal \
+                -c "http.extraheader=AUTHORIZATION: bearer $GH_TOKEN" push \
                 --force-with-lease="refs/heads/$CATALOG_BRANCH:$CATALOG_REMOTE_HEAD" \
                 origin "HEAD:refs/heads/$CATALOG_BRANCH"
             else
-              git -C catalog-withdrawal push origin "HEAD:refs/heads/$CATALOG_BRANCH"
+              git -C catalog-withdrawal \
+                -c "http.extraheader=AUTHORIZATION: bearer $GH_TOKEN" \
+                push origin "HEAD:refs/heads/$CATALOG_BRANCH"
             fi
             CATALOG_PRS="$(gh pr list --repo ntanwir10/homebrew-tap \
               --head "$CATALOG_BRANCH" --base main --state all --limit 20 \
@@ -304,6 +324,7 @@ jobs:
       - name: Complete repository withdrawal and deactivate the train
         if: steps.authority.outputs.completed != 'true'
         env:
+          RELEASE_APP_TOKEN: ${{ steps.app.outputs.token }}
           CATALOG_STATE: ${{ steps.catalog.outputs.state }}
           CATALOG_BRANCH: ${{ steps.catalog.outputs.branch }}
           CATALOG_PR: ${{ steps.catalog.outputs.pull_request }}
@@ -410,8 +431,13 @@ jobs:
           (
             cd ledger-branch
             git add events active-versions.json recoveries
-            git commit -m "first release repository withdrawal complete: v$DEFECTIVE_VERSION" || exit 0
-            git push origin HEAD:release-ledger
+            if git diff --cached --quiet; then
+              echo 'First-release withdrawal completion already persisted.'
+            else
+              git commit -m "first release repository withdrawal complete: v$DEFECTIVE_VERSION"
+            fi
+            git -c "http.extraheader=AUTHORIZATION: bearer $RELEASE_APP_TOKEN" \
+              push origin HEAD:release-ledger
           )
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:

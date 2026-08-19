@@ -4,6 +4,7 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const {CHANNELS, readBounded} = require('./lib');
+const {compareUtf8} = require('./deterministic');
 const {createPublicationEvidence} = require('./publication-evidence');
 
 const EVENT_SCHEMA = 'guardscan.release-event.v1';
@@ -54,7 +55,7 @@ function canonicalize(value) {
   if (Array.isArray(value)) return value.map(canonicalize);
   if (value && typeof value === 'object') {
     return Object.fromEntries(
-      Object.keys(value).sort().map(key => [key, canonicalize(value[key])])
+      Object.keys(value).sort(compareUtf8).map(key => [key, canonicalize(value[key])])
     );
   }
   return value;
@@ -98,7 +99,7 @@ function validateCatalogEvidence(event) {
   if (!evidence || typeof evidence !== 'object' || Array.isArray(evidence)) {
     throw new Error('release event catalog evidence must be an object');
   }
-  const keys = Object.keys(evidence).sort();
+  const keys = Object.keys(evidence).sort(compareUtf8);
   const expectedKeys = [
     'commit',
     'fileDigest',
@@ -107,7 +108,7 @@ function validateCatalogEvidence(event) {
     'path',
     'pullRequest',
     'repository',
-  ].sort();
+  ].sort(compareUtf8);
   if (keys.join('\n') !== expectedKeys.join('\n')) {
     throw new Error('release event catalog evidence has unexpected or missing fields');
   }
@@ -145,7 +146,7 @@ function validateActionRequired(event) {
   if (event.type !== 'action_required') return;
   if (!event.channel) throw new Error('action_required requires a release channel');
   const payload = event.payload;
-  const keys = Object.keys(payload).sort();
+  const keys = Object.keys(payload).sort(compareUtf8);
   const expectedKeys = ['action', 'authority', 'reason'];
   if (keys.join('\n') !== expectedKeys.join('\n')
       || expectedKeys.some(key => typeof payload[key] !== 'string' || payload[key].length < 1)) {
@@ -196,8 +197,8 @@ function validateTrainStarted(event) {
   }
   const sourceFields = ['profile', 'releasePr', 'sourcePrHead', 'sourcePrBase', 'sourcePrTree'];
   if (sourceFields.some(field => event.payload[field] !== undefined)) {
-    const keys = Object.keys(event.payload).sort();
-    const expected = ['channels', ...sourceFields].sort();
+    const keys = Object.keys(event.payload).sort(compareUtf8);
+    const expected = ['channels', ...sourceFields].sort(compareUtf8);
     if (keys.join('\n') !== expected.join('\n')
         || event.payload.profile !== 'full'
         || !Number.isSafeInteger(event.payload.releasePr)
@@ -222,11 +223,11 @@ function validateModerationEvent(event) {
   if (!moderationTypes.has(event.type) || !MODERATED_CHANNELS.has(event.channel)) return;
   const evidence = event.payload.submission;
   const requiresReason = event.type === 'channel_rejected';
-  const payloadKeys = Object.keys(event.payload).sort();
+  const payloadKeys = Object.keys(event.payload).sort(compareUtf8);
   const expectedPayloadKeys = [
     'artifactIds', 'remoteDigest', 'remoteIdentity', 'submission',
     ...(requiresReason ? ['reason'] : []),
-  ].sort();
+  ].sort(compareUtf8);
   if (payloadKeys.join('\n') !== expectedPayloadKeys.join('\n')
       || !Array.isArray(event.payload.artifactIds)
       || event.payload.artifactIds.length < 1
@@ -257,8 +258,8 @@ function validateModerationEvent(event) {
     ...commonKeys,
     ...(event.channel === 'winget' ? ['files'] : ['packageFilename']),
     ...(requiresReason ? ['reason'] : []),
-  ].sort();
-  if (Object.keys(evidence).sort().join('\n') !== expectedEvidenceKeys.join('\n')
+  ].sort(compareUtf8);
+  if (Object.keys(evidence).sort(compareUtf8).join('\n') !== expectedEvidenceKeys.join('\n')
       || evidence.schemaVersion !== 'guardscan.moderated-submission.v1'
       || evidence.channel !== event.channel
       || evidence.version !== event.version
@@ -291,14 +292,14 @@ function validateModerationEvent(event) {
     const providerKeys = [
       'commit', 'path', 'pendingStateQuery', 'publicBytesVerified',
       'pullRequest', 'repository',
-    ].sort();
-    const fileNames = Object.keys(evidence.files || {}).sort();
+    ].sort(compareUtf8);
+    const fileNames = Object.keys(evidence.files || {}).sort(compareUtf8);
     const digestInput = fileNames.map(name => `${name}\0${evidence.files[name]}\n`).join('');
     const publicExact = evidence.state === 'public-exact';
     const expectedIdentity = publicExact
       ? `github:microsoft/winget-pkgs@${evidence.provider.commit}#${evidence.provider.path}`
       : `github:microsoft/winget-pkgs/pull/${evidence.provider.pullRequest}@${evidence.provider.commit}#${evidence.provider.path}`;
-    if (Object.keys(evidence.provider).sort().join('\n') !== providerKeys.join('\n')
+    if (Object.keys(evidence.provider).sort(compareUtf8).join('\n') !== providerKeys.join('\n')
         || fileNames.join('\n') !== filenames.join('\n')
         || fileNames.some(name => !/^[a-f0-9]{64}$/.test(evidence.files[name] || ''))
         || sha256(digestInput) !== evidence.remoteDigest
@@ -316,11 +317,11 @@ function validateModerationEvent(event) {
     }
     return;
   }
-  const providerKeys = ['pendingStateQuery', 'publicBytesVerified', 'url'].sort();
+  const providerKeys = ['pendingStateQuery', 'publicBytesVerified', 'url'].sort(compareUtf8);
   const publicExact = evidence.state === 'public-exact';
   const expectedUrl = `https://community.chocolatey.org/api/v2/package/guardscan/${event.version}`;
   const expectedIdentity = publicExact ? expectedUrl : `chocolatey:guardscan@${event.version}`;
-  if (Object.keys(evidence.provider).sort().join('\n') !== providerKeys.join('\n')
+  if (Object.keys(evidence.provider).sort(compareUtf8).join('\n') !== providerKeys.join('\n')
       || evidence.packageIdentity !== `guardscan@${event.version}`
       || evidence.packageFilename !== `guardscan.${event.version}.nupkg`
       || evidence.provider.url !== expectedUrl
@@ -332,7 +333,7 @@ function validateModerationEvent(event) {
 
 function validateIncidentEvent(event) {
   if (event.type === 'incident_opened') {
-    const keys = Object.keys(event.payload).sort();
+    const keys = Object.keys(event.payload).sort(compareUtf8);
     const expected = ['incidentId', 'kind', 'summary'];
     if (keys.join('\n') !== expected.join('\n')
         || typeof event.payload.incidentId !== 'string'
@@ -356,10 +357,28 @@ function validateIncidentEvent(event) {
   }
 }
 
+function validateCanaryEvent(event) {
+  if (event.type !== 'canary_recorded') return;
+  const keys = Object.keys(event.payload).sort(compareUtf8);
+  const expected = ['evidenceUrl', 'status'];
+  if (!keys.every(key => ['evidenceUrl', 'status', 'target'].includes(key))
+      || keys.length < expected.length
+      || !expected.every(key => keys.includes(key))
+      || !['passed', 'failed'].includes(event.payload.status)
+      || (event.payload.target !== undefined
+        && (typeof event.payload.target !== 'string'
+          || event.payload.target.length < 1
+          || event.payload.target.length > 200))
+      || typeof event.payload.evidenceUrl !== 'string'
+      || !/^https:\/\/[^\s]+$/.test(event.payload.evidenceUrl)) {
+    throw new Error('canary_recorded payload is invalid');
+  }
+}
+
 function validateRollbackStarted(event) {
   if (event.type !== 'rollback_started') return;
   const stable = /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/;
-  const keys = Object.keys(event.payload).sort();
+  const keys = Object.keys(event.payload).sort(compareUtf8);
   if (event.payload.mode === 'known-good' || event.payload.mode === undefined) {
     const expected = [
       'forwardFixBranch',
@@ -367,7 +386,7 @@ function validateRollbackStarted(event) {
       'knownGoodCommit',
       'knownGoodVersion',
       ...(event.payload.mode === undefined ? [] : ['mode']),
-    ].sort();
+    ].sort(compareUtf8);
     if (keys.join('\n') !== expected.join('\n')
         || !stable.test(event.payload.knownGoodVersion || '')
         || !stable.test(event.payload.forwardFixVersion || '')
@@ -400,7 +419,7 @@ function validateRollbackCompletion(event) {
   }
   assertCanonicalTimestamp(evidence.completedAt, 'rollback repository completion');
   if (evidence.mode === 'known-good') {
-    const keys = Object.keys(evidence).sort();
+    const keys = Object.keys(evidence).sort(compareUtf8);
     const expected = [
       'catalog',
       'completedAt',
@@ -409,7 +428,7 @@ function validateRollbackCompletion(event) {
       'knownGoodVersion',
       'mode',
       'schemaVersion',
-    ].sort();
+    ].sort(compareUtf8);
     if (keys.join('\n') !== expected.join('\n')
         || !stable.test(evidence.knownGoodVersion || '')
         || !evidence.forwardFix
@@ -419,7 +438,7 @@ function validateRollbackCompletion(event) {
     return;
   }
   if (evidence.mode === 'first-release-withdrawal') {
-    const keys = Object.keys(evidence).sort();
+    const keys = Object.keys(evidence).sort(compareUtf8);
     const expected = [
       'catalog',
       'completedAt',
@@ -428,18 +447,18 @@ function validateRollbackCompletion(event) {
       'mode',
       'requiredNextVersion',
       'schemaVersion',
-    ].sort();
+    ].sort(compareUtf8);
     const catalog = evidence.catalog;
-    const catalogKeys = Object.keys(catalog || {}).sort();
+    const catalogKeys = Object.keys(catalog || {}).sort(compareUtf8);
     const pending = evidence.externalActionsPending;
     if (keys.join('\n') !== expected.join('\n')
         || !stable.test(evidence.requiredNextVersion || '')
         || !Array.isArray(pending)
         || new Set(pending).size !== pending.length
-        || pending.join('\n') !== [...pending].sort().join('\n')
+        || pending.join('\n') !== [...pending].sort(compareUtf8).join('\n')
         || pending.some(channel => !EXTERNAL_WITHDRAWAL_CHANNELS.has(channel))
         || !catalog
-        || catalogKeys.join('\n') !== ['branch', 'commit', 'pullRequest', 'state'].sort().join('\n')
+        || catalogKeys.join('\n') !== ['branch', 'commit', 'pullRequest', 'state'].sort(compareUtf8).join('\n')
         || !['already-absent', 'removed'].includes(catalog.state)
         || typeof catalog.branch !== 'string'
         || !Number.isSafeInteger(catalog.pullRequest)
@@ -483,6 +502,7 @@ function validateEvent(event, previous) {
   validatePublicationEvidence(event);
   validateModerationEvent(event);
   validateIncidentEvent(event);
+  validateCanaryEvent(event);
   validateRollbackStarted(event);
   validateRollbackCompletion(event);
   validateTrainStarted(event);
@@ -678,7 +698,7 @@ function materializeReleaseState(events) {
       state.channels[event.channel] = {
         status,
         artifactIds: Array.isArray(event.payload.artifactIds)
-          ? [...event.payload.artifactIds].sort()
+          ? [...event.payload.artifactIds].sort(compareUtf8)
           : previous.artifactIds,
         updatedAt: event.timestamp,
         ...(event.payload.remoteIdentity || previous.remoteIdentity
@@ -704,6 +724,7 @@ function materializeReleaseState(events) {
       const samples = state.canaries[event.channel] || [];
       state.canaries[event.channel] = [...samples, {
         status: event.payload.status,
+        target: event.payload.target,
         checkedAt: event.timestamp,
         evidenceUrl: event.payload.evidenceUrl,
       }];
