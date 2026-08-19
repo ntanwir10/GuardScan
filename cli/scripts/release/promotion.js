@@ -1,9 +1,12 @@
 'use strict';
 
 const semver = require('semver');
+const {CHANNELS, REQUIRED_RC_CHANNELS} = require('./lib');
+const {compareUtf8} = require('./deterministic');
 
 const DECISION_SCHEMA = 'guardscan.promotion-decision.v1';
 const SOAK_MILLISECONDS = 24 * 60 * 60 * 1000;
+const CANARY_INTERVAL_MILLISECONDS = 60 * 60 * 1000;
 const DEFAULT_MINIMUM_SAMPLES = 24;
 const MAX_CANARY_AGE_MILLISECONDS = 90 * 60 * 1000;
 
@@ -53,17 +56,27 @@ function createPromotionDecision(input) {
   const publishedAt = canonicalTimestamp(input.rc.publishedAt, 'RC publishedAt');
   const evaluatedAt = canonicalTimestamp(input.evaluatedAt, 'promotion evaluatedAt');
   const eligibleAt = new Date(publishedAt.getTime() + SOAK_MILLISECONDS);
-  const requiredChannels = [...new Set(input.requiredChannels || [
-    'npm',
-    'pnpm',
-    'yarn',
-    'bun',
-    'github',
-    'homebrew',
-    'scoop',
-    'pypi',
-  ])].sort();
-  const minimumSamples = input.minimumSamples || DEFAULT_MINIMUM_SAMPLES;
+  const requestedChannels = input.requiredChannels === undefined
+    ? [...REQUIRED_RC_CHANNELS]
+    : input.requiredChannels;
+  if (!Array.isArray(requestedChannels) || requestedChannels.length === 0) {
+    throw new Error('promotion requiredChannels cannot weaken the immutable eight-channel RC floor');
+  }
+  if (requestedChannels.some(channel => typeof channel !== 'string'
+      || !CHANNELS.some(candidate => candidate.id === channel))) {
+    throw new Error('promotion requiredChannels contains an unsupported channel');
+  }
+  const requiredChannels = [...new Set(requestedChannels)].sort(compareUtf8);
+  if (requiredChannels.length !== requestedChannels.length
+      || REQUIRED_RC_CHANNELS.some(channel => !requiredChannels.includes(channel))) {
+    throw new Error('promotion requiredChannels cannot weaken the immutable eight-channel RC floor');
+  }
+  const minimumSamples = input.minimumSamples === undefined
+    ? DEFAULT_MINIMUM_SAMPLES
+    : input.minimumSamples;
+  if (!Number.isSafeInteger(minimumSamples) || minimumSamples < DEFAULT_MINIMUM_SAMPLES) {
+    throw new Error(`promotion minimumSamples cannot be less than ${DEFAULT_MINIMUM_SAMPLES}`);
+  }
   const reasons = [];
   if (evaluatedAt < eligibleAt) reasons.push('soak_window_incomplete');
   if (input.rc.sourcePrHead !== input.currentSourcePrHead) reasons.push('source_pr_head_changed');
@@ -126,15 +139,16 @@ function createPromotionDecision(input) {
     activeIncidents: activeIncidents.map(incident => ({
       incidentId: incident.incidentId,
       kind: incident.kind,
-    })).sort((a, b) => a.incidentId.localeCompare(b.incidentId)),
+    })).sort((a, b) => compareUtf8(a.incidentId, b.incidentId)),
     result: reasons.length === 0 ? 'permitted' : 'denied',
     eligible: reasons.length === 0,
-    reasons: [...new Set(reasons)].sort(),
+    reasons: [...new Set(reasons)].sort(compareUtf8),
   };
 }
 
 module.exports = {
   DECISION_SCHEMA,
+  CANARY_INTERVAL_MILLISECONDS,
   DEFAULT_MINIMUM_SAMPLES,
   MAX_CANARY_AGE_MILLISECONDS,
   SOAK_MILLISECONDS,

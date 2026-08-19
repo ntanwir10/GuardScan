@@ -3,7 +3,7 @@
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
-const compareUtf8 = (left, right) => (left < right ? -1 : left > right ? 1 : 0);
+const {compareUtf8} = require('./deterministic');
 
 const SBOM_SCHEMA = 'guardscan.artifact-sbom.v1';
 

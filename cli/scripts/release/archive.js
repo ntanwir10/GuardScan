@@ -4,6 +4,7 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const zlib = require('zlib');
+const {compareUtf8} = require('./deterministic');
 
 const MAX_ARCHIVE_BYTES = 768 * 1024 * 1024;
 const MAX_EXPANDED_BYTES = 512 * 1024 * 1024;

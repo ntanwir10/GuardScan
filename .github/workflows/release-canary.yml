@@ -43,6 +43,8 @@ jobs:
         with:
           app-id: ${{ vars.RELEASE_APP_ID }}
           private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          permission-contents: read
+          permission-metadata: read
       - name: Load protected active-train index
         id: matrix
         env:
@@ -770,7 +772,7 @@ jobs:
           RELEASE_APP_TOKEN: ${{ steps.app.outputs.token }}
           TRAIN_VERSION: ${{ matrix.train.version }}
         run: |
-          git fetch origin release-ledger
+          git -c "http.extraheader=AUTHORIZATION: bearer $RELEASE_APP_TOKEN" fetch origin release-ledger
           node - <<'NODE'
           const fs = require('fs');
           const path = require('path');
@@ -872,6 +874,7 @@ jobs:
                 : {},
             });
           }
+          fs.writeFileSync('.canary-record-status', `${recordStatus}\n`);
           NODE
           git worktree add ledger-branch origin/release-ledger
           cp ledgers/*.jsonl ledger-branch/events/
@@ -904,3 +907,8 @@ jobs:
               git push origin HEAD:release-ledger
             fi
           )
+          CANARY_RECORD_STATUS="$(cat .canary-record-status)"
+          if [ "$CANARY_RECORD_STATUS" -ne 0 ]; then
+            echo 'One or more canary target sets were incomplete; incident evidence was persisted.' >&2
+            exit "$CANARY_RECORD_STATUS"
+          fi

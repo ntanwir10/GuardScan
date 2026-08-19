@@ -4,6 +4,7 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const semver = require('semver');
+const {compareUtf8} = require('./deterministic');
 const {materializeReleaseState, readEvents} = require('./events');
 const {releaseTrainChannels} = require('./lib');
 const {reconcileRelease} = require('./reconcile');
@@ -78,9 +79,9 @@ function assertFirstReleaseWithdrawal(ledgerRoot, defectiveVersion, ledgerCommit
       || (alreadyCompleted && activeTarget)) {
     throw new Error('defective stable release is not an active protected train');
   }
-  const selectedChannels = Object.keys(defectiveState.channels).sort();
-  const stableChannels = releaseTrainChannels('stable').sort();
-  const stableWithCore = releaseTrainChannels('stable', {homebrewCoreEnabled: true}).sort();
+  const selectedChannels = Object.keys(defectiveState.channels).sort(compareUtf8);
+  const stableChannels = releaseTrainChannels('stable').sort(compareUtf8);
+  const stableWithCore = releaseTrainChannels('stable', {homebrewCoreEnabled: true}).sort(compareUtf8);
   if (![stableChannels, stableWithCore].some(expected => (
     expected.length === selectedChannels.length
       && expected.every((channel, index) => channel === selectedChannels[index])
@@ -95,7 +96,7 @@ function assertFirstReleaseWithdrawal(ledgerRoot, defectiveVersion, ledgerCommit
         || !Array.isArray(pending)
         || new Set(pending).size !== pending.length
         || pending.some(channel => typeof channel !== 'string')
-        || pending.join('\n') !== [...pending].sort().join('\n')) {
+        || pending.join('\n') !== [...pending].sort(compareUtf8).join('\n')) {
       throw new Error('completed first-release withdrawal evidence is incomplete');
     }
     const requested = new Set((defectiveState.actionRequired || []).map(item => item.channel));
@@ -112,7 +113,7 @@ function assertFirstReleaseWithdrawal(ledgerRoot, defectiveVersion, ledgerCommit
     }
   }
   const completed = [];
-  for (const name of fs.readdirSync(eventsRoot).sort()) {
+  for (const name of fs.readdirSync(eventsRoot).sort(compareUtf8)) {
     const match = /^v(.+)\.jsonl$/.exec(name);
     if (!match || match[1] === defectiveVersion) continue;
     const version = match[1];
@@ -162,7 +163,7 @@ function prepareFirstReleaseCatalogWithdrawal(catalogRoot, defectiveVersion, def
   const formula = readText(path.join(root, 'Formula/guardscan.rb'), 'Homebrew formula');
   const scoopText = readText(path.join(root, 'bucket/guardscan.json'), 'Scoop manifest');
   const scoop = JSON.parse(scoopText);
-  const lockFiles = Object.keys(lock.files || {}).sort();
+  const lockFiles = Object.keys(lock.files || {}).sort(compareUtf8);
   if (lock.schemaVersion !== 'guardscan.channel-catalog.v1'
       || lock.source?.repository !== 'ntanwir10/GuardScan'
       || lock.source?.version !== defectiveVersion
@@ -172,7 +173,7 @@ function prepareFirstReleaseCatalogWithdrawal(catalogRoot, defectiveVersion, def
       || !/^[a-f0-9]{64}$/.test(lock.source?.manifestSha256 || '')
       || lock.generator?.repository !== 'ntanwir10/GuardScan'
       || lock.generator?.commit !== lock.source.commit
-      || lockFiles.join('\n') !== CATALOG_PATHS.slice(0, 2).sort().join('\n')
+      || lockFiles.join('\n') !== CATALOG_PATHS.slice(0, 2).sort(compareUtf8).join('\n')
       || lock.files['Formula/guardscan.rb']?.sha256 !== sha256(formula)
       || lock.files['bucket/guardscan.json']?.sha256 !== sha256(scoopText)
       || scoop.version !== defectiveVersion
