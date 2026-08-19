@@ -481,6 +481,9 @@ describe('zero-touch release workflow contracts', () => {
     expect(train).toContain("releaseTrainChannels(process.env.RELEASE_CHANNEL)");
     expect(train).not.toContain("? ['homebrew-core', 'winget', 'chocolatey']");
     expect(train).toContain('cannot start or promote while a stable train remains incomplete');
+    expect(train).toContain('sourcePrHead: process.env.SOURCE_PR_HEAD');
+    expect(train).toContain('`expected_head=${train.sourcePrHead}`');
+    expect(train).toContain('-f expected_head="$EXPECTED_HEAD"');
     expect(canary).toContain("train.channel !== 'stable'");
     expect(canary).toContain('reconcileRelease(materializeReleaseState(readEvents(ledger))).complete');
     expect(train).toContain("vars.RELEASE_AUTOMATION_ENABLED == 'true'");
@@ -630,7 +633,10 @@ describe('zero-touch release workflow contracts', () => {
     expect(withdrawal).not.toContain('npm unpublish');
     expect(train).toContain('sourcePrBase: process.env.SOURCE_PR_BASE');
     expect(train).toContain('sourcePrTree: process.env.SOURCE_PR_TREE');
-    expect(train).not.toMatch(/Persist refetched catalog publication evidence\n\s+if:[^\n]+\n\s+env:\s*\n/);
+    expect(train).toMatch(
+      /Persist refetched catalog publication evidence\n\s+if:[^\n]+\n\s+env:\n\s+RELEASE_APP_TOKEN: \$\{\{ steps\.app\.outputs\.token \}\}/
+    );
+    expect(train).toContain('http.extraheader=AUTHORIZATION: bearer $RELEASE_APP_TOKEN');
   });
 
   it('pins each canary train implementation to its immutable ledger identity and verifies its own version', () => {
@@ -732,10 +738,9 @@ describe('zero-touch release workflow contracts', () => {
     expect(train).toContain('process.env.GITHUB_REPOSITORY.toLowerCase()');
     expect(train).toContain('REQUEST_RELEASE_PR: ${{ inputs.release_pr }}');
     expect(train).toContain('EXPECTED_HEAD: ${{ steps.source.outputs.head_sha }}');
-    expect(train).toContain('gh pr ready "$REQUEST_RELEASE_PR"');
-    expect(train.indexOf('gh pr ready "$REQUEST_RELEASE_PR"'))
-      .toBeLessThan(train.indexOf('Derive bot-owned RC commit from exact stable PR head'));
-    expect(train).toContain('--match-head-commit "${{ steps.source.outputs.head_sha }}"');
+    expect(train).not.toContain('gh pr ready "$REQUEST_RELEASE_PR"');
+    expect(train).toContain('expected_head:');
+    expect(train).toContain('--match-head-commit "$EXPECTED_HEAD"');
     expect(train).not.toContain('gh pr ready "${{ inputs.release_pr }}"');
   });
 
@@ -793,6 +798,10 @@ describe('zero-touch release workflow contracts', () => {
     expect(producer).toContain('--certificate-github-workflow-sha "$BUILD_WORKFLOW_SHA"');
     expect(producer).toContain('.producer.runId == $run_id and (.producer.runAttempt | tostring) == $attempt');
     expect(producer).toContain('.commit == $tag_sha');
+    expect(publish).toContain('choco install guardscan --source "$feed" --version 1.0.5');
+    expect(publish).toContain('choco upgrade guardscan --source "$feed" --version "$candidateVersion"');
+    expect(combined).toContain('/.github/workflows/release-build.yml@refs/heads/main');
+    expect(combined).not.toContain('/.github/workflows/release-train.yml@');
   });
 
   it('binds moderated submissions to exact provider evidence and fail-closed preflights', () => {
@@ -838,8 +847,8 @@ describe('zero-touch release workflow contracts', () => {
     const canary = workflowSource('release-canary.yml');
     const publish = workflowSource('release-publish.yml');
     expect(canary).toContain('$installedVersion = (& guardscan --version | Out-String).Trim()');
-    expect(canary.match(/\$reportedVersion -cne '\$\{\{ matrix.train.version \}\}'/g)).toHaveLength(2);
-    expect(publish.match(/\$installedVersion -ne '\$\{\{ inputs\.tag \}\}'\.TrimStart\('v'\)/g))
+    expect(canary).toContain('$installedVersion -ne \'${{ matrix.train.version }}\'');
+    expect(publish.match(/\$installedVersion -ne \(\$env:RELEASE_INPUT_TAG\)\.TrimStart\('v'\)/g))
       .toHaveLength(2);
     expect(publish).toContain('WinGet is unavailable on the selected Windows runner');
     expect(publish).toContain('Chocolatey is unavailable on the selected Windows runner');

@@ -1,0 +1,18 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://guardscancli.com/schemas/guardscan.canary-report.v1.schema.json",
+  "title": "GuardScan release canary report",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "channel", "target", "status", "checkedAt", "evidenceUrl"],
+  "properties": {
+    "version": { "type": "string", "minLength": 1, "maxLength": 100 },
+    "channel": {
+      "enum": ["npm", "pnpm", "yarn", "bun", "github", "homebrew", "homebrew-core", "scoop", "winget", "chocolatey", "pypi"]
+    },
+    "target": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "status": { "enum": ["passed", "failed"] },
+    "checkedAt": { "type": "string", "format": "date-time" },
+    "evidenceUrl": { "type": "string", "format": "uri", "pattern": "^https://" }
+  }
+}

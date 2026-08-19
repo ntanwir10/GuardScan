@@ -42,6 +42,7 @@ const {
 };
 const {
   classifyNpmRemote,
+  parseNpmPackResult,
   verifyNpmArtifact,
 } = require('../../scripts/release/npm-artifact') as {
   classifyNpmRemote: (
@@ -49,6 +50,7 @@ const {
     remoteIntegrity?: string,
     options?: Record<string, string>
   ) => Record<string, boolean>;
+  parseNpmPackResult: (stdout: string) => Record<string, unknown>;
   verifyNpmArtifact: (
     source: Record<string, string>,
     outputDir: string
@@ -81,6 +83,7 @@ const {
 const {reconcileRelease} = require('../../scripts/release/reconcile') as {
   reconcileRelease: (state: Record<string, any>) => Record<string, any>;
 };
+const {main} = require('../../scripts/release/index') as Record<string, any>;
 
 const COMMIT = 'a'.repeat(40);
 let root: string;
@@ -164,6 +167,16 @@ describe('release source validation', () => {
   it('rejects malformed source identities', () => {
     expect(() => validateSource({packageRoot, repositoryRoot: root, commit: 'not-a-sha'}))
       .toThrow(/commit must be a 40-character lowercase git SHA/);
+  });
+
+  it('can pin schema validation to trusted control-plane bytes', async () => {
+    const stateFile = path.join(root, 'untrusted-state.json');
+    fs.writeFileSync(stateFile, JSON.stringify({schemaVersion: 'guardscan.release-state.v1'}));
+    await expect(main([
+      'status',
+      '--state', stateFile,
+      '--schema-root', path.resolve(__dirname, '../..'),
+    ])).rejects.toThrow(/state is invalid/);
   });
 
   it('rejects split or duplicated stable release notes', () => {
@@ -419,6 +432,15 @@ describe('release planning and state summaries', () => {
 
     fs.appendFileSync(path.join(outputDir, filename), 'tampered');
     expect(() => verifyNpmArtifact(source, outputDir)).toThrow(/does not match metadata/);
+  });
+
+  it('accepts both npm 10/11 and npm 12 pack JSON shapes', () => {
+    const packed = {name: 'guardscan', version: '1.2.3', filename: 'guardscan-1.2.3.tgz'};
+    expect(parseNpmPackResult(JSON.stringify([packed]))).toEqual(packed);
+    expect(parseNpmPackResult(JSON.stringify({guardscan: packed}))).toEqual(packed);
+    expect(() => parseNpmPackResult('{}')).toThrow(/unexpected pack result count/);
+    expect(() => parseNpmPackResult(JSON.stringify([packed, packed])))
+      .toThrow(/unexpected pack result count/);
   });
 });
 

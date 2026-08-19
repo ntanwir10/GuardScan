@@ -10,6 +10,7 @@ const {
   validateDocument,
 } = require('./lib');
 const {canonicalJson} = require('./events');
+const {compareUtf8} = require('./deterministic');
 
 const MANIFEST_SCHEMA = 'guardscan.release-manifest.v1';
 const INPUT_SCHEMA = 'guardscan.release-manifest-input.v1';
@@ -28,6 +29,13 @@ const REQUIRED_SIGNATURE = Object.freeze({
 
 function sha256Text(value) {
   return crypto.createHash('sha256').update(value).digest('hex');
+}
+
+function assertPrivateRegularFile(file, label) {
+  const stat = fs.lstatSync(file);
+  if (!stat.isFile() || stat.nlink !== 1) {
+    throw new Error(`${label} must be a private regular file`);
+  }
 }
 
 function canonicalTimestamp(value, label) {
@@ -194,15 +202,15 @@ function createReleaseManifest(source, input) {
     const targets = artifacts
       .filter(artifact => artifact.kind === 'standalone')
       .map(artifact => platformId(artifact.platform))
-      .sort();
-    if (targets.join('\n') !== [...REQUIRED_NATIVE_TARGETS].sort().join('\n')) {
+      .sort(compareUtf8);
+    if (targets.join('\n') !== [...REQUIRED_NATIVE_TARGETS].sort(compareUtf8).join('\n')) {
       throw new Error(`full release requires exact native target matrix: ${REQUIRED_NATIVE_TARGETS.join(', ')}`);
     }
     const wheelTargets = artifacts
       .filter(artifact => artifact.kind === 'python-wheel')
       .map(artifact => platformId(artifact.platform))
-      .sort();
-    if (wheelTargets.join('\n') !== [...REQUIRED_NATIVE_TARGETS].sort().join('\n')) {
+      .sort(compareUtf8);
+    if (wheelTargets.join('\n') !== [...REQUIRED_NATIVE_TARGETS].sort(compareUtf8).join('\n')) {
       throw new Error('full release requires one Python wheel for every native target');
     }
   }
@@ -225,7 +233,7 @@ function createReleaseManifest(source, input) {
     createdAt: input.createdAt,
     producer: input.producer,
     toolchain: input.toolchain,
-    artifacts: artifacts.sort((a, b) => a.id.localeCompare(b.id)),
+    artifacts: artifacts.sort((a, b) => compareUtf8(a.id, b.id)),
   };
 }
 
@@ -258,9 +266,10 @@ function writeReleaseManifest(source, descriptorFile, outputFile) {
   );
   try {
     fs.writeFileSync(stage, contents, {encoding: 'utf8', mode: 0o600, flag: 'wx'});
-    validateDocument('manifest', stage, source.packageRoot);
+    validateDocument('manifest', stage, source.schemaRoot || source.packageRoot);
 
     if (fs.existsSync(resolved)) {
+      assertPrivateRegularFile(resolved, 'release manifest');
       if (readBounded(resolved, 'release manifest') !== contents) {
         throw new Error(`release manifest conflicts with existing output: ${resolved}`);
       }
@@ -294,7 +303,7 @@ function verifyManifestFiles(manifest, artifactRoot) {
     if (digest !== artifact.sha256) throw new Error(`artifact digest mismatch: ${artifact.id}`);
     verified.push(artifact.id);
   }
-  return {valid: true, verified: verified.sort()};
+  return {valid: true, verified: verified.sort(compareUtf8)};
 }
 
 module.exports = {

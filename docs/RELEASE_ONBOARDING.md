@@ -68,6 +68,17 @@ required first-release exception.
 - Enable immutable releases for GuardScan.
 - Enable squash merge and auto-merge, and require the full `Release gate`
   status on the stable release PR.
+- Require code-owner review for release control-plane changes, including
+  workflows, release tooling, schemas, package-toolchain pins, catalog
+  verification, and release governance documentation. Protect `CODEOWNERS`
+  through the same branch rule, dismiss stale approvals, and require the latest
+  push to be approved by someone other than its author. Before activation,
+  `CODEOWNERS` must name an independent maintainer or team in addition to the
+  change author; the bootstrap's single-owner seed is not sufficient when that
+  owner authors the change. This approval guards changes to publication
+  authority and is the immutable control used for production PyPI OIDC. It does
+  not require a per-release promotion click after an exact reviewed workflow
+  revision and candidate have passed every automated gate.
 - Keep repository variables `RELEASE_AUTOMATION_ENABLED=false` and
   `RELEASE_PLEASE_ENABLED=false` until their separate activation gates pass.
   Keep `RELEASE_PROVIDER_REHEARSAL_ENABLED=false` except for an explicitly
@@ -162,6 +173,12 @@ generated projection.
   workflow filename `release-train.yml`. Bind TestPyPI to environment
   `testpypi` and production PyPI to environment `pypi`; never share their OIDC
   subjects.
+- Do not activate the production PyPI trusted publisher until the protected
+  workflow paths have an independent code-owner approval and the branch rule
+  requires approval of the latest push by someone other than its author. If an
+  independent reviewer cannot be configured, add required reviewers to the
+  `pypi` environment and accept the per-release approval instead; never remove
+  both controls to preserve zero-touch behavior.
 - Confirm both publishers accept the PEP 440 identity `1.1.0rc1` derived from
   tag `v1.1.0-rc.1`. TestPyPI must converge to all five tested wheels and pass
   pip/pipx native lifecycles before the production PyPI job can run.

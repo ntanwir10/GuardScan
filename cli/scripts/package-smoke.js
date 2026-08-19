@@ -8,6 +8,7 @@ const { spawnSync } = require('child_process');
 const Ajv = require('ajv');
 const addFormats = require('ajv-formats');
 const {resolveToolInvocation} = require('./process-invocation');
+const {parseNpmPackResult} = require('./release/npm-artifact');
 const {assertCompiledRuntimeFilesClean} = require('./release/runtime-artifact-policy');
 
 const packageRoot = path.resolve(__dirname, '..');
@@ -166,7 +167,7 @@ function resolveTarball(argv, destination, env) {
     packageRoot,
     env
   );
-  const packResult = JSON.parse(packed.stdout)[0];
+  const packResult = parseNpmPackResult(packed.stdout);
   return path.join(destination, packResult.filename);
 }
 
