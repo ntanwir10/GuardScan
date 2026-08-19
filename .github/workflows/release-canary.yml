@@ -603,6 +603,9 @@ jobs:
           const fs = require('fs');
           const path = require('path');
           const {compareUtf8} = require('./cli/scripts/release/deterministic');
+          const activeTrains = JSON.parse(process.env.ACTIVE_TRAINS || '[]');
+          const activeVersions = activeTrains.map(train => train.version)
+            .sort((left, right) => right.length - left.length || compareUtf8(left, right));
           const files = [];
           const walk = dir => fs.readdirSync(dir, {withFileTypes: true}).forEach(entry => {
             const file = path.join(dir, entry.name);
@@ -615,7 +618,10 @@ jobs:
             try {
               return [JSON.parse(fs.readFileSync(file, 'utf8'))];
             } catch {
-              invalidReports.push({invalidCanaryReport: true, artifact: path.basename(file)});
+              const artifact = path.relative('reports', file).split(path.sep)[0];
+              const version = activeVersions.find(candidate => artifact.startsWith(`canary-${candidate}-`));
+              if (!version) throw new Error(`malformed canary report has no active train attribution: ${artifact}`);
+              invalidReports.push({version, invalidCanaryReport: true, artifact});
               return [];
             }
           })
@@ -639,7 +645,6 @@ jobs:
           fs.writeFileSync('canary-expected-targets.json', `${JSON.stringify(expectedTargets)}\n`);
           let recordStatus = 0;
           fs.mkdirSync('ledgers', {recursive: true});
-          const activeTrains = JSON.parse(process.env.ACTIVE_TRAINS || '[]');
           const versions = new Set([
             ...reports.map(report => report.version),
             ...activeTrains.map(train => train.version),
@@ -660,7 +665,7 @@ jobs:
               ...reports.filter(report => (
                 report.version === version && selectedTargets[report.channel]
               )),
-              ...invalidReports,
+              ...invalidReports.filter(report => report.version === version),
             ];
             const reportsFile = `canary-reports-${version}.json`;
             const targetsFile = `canary-expected-targets-${version}.json`;

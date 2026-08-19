@@ -123,6 +123,7 @@ test('canary aggregation delegates fail-closed incident handling to record-canar
   assert.match(source, /record-canary/);
   assert.match(source, /--expected-targets/);
   assert.match(source, /invalidCanaryReport: true/);
+  assert.match(source, /invalidReports\.filter\(report => report\.version === version\)/);
   assert.doesNotMatch(source, /appendEvent/);
 });
 

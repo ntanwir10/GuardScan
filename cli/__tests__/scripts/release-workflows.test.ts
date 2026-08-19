@@ -466,7 +466,8 @@ describe('zero-touch release workflow contracts', () => {
   it('preserves malformed canary artifacts as incident-producing invalid reports', () => {
     const canary = workflowSource('release-canary.yml');
     expect(canary).toContain('invalidCanaryReport: true');
-    expect(canary).toContain('...invalidReports');
+    expect(canary).toContain('artifact.startsWith(`canary-${candidate}-`)');
+    expect(canary).toContain('...invalidReports.filter(report => report.version === version)');
     expect(canary).not.toContain('localeCompare');
   });
 
