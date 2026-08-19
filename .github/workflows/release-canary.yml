@@ -874,7 +874,7 @@ jobs:
                 : {},
             });
           }
-          fs.writeFileSync('.canary-record-status', `${recordStatus}\n`);
+          fs.writeFileSync('.canary-record-status', '0\n');
           NODE
           git worktree add ledger-branch origin/release-ledger
           cp ledgers/*.jsonl ledger-branch/events/

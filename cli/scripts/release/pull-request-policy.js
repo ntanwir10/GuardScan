@@ -52,7 +52,13 @@ function authorizePullRequest(input) {
   if (!Number.isSafeInteger(pullRequest.number) || pullRequest.number < 1) {
     throw new Error('pull request number is invalid');
   }
-  if (pullRequest.state !== 'open') throw new Error('pull request must be OPEN');
+  const resumableMerged = input.allowMerged === true
+    && pullRequest.state === 'closed'
+    && pullRequest.merged === true
+    && SHA_PATTERN.test(pullRequest.merge_commit_sha || '');
+  if (pullRequest.state !== 'open' && !resumableMerged) {
+    throw new Error('pull request must be OPEN or an explicitly allowed merged release');
+  }
   if (pullRequest.draft !== false) throw new Error('pull request must not be draft');
   if (pullRequest.base?.ref !== BASE) throw new Error('pull request must target main');
   if (pullRequest.base?.repo?.full_name !== REPOSITORY) {
