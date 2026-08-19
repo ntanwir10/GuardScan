@@ -18,7 +18,7 @@ on:
         type: string
       expected_head:
         description: Exact 40-character release pull request head SHA
-        required: true
+        required: false
         type: string
       known_good:
         description: Verified rollback target
@@ -54,6 +54,54 @@ jobs:
             echo 'Release automation is disabled; manual train dispatch refused.' >&2
             exit 1
           }
+
+  validate-request:
+    name: Validate release request before provider access
+    if: github.event_name == 'workflow_dispatch' && vars.RELEASE_AUTOMATION_ENABLED == 'true'
+    runs-on: ubuntu-24.04
+    env:
+      REQUEST_ACTION: ${{ inputs.action }}
+      REQUEST_VERSION: ${{ inputs.version }}
+      REQUEST_RELEASE_PR: ${{ inputs.release_pr }}
+      REQUEST_EXPECTED_HEAD: ${{ inputs.expected_head }}
+      REQUEST_KNOWN_GOOD: ${{ inputs.known_good }}
+    steps:
+      - name: Validate untrusted dispatch syntax without credentials
+        run: |
+          node - <<'NODE'
+          const action = process.env.REQUEST_ACTION;
+          const version = process.env.REQUEST_VERSION;
+          const releasePr = process.env.REQUEST_RELEASE_PR;
+          const expectedHead = process.env.REQUEST_EXPECTED_HEAD;
+          const knownGood = process.env.REQUEST_KNOWN_GOOD;
+          if (!['candidate', 'reconcile', 'promote', 'rollback'].includes(action)) {
+            throw new Error('release request action is invalid');
+          }
+          if (!/^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-rc\.(0|[1-9][0-9]*))?$/.test(version || '')) {
+            throw new Error('release request version is invalid');
+          }
+          if (['candidate', 'promote'].includes(action)) {
+            if (!/-rc\.(0|[1-9][0-9]*)$/.test(version)) {
+              throw new Error('candidate and promotion require an RC version');
+            }
+            if (!/^[1-9][0-9]*$/.test(releasePr || '') || !Number.isSafeInteger(Number(releasePr))) {
+              throw new Error('release request PR is invalid');
+            }
+            if (!/^[a-f0-9]{40}$/.test(expectedHead || '')) {
+              throw new Error('candidate and promotion require the exact reviewed PR head');
+            }
+          }
+          if (action === 'reconcile'
+              && (!/^[1-9][0-9]*$/.test(releasePr || '') || !Number.isSafeInteger(Number(releasePr)))) {
+            throw new Error('reconciliation release PR is invalid');
+          }
+          if (action === 'rollback') {
+            const stable = /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/;
+            if (!stable.test(version) || (knownGood && !stable.test(knownGood))) {
+              throw new Error('rollback version input is invalid');
+            }
+          }
+          NODE
 
   scheduler:
     name: Dispatch reconciliation for every active train
@@ -166,6 +214,10 @@ jobs:
   credential-health:
     name: Required provider credential health
     if: github.event_name == 'workflow_dispatch' && vars.RELEASE_AUTOMATION_ENABLED == 'true'
+    needs: [validate-request]
+    permissions:
+      contents: read
+      id-token: write
     uses: ./.github/workflows/release-credential-health.yml
     secrets:
       RELEASE_APP_PRIVATE_KEY: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
@@ -225,6 +277,18 @@ jobs:
             throw new Error('release request expected head is invalid');
           }
           NODE
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.workflow_sha }}
+          fetch-depth: 0
+          token: ${{ github.token }}
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.RELEASE_NODE_VERSION }}
+      - name: Install trusted control-plane dependencies without lifecycle scripts
+        working-directory: cli
+        run: npm ci --ignore-scripts
       - name: Validate request and resolve unchanged release PR head
         id: source
         env:
@@ -291,28 +355,19 @@ jobs:
           test "${#SHA}" = 40
           done
           gh api "repos/${GITHUB_REPOSITORY}/commits/$HEAD_SHA/check-runs?per_page=100&filter=latest" \
+            --jq '.check_runs' \
             > release-check-runs.json
           gh api "repos/${GITHUB_REPOSITORY}/pulls/$REQUEST_RELEASE_PR/reviews?per_page=100" \
             > release-reviews.json
-          HEAD_SHA="$HEAD_SHA" node - <<'NODE'
-          const fs = require('fs');
-          const pr = JSON.parse(fs.readFileSync('release-pr.json'));
-          const head = process.env.HEAD_SHA;
-          const checks = JSON.parse(fs.readFileSync('release-check-runs.json')).check_runs || [];
-          if (!checks.some(check => check.name === 'Release gate' && check.head_sha === head && check.conclusion === 'success')) {
-            throw new Error('Release gate has not succeeded for the expected PR head');
-          }
-          const author = pr.user?.login?.toLowerCase();
-          const reviews = JSON.parse(fs.readFileSync('release-reviews.json'));
-          if (!reviews.some(review => (
-            review.state === 'APPROVED'
-            && review.commit_id === head
-            && review.user?.login?.toLowerCase()
-            && review.user.login.toLowerCase() !== author
-          ))) {
-            throw new Error('expected at least one non-author approval bound to the exact PR head');
-          }
-          NODE
+          PR_POLICY_ARGS=(
+            --pull-request release-pr.json
+            --check-runs release-check-runs.json
+            --reviews release-reviews.json
+            --expected-head "$HEAD_SHA"
+          )
+          if [ "$REQUEST_ACTION" = promote ]; then PR_POLICY_ARGS+=(--allow-merged); fi
+          node cli/scripts/release/index.js validate-pr "${PR_POLICY_ARGS[@]}" \
+            > release-pr-authorization.json
           echo "head_sha=$HEAD_SHA" >> "$GITHUB_OUTPUT"
           echo "base_sha=$BASE_SHA" >> "$GITHUB_OUTPUT"
           echo "tree_sha=$TREE_SHA" >> "$GITHUB_OUTPUT"
@@ -321,24 +376,11 @@ jobs:
           echo "merge_sha=$(node -p 'require("./release-pr.json").merge_commit_sha || ""')" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: ${{ github.workflow_sha }}
-          fetch-depth: 0
-          token: ${{ github.token }}
-          persist-credentials: false
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
           ref: ${{ steps.source.outputs.head_sha }}
           fetch-depth: 0
           path: source
           token: ${{ github.token }}
           persist-credentials: false
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version: ${{ env.RELEASE_NODE_VERSION }}
-      - name: Install trusted control-plane dependencies without lifecycle scripts
-        working-directory: cli
-        run: npm ci --ignore-scripts
-
       - name: Derive bot-owned RC commit from exact stable PR head
         if: inputs.action == 'candidate'
         env:
@@ -1622,7 +1664,8 @@ jobs:
             sourcePrHead: process.env.SOURCE_PR_HEAD,
             channel: process.env.RELEASE_CHANNEL,
           });
-          active.trains.sort((a, b) => a.version.localeCompare(b.version));
+          const {compareUtf8} = require('./cli/scripts/release/deterministic');
+          active.trains.sort((a, b) => compareUtf8(a.version, b.version));
           fs.writeFileSync(file, `${JSON.stringify(active, null, 2)}\n`);
           NODE
           (

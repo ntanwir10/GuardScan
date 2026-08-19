@@ -108,8 +108,12 @@ test('rollback pins trusted control-plane code and fetches the defective tag as 
 
 test('release train depends on healthy provider credentials and blocks unknown state', () => {
   const train = readWorkflow('release-train.yml');
+  const workflow = parseWorkflow('release-train.yml');
   const health = readWorkflow('release-credential-health.yml');
   assert.match(train, /uses: \.\/\.github\/workflows\/release-credential-health\.yml/);
+  assert.deepEqual(workflow.jobs['credential-health'].needs, ['validate-request']);
+  assert.equal(workflow.jobs['credential-health'].permissions?.['id-token'], 'write');
+  assert.equal(workflow.jobs['credential-health'].permissions?.contents, 'read');
   assert.match(train, /needs\.credential-health\.outputs\.status == 'healthy'/);
   assert.match(health, /if\(report\.status!==['"]healthy['"]\) process\.exit\(1\)/);
 });
@@ -118,6 +122,7 @@ test('canary aggregation delegates fail-closed incident handling to record-canar
   const source = readWorkflow('release-canary.yml');
   assert.match(source, /record-canary/);
   assert.match(source, /--expected-targets/);
+  assert.match(source, /invalidCanaryReport: true/);
   assert.doesNotMatch(source, /appendEvent/);
 });
 

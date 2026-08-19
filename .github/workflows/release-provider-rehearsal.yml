@@ -58,6 +58,17 @@ jobs:
           }
           if (!/^[a-f0-9]{40}$/.test(head || '')) throw new Error('release rehearsal head SHA is invalid');
           NODE
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.workflow_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22.23.1
+      - name: Install trusted policy dependencies without lifecycle scripts
+        working-directory: cli
+        run: npm ci --ignore-scripts
       - name: Validate open same-repository PR targeting main and exact head
         id: source
         env:
@@ -66,41 +77,18 @@ jobs:
           REQUEST_EXPECTED_HEAD: ${{ inputs.expected_head }}
         run: |
           gh api "repos/${GITHUB_REPOSITORY}/pulls/$REQUEST_RELEASE_PR" > pull-request.json
-          node - <<'NODE'
-          const fs = require('fs');
-          const pr = JSON.parse(fs.readFileSync('pull-request.json'));
-          const expected = process.env.REQUEST_EXPECTED_HEAD;
-          if (pr.state !== 'open' || pr.base?.ref !== 'main') throw new Error('rehearsal PR must be open and target main');
-          if (pr.head?.repo?.full_name?.toLowerCase() !== process.env.GITHUB_REPOSITORY.toLowerCase()) {
-            throw new Error('rehearsal PR must originate in the same repository');
-          }
-          if (pr.head?.sha !== expected) throw new Error('rehearsal PR head changed');
-          if (pr.draft === true) throw new Error('rehearsal PR must be ready, not draft');
-          fs.appendFileSync(process.env.GITHUB_OUTPUT, `head=${pr.head.sha}\n`);
-          NODE
           gh api "repos/${GITHUB_REPOSITORY}/commits/$REQUEST_EXPECTED_HEAD/check-runs?per_page=100&filter=latest" \
+            --jq '.check_runs' \
             > release-check-runs.json
           gh api "repos/${GITHUB_REPOSITORY}/pulls/$REQUEST_RELEASE_PR/reviews?per_page=100" \
             > release-reviews.json
-          node - <<'NODE'
-          const fs = require('fs');
-          const pr = JSON.parse(fs.readFileSync('pull-request.json'));
-          const head = process.env.REQUEST_EXPECTED_HEAD;
-          const checks = JSON.parse(fs.readFileSync('release-check-runs.json')).check_runs || [];
-          if (!checks.some(check => check.name === 'Release gate' && check.head_sha === head && check.conclusion === 'success')) {
-            throw new Error('Release gate has not succeeded for the expected rehearsal head');
-          }
-          const author = pr.user?.login?.toLowerCase();
-          const reviews = JSON.parse(fs.readFileSync('release-reviews.json'));
-          if (!reviews.some(review => (
-            review.state === 'APPROVED'
-            && review.commit_id === head
-            && review.user?.login?.toLowerCase()
-            && review.user.login.toLowerCase() !== author
-          ))) {
-            throw new Error('expected at least one non-author approval bound to the exact rehearsal head');
-          }
-          NODE
+          node cli/scripts/release/index.js validate-pr \
+            --pull-request pull-request.json \
+            --check-runs release-check-runs.json \
+            --reviews release-reviews.json \
+            --expected-head "$REQUEST_EXPECTED_HEAD" \
+            > release-pr-authorization.json
+          echo "head=$REQUEST_EXPECTED_HEAD" >> "$GITHUB_OUTPUT"
 
   rehearsal:
     name: Run non-production provider rehearsal

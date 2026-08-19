@@ -171,11 +171,31 @@ jobs:
           subject-path: npm-artifact/*.tgz
       - name: Bind npm tarball to source and provenance
         env:
-          ATTESTATION_URL: ${{ steps.attest-npm.outputs.attestation-url }}
+          GH_TOKEN: ${{ github.token }}
+          BUNDLE_PATH: ${{ steps.attest-npm.outputs.bundle-path }}
+          SIGNER_WORKFLOW_SHA: ${{ env.RELEASE_BUILD_WORKFLOW_SHA }}
+          SOURCE_COMMIT: ${{ inputs.ref }}
+          BUNDLE_FILE: npm.provenance.sigstore.json
+          BUNDLE_URL: https://github.com/${{ github.repository }}/releases/download/${{ inputs.tag }}/npm.provenance.sigstore.json
         run: |
+          TARBALL="$(find npm-artifact -maxdepth 1 -type f -name '*.tgz' -print -quit)"
+          test -n "$TARBALL" && test -f "$BUNDLE_PATH"
+          gh attestation verify "$TARBALL" --bundle "$BUNDLE_PATH" --repo "$GITHUB_REPOSITORY" --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release-build.yml" --signer-digest "$SIGNER_WORKFLOW_SHA" --predicate-type 'https://slsa.dev/provenance/v1' --format json > npm-attestation-verification.json
+          cp "$BUNDLE_PATH" "npm-artifact/$BUNDLE_FILE"
           node - <<'NODE'
           const fs = require('fs');
+          const path = require('path');
+          const {createVerifiedAttestationEvidence} = require('./cli/scripts/release/provenance');
           const metadata = JSON.parse(fs.readFileSync('npm-artifact/npm-artifact.json'));
+          if (metadata.commit !== process.env.SOURCE_COMMIT) throw new Error('npm attestation source binding mismatch');
+          const provenance = createVerifiedAttestationEvidence({
+            bundleFile: path.join('npm-artifact', process.env.BUNDLE_FILE),
+            subjectFile: path.join('npm-artifact', metadata.filename),
+            source: {version: metadata.version, tag: metadata.tag, commit: metadata.commit},
+            url: process.env.BUNDLE_URL,
+            signerDigest: process.env.SIGNER_WORKFLOW_SHA,
+            verification: JSON.parse(fs.readFileSync('npm-attestation-verification.json')),
+          });
           const artifact = {
             id: 'npm:guardscan', kind: 'npm-tarball', filename: metadata.filename,
             size: metadata.size, sha256: metadata.sha256,
@@ -183,7 +203,7 @@ jobs:
             capabilities: {coreScan: true, sbom: true, chartRendering: true, accurateTokenCounting: true},
             url: `https://registry.npmjs.org/guardscan/-/${metadata.filename}`,
             integrity: metadata.integrity,
-            provenance: {type: 'slsa', url: process.env.ATTESTATION_URL, verified: true},
+            provenance,
           };
           fs.writeFileSync('npm-artifact/npm-artifact.metadata.json', `${JSON.stringify({
             schemaVersion: 'guardscan.artifact-metadata.v1', version: metadata.version,
@@ -417,17 +437,26 @@ jobs:
           subject-path: standalone/${{ matrix.executable }}
       - name: Create verified evidence descriptor
         env:
+          GH_TOKEN: ${{ github.token }}
           ARTIFACT_TAG: ${{ inputs.tag }}
           ARTIFACT_VERSION: ${{ inputs.tag }}
           ARTIFACT_OS: ${{ matrix.os }}
           ARTIFACT_ARCH: ${{ matrix.arch }}
           ARTIFACT_LIBC: ${{ matrix.libc }}
           ARTIFACT_ID: ${{ matrix.id }}
-          ATTESTATION_URL: ${{ steps.attest-executable.outputs.attestation-url }}
+          BUNDLE_PATH: ${{ steps.attest-executable.outputs.bundle-path }}
+          SIGNER_WORKFLOW_SHA: ${{ env.RELEASE_BUILD_WORKFLOW_SHA }}
+          BUNDLE_FILE: ${{ matrix.id }}.executable.provenance.sigstore.json
+          BUNDLE_URL: https://github.com/${{ github.repository }}/releases/download/${{ inputs.tag }}/${{ matrix.id }}.executable.provenance.sigstore.json
         run: |
+          test -f "$BUNDLE_PATH"
+          gh attestation verify "standalone/${{ matrix.executable }}" --bundle "$BUNDLE_PATH" --repo "$GITHUB_REPOSITORY" --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release-build.yml" --signer-digest "$SIGNER_WORKFLOW_SHA" --predicate-type 'https://slsa.dev/provenance/v1' --format json > executable-attestation-verification.json
+          cp "$BUNDLE_PATH" "standalone/$BUNDLE_FILE"
           node - <<'NODE'
           const fs = require('fs');
           const cp = require('child_process');
+          const path = require('path');
+          const {createVerifiedAttestationEvidence} = require('./cli/scripts/release/provenance');
           const version = process.env.ARTIFACT_VERSION.replace(/^v/, '');
           const prototype = JSON.parse(fs.readFileSync('standalone/standalone-prototype.json'));
           const commit = cp.execFileSync('git', ['-C', 'source', 'rev-parse', 'HEAD'], {encoding: 'utf8'}).trim();
@@ -437,7 +466,15 @@ jobs:
           const sbom = JSON.parse(fs.readFileSync('standalone-sbom/artifact-sbom.json'));
           const signatures = process.env.ARTIFACT_OS === 'darwin' ? ['apple-code-signing', 'apple-notarization'] : [process.env.ARTIFACT_OS === 'windows' ? 'authenticode' : 'sigstore'];
           const signatureFile = {'apple-code-signing': 'apple-code-signing.txt', 'apple-notarization': 'apple-notarization.json', authenticode: 'authenticode.txt', sigstore: 'guardscan.sigstore.json'};
-          fs.writeFileSync('standalone/evidence.json', `${JSON.stringify({schemaVersion: 'guardscan.standalone-evidence.v1', version, tag: process.env.ARTIFACT_TAG, commit, platform: {os: process.env.ARTIFACT_OS, arch: process.env.ARTIFACT_ARCH, ...(process.env.ARTIFACT_LIBC ? {libc: process.env.ARTIFACT_LIBC} : {})}, optionalCapabilities: smoke.optionalCapabilities, signatures: signatures.map(type => ({type, url: `https://github.com/${process.env.GITHUB_REPOSITORY}/releases/download/${process.env.ARTIFACT_TAG}/${process.env.ARTIFACT_ID}.${signatureFile[type]}`, verified: true})), sboms: sbom.files.map(file => ({type: file.format, url: `https://github.com/${process.env.GITHUB_REPOSITORY}/releases/download/${process.env.ARTIFACT_TAG}/${file.filename}`, sha256: file.sha256, verified: true})), provenance: {type: 'slsa', url: process.env.ATTESTATION_URL, verified: true}}, null, 2)}\n`);
+          const provenance = createVerifiedAttestationEvidence({
+            bundleFile: path.join('standalone', process.env.BUNDLE_FILE),
+            subjectFile: path.join('standalone', process.env.ARTIFACT_OS === 'windows' ? 'guardscan.exe' : 'guardscan'),
+            source: {version, tag: process.env.ARTIFACT_TAG, commit},
+            url: process.env.BUNDLE_URL,
+            signerDigest: process.env.SIGNER_WORKFLOW_SHA,
+            verification: JSON.parse(fs.readFileSync('executable-attestation-verification.json')),
+          });
+          fs.writeFileSync('standalone/evidence.json', `${JSON.stringify({schemaVersion: 'guardscan.standalone-evidence.v1', version, tag: process.env.ARTIFACT_TAG, commit, platform: {os: process.env.ARTIFACT_OS, arch: process.env.ARTIFACT_ARCH, ...(process.env.ARTIFACT_LIBC ? {libc: process.env.ARTIFACT_LIBC} : {})}, optionalCapabilities: smoke.optionalCapabilities, signatures: signatures.map(type => ({type, url: `https://github.com/${process.env.GITHUB_REPOSITORY}/releases/download/${process.env.ARTIFACT_TAG}/${process.env.ARTIFACT_ID}.${signatureFile[type]}`, verified: true})), sboms: sbom.files.map(file => ({type: file.format, url: `https://github.com/${process.env.GITHUB_REPOSITORY}/releases/download/${process.env.ARTIFACT_TAG}/${file.filename}`, sha256: file.sha256, verified: true})), provenance}, null, 2)}\n`);
           NODE
       - name: Archive signed executable with trusted tooling
         shell: bash
@@ -446,6 +483,7 @@ jobs:
           if [ -n "${{ matrix.libc }}" ]; then ARGS+=(--platform-libc "${{ matrix.libc }}"); fi
           node cli/scripts/release/index.js build "${ARGS[@]}"
           cp standalone-sbom/guardscan-*.json native-output/
+          cp "standalone/${{ matrix.id }}.executable.provenance.sigstore.json" native-output/
           for file in guardscan.sigstore.json apple-code-signing.txt apple-notarization.json authenticode.txt; do [ -f "standalone/$file" ] && cp "standalone/$file" "native-output/${{ matrix.id }}.$file"; done
       - name: Attest signed archive
         id: attest-archive
@@ -454,13 +492,33 @@ jobs:
           subject-path: native-output/guardscan-*
       - name: Bind archive metadata to archive attestation
         env:
-          ATTESTATION_URL: ${{ steps.attest-archive.outputs.attestation-url }}
+          GH_TOKEN: ${{ github.token }}
+          BUNDLE_PATH: ${{ steps.attest-archive.outputs.bundle-path }}
+          SIGNER_WORKFLOW_SHA: ${{ env.RELEASE_BUILD_WORKFLOW_SHA }}
+          SOURCE_COMMIT: ${{ inputs.ref }}
+          BUNDLE_FILE: ${{ matrix.id }}.archive.provenance.sigstore.json
+          BUNDLE_URL: https://github.com/${{ github.repository }}/releases/download/${{ inputs.tag }}/${{ matrix.id }}.archive.provenance.sigstore.json
         run: |
+          test -f "$BUNDLE_PATH"
+          ARCHIVE="$(node -e 'const fs=require("fs"); const file=fs.readdirSync("native-output").find(name=>name.endsWith(".metadata.json")); process.stdout.write(require(`./native-output/${file}`).artifact.filename)')"
+          test -f "native-output/$ARCHIVE"
+          gh attestation verify "native-output/$ARCHIVE" --bundle "$BUNDLE_PATH" --repo "$GITHUB_REPOSITORY" --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release-build.yml" --signer-digest "$SIGNER_WORKFLOW_SHA" --predicate-type 'https://slsa.dev/provenance/v1' --format json > archive-attestation-verification.json
+          cp "$BUNDLE_PATH" "native-output/$BUNDLE_FILE"
           node - <<'NODE'
           const fs = require('fs');
+          const path = require('path');
+          const {createVerifiedAttestationEvidence} = require('./cli/scripts/release/provenance');
           const file = fs.readdirSync('native-output').find(name => name.endsWith('.metadata.json'));
           const metadata = JSON.parse(fs.readFileSync(`native-output/${file}`));
-          metadata.artifact.provenance.url = process.env.ATTESTATION_URL;
+          if (metadata.commit !== process.env.SOURCE_COMMIT) throw new Error('archive attestation source binding mismatch');
+          metadata.artifact.provenance = createVerifiedAttestationEvidence({
+            bundleFile: path.join('native-output', process.env.BUNDLE_FILE),
+            subjectFile: path.join('native-output', metadata.artifact.filename),
+            source: {version: metadata.version, tag: metadata.tag, commit: metadata.commit},
+            url: process.env.BUNDLE_URL,
+            signerDigest: process.env.SIGNER_WORKFLOW_SHA,
+            verification: JSON.parse(fs.readFileSync('archive-attestation-verification.json')),
+          });
           fs.writeFileSync(`native-output/${file}`, `${JSON.stringify(metadata, null, 2)}\n`);
           NODE
       - name: Build exact signed Python wheel with trusted tooling
@@ -477,7 +535,6 @@ jobs:
       - name: Verify Python wheel bundle and write bound evidence
         env:
           GH_TOKEN: ${{ github.token }}
-          ATTESTATION_URL: ${{ steps.attest-wheel.outputs.attestation-url }}
           BUNDLE_PATH: ${{ steps.attest-wheel.outputs.bundle-path }}
           SIGNER_WORKFLOW_SHA: ${{ env.RELEASE_BUILD_WORKFLOW_SHA }}
           SOURCE_COMMIT: ${{ inputs.ref }}
@@ -489,17 +546,23 @@ jobs:
           gh attestation verify "$WHEEL_FILE" --bundle "$BUNDLE_PATH" --repo "$GITHUB_REPOSITORY" --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release-build.yml" --signer-digest "$SIGNER_WORKFLOW_SHA" --predicate-type 'https://slsa.dev/provenance/v1' --format json > wheel-attestation-verification.json
           cp "$BUNDLE_PATH" "wheel-output/$BUNDLE_FILE"
           node - <<'NODE'
-          const crypto = require('crypto');
           const fs = require('fs');
           const path = require('path');
+          const {createVerifiedAttestationEvidence} = require('./cli/scripts/release/provenance');
           const wheel = fs.readdirSync('wheel-output').find(name => name.endsWith('.whl'));
           const meta = fs.readdirSync('wheel-output').find(name => name.endsWith('.whl.json'));
           const verified = JSON.parse(fs.readFileSync('wheel-attestation-verification.json'));
           if (!Array.isArray(verified) || verified.length < 1) throw new Error('wheel attestation returned no verified statement');
           const metadata = JSON.parse(fs.readFileSync(path.join('wheel-output', meta)));
           if (metadata.commit !== process.env.SOURCE_COMMIT || metadata.tag !== process.env.RELEASE_INPUT_TAG) throw new Error('wheel source binding mismatch');
-          const bundleBytes = fs.readFileSync(path.join('wheel-output', process.env.BUNDLE_FILE));
-          const evidence = {type: 'slsa', url: process.env.BUNDLE_URL, verified: true, sha256: crypto.createHash('sha256').update(bundleBytes).digest('hex'), subjectSha256: crypto.createHash('sha256').update(fs.readFileSync(path.join('wheel-output', wheel))).digest('hex'), sourceVersion: metadata.version, sourceTag: metadata.tag, sourceCommit: metadata.commit, signerIdentity: `https://github.com/${process.env.GITHUB_REPOSITORY}/.github/workflows/release-build.yml`, predicateType: 'https://slsa.dev/provenance/v1'};
+          const evidence = createVerifiedAttestationEvidence({
+            bundleFile: path.join('wheel-output', process.env.BUNDLE_FILE),
+            subjectFile: path.join('wheel-output', wheel),
+            source: {version: metadata.version, tag: metadata.tag, commit: metadata.commit},
+            url: process.env.BUNDLE_URL,
+            signerDigest: process.env.SIGNER_WORKFLOW_SHA,
+            verification: verified,
+          });
           if (!/^https:\/\//.test(evidence.url || '')) throw new Error('attestation URL is not HTTPS');
           fs.writeFileSync('wheel-output/python-wheel-provenance.json', `${JSON.stringify(evidence, null, 2)}\n`, {flag: 'wx'});
           NODE
@@ -567,10 +630,43 @@ jobs:
           node - <<'NODE'
           const fs = require('fs');
           const path = require('path');
+          const cp = require('child_process');
+          const {compareUtf8} = require('./cli/scripts/release/deterministic');
+          const {releaseToolchainVersions} = require('./cli/scripts/release/standalone');
           const files = [];
           const walk = dir => fs.readdirSync(dir, {withFileTypes: true}).forEach(entry => { const file = path.join(dir, entry.name); if (entry.isDirectory()) walk(file); else if (entry.name.endsWith('.metadata.json')) files.push(path.relative('collected', file)); });
           walk('collected');
-          fs.writeFileSync('collected/release-manifest-input.json', `${JSON.stringify({schemaVersion: 'guardscan.release-manifest-input.v1', profile: 'full', createdAt: new Date().toISOString(), producer: {provider: 'github-actions', repository: process.env.GITHUB_REPOSITORY, workflow: '.github/workflows/release-build.yml', runId: process.env.GITHUB_RUN_ID, runAttempt: Number(process.env.GITHUB_RUN_ATTEMPT), sourceRef: `refs/tags/${process.env.RELEASE_TAG}`}, artifactFiles: files}, null, 2)}\n`);
+          files.sort(compareUtf8);
+          const createdAt = new Date(cp.execFileSync(
+            'git', ['-C', 'source', 'show', '-s', '--format=%cI', 'HEAD'], {encoding: 'utf8'}
+          ).trim()).toISOString();
+          const tools = Object.entries(releaseToolchainVersions())
+            .map(([name, version]) => ({name, version}))
+            .sort((left, right) => compareUtf8(left.name, right.name));
+          const descriptor = {
+            schemaVersion: 'guardscan.release-manifest-input.v1',
+            profile: 'full',
+            createdAt,
+            producer: {
+              provider: 'github-actions',
+              repository: process.env.GITHUB_REPOSITORY,
+              workflow: '.github/workflows/release-build.yml',
+              workflowSha: process.env.RELEASE_BUILD_WORKFLOW_SHA,
+              runId: process.env.GITHUB_RUN_ID,
+              runAttempt: Number(process.env.GITHUB_RUN_ATTEMPT),
+              sourceRef: `refs/tags/${process.env.RELEASE_TAG}`,
+            },
+            toolchain: {
+              node: process.versions.node,
+              packageManager: {
+                name: 'npm',
+                version: cp.execFileSync('npm', ['--version'], {encoding: 'utf8'}).trim(),
+              },
+              tools,
+            },
+            artifactFiles: files,
+          };
+          fs.writeFileSync('collected/release-manifest-input.json', `${JSON.stringify(descriptor, null, 2)}\n`);
           NODE
           node cli/scripts/release/index.js manifest --descriptor collected/release-manifest-input.json --output release/release-manifest.json --package-root "$GITHUB_WORKSPACE/source/cli" --repository-root "$GITHUB_WORKSPACE/source" --schema-root "$GITHUB_WORKSPACE/cli"
       - name: Produce and sign aggregate checksums
@@ -726,6 +822,20 @@ jobs:
           timestamp-rfc3161: http://timestamp.acs.microsoft.com
           timestamp-digest: SHA256
           cache-dependencies: false
+      - name: Verify rehearsal Authenticode signature and timestamp
+        if: matrix.os == 'windows'
+        shell: pwsh
+        run: |
+          $file = 'rehearsal-standalone\guardscan.exe'
+          $signature = Get-AuthenticodeSignature $file
+          if ($signature.Status -ne 'Valid') { throw "Invalid Authenticode status: $($signature.Status)" }
+          if ($null -eq $signature.TimeStamperCertificate) { throw 'Authenticode timestamp is missing' }
+          [ordered]@{
+            status = [string]$signature.Status
+            artifactSha256 = (Get-FileHash -Algorithm SHA256 $file).Hash.ToLowerInvariant()
+            signerThumbprint = $signature.SignerCertificate.Thumbprint.ToLowerInvariant()
+            timestampThumbprint = $signature.TimeStamperCertificate.Thumbprint.ToLowerInvariant()
+          } | ConvertTo-Json | Set-Content -Encoding utf8 rehearsal-standalone\authenticode-verification.json
       - name: Write non-production provider rehearsal evidence
         env:
           REHEARSAL_REF: ${{ inputs.ref }}
@@ -738,7 +848,17 @@ jobs:
           const prototype = JSON.parse(fs.readFileSync('rehearsal-standalone/standalone-prototype.json'));
           const sourceCommit = cp.execFileSync('git', ['-C', 'source', 'rev-parse', 'HEAD'], {encoding: 'utf8'}).trim();
           if (prototype.productionReady !== false || sourceCommit !== process.env.REHEARSAL_REF || prototype.commit !== process.env.REHEARSAL_REF) throw new Error('provider rehearsal source binding failed');
-          fs.writeFileSync('rehearsal-standalone/provider-rehearsal-evidence.json', `${JSON.stringify({schemaVersion: 'guardscan.provider-rehearsal.v1', productionReady: false, source: {repository: process.env.GITHUB_REPOSITORY, commit: sourceCommit, ref: process.env.REHEARSAL_REF}, workflow: {runId: process.env.GITHUB_RUN_ID, mode: process.env.REHEARSAL_MODE}, platform: process.env.REHEARSAL_PLATFORM, checks: {standaloneBuild: true, appleSigningAndNotarization: process.env.REHEARSAL_PLATFORM.startsWith('darwin'), azureAuthenticodeSigning: process.env.REHEARSAL_PLATFORM.startsWith('windows')}, publication: {tag: false, release: false, package: false, catalog: false, ledger: false}}, null, 2)}\n`);
+          let azureAuthenticodeSigning = false;
+          if (process.env.REHEARSAL_PLATFORM.startsWith('windows')) {
+            azureAuthenticodeSigning = JSON.parse(fs.readFileSync('rehearsal-standalone/authenticode-verification.json'));
+            if (azureAuthenticodeSigning.status !== 'Valid'
+                || !/^[a-f0-9]{64}$/.test(azureAuthenticodeSigning.artifactSha256 || '')
+                || !/^[a-f0-9]{40}$/.test(azureAuthenticodeSigning.signerThumbprint || '')
+                || !/^[a-f0-9]{40}$/.test(azureAuthenticodeSigning.timestampThumbprint || '')) {
+              throw new Error('Windows rehearsal Authenticode evidence is incomplete');
+            }
+          }
+          fs.writeFileSync('rehearsal-standalone/provider-rehearsal-evidence.json', `${JSON.stringify({schemaVersion: 'guardscan.provider-rehearsal.v1', productionReady: false, source: {repository: process.env.GITHUB_REPOSITORY, commit: sourceCommit, ref: process.env.REHEARSAL_REF}, workflow: {runId: process.env.GITHUB_RUN_ID, mode: process.env.REHEARSAL_MODE}, platform: process.env.REHEARSAL_PLATFORM, checks: {standaloneBuild: true, appleSigningAndNotarization: process.env.REHEARSAL_PLATFORM.startsWith('darwin'), azureAuthenticodeSigning}, publication: {tag: false, release: false, package: false, catalog: false, ledger: false}}, null, 2)}\n`);
           NODE
           rm -f rehearsal-standalone/guardscan rehearsal-standalone/guardscan.exe
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

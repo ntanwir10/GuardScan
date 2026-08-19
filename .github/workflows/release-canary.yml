@@ -602,6 +602,7 @@ jobs:
           node - <<'NODE'
           const fs = require('fs');
           const path = require('path');
+          const {compareUtf8} = require('./cli/scripts/release/deterministic');
           const files = [];
           const walk = dir => fs.readdirSync(dir, {withFileTypes: true}).forEach(entry => {
             const file = path.join(dir, entry.name);
@@ -609,11 +610,19 @@ jobs:
             else if (entry.name.endsWith('.json')) files.push(file);
           });
           walk('reports');
-          const reports = files.map(file => JSON.parse(fs.readFileSync(file, 'utf8')))
+          const invalidReports = [];
+          const reports = files.flatMap(file => {
+            try {
+              return [JSON.parse(fs.readFileSync(file, 'utf8'))];
+            } catch {
+              invalidReports.push({invalidCanaryReport: true, artifact: path.basename(file)});
+              return [];
+            }
+          })
             .filter(report => typeof report.version === 'string')
-            .sort((left, right) => left.version.localeCompare(right.version)
-              || left.channel.localeCompare(right.channel)
-              || left.target.localeCompare(right.target));
+            .sort((left, right) => compareUtf8(left.version, right.version)
+              || compareUtf8(String(left.channel || ''), String(right.channel || ''))
+              || compareUtf8(String(left.target || ''), String(right.target || '')));
           const expectedTargets = {
             npm: ['npm'],
             pnpm: ['pnpm'],
@@ -647,15 +656,19 @@ jobs:
             const selectedTargets = Object.fromEntries(
               Object.entries(expectedTargets).filter(([channel]) => state.channels[channel])
             );
-            const versionReports = reports.filter(report => (
-              report.version === version && selectedTargets[report.channel]
-            ));
+            const versionReports = [
+              ...reports.filter(report => (
+                report.version === version && selectedTargets[report.channel]
+              )),
+              ...invalidReports,
+            ];
             const reportsFile = `canary-reports-${version}.json`;
             const targetsFile = `canary-expected-targets-${version}.json`;
             fs.writeFileSync(reportsFile, `${JSON.stringify(versionReports)}\n`);
             fs.writeFileSync(targetsFile, `${JSON.stringify(selectedTargets)}\n`);
             const evaluatedAt = versionReports
-              .map(report => report.checkedAt).sort().at(-1) || new Date().toISOString();
+              .map(report => report.checkedAt).filter(Boolean).sort(compareUtf8).at(-1)
+              || new Date().toISOString();
             const result = require('child_process').spawnSync('node', [
               'cli/scripts/release/index.js', 'record-canary',
               '--package-root', 'cli', '--repository-root', '.',

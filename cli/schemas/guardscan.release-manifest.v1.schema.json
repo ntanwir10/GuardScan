@@ -49,11 +49,12 @@
     "producer": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["provider", "repository", "workflow", "runId", "runAttempt", "sourceRef"],
+      "required": ["provider", "repository", "workflow", "workflowSha", "runId", "runAttempt", "sourceRef"],
       "properties": {
         "provider": { "const": "github-actions" },
         "repository": { "const": "ntanwir10/GuardScan" },
         "workflow": { "type": "string", "pattern": "^\\.github/workflows/[A-Za-z0-9._-]+\\.yml$" },
+        "workflowSha": { "$ref": "#/definitions/commit" },
         "runId": { "type": "string", "pattern": "^[1-9][0-9]{0,19}$" },
         "runAttempt": { "type": "integer", "minimum": 1 },
         "sourceRef": { "type": "string", "pattern": "^refs/(heads|tags)/[A-Za-z0-9._/-]+$" }
@@ -190,13 +191,23 @@
     "provenance": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["type", "url", "verified"],
+      "required": [
+        "type", "url", "verified", "sha256", "subjectSha256",
+        "sourceVersion", "sourceTag", "sourceCommit", "signerIdentity",
+        "signerDigest", "predicateType"
+      ],
       "properties": {
         "type": { "enum": ["slsa", "in-toto"] },
         "url": { "type": "string", "format": "uri" },
         "verified": { "const": true },
         "sha256": { "$ref": "#/definitions/sha256" },
-        "predicateType": { "type": "string", "format": "uri" }
+        "subjectSha256": { "$ref": "#/definitions/sha256" },
+        "sourceVersion": { "$ref": "#/definitions/semver" },
+        "sourceTag": { "$ref": "#/definitions/versionTag" },
+        "sourceCommit": { "$ref": "#/definitions/commit" },
+        "signerIdentity": { "const": "https://github.com/ntanwir10/GuardScan/.github/workflows/release-build.yml" },
+        "signerDigest": { "$ref": "#/definitions/commit" },
+        "predicateType": { "const": "https://slsa.dev/provenance/v1" }
       }
     },
     "archiveEntry": {

@@ -280,10 +280,12 @@ boundary for the first source-bound event schema. Then set the variable to
 `true` and start the candidate from the default-branch workflow:
 
 ```bash
+EXPECTED_HEAD="$(gh pr view RELEASE_PR_NUMBER --json headRefOid --jq .headRefOid)"
 gh workflow run release-train.yml \
   -f action=candidate \
   -f version=1.1.0-rc.1 \
-  -f release_pr=RELEASE_PR_NUMBER
+  -f release_pr=RELEASE_PR_NUMBER \
+  -f expected_head="$EXPECTED_HEAD"
 ```
 
 The train:

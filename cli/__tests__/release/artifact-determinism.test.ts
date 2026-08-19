@@ -18,6 +18,23 @@ const source = {
   commit: 'a'.repeat(40),
   packageRoot: path.resolve(__dirname, '../../'),
 };
+const workflowSha = 'f'.repeat(40);
+
+function attestation(subjectSha256: string, name: string) {
+  return {
+    type: 'slsa',
+    url: `https://github.com/ntanwir10/GuardScan/releases/download/${source.tag}/${name}.provenance.sigstore.json`,
+    verified: true,
+    sha256: 'd'.repeat(64),
+    subjectSha256,
+    sourceVersion: source.version,
+    sourceTag: source.tag,
+    sourceCommit: source.commit,
+    signerIdentity: 'https://github.com/ntanwir10/GuardScan/.github/workflows/release-build.yml',
+    signerDigest: workflowSha,
+    predicateType: 'https://slsa.dev/provenance/v1',
+  };
+}
 
 function writeManifestInput(root: string) {
   const artifact = {
@@ -44,11 +61,7 @@ function writeManifestInput(root: string) {
       },
       url: 'https://registry.npmjs.org/guardscan/-/guardscan.tgz',
       integrity: `sha512-${'A'.repeat(86)}==`,
-      provenance: {
-        type: 'slsa',
-        url: 'https://github.com/ntanwir10/GuardScan/attestations/1',
-        verified: true,
-      },
+      provenance: attestation('b'.repeat(64), 'npm'),
     },
   };
   fs.writeFileSync(path.join(root, 'artifact.json'), JSON.stringify(artifact));
@@ -60,6 +73,7 @@ function writeManifestInput(root: string) {
       provider: 'github-actions',
       repository: 'ntanwir10/GuardScan',
       workflow: '.github/workflows/release-build.yml',
+      workflowSha,
       runId: '1',
       runAttempt: 1,
       sourceRef: 'refs/tags/v1.1.0',
@@ -195,6 +209,7 @@ describe('release artifact determinism', () => {
           sourceTag: source.tag,
           sourceCommit: source.commit,
           signerIdentity: 'https://github.com/attacker/repository/.github/workflows/build.yml',
+          signerDigest: workflowSha,
         },
         outputFile,
       )).toThrow(/protected release-build workflow/);
@@ -202,27 +217,11 @@ describe('release artifact determinism', () => {
         source,
         wheelMetadataFile,
         standaloneMetadataFile,
-        {
-          type: 'slsa',
-          url: `https://github.com/ntanwir10/GuardScan/releases/download/${source.tag}/linux-x64-glibc.wheel.provenance.sigstore.json`,
-          verified: true,
-          sha256: 'd'.repeat(64),
-          predicateType: 'https://slsa.dev/provenance/v1',
-          subjectSha256: wheelDigest,
-          sourceVersion: source.version,
-          sourceTag: source.tag,
-          sourceCommit: source.commit,
-          signerIdentity: 'https://github.com/ntanwir10/GuardScan/.github/workflows/release-build.yml',
-        },
+        attestation(wheelDigest, 'linux-x64-glibc.wheel'),
         outputFile,
       );
-      expect(result.metadata.artifact.provenance).toEqual({
-        type: 'slsa',
-        url: `https://github.com/ntanwir10/GuardScan/releases/download/${source.tag}/linux-x64-glibc.wheel.provenance.sigstore.json`,
-        verified: true,
-        sha256: 'd'.repeat(64),
-        predicateType: 'https://slsa.dev/provenance/v1',
-      });
+      expect(result.metadata.artifact.provenance)
+        .toEqual(attestation(wheelDigest, 'linux-x64-glibc.wheel'));
     } finally {
       fs.rmSync(root, {recursive: true, force: true});
     }

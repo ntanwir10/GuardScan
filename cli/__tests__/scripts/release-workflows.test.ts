@@ -78,10 +78,8 @@ describe('zero-touch release workflow contracts', () => {
     expect(rehearsal).toContain("vars.RELEASE_PROVIDER_REHEARSAL_ENABLED == 'true'");
     expect(rehearsal).toContain("/^[1-9][0-9]*$/.test(pr || '')");
     expect(rehearsal).toContain("/^[a-f0-9]{40}$/.test(head || '')");
-    expect(rehearsal).toContain("pr.state !== 'open'");
-    expect(rehearsal).toContain("pr.base?.ref !== 'main'");
-    expect(rehearsal).toContain('pr.head?.repo?.full_name?.toLowerCase()');
-    expect(rehearsal).toContain('pr.head?.sha !== expected');
+    expect(rehearsal).toContain('cli/scripts/release/index.js validate-pr');
+    expect(rehearsal).toContain('--expected-head "$REQUEST_EXPECTED_HEAD"');
     expect(rehearsal).toContain('mode: rehearsal');
     expect(rehearsal).not.toContain('gh release');
     expect(rehearsal).not.toContain('npm publish');
@@ -95,6 +93,9 @@ describe('zero-touch release workflow contracts', () => {
     expect(build).toContain('Developer ID Application:');
     expect(build).not.toContain('Developer ID Application: Nauman Tanwir');
     expect(build).toContain('productionReady: false');
+    expect(build).toContain('Verify rehearsal Authenticode signature and timestamp');
+    expect(build).toContain('artifactSha256 = (Get-FileHash -Algorithm SHA256 $file)');
+    expect(build).toContain('authenticode-verification.json');
     expect(build).toContain('publication: {tag: false, release: false, package: false, catalog: false, ledger: false}');
   });
 
@@ -393,10 +394,11 @@ describe('zero-touch release workflow contracts', () => {
 
   it('validates and readies the exact same-repository main release PR before candidate tagging', () => {
     const train = workflowSource('release-train.yml');
-    expect(train).toContain("pr.state !== 'open'");
-    expect(train).toContain("pr.base?.ref !== 'main'");
-    expect(train).toContain('pr.head?.repo?.full_name?.toLowerCase()');
-    expect(train).toContain('process.env.GITHUB_REPOSITORY.toLowerCase()');
+    expect(train).toContain('Validate release request before provider access');
+    expect(train).toContain("['candidate', 'promote'].includes(action)");
+    expect(train).toContain('candidate and promotion require the exact reviewed PR head');
+    expect(train).toContain('cli/scripts/release/index.js validate-pr');
+    expect(train).toContain('PR_POLICY_ARGS+=(--allow-merged)');
     expect(train).toContain('REQUEST_RELEASE_PR: ${{ inputs.release_pr }}');
     expect(train).toContain('EXPECTED_HEAD: ${{ steps.source.outputs.head_sha }}');
     expect(train).not.toContain('gh pr ready "$REQUEST_RELEASE_PR"');
@@ -433,6 +435,11 @@ describe('zero-touch release workflow contracts', () => {
     expect(build).toContain('rm -f "$RUNNER_TEMP/certificate.p12" "$RUNNER_TEMP/AuthKey.p8"');
     expect(build).toContain('Azure/artifact-signing-action@');
     expect(build).toContain('actions/attest-build-provenance@');
+    expect(build).toContain('createVerifiedAttestationEvidence');
+    expect(build.match(/gh attestation verify/g)?.length).toBeGreaterThanOrEqual(3);
+    expect(build).toContain('workflowSha: process.env.RELEASE_BUILD_WORKFLOW_SHA');
+    expect(build).toContain('packageManager: {');
+    expect(build).toContain('artifactFiles: files');
     expect(build).toContain('release-manifest.json');
     expect(build).toContain('npm run test:package');
     expect(build).toContain('npm run test:package-manager');
@@ -454,6 +461,13 @@ describe('zero-touch release workflow contracts', () => {
     expect(publish).toContain('choco upgrade guardscan --source "$feed" --version "$candidateVersion"');
     expect(combined).toContain('/.github/workflows/release-build.yml@refs/heads/main');
     expect(combined).not.toContain('/.github/workflows/release-train.yml@');
+  });
+
+  it('preserves malformed canary artifacts as incident-producing invalid reports', () => {
+    const canary = workflowSource('release-canary.yml');
+    expect(canary).toContain('invalidCanaryReport: true');
+    expect(canary).toContain('...invalidReports');
+    expect(canary).not.toContain('localeCompare');
   });
 
   it('binds moderated submissions to exact provider evidence and fail-closed preflights', () => {

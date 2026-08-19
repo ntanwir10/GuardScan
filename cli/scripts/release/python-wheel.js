@@ -196,6 +196,12 @@ function finalizeWheelArtifact(
       url: provenance.url,
       verified: true,
       sha256: provenance.sha256,
+      subjectSha256: provenance.subjectSha256,
+      sourceVersion: provenance.sourceVersion,
+      sourceTag: provenance.sourceTag,
+      sourceCommit: provenance.sourceCommit,
+      signerIdentity: provenance.signerIdentity,
+      signerDigest: provenance.signerDigest,
       predicateType: provenance.predicateType,
     },
   };

@@ -56,6 +56,7 @@ const {authorizePullRequest} = require('./pull-request-policy');
 
 const BOOLEAN_OPTIONS = new Set([
   'accepted',
+  'allowMerged',
   'check',
   'firstReleaseWithdrawal',
   'native',
@@ -494,6 +495,7 @@ async function main(argv) {
       checkRuns: JSON.parse(readBounded(path.resolve(options.checkRuns), 'check runs')),
       reviews: JSON.parse(readBounded(path.resolve(options.reviews), 'pull request reviews')),
       expectedHead: options.expectedHead,
+      allowMerged: options.allowMerged === true,
     });
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
     return;
