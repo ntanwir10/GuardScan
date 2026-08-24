@@ -48,6 +48,17 @@ present on the default branch. Keeping the implementation solely on the release
 PR would therefore leave the orchestrator unavailable; the inert bootstrap is a
 required first-release exception.
 
+### Inert 1.0.5 bootstrap CI exception
+
+The temporary default-branch bootstrap preserves the complete public `1.0.5`
+application and production dependency graph. Its CI therefore substitutes strict
+source-byte, package-graph, installed-package, audit-regression, and workflow
+security gates for the package-manager and five-host SEA checks that exercise the
+`1.1.0` product/runtime changes. The complete release gate, including those
+package-manager and SEA matrices, must pass on the exact protected release source
+and again after that source lands. Bootstrap CI is not acceptance evidence for
+product changes that it intentionally does not contain.
+
 ## GitHub
 
 - Reauthenticate `gh` as `ntanwir10` and verify the active host/account before
