@@ -4,9 +4,9 @@
 /.github/workflows/ci.yml @ntanwir10
 /.github/release-ledger/ @ntanwir10
 /.github/release-bootstrap-provenance.json @ntanwir10
-/.github/scripts/verify-inert-release-bootstrap.test.js @ntanwir10
+/.github/scripts/ @ntanwir10
 /cli/scripts/release/ @ntanwir10
-/cli/schemas/release-*.schema.json @ntanwir10
+/cli/schemas/guardscan.*.schema.json @ntanwir10
 /cli/package.json @ntanwir10
 /cli/package-lock.json @ntanwir10
 /catalog/homebrew-tap/ @ntanwir10
