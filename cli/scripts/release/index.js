@@ -9,11 +9,18 @@ const {
   assertStateReferencesManifest,
   createPlan,
   prepareRelease,
+  readBounded,
   summarizeState,
   validateDocument,
   validateSource,
 } = require('./lib');
-const {renderAdapters, writeRenderedOutput} = require('./renderers');
+const {
+  classifyChannelCatalog,
+  renderAdapters,
+  renderChannelCatalog,
+  writeChannelCatalogOutput,
+  writeRenderedOutput,
+} = require('./renderers');
 const {
   buildNpmArtifact,
   queryNpmRemote,
@@ -33,7 +40,7 @@ const {
 } = require('./events');
 const {createPromotionDecision} = require('./promotion');
 const {classifyRemoteArtifact} = require('./remote');
-const {planRollback, reconcileRelease} = require('./reconcile');
+const {planFirstReleaseWithdrawal, planRollback, reconcileRelease} = require('./reconcile');
 const {
   verifyManifestFiles,
   writeReleaseManifest,
@@ -42,8 +49,15 @@ const {buildWheel, finalizeWheelArtifact} = require('./python-wheel');
 const {writeArtifactSboms} = require('./artifact-sbom');
 const {buildStandaloneArtifact} = require('./standalone-artifact');
 const {createReleaseCandidate} = require('./candidate');
+const {createPublicationEvidence} = require('./publication-evidence');
 
-const BOOLEAN_OPTIONS = new Set(['accepted', 'check', 'native', 'requireNative']);
+const BOOLEAN_OPTIONS = new Set([
+  'accepted',
+  'check',
+  'firstReleaseWithdrawal',
+  'native',
+  'requireNative',
+]);
 const COMMANDS = new Set([
   'validate',
   'candidate',
@@ -58,6 +72,8 @@ const COMMANDS = new Set([
   'prepare',
   'dry-run',
   'render',
+  'catalog',
+  'catalog-status',
   'validate-adapters',
   'standalone-prototype',
   'package',
@@ -98,8 +114,10 @@ function printHelp() {
     '  verify      Verify local/remote identities and record acceptance or public verification',
     '  reconcile   Materialize the ledger and plan only incomplete remote operations',
     '  promote     Generate the machine 24-hour promotion decision',
-    '  rollback    Append rollback_started and produce a forward-fix recovery plan',
+    '  rollback    Append rollback_started and produce a verified recovery plan',
     '  status      Materialize and summarize release state',
+    '  catalog     Render or check the authoritative shared channel catalog',
+    '  catalog-status  Classify shared catalog drift against the exact release source',
     '',
     'Foundation and compatibility commands:',
     '  validate, plan, prepare, dry-run, render, validate-adapters',
@@ -122,6 +140,15 @@ function printHelp() {
     '  --artifact-id ID         Manifest artifact identity',
     '  --remote-identity ID     Immutable public identity',
     '  --remote-digest SHA256   Observed public SHA-256',
+    '  --publication-evidence P Provider-bound file evidence for GitHub, npm, or PyPI',
+    '  --manifest-url URL       Immutable GitHub release-manifest.json URL',
+    '  --manifest-sha256 SHA    Exact release-manifest.json SHA-256',
+    '  --generator-repository R Repository containing the catalog renderer',
+    '  --generator-commit SHA   Exact renderer source commit',
+    '  --known-good VERSION      Verified stable rollback source version',
+    '  --known-good-commit SHA   Exact verified rollback source commit',
+    '  --first-release-withdrawal  Withdraw the first stable train without inventing a baseline',
+    '  --first-release-authority P Protected-ledger authority document for first withdrawal',
     '',
   ].join('\n'));
 }
@@ -169,6 +196,36 @@ function platformFromOptions(options) {
   };
 }
 
+function catalogEvidence(options, manifestFile) {
+  if (!['homebrew', 'scoop'].includes(options.channel)) return undefined;
+  requireOptions('catalog publication', options, [
+    'catalogRepository',
+    'catalogCommit',
+    'catalogPullRequest',
+    'catalogLockDigest',
+    'catalogManifestDigest',
+    'catalogPath',
+    'catalogFileDigest',
+  ]);
+  const pullRequest = Number(options.catalogPullRequest);
+  if (!Number.isSafeInteger(pullRequest) || pullRequest < 1) {
+    throw new Error('catalog publication requires a positive --catalog-pull-request');
+  }
+  const evidence = {
+    repository: options.catalogRepository,
+    commit: options.catalogCommit,
+    pullRequest,
+    lockDigest: options.catalogLockDigest,
+    manifestDigest: options.catalogManifestDigest,
+    path: options.catalogPath,
+    fileDigest: options.catalogFileDigest,
+  };
+  if (evidence.manifestDigest !== manifestDigest(manifestFile)) {
+    throw new Error('catalog manifest digest does not match the exact release manifest');
+  }
+  return evidence;
+}
+
 function hashExecutable(file) {
   const buffer = fs.readFileSync(path.resolve(file));
   if (buffer.length <= 0) throw new Error('standalone executable is empty');
@@ -177,6 +234,27 @@ function hashExecutable(file) {
     size: buffer.length,
     sha256: crypto.createHash('sha256').update(buffer).digest('hex'),
   };
+}
+
+function renderCatalogFromOptions(manifest, options) {
+  requireOptions('catalog', options, [
+    'manifest',
+    'manifestUrl',
+    'manifestSha256',
+    'generatorRepository',
+    'generatorCommit',
+  ]);
+  const manifestBytes = fs.readFileSync(path.resolve(options.manifest));
+  const actualManifestSha256 = crypto.createHash('sha256').update(manifestBytes).digest('hex');
+  if (actualManifestSha256 !== options.manifestSha256) {
+    throw new Error('catalog manifestSha256 does not match the exact manifest file');
+  }
+  return renderChannelCatalog(manifest, {
+    manifestUrl: options.manifestUrl,
+    manifestSha256: options.manifestSha256,
+    generatorRepository: options.generatorRepository,
+    generatorCommit: options.generatorCommit,
+  });
 }
 
 async function handleBuild(source, options) {
@@ -257,8 +335,33 @@ function handlePublication(command, source, manifest, options) {
   ]);
   const artifact = manifestArtifact(manifest, options.artifactId);
   if (options.artifactRoot) verifyManifestFiles(manifest, options.artifactRoot);
+  const catalog = catalogEvidence(options, options.manifest);
+  const primaryPublication = command === 'publish'
+    && ['github', 'npm', 'pypi'].includes(options.channel);
+  let publication;
+  if (primaryPublication) {
+    if (!options.publicationEvidence) {
+      throw new Error(`${options.channel} publication requires --publication-evidence`);
+    }
+    const publicationFile = path.resolve(options.publicationEvidence);
+    let input;
+    try {
+      input = JSON.parse(readBounded(publicationFile, 'provider publication evidence'));
+    } catch (error) {
+      throw new Error(`provider publication evidence is invalid: ${error.message}`);
+    }
+    publication = createPublicationEvidence(input);
+    if (publication.channel !== options.channel
+        || publication.version !== source.version
+        || publication.tag !== source.tag
+        || publication.remoteIdentity !== options.remoteIdentity
+        || publication.aggregateSha256 !== options.remoteDigest
+        || publication.files[artifact.filename] !== artifact.sha256) {
+      throw new Error('provider publication evidence does not match the exact release artifact');
+    }
+  }
   const classification = classifyRemoteArtifact(
-    {sha256: artifact.sha256},
+    {sha256: publication?.aggregateSha256 || catalog?.fileDigest || artifact.sha256},
     {identity: options.remoteIdentity, sha256: options.remoteDigest}
   );
   if (classification.integrityIncident) {
@@ -280,6 +383,8 @@ function handlePublication(command, source, manifest, options) {
     artifactIds: [artifact.id],
     remoteIdentity: options.remoteIdentity,
     remoteDigest: options.remoteDigest,
+    ...(catalog ? {catalog} : {}),
+    ...(publication ? {publication} : {}),
   }, options.channel));
   return {changed: result.changed, classification, event: result.event};
 }
@@ -363,6 +468,8 @@ async function main(argv) {
       'candidateVersion',
       'sourcePr',
       'sourcePrHead',
+      'sourcePrBase',
+      'sourcePrTree',
       'timestamp',
     ]);
     process.stdout.write(`${JSON.stringify(createReleaseCandidate(
@@ -370,6 +477,8 @@ async function main(argv) {
       options.candidateVersion,
       options.sourcePr,
       options.sourcePrHead,
+      options.sourcePrBase,
+      options.sourcePrTree,
       options.timestamp
     ), null, 2)}\n`);
     return;
@@ -428,13 +537,95 @@ async function main(argv) {
 
   if (command === 'rollback') {
     requireOptions('rollback', options, ['ledger', 'timestamp', 'idempotencyKey']);
+    if (options.firstReleaseWithdrawal && (options.knownGood || options.knownGoodCommit)) {
+      throw new Error('first-release withdrawal cannot accept a known-good release');
+    }
+    if (options.firstReleaseWithdrawal && !options.firstReleaseAuthority) {
+      throw new Error('first-release withdrawal requires --first-release-authority');
+    }
+    if (!options.firstReleaseWithdrawal) {
+      requireOptions('rollback', options, ['knownGood', 'knownGoodCommit']);
+    }
     const materialized = materializeReleaseState(readEvents(options.ledger));
-    const plan = planRollback(materialized, options.knownGood);
-    const result = appendEvent(options.ledger, eventIdentity(source, options, 'rollback_started', {
-      knownGoodVersion: options.knownGood || null,
-      forwardFixVersion: plan.forwardFixVersion,
-    }));
-    process.stdout.write(`${JSON.stringify({changed: result.changed, plan}, null, 2)}\n`);
+    let firstReleaseAuthority;
+    if (options.firstReleaseWithdrawal) {
+      try {
+        firstReleaseAuthority = JSON.parse(readBounded(
+          path.resolve(options.firstReleaseAuthority),
+          'first-release withdrawal authority'
+        ));
+      } catch (error) {
+        throw new Error(`first-release withdrawal authority is invalid: ${error.message}`);
+      }
+    }
+    const plan = options.firstReleaseWithdrawal
+      ? planFirstReleaseWithdrawal(materialized, firstReleaseAuthority)
+      : planRollback(materialized, options.knownGood, options.knownGoodCommit);
+    const results = [];
+    results.push(appendEvent(options.ledger, eventIdentity(
+      source,
+      options,
+      'rollback_started',
+      plan.mode === 'first-release-withdrawal'
+        ? {
+          mode: plan.mode,
+          requiredNextVersion: plan.requiredNextVersion,
+        }
+        : {
+          mode: plan.mode,
+          knownGoodVersion: options.knownGood,
+          knownGoodCommit: options.knownGoodCommit,
+          forwardFixVersion: plan.forwardFixVersion,
+          forwardFixBranch: plan.forwardFixBranch,
+        }
+    )));
+    if (plan.mode === 'first-release-withdrawal') {
+      const incidentOptions = {
+        ...options,
+        idempotencyKey: `${options.idempotencyKey}:incident`,
+      };
+      results.push(appendEvent(options.ledger, eventIdentity(
+        source,
+        incidentOptions,
+        'incident_opened',
+        {
+          incidentId: `first-release-withdrawal-v${materialized.version}`,
+          kind: 'recovery',
+          summary: `v${materialized.version} requires withdrawal and a separately reviewed v${plan.requiredNextVersion}`,
+        }
+      )));
+    }
+    const authorityReasons = {
+      npm: 'GitHub OIDC trusted publishing cannot deprecate an existing npm version',
+      pypi: 'PyPI trusted publishing cannot yank an existing release',
+      'homebrew-core': 'Homebrew Core changes require an upstream maintainer-reviewed pull request',
+      winget: 'WinGet correction requires upstream submission and moderation authority',
+      chocolatey: 'Chocolatey unlisting or superseding requires publisher moderation authority',
+    };
+    for (const action of plan.actions.filter(item => item.automation === 'external-action-required')) {
+      const eventOptions = {
+        ...options,
+        idempotencyKey: `${options.idempotencyKey}:action-required:${action.channel}`,
+      };
+      results.push(appendEvent(options.ledger, eventIdentity(
+        source,
+        eventOptions,
+        'action_required',
+        {
+          action: action.action,
+          authority: action.authority,
+          reason: authorityReasons[action.channel],
+        },
+        action.channel
+      )));
+    }
+    process.stdout.write(`${JSON.stringify({
+      ...plan,
+      ledger: {
+        changed: results.some(result => result.changed),
+        eventHashes: results.map(result => result.event.eventHash),
+      },
+    }, null, 2)}\n`);
     return;
   }
 
@@ -524,6 +715,36 @@ async function main(argv) {
     requireOptions('render', options, ['outputDir']);
     const rendered = renderAdapters(manifest, options.channels);
     const result = writeRenderedOutput(manifest, rendered, options.outputDir, options.check === true);
+    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+    return;
+  }
+
+  if (command === 'catalog') {
+    if (!manifest) throw new Error('catalog requires --manifest');
+    requireOptions('catalog', options, ['outputDir']);
+    const rendered = renderCatalogFromOptions(manifest, options);
+    const result = writeChannelCatalogOutput(
+      rendered,
+      options.outputDir,
+      options.check === true
+    );
+    validateDocument('catalog', path.join(result.outputDir, 'channel-lock.json'), packageRoot);
+    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+    return;
+  }
+
+  if (command === 'catalog-status') {
+    if (!manifest) throw new Error('catalog-status requires --manifest');
+    requireOptions('catalog-status', options, ['catalogRoot']);
+    const rendered = renderCatalogFromOptions(manifest, options);
+    const result = classifyChannelCatalog(rendered, options.catalogRoot);
+    if (result.classification === 'exact') {
+      validateDocument(
+        'catalog',
+        path.join(path.resolve(options.catalogRoot), 'channel-lock.json'),
+        packageRoot
+      );
+    }
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
     return;
   }

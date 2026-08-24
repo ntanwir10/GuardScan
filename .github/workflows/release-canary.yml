@@ -15,17 +15,30 @@ permissions:
 
 env:
   RELEASE_NODE_VERSION: 22.23.1
+  SCOOP_INSTALL_COMMIT: b0ee913725139b816f9178163af0aecdba07a7ed
+  SCOOP_COMMIT: b588a06e41d920d2123ec70aee682bae14935939
 
 jobs:
   discover:
     name: Discover active releases
+    if: github.event_name == 'workflow_dispatch' || vars.RELEASE_AUTOMATION_ENABLED == 'true'
     runs-on: ubuntu-24.04
     outputs:
       trains: ${{ steps.matrix.outputs.trains }}
-      implementation_ref: ${{ steps.matrix.outputs.implementation_ref }}
     steps:
+      - name: Validate optional manual version before minting credentials
+        env:
+          REQUEST_VERSION: ${{ inputs.version }}
+        run: |
+          node - <<'NODE'
+          const version = process.env.REQUEST_VERSION;
+          if (version && !/^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-rc\.(0|[1-9][0-9]*))?$/.test(version)) {
+            throw new Error('manual canary version is invalid');
+          }
+          NODE
       - name: Create short-lived release app token
         id: app
+        if: inputs.version == '' || vars.RELEASE_AUTOMATION_ENABLED == 'true'
         uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
         with:
           app-id: ${{ vars.RELEASE_APP_ID }}
@@ -34,11 +47,12 @@ jobs:
         id: matrix
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
+          REQUEST_VERSION: ${{ inputs.version }}
         run: |
-          if [ -n "${{ inputs.version }}" ]; then
+          if [ -n "$REQUEST_VERSION" ]; then
             printf '{"trains":[{"version":"%s","releasePr":0,"channel":"%s"}]}\n' \
-              "${{ inputs.version }}" \
-              "$([[ '${{ inputs.version }}' == *-rc.* ]] && echo rc || echo stable)" \
+              "$REQUEST_VERSION" \
+              "$([[ "$REQUEST_VERSION" == *-rc.* ]] && echo rc || echo stable)" \
               > active.json
           else
             gh api \
@@ -47,7 +61,6 @@ jobs:
               > active.json
           fi
           echo "trains=$(node -p 'JSON.stringify(require("./active.json").trains || [])')" >> "$GITHUB_OUTPUT"
-          echo "implementation_ref=$(node -p 'require("./active.json").trains[0] ? `v${require("./active.json").trains[0].version}` : \"\"')" >> "$GITHUB_OUTPUT"
 
   package-managers:
     name: ${{ matrix.manager }} canary for ${{ matrix.train.version }}
@@ -98,37 +111,41 @@ jobs:
         env:
           VERSION: ${{ matrix.train.version }}
         run: |
+          assert_version() {
+            ACTUAL_VERSION="$("$@" | tr -d '\r')"
+            test "$ACTUAL_VERSION" = "$VERSION"
+          }
           case "${{ matrix.manager }}" in
             npm)
               npm install --global "guardscan@$VERSION"
-              guardscan --version
-              npx --yes "guardscan@$VERSION" --version
+              assert_version guardscan --version
+              assert_version npx --yes "guardscan@$VERSION" --version
               npm uninstall --global guardscan
               ;;
             pnpm)
               pnpm config set global-bin-dir "$RUNNER_TEMP/pnpm-bin"
               export PATH="$RUNNER_TEMP/pnpm-bin:$PATH"
               pnpm add --global "guardscan@$VERSION"
-              guardscan --version
-              pnpm dlx "guardscan@$VERSION" --version
+              assert_version guardscan --version
+              assert_version pnpm dlx "guardscan@$VERSION" --version
               pnpm remove --global guardscan
               ;;
             yarn-classic)
               corepack enable
               corepack prepare yarn@1.22.22 --activate
               yarn global add "guardscan@$VERSION"
-              "$(yarn global bin)/guardscan" --version
+              assert_version "$(yarn global bin)/guardscan" --version
               yarn global remove guardscan
               ;;
             yarn-modern)
               corepack enable
               corepack prepare yarn@4.9.2 --activate
-              yarn dlx "guardscan@$VERSION" --version
+              assert_version yarn dlx "guardscan@$VERSION" --version
               ;;
             bun)
               bun add --global "guardscan@$VERSION"
-              guardscan --version
-              bunx "guardscan@$VERSION" --version
+              assert_version guardscan --version
+              assert_version bunx "guardscan@$VERSION" --version
               bun remove --global guardscan
               ;;
           esac
@@ -235,7 +252,7 @@ jobs:
             --dir release --pattern "$TARGET.guardscan.sigstore.json"
           cosign verify-blob \
             --bundle "release/$TARGET.guardscan.sigstore.json" \
-            --certificate-identity-regexp "^https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release-build.yml@" \
+            --certificate-identity-regexp "^https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release-train.yml@" \
             --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
             executable/guardscan
       - name: Verify macOS signing and Gatekeeper
@@ -263,14 +280,15 @@ jobs:
           EXE="$PWD/executable/$EXECUTABLE"
           (
             cd project
-            env -i \
+            ACTUAL_VERSION="$(env -i \
               HOME="$PWD/../isolated-home" \
               USERPROFILE="$PWD/../isolated-home" \
               GUARDSCAN_HOME="$PWD/../isolated-home/.guardscan" \
               GUARDSCAN_NO_TELEMETRY=true \
               GUARDSCAN_OFFLINE=true \
               PATH="" \
-              "$EXE" --version
+              "$EXE" --version | tr -d '\r')"
+            test "$ACTUAL_VERSION" = "$VERSION"
             env -i HOME="$PWD/../isolated-home" PATH="" "$EXE" --help
             env -i HOME="$PWD/../isolated-home" PATH="" "$EXE" \
               --no-telemetry scan --offline --no-cve --skip-tests --skip-ai \
@@ -296,10 +314,16 @@ jobs:
         run: |
           PYPI_VERSION="${VERSION/-rc./rc}"
           python -m pip install --no-deps "guardscan-cli==$PYPI_VERSION"
-          guardscan --version
+          test "$(guardscan --version | tr -d '\r')" = "$VERSION"
+          guardscan --help | grep -q scan
           python -m pip uninstall -y guardscan-cli
           python -m pip install pipx
           python -m pipx install --pip-args=--no-deps "guardscan-cli==$PYPI_VERSION"
+          PIPX_BIN_DIR="$(python -m pipx environment --value PIPX_BIN_DIR)"
+          PIPX_GUARDSCAN="$PIPX_BIN_DIR/guardscan"
+          if [ -f "$PIPX_GUARDSCAN.exe" ]; then PIPX_GUARDSCAN="$PIPX_GUARDSCAN.exe"; fi
+          test "$("$PIPX_GUARDSCAN" --version | tr -d '\r')" = "$VERSION"
+          "$PIPX_GUARDSCAN" --help | grep -q scan
           python -m pipx runpip guardscan-cli show guardscan-cli
           python -m pipx uninstall guardscan-cli
           python - <<'PY'
@@ -330,6 +354,26 @@ jobs:
         train: ${{ fromJSON(needs.discover.outputs.trains) }}
         adapter: [homebrew-macos, homebrew-linux, scoop]
     steps:
+      - name: Check out the pinned Scoop installer
+        if: matrix.adapter == 'scoop'
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: ScoopInstaller/Install
+          ref: ${{ env.SCOOP_INSTALL_COMMIT }}
+          path: .scoop-installer
+          persist-credentials: false
+      - name: Install the pinned Scoop CLI
+        if: matrix.adapter == 'scoop'
+        shell: pwsh
+        run: |
+          $scoopRoot = Join-Path $env:RUNNER_TEMP 'scoop'
+          & .\.scoop-installer\install.ps1 -RunAsAdmin -ScoopDir $scoopRoot
+          if (-not $?) { throw 'Pinned Scoop installer failed' }
+          git -C "$scoopRoot\apps\scoop\current" fetch origin $env:SCOOP_COMMIT --depth 1
+          if ($LASTEXITCODE -ne 0) { throw 'Unable to fetch the pinned Scoop CLI' }
+          git -C "$scoopRoot\apps\scoop\current" checkout --detach $env:SCOOP_COMMIT
+          if ($LASTEXITCODE -ne 0) { throw 'Unable to select the pinned Scoop CLI' }
+          "$scoopRoot\shims" | Out-File $env:GITHUB_PATH -Append
       - name: Initialize fail-closed report
         shell: bash
         run: |
@@ -360,15 +404,15 @@ jobs:
             brew install ntanwir10/tap/guardscan
             brew test ntanwir10/tap/guardscan
             brew upgrade --dry-run ntanwir10/tap/guardscan
-            guardscan --version
+            test "$(guardscan --version | tr -d '\r')" = "$VERSION"
             brew uninstall guardscan
           else
-            git clone --branch "guardscan/v$VERSION" \
+            git clone --branch "channel-preview/v$VERSION" \
               https://github.com/ntanwir10/homebrew-tap preview-tap
             brew style preview-tap/Formula/guardscan.rb
             brew audit --strict preview-tap/Formula/guardscan.rb
             brew install --formula preview-tap/Formula/guardscan.rb
-            guardscan --version
+            test "$(guardscan --version | tr -d '\r')" = "$VERSION"
             brew uninstall guardscan
           fi
           node -e '
@@ -386,15 +430,26 @@ jobs:
           CHANNEL: ${{ matrix.train.channel }}
         run: |
           if ($env:CHANNEL -eq 'stable') {
-            scoop bucket add guardscan https://github.com/ntanwir10/scoop-bucket
+            scoop bucket add guardscan https://github.com/ntanwir10/homebrew-tap
+            if ($LASTEXITCODE -ne 0) { throw 'Unable to add the stable GuardScan bucket' }
+            $package = 'guardscan/guardscan'
           } else {
-            git clone --branch "guardscan/v$env:VERSION" https://github.com/ntanwir10/scoop-bucket preview-bucket
+            git clone --branch "channel-preview/v$env:VERSION" https://github.com/ntanwir10/homebrew-tap preview-bucket
+            if ($LASTEXITCODE -ne 0) { throw 'Unable to clone the GuardScan preview bucket' }
             scoop bucket add guardscan-preview (Resolve-Path preview-bucket)
+            if ($LASTEXITCODE -ne 0) { throw 'Unable to add the GuardScan preview bucket' }
+            $package = 'guardscan-preview/guardscan'
           }
-          scoop install guardscan
-          guardscan --version
+          scoop install $package
+          if ($LASTEXITCODE -ne 0) { throw 'Scoop installation failed' }
+          $installedVersion = (& guardscan --version | Out-String).Trim()
+          if ($LASTEXITCODE -ne 0 -or $installedVersion -ne $env:VERSION) {
+            throw 'Scoop invocation or version check failed'
+          }
           scoop update guardscan
+          if ($LASTEXITCODE -ne 0) { throw 'Scoop update check failed' }
           scoop uninstall guardscan
+          if ($LASTEXITCODE -ne 0) { throw 'Scoop uninstall failed' }
           node -e '
             const fs = require("fs");
             const report = JSON.parse(fs.readFileSync("report.json"));
@@ -436,7 +491,6 @@ jobs:
         if: matrix.train.channel == 'stable'
         shell: pwsh
         run: |
-          $reports = @()
           foreach ($channel in @('winget', 'chocolatey')) {
             $report = @{
               version = '${{ matrix.train.version }}'
@@ -446,29 +500,34 @@ jobs:
               target = 'windows-x64'
               evidenceUrl = "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
             }
+            $discovered = $false
             try {
               if ($channel -eq 'winget') {
                 winget show --exact --id NaumanTanwir.GuardScan --version "${{ matrix.train.version }}"
-                if ($LASTEXITCODE -ne 0) { throw 'WinGet package is not public yet' }
-                winget install --exact --id NaumanTanwir.GuardScan --version "${{ matrix.train.version }}" --accept-package-agreements --accept-source-agreements
-                if ($LASTEXITCODE -ne 0) { throw 'WinGet installation failed' }
-                guardscan --version
-                if ($LASTEXITCODE -ne 0) { throw 'WinGet invocation failed' }
-                winget uninstall --exact --id NaumanTanwir.GuardScan
-                if ($LASTEXITCODE -ne 0) { throw 'WinGet uninstall failed' }
+                if ($LASTEXITCODE -eq 0) {
+                  $discovered = $true
+                  winget install --exact --id NaumanTanwir.GuardScan --version "${{ matrix.train.version }}" --accept-package-agreements --accept-source-agreements
+                  if ($LASTEXITCODE -ne 0) { throw 'WinGet installation failed' }
+                  $installedVersion = (& guardscan --version | Out-String).Trim()
+                  if ($LASTEXITCODE -ne 0 -or $installedVersion -ne '${{ matrix.train.version }}') { throw 'WinGet invocation or version check failed' }
+                  winget uninstall --exact --id NaumanTanwir.GuardScan
+                  if ($LASTEXITCODE -ne 0) { throw 'WinGet uninstall failed' }
+                }
               } else {
                 choco info guardscan --version "${{ matrix.train.version }}" --source https://community.chocolatey.org/api/v2/
-                if ($LASTEXITCODE -ne 0) { throw 'Chocolatey package is not public yet' }
-                choco install guardscan --version "${{ matrix.train.version }}" --yes
-                if ($LASTEXITCODE -ne 0) { throw 'Chocolatey installation failed' }
-                guardscan --version
-                if ($LASTEXITCODE -ne 0) { throw 'Chocolatey invocation failed' }
-                choco uninstall guardscan --yes
-                if ($LASTEXITCODE -ne 0) { throw 'Chocolatey uninstall failed' }
+                if ($LASTEXITCODE -eq 0) {
+                  $discovered = $true
+                  choco install guardscan --version "${{ matrix.train.version }}" --yes
+                  if ($LASTEXITCODE -ne 0) { throw 'Chocolatey installation failed' }
+                  $installedVersion = (& guardscan --version | Out-String).Trim()
+                  if ($LASTEXITCODE -ne 0 -or $installedVersion -ne '${{ matrix.train.version }}') { throw 'Chocolatey invocation or version check failed' }
+                  choco uninstall guardscan --yes
+                  if ($LASTEXITCODE -ne 0) { throw 'Chocolatey uninstall failed' }
+                }
               }
-              $report.status = 'passed'
+              if ($discovered) { $report.status = 'passed' }
             } catch {
-              if ($_ -notmatch 'not found|No package found|Unable to find') { $report.status = 'failed' }
+              if ($discovered) { $report.status = 'failed' }
             }
             $report | ConvertTo-Json -Compress | Out-File "$channel.json"
           }
@@ -484,7 +543,10 @@ jobs:
   record:
     name: Append canary evidence
     needs: [discover, package-managers, native-and-pypi, adapters, moderated]
-    if: always() && needs.discover.outputs.trains != '[]'
+    if: >-
+      always()
+      && vars.RELEASE_AUTOMATION_ENABLED == 'true'
+      && needs.discover.outputs.trains != '[]'
     runs-on: ubuntu-24.04
     concurrency:
       group: release-ledger
@@ -498,9 +560,15 @@ jobs:
           private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: ${{ needs.discover.outputs.implementation_ref }}
+          ref: ${{ github.event.repository.default_branch }}
           fetch-depth: 0
           token: ${{ steps.app.outputs.token }}
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.RELEASE_NODE_VERSION }}
+      - name: Install default-branch ledger tooling
+        working-directory: cli
+        run: npm ci
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           pattern: canary-*
@@ -529,6 +597,18 @@ jobs:
               || a.report.checkedAt.localeCompare(b.report.checkedAt)
               || a.file.localeCompare(b.file));
           const versions = [...new Set(reports.map(({report}) => report.version))];
+          const expectedTargetCounts = {
+            npm: 1,
+            pnpm: 1,
+            yarn: 2,
+            bun: 1,
+            github: 5,
+            pypi: 5,
+            homebrew: 2,
+            scoop: 1,
+            winget: 1,
+            chocolatey: 1,
+          };
           fs.mkdirSync('ledgers', {recursive: true});
           for (const version of versions) {
             const tag = `v${version}`;
@@ -542,7 +622,8 @@ jobs:
             const existing = readEvents(ledger);
             if (existing.length === 0) throw new Error(`release ledger is empty for ${tag}`);
             const commit = existing[0].commit;
-            for (const {file, report} of reports.filter(item => item.report.version === version)) {
+            const versionReports = reports.filter(item => item.report.version === version);
+            for (const {file, report} of versionReports) {
               if (report.status === 'pending') continue;
               const suffix = `${process.env.GITHUB_RUN_ID}:${process.env.GITHUB_RUN_ATTEMPT}:${report.channel}:${report.target}:${path.basename(path.dirname(file))}`;
               appendEvent(ledger, {
@@ -553,20 +634,40 @@ jobs:
                 idempotencyKey: `canary:${suffix}`,
                 payload: {status: report.status, evidenceUrl: report.evidenceUrl},
               });
-              if (report.status === 'passed') {
-                const types = ['winget', 'chocolatey'].includes(report.channel)
+            }
+            const versionAggregateTimestamp = versionReports
+              .filter(({report}) => report.status !== 'pending')
+              .map(({report}) => report.checkedAt)
+              .sort()
+              .at(-1);
+            for (const [channel, expectedCount] of Object.entries(expectedTargetCounts)) {
+              const channelReports = versionReports.filter(({report}) => report.channel === channel);
+              const resolved = channelReports.filter(({report}) => report.status !== 'pending');
+              if (resolved.length === 0) continue;
+              const suffix = `${process.env.GITHUB_RUN_ID}:${process.env.GITHUB_RUN_ATTEMPT}:${channel}`;
+              if (resolved.some(({report}) => report.status !== 'passed')) {
+                appendEvent(ledger, {
+                  version, tag, commit,
+                  timestamp: versionAggregateTimestamp,
+                  type: 'channel_failed',
+                  channel,
+                  idempotencyKey: `channel-failed:${suffix}`,
+                  payload: {error: 'one or more current public canary targets failed'},
+                });
+                continue;
+              }
+              if (resolved.length === expectedCount) {
+                const types = ['winget', 'chocolatey'].includes(channel)
                   ? ['channel_accepted', 'channel_verified']
                   : ['channel_verified'];
                 for (const type of types) {
                   appendEvent(ledger, {
                     version, tag, commit,
-                    timestamp: report.checkedAt,
+                    timestamp: versionAggregateTimestamp,
                     type,
-                    channel: report.channel,
+                    channel,
                     idempotencyKey: `${type}:${suffix}`,
-                    payload: {
-                      remoteIdentity: `${report.channel}:${version}`,
-                    },
+                    payload: {},
                   });
                 }
               }
@@ -575,11 +676,26 @@ jobs:
           NODE
           git worktree add ledger-branch origin/release-ledger
           cp ledgers/*.jsonl ledger-branch/events/
+          node - <<'NODE'
+          const fs = require('fs');
+          const path = require('path');
+          const {materializeReleaseState, readEvents} = require('./cli/scripts/release/events');
+          const {reconcileRelease} = require('./cli/scripts/release/reconcile');
+          const activeFile = 'ledger-branch/active-versions.json';
+          const active = JSON.parse(fs.readFileSync(activeFile));
+          active.trains = (active.trains || []).filter(train => {
+            if (train.channel !== 'stable') return true;
+            const ledger = path.join('ledger-branch/events', `v${train.version}.jsonl`);
+            return !fs.existsSync(ledger)
+              || !reconcileRelease(materializeReleaseState(readEvents(ledger))).complete;
+          });
+          fs.writeFileSync(activeFile, `${JSON.stringify(active, null, 2)}\n`);
+          NODE
           (
             cd ledger-branch
             git config user.name guardscan-release-bot
             git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-            git add events
+            git add events active-versions.json
             git commit -m "canary evidence: run $GITHUB_RUN_ID"
             git push origin HEAD:release-ledger
           )

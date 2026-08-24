@@ -88,6 +88,22 @@ function makeManifest(): JsonDocument {
         sha256: 'd'.repeat(64),
         source,
         capabilities,
+        optionalCapabilities: {
+          schemaVersion: 'guardscan.runtime-capabilities.v1',
+          tokenCounting: {
+            dependency: 'tiktoken',
+            dependencyAvailable: false,
+            mode: 'estimated',
+            sampleTokenCount: 7,
+            safeFallbackObserved: true,
+          },
+          chartRendering: {
+            dependency: 'chartjs-node-canvas',
+            dependencyAvailable: false,
+            mode: 'unavailable',
+            safeFallbackObserved: true,
+          },
+        },
         platform: { os: 'linux', arch: 'x64', libc: 'glibc' },
         archiveFormat: 'tar.gz',
         entrypoint: 'guardscan',
@@ -197,6 +213,40 @@ function makeState(): JsonDocument {
   };
 }
 
+function makeStateV2(): JsonDocument {
+  return {
+    schemaVersion: 'guardscan.release-state.v2',
+    version: '1.2.0-rc.1',
+    tag: 'v1.2.0-rc.1',
+    commit,
+    updatedAt: timestamp,
+    lastSequence: 2,
+    lastEventHash: 'c'.repeat(64),
+    manifestSha256: digest,
+    channels: {
+      npm: {
+        status: 'published',
+        artifactIds: ['npm:guardscan@1.2.0-rc.1'],
+        updatedAt: timestamp,
+        remoteIdentity: 'npm:guardscan@1.2.0-rc.1',
+        remoteDigest: digest,
+        publication: {
+          schemaVersion: 'guardscan.provider-publication.v1',
+          channel: 'npm',
+          version: '1.2.0-rc.1',
+          tag: 'v1.2.0-rc.1',
+          remoteIdentity: 'npm:guardscan@1.2.0-rc.1',
+          aggregateSha256: digest,
+          files: {'guardscan-1.2.0-rc.1.tgz': digest},
+        },
+      },
+    },
+    canaries: {},
+    incidents: {},
+    actionRequired: [],
+  };
+}
+
 function makeApproval(): JsonDocument {
   return {
     schemaVersion: 'guardscan.release-approval.v1',
@@ -220,8 +270,11 @@ function makeApproval(): JsonDocument {
 
 describe('release contract schemas', () => {
   const validateApproval = loadValidator('guardscan.release-approval.v1.schema.json');
+  const validateCatalog = loadValidator('guardscan.channel-catalog.v1.schema.json');
+  const validateEvent = loadValidator('guardscan.release-event.v1.schema.json');
   const validateManifest = loadValidator('guardscan.release-manifest.v1.schema.json');
   const validateState = loadValidator('guardscan.release-state.v1.schema.json');
+  const validateStateV2 = loadValidator('guardscan.release-state.v2.schema.json');
 
   it('accepts representative release manifest and state documents', () => {
     const manifest = makeManifest();
@@ -233,6 +286,172 @@ describe('release contract schemas', () => {
     expect(validateState.errors).toBeNull();
     expect(validateApproval(makeApproval())).toBe(true);
     expect(validateApproval.errors).toBeNull();
+    expect(validateStateV2(makeStateV2())).toBe(true);
+    expect(validateStateV2.errors).toBeNull();
+  });
+
+  it('requires provider evidence for published primary v2 channels and rejects unknown channels', () => {
+    const missingPublication = clone(makeStateV2()) as {
+      channels: {npm: Record<string, unknown>};
+    };
+    delete missingPublication.channels.npm.publication;
+    expect(validateStateV2(missingPublication)).toBe(false);
+
+    const unknownChannel = clone(makeStateV2()) as {channels: Record<string, unknown>};
+    unknownChannel.channels.unknown = {
+      status: 'planned', artifactIds: [], updatedAt: timestamp,
+    };
+    expect(validateStateV2(unknownChannel)).toBe(false);
+  });
+
+  it('validates exact known-good and first-release recovery state shapes', () => {
+    const knownGood = clone(makeStateV2()) as Record<string, any>;
+    knownGood.recovery = {
+      status: 'started',
+      startedAt: timestamp,
+      mode: 'known-good',
+      knownGoodVersion: '1.1.9',
+      knownGoodCommit: 'b'.repeat(40),
+      forwardFixVersion: '1.2.1',
+      forwardFixBranch: 'release/forward-fix-v1.2.1-from-v1.1.9',
+    };
+    expect(validateStateV2(knownGood)).toBe(true);
+
+    const firstRelease = clone(makeStateV2()) as Record<string, any>;
+    firstRelease.recovery = {
+      status: 'provider-actions-pending',
+      startedAt: timestamp,
+      repositoryCompletedAt: timestamp,
+      mode: 'first-release-withdrawal',
+      requiredNextVersion: '1.2.1',
+      externalActionsPending: ['npm'],
+      evidence: {schemaVersion: 'guardscan.rollback-repository-evidence.v1'},
+    };
+    firstRelease.incidents = {
+      'first-release-withdrawal-v1.2.0': {
+        kind: 'recovery',
+        status: 'open',
+        openedAt: timestamp,
+        summary: 'The first stable release requires provider withdrawal',
+      },
+    };
+    expect(validateStateV2(firstRelease)).toBe(true);
+
+    firstRelease.recovery.knownGoodVersion = '1.1.9';
+    expect(validateStateV2(firstRelease)).toBe(false);
+    delete firstRelease.recovery.knownGoodVersion;
+    delete firstRelease.recovery.mode;
+    expect(validateStateV2(firstRelease)).toBe(false);
+    firstRelease.recovery.mode = 'first-release-withdrawal';
+    firstRelease.incidents['first-release-withdrawal-v1.2.0'].kind = 'deployment';
+    expect(validateStateV2(firstRelease)).toBe(false);
+  });
+
+  it('binds the shared channel catalog to GuardScan source, generator, and file digests', () => {
+    const catalog = {
+      schemaVersion: 'guardscan.channel-catalog.v1',
+      source: {
+        repository: 'ntanwir10/GuardScan',
+        version: '1.2.3',
+        tag: 'v1.2.3',
+        commit,
+        manifestUrl: 'https://github.com/ntanwir10/GuardScan/releases/download/v1.2.3/release-manifest.json',
+        manifestSha256: digest,
+      },
+      generator: {
+        repository: 'ntanwir10/GuardScan',
+        commit,
+      },
+      files: {
+        'Formula/guardscan.rb': {sha256: 'c'.repeat(64)},
+        'bucket/guardscan.json': {sha256: 'd'.repeat(64)},
+      },
+    };
+    expect(validateCatalog(catalog)).toBe(true);
+    expect(validateCatalog.errors).toBeNull();
+
+    const circular = clone(catalog) as Record<string, unknown>;
+    circular.catalogCommit = commit;
+    expect(validateCatalog(circular)).toBe(false);
+
+    const unknownFile = clone(catalog) as {files: Record<string, unknown>};
+    unknownFile.files['unmanaged.txt'] = {sha256: 'e'.repeat(64)};
+    expect(validateCatalog(unknownFile)).toBe(false);
+  });
+
+  it('models Homebrew Core as an explicit release event channel', () => {
+    expect(validateEvent({
+      schemaVersion: 'guardscan.release-event.v1',
+      version: '1.2.3',
+      tag: 'v1.2.3',
+      commit,
+      sequence: 2,
+      previousHash: 'c'.repeat(64),
+      timestamp,
+      type: 'channel_submitted',
+      channel: 'homebrew-core',
+      idempotencyKey: 'homebrew-core:v1.2.3',
+      payload: {},
+      eventHash: 'd'.repeat(64),
+    })).toBe(true);
+  });
+
+  it('validates both rollback modes and exact first-release repository evidence', () => {
+    const base = {
+      schemaVersion: 'guardscan.release-event.v1',
+      version: '1.2.0',
+      tag: 'v1.2.0',
+      commit,
+      sequence: 2,
+      previousHash: 'c'.repeat(64),
+      timestamp,
+      idempotencyKey: 'rollback:v1.2.0',
+      eventHash: 'd'.repeat(64),
+    };
+    expect(validateEvent({
+      ...base,
+      type: 'rollback_started',
+      payload: {mode: 'first-release-withdrawal', requiredNextVersion: '1.2.1'},
+    })).toBe(true);
+    expect(validateEvent({
+      ...base,
+      type: 'rollback_started',
+      payload: {
+        mode: 'known-good',
+        knownGoodVersion: '1.1.9',
+        knownGoodCommit: 'b'.repeat(40),
+        forwardFixVersion: '1.2.1',
+        forwardFixBranch: 'release/forward-fix-v1.2.1-from-v1.1.9',
+      },
+    })).toBe(true);
+    expect(validateEvent({
+      ...base,
+      type: 'rollback_started',
+      payload: {
+        mode: 'first-release-withdrawal',
+        requiredNextVersion: '1.2.1',
+        knownGoodVersion: '1.1.9',
+      },
+    })).toBe(false);
+    expect(validateEvent({
+      ...base,
+      type: 'rollback_repository_completed',
+      idempotencyKey: 'rollback-repository-completed:1.2.0',
+      payload: {
+        schemaVersion: 'guardscan.rollback-repository-evidence.v1',
+        mode: 'first-release-withdrawal',
+        defectiveVersion: '1.2.0',
+        requiredNextVersion: '1.2.1',
+        externalActionsPending: ['npm'],
+        catalog: {
+          state: 'already-absent',
+          branch: 'rollback/v1.2.0-remove-first-release',
+          pullRequest: 0,
+          commit: 'e'.repeat(40),
+        },
+        completedAt: timestamp,
+      },
+    })).toBe(true);
   });
 
   it('rejects broad, malformed, and untrusted promotion approvals', () => {
@@ -285,6 +504,22 @@ describe('release contract schemas', () => {
     };
     unknownSignature.artifacts[1].signatures![0].issuer = 'unexpected';
     expect(validateManifest(unknownSignature)).toBe(false);
+  });
+
+  it('requires observed reduced-capability evidence on standalone artifacts', () => {
+    const missing = clone(makeManifest()) as {
+      artifacts: Array<{optionalCapabilities?: Record<string, unknown>}>;
+    };
+    delete missing.artifacts[1].optionalCapabilities;
+    expect(validateManifest(missing)).toBe(false);
+
+    const inconsistent = clone(makeManifest()) as {
+      artifacts: Array<{
+        optionalCapabilities?: {tokenCounting: {dependencyAvailable: boolean}};
+      }>;
+    };
+    inconsistent.artifacts[1].optionalCapabilities!.tokenCounting.dependencyAvailable = true;
+    expect(validateManifest(inconsistent)).toBe(false);
   });
 
   it('rejects invalid state transitions, channel names, and unknown fields', () => {

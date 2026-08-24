@@ -22,13 +22,27 @@ function writeJson(file, document) {
   fs.writeFileSync(file, `${JSON.stringify(document, null, 2)}\n`, 'utf8');
 }
 
-function createReleaseCandidate(source, candidateVersion, sourcePr, sourcePrHead, timestamp) {
+function createReleaseCandidate(
+  source,
+  candidateVersion,
+  sourcePr,
+  sourcePrHead,
+  sourcePrBase,
+  sourcePrTree,
+  timestamp
+) {
   assertCandidateVersion(source.version, candidateVersion);
   if (!Number.isSafeInteger(Number(sourcePr)) || Number(sourcePr) < 1) {
     throw new Error('release candidate source PR is invalid');
   }
   if (!/^[a-f0-9]{40}$/.test(sourcePrHead || '')) {
     throw new Error('release candidate source PR head is invalid');
+  }
+  if (!/^[a-f0-9]{40}$/.test(sourcePrBase || '')) {
+    throw new Error('release candidate source PR base is invalid');
+  }
+  if (!/^[a-f0-9]{40}$/.test(sourcePrTree || '')) {
+    throw new Error('release candidate source PR tree is invalid');
   }
   const date = new Date(timestamp);
   if (!Number.isFinite(date.getTime()) || date.toISOString() !== timestamp) {
@@ -62,6 +76,8 @@ function createReleaseCandidate(source, candidateVersion, sourcePr, sourcePrHead
     candidateVersion,
     sourcePr: Number(sourcePr),
     sourcePrHead,
+    sourcePrBase,
+    sourcePrTree,
     createdAt: timestamp,
   };
   writeJson(path.join(source.repositoryRoot, '.release-candidate.json'), metadata);

@@ -59,6 +59,7 @@ function createPromotionDecision(input) {
   const reasons = [];
   if (evaluatedAt < eligibleAt) reasons.push('soak_window_incomplete');
   if (input.rc.sourcePrHead !== input.currentSourcePrHead) reasons.push('source_pr_head_changed');
+  if (input.rc.sourcePrBase !== input.currentSourcePrBase) reasons.push('source_pr_base_changed');
   const activeIncidents = (input.incidents || []).filter(incident => incident.status === 'open');
   if (activeIncidents.length > 0) reasons.push('active_release_incident');
 
@@ -92,12 +93,16 @@ function createPromotionDecision(input) {
       eligibleAt: eligibleAt.toISOString(),
       sourcePr: input.rc.sourcePr,
       sourcePrHead: input.rc.sourcePrHead,
+      sourcePrBase: input.rc.sourcePrBase,
+      sourcePrTree: input.rc.sourcePrTree,
     },
     stable: {
       version,
       tag: `v${version}`,
       sourcePr: input.rc.sourcePr,
       sourcePrHead: input.currentSourcePrHead,
+      sourcePrBase: input.currentSourcePrBase,
+      sourcePrTree: input.rc.sourcePrTree,
     },
     evaluatedAt: input.evaluatedAt,
     policy: {

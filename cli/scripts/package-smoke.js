@@ -7,6 +7,7 @@ const path = require('path');
 const { spawnSync } = require('child_process');
 const Ajv = require('ajv');
 const addFormats = require('ajv-formats');
+const {assertCompiledRuntimeFilesClean} = require('./release/runtime-artifact-policy');
 
 const packageRoot = path.resolve(__dirname, '..');
 const expectedVersion = require(path.join(packageRoot, 'package.json')).version;
@@ -27,8 +28,7 @@ try {
     name: 'guardscan-package-smoke', version: '1.0.0', private: true,
   }));
   fs.writeFileSync(path.join(project, 'index.js'), 'module.exports = () => 42;\n');
-  run(
-    npmCommand(),
+  runNpm(
     [
       'install',
       '--global',
@@ -47,6 +47,7 @@ try {
     ? path.join(globalPrefix, 'node_modules', 'guardscan')
     : path.join(globalPrefix, 'lib', 'node_modules', 'guardscan');
   const files = new Set(listPackageFiles(installedPackage));
+  assertCompiledRuntimeFilesClean(installedPackage, files, 'npm packed runtime');
   for (const required of [
     'package.json',
     'dist/index.js',
@@ -77,6 +78,14 @@ try {
     ? path.join(globalPrefix, 'guardscan.cmd')
     : path.join(globalPrefix, 'bin', 'guardscan');
   assert(fs.existsSync(cli), `global install did not create the GuardScan shim at ${cli}`);
+  const cliCommand = process.platform === 'win32' ? process.execPath : cli;
+  const cliPrefix = process.platform === 'win32'
+    ? [path.join(installedPackage, 'dist', 'index.js')]
+    : [];
+  if (process.platform === 'win32') {
+    const shim = fs.readFileSync(cli, 'utf8').replace(/\\/g, '/');
+    assert(shim.includes('node_modules/guardscan/dist/index.js'), 'Windows shim has the wrong target');
+  }
   const env = {
     ...npmEnv,
     GUARDSCAN_HOME: home,
@@ -84,24 +93,24 @@ try {
     USERPROFILE: home,
     GUARDSCAN_NO_TELEMETRY: 'true',
   };
-  const version = run(cli, ['--version'], project, env);
+  const version = run(cliCommand, [...cliPrefix, '--version'], project, env);
   const versionLines = version.stdout.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
   const reportedVersion = versionLines.at(-1);
   assert(
     reportedVersion === expectedVersion,
     `installed CLI reported ${JSON.stringify(reportedVersion)}; expected ${expectedVersion}`
   );
-  const help = run(cli, ['--help'], project, env);
+  const help = run(cliCommand, [...cliPrefix, '--help'], project, env);
   for (const command of ['scan', 'security', 'vuln|cve', 'telemetry', 'cache']) {
     assert(help.stdout.includes(command), `installed CLI help is missing ${command}`);
   }
-  run(cli, ['--no-telemetry', 'init'], project, env);
+  run(cliCommand, [...cliPrefix, '--no-telemetry', 'init'], project, env);
   const config = parseJsonLikeYaml(path.join(home, '.guardscan', 'config.yml'));
   assert(config.telemetryEnabled === false, 'installed CLI did not default telemetry off');
   assert(config.offlineMode === true, 'installed CLI did not default offline mode on');
 
   const output = path.join(project, 'scan.json');
-  run(cli, [
+  run(cliCommand, [...cliPrefix,
     '--no-telemetry',
     'scan',
     '--offline',
@@ -126,10 +135,10 @@ try {
 
   const spdxOutput = path.join(project, 'sbom-spdx.json');
   const cycloneDxOutput = path.join(project, 'sbom-cyclonedx.json');
-  run(cli, [
+  run(cliCommand, [...cliPrefix,
     '--no-telemetry', '--offline', 'sbom', '--format', 'spdx', '--output', spdxOutput,
   ], project, env);
-  run(cli, [
+  run(cliCommand, [...cliPrefix,
     '--no-telemetry', '--offline', 'sbom', '--format', 'cyclonedx', '--output', cycloneDxOutput,
   ], project, env);
   validateSboms(
@@ -137,7 +146,12 @@ try {
     JSON.parse(fs.readFileSync(cycloneDxOutput, 'utf8'))
   );
 
-  const telemetry = run(cli, ['--no-telemetry', 'telemetry', 'status'], project, env);
+  const telemetry = run(
+    cliCommand,
+    [...cliPrefix, '--no-telemetry', 'telemetry', 'status'],
+    project,
+    env
+  );
   assert(telemetry.stdout.includes('Consent: disabled'), 'installed telemetry consent default is wrong');
   assert(telemetry.stdout.includes('Pending events: 0'), 'installed telemetry outbox is not empty');
   process.stdout.write(`Package smoke passed: ${path.basename(tarball)}\n`);
@@ -145,8 +159,13 @@ try {
   fs.rmSync(tempRoot, { recursive: true, force: true });
 }
 
-function npmCommand() {
-  return process.platform === 'win32' ? 'npm.cmd' : 'npm';
+function runNpm(args, cwd, env) {
+  const npmCli = process.env.npm_execpath;
+  if (npmCli && fs.existsSync(npmCli)) {
+    return run(process.execPath, [npmCli, ...args], cwd, env);
+  }
+  assert(process.platform !== 'win32', 'npm_execpath is required for shell-free Windows smoke tests');
+  return run('npm', args, cwd, env);
 }
 
 function resolveTarball(argv, destination, env) {
@@ -163,8 +182,7 @@ function resolveTarball(argv, destination, env) {
     assert(stat.isFile() && resolved.endsWith('.tgz'), `invalid package tarball: ${resolved}`);
     return resolved;
   }
-  const packed = run(
-    npmCommand(),
+  const packed = runNpm(
     ['pack', '--json', '--pack-destination', destination],
     packageRoot,
     env

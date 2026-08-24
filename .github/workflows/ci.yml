@@ -2,12 +2,16 @@ name: CI
 
 on:
   push:
-    branches: [main, develop, "release/**"]
+    branches: [main, develop]
   pull_request:
     branches: [main, develop]
 
 permissions:
   contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 env:
   RELEASE_NODE_VERSION: 22.23.1

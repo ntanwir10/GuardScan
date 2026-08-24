@@ -101,6 +101,48 @@
         "accurateTokenCounting": { "type": "boolean" }
       }
     },
+    "optionalCapabilities": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "tokenCounting", "chartRendering"],
+      "properties": {
+        "schemaVersion": { "const": "guardscan.runtime-capabilities.v1" },
+        "tokenCounting": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "dependency",
+            "dependencyAvailable",
+            "mode",
+            "sampleTokenCount",
+            "safeFallbackObserved"
+          ],
+          "properties": {
+            "dependency": { "const": "tiktoken" },
+            "dependencyAvailable": { "const": false },
+            "mode": { "const": "estimated" },
+            "sampleTokenCount": { "type": "integer", "minimum": 1 },
+            "safeFallbackObserved": { "const": true }
+          }
+        },
+        "chartRendering": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "dependency",
+            "dependencyAvailable",
+            "mode",
+            "safeFallbackObserved"
+          ],
+          "properties": {
+            "dependency": { "const": "chartjs-node-canvas" },
+            "dependencyAvailable": { "const": false },
+            "mode": { "const": "unavailable" },
+            "safeFallbackObserved": { "const": true }
+          }
+        }
+      }
+    },
     "source": {
       "type": "object",
       "additionalProperties": false,
@@ -204,6 +246,7 @@
               "archiveFormat": {},
               "entrypoint": {},
               "url": {},
+              "optionalCapabilities": {},
               "signatures": {},
               "sboms": {},
               "archiveEntries": {},
@@ -215,6 +258,7 @@
               "archiveFormat",
               "entrypoint",
               "url",
+              "optionalCapabilities",
               "signatures",
               "sboms",
               "archiveEntries",
@@ -264,6 +308,7 @@
         "sha256": { "$ref": "#/definitions/sha256" },
         "source": { "$ref": "#/definitions/source" },
         "capabilities": { "$ref": "#/definitions/capabilities" },
+        "optionalCapabilities": { "$ref": "#/definitions/optionalCapabilities" },
         "platform": { "$ref": "#/definitions/platform" },
         "archiveFormat": { "enum": ["tar.gz", "zip"] },
         "entrypoint": {

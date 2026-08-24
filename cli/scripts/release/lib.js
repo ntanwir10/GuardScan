@@ -18,11 +18,34 @@ const CHANNELS = Object.freeze([
   {id: 'bun', phase: 'node', operation: 'verify', artifacts: ['npm-tarball']},
   {id: 'github', phase: 'native', operation: 'publish', artifacts: ['standalone', 'checksum', 'sbom']},
   {id: 'homebrew', phase: 'full', operation: 'update-adapter', artifacts: ['standalone']},
+  {
+    id: 'homebrew-core',
+    phase: 'full',
+    operation: 'submit',
+    artifacts: ['npm-tarball'],
+    required: false,
+  },
   {id: 'scoop', phase: 'full', operation: 'update-adapter', artifacts: ['standalone']},
   {id: 'winget', phase: 'full', operation: 'submit', artifacts: ['standalone']},
   {id: 'chocolatey', phase: 'full', operation: 'publish', artifacts: ['standalone']},
   {id: 'pypi', phase: 'full', operation: 'publish', artifacts: ['python-wheel', 'standalone']},
 ]);
+
+const REQUIRED_RC_CHANNELS = Object.freeze([
+  'npm', 'pnpm', 'yarn', 'bun', 'github', 'homebrew', 'scoop', 'pypi',
+]);
+
+function releaseTrainChannels(channel, options = {}) {
+  if (!['rc', 'stable'].includes(channel)) {
+    throw new Error(`unsupported release train channel: ${channel}`);
+  }
+  const channels = [...REQUIRED_RC_CHANNELS];
+  if (channel === 'stable') {
+    if (options.homebrewCoreEnabled === true) channels.push('homebrew-core');
+    channels.push('winget', 'chocolatey');
+  }
+  return channels;
+}
 
 function readBounded(file, label = 'file') {
   const descriptor = fs.openSync(file, 'r');
@@ -106,8 +129,28 @@ function validateSource(options = {}) {
   if (semver.valid(packageJson.version)) {
     const changelog = readBounded(path.join(packageRoot, 'CHANGELOG.md'), 'CHANGELOG.md');
     const escapedVersion = packageJson.version.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    if (!new RegExp(`^## \\[${escapedVersion}\\](?:\\s|$)`, 'm').test(changelog)) {
+    const releaseHeadings = changelog.match(
+      new RegExp(`^## \\[${escapedVersion}\\](?:\\s|$)`, 'gm')
+    ) || [];
+    if (releaseHeadings.length === 0) {
       errors.push(`CHANGELOG.md has no release section for ${packageJson.version}`);
+    } else if (releaseHeadings.length !== 1) {
+      errors.push(`CHANGELOG.md must contain exactly one release section for ${packageJson.version}`);
+    }
+    if (semver.prerelease(packageJson.version) === null) {
+      const unreleasedHeading = /^## \[Unreleased\][^\n]*$/m.exec(changelog);
+      const unreleasedBody = unreleasedHeading
+        ? changelog.slice(
+          unreleasedHeading.index + unreleasedHeading[0].length,
+          (() => {
+            const next = changelog.indexOf('\n## [', unreleasedHeading.index + unreleasedHeading[0].length);
+            return next === -1 ? changelog.length : next;
+          })()
+        ).trim()
+        : '';
+      if (unreleasedBody.length > 0) {
+        errors.push(`CHANGELOG.md Unreleased section must be empty for stable release ${packageJson.version}`);
+      }
     }
   }
 
@@ -137,6 +180,7 @@ function createPlan(source, profile = 'node') {
     phase: channel.phase,
     operation: channel.operation,
     artifacts: [...channel.artifacts],
+    required: channel.required !== false,
     status: PROFILE_ORDER[channel.phase] <= PROFILE_ORDER[profile] ? 'planned' : 'deferred',
   }));
   const gates = [
@@ -181,7 +225,9 @@ function createInitialState(source, profile, timestamp) {
   if (!(profile in PROFILE_ORDER)) throw new Error(`Unknown release profile: ${profile}`);
   const normalizedTimestamp = new Date(timestamp).toISOString();
   const publicationChannels = CHANNELS.filter(channel => (
-    channel.operation !== 'verify' && PROFILE_ORDER[channel.phase] <= PROFILE_ORDER[profile]
+    channel.operation !== 'verify'
+      && channel.required !== false
+      && PROFILE_ORDER[channel.phase] <= PROFILE_ORDER[profile]
   ));
   return {
     schemaVersion: 'guardscan.release-state.v1',
@@ -241,6 +287,7 @@ function validateDocument(kind, file, packageRoot) {
   const document = readJson(path.resolve(file), kind);
   const schemaNames = {
     approval: 'guardscan.release-approval.v1.schema.json',
+    catalog: 'guardscan.channel-catalog.v1.schema.json',
     decision: 'guardscan.promotion-decision.v1.schema.json',
     event: 'guardscan.release-event.v1.schema.json',
     manifest: 'guardscan.release-manifest.v1.schema.json',
@@ -260,7 +307,7 @@ function validateDocument(kind, file, packageRoot) {
 }
 
 function assertInternalDocumentIdentity(kind, document) {
-  if (kind === 'decision') return;
+  if (kind === 'decision' || kind === 'catalog') return;
   if (document.tag !== `v${document.version}`) {
     throw new Error(`${kind} tag does not match its version`);
   }
@@ -340,6 +387,7 @@ module.exports = {
   prepareRelease,
   readBounded,
   readJson,
+  releaseTrainChannels,
   resolveGitCommit,
   resolveGitTimestamp,
   summarizeState,

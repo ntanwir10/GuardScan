@@ -1,18 +1,18 @@
 /**
- * Monitoring API contract tests.
+ * Telemetry collector contract tests.
  *
  * These tests pin the request paths and payload envelopes emitted by the CLI
  * telemetry client.
  */
 
 import axios from 'axios';
-import { APIClient, TelemetryRequest } from '../../src/utils/api-client';
+import { TelemetryClient, TelemetryRequest } from '../../src/utils/telemetry-client';
 
 jest.mock('axios');
 
 const mockedAxios = axios as jest.Mocked<typeof axios>;
 
-describe('Monitoring API contracts', () => {
+describe('Telemetry collector contracts', () => {
   beforeEach(() => {
     jest.clearAllMocks();
   });
@@ -22,10 +22,9 @@ describe('Monitoring API contracts', () => {
       const post = jest.fn().mockResolvedValue({ status: 202 });
       mockedAxios.create.mockReturnValue({
         post,
-        get: jest.fn(),
       } as any);
 
-      const client = new APIClient('https://monitoring.example');
+      const client = new TelemetryClient('https://telemetry.example');
       const payload: TelemetryRequest = {
         schemaVersion: 'guardscan.telemetry.v1',
         batchId: '00000000-0000-4000-8000-000000000001',
@@ -56,24 +55,11 @@ describe('Monitoring API contracts', () => {
 
       expect(mockedAxios.create).toHaveBeenCalledWith(
         expect.objectContaining({
-          baseURL: 'https://monitoring.example',
+          baseURL: 'https://telemetry.example',
           headers: { 'Content-Type': 'application/json' },
         })
       );
       expect(post).toHaveBeenCalledWith('/api/telemetry', payload);
-    });
-
-    it('checks API health with GET /health', async () => {
-      const get = jest.fn().mockResolvedValue({ status: 200 });
-      mockedAxios.create.mockReturnValue({
-        post: jest.fn(),
-        get,
-      } as any);
-
-      const client = new APIClient('https://monitoring.example');
-      await expect(client.ping()).resolves.toBe(true);
-
-      expect(get).toHaveBeenCalledWith('/health', { timeout: 3000 });
     });
   });
 });

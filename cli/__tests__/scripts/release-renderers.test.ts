@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -5,8 +6,11 @@ import yaml from 'js-yaml';
 
 const {
   MARKER_FILE,
+  classifyChannelCatalog,
   renderAdapters,
+  renderChannelCatalog,
   toPep440,
+  writeChannelCatalogOutput,
   writeRenderedOutput,
 } = require('../../scripts/release/renderers') as {
   MARKER_FILE: string;
@@ -14,7 +18,20 @@ const {
     manifest: Record<string, any>,
     channels?: string
   ) => {channels: string[]; files: Record<string, string>};
+  renderChannelCatalog: (
+    manifest: Record<string, any>,
+    options: Record<string, string>
+  ) => {files: Record<string, string>; lock: Record<string, any>};
+  classifyChannelCatalog: (
+    rendered: {files: Record<string, string>; lock: Record<string, any>},
+    catalogRoot: string
+  ) => Record<string, unknown>;
   toPep440: (version: string) => string;
+  writeChannelCatalogOutput: (
+    rendered: {files: Record<string, string>; lock: Record<string, any>},
+    outputDir: string,
+    checkOnly?: boolean
+  ) => {changed: boolean; checked: boolean; files: string[]; lockSha256: string};
   writeRenderedOutput: (
     manifest: Record<string, any>,
     rendered: {channels: string[]; files: Record<string, string>},
@@ -140,6 +157,13 @@ function makeManifest(): Record<string, any> {
 }
 
 describe('release adapter rendering', () => {
+  const catalogOptions = {
+    manifestUrl: 'https://github.com/ntanwir10/GuardScan/releases/download/v1.2.3/release-manifest.json',
+    manifestSha256: '9'.repeat(64),
+    generatorRepository: 'ntanwir10/GuardScan',
+    generatorCommit: commit,
+  };
+
   it('renders deterministic native adapters and a fail-closed PyPI publication descriptor', () => {
     const manifest = makeManifest();
     const rendered = renderAdapters(manifest, 'pypi,chocolatey,winget,scoop,homebrew');
@@ -192,6 +216,154 @@ describe('release adapter rendering', () => {
       artifact.kind !== 'python-wheel'
     ));
     expect(() => renderAdapters(noWheels, 'pypi')).toThrow(/requires at least one prebuilt/);
+  });
+
+  it('renders one cryptographically bound shared Homebrew and Scoop catalog', () => {
+    const rendered = renderChannelCatalog(makeManifest(), catalogOptions);
+    expect(Object.keys(rendered.files).sort()).toEqual([
+      'Formula/guardscan.rb',
+      'bucket/guardscan.json',
+      'channel-lock.json',
+    ]);
+    expect(rendered.lock).toMatchObject({
+      schemaVersion: 'guardscan.channel-catalog.v1',
+      source: {
+        repository: 'ntanwir10/GuardScan',
+        version: '1.2.3',
+        tag: 'v1.2.3',
+        commit,
+        manifestSha256: '9'.repeat(64),
+      },
+      generator: {repository: 'ntanwir10/GuardScan', commit},
+    });
+    expect(rendered.lock).not.toHaveProperty('catalogCommit');
+    for (const catalogPath of ['Formula/guardscan.rb', 'bucket/guardscan.json']) {
+      expect(rendered.lock.files[catalogPath].sha256).toBe(
+        crypto.createHash('sha256').update(rendered.files[catalogPath]).digest('hex')
+      );
+    }
+  });
+
+  it('detects missing, older, newer, and manually edited catalog projections', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'guardscan-catalog-'));
+    try {
+      const rendered = renderChannelCatalog(makeManifest(), catalogOptions);
+      expect(classifyChannelCatalog(rendered, root)).toMatchObject({
+        classification: 'missing',
+        integrityIncident: false,
+        action: 'open-or-reuse-update-pr',
+      });
+      expect(writeChannelCatalogOutput(rendered, root)).toMatchObject({changed: true});
+      expect(writeChannelCatalogOutput(rendered, root, true)).toMatchObject({
+        changed: false,
+        checked: true,
+      });
+      expect(classifyChannelCatalog(rendered, root)).toMatchObject({
+        classification: 'exact',
+        integrityIncident: false,
+        action: 'record-verified',
+      });
+
+      fs.writeFileSync(path.join(root, 'Formula/evil.rb'), 'system "curl", "https://evil.invalid"\n');
+      expect(classifyChannelCatalog(rendered, root)).toMatchObject({
+        classification: 'digest-conflict',
+        integrityIncident: true,
+        action: 'stop',
+      });
+      expect(() => writeChannelCatalogOutput(rendered, root, true)).toThrow(/unmanaged generated paths/);
+      fs.rmSync(path.join(root, 'Formula/evil.rb'));
+
+      fs.appendFileSync(path.join(root, 'Formula/guardscan.rb'), '# human drift\n');
+      expect(classifyChannelCatalog(rendered, root)).toMatchObject({
+        classification: 'digest-conflict',
+        integrityIncident: true,
+        action: 'stop',
+      });
+      expect(() => writeChannelCatalogOutput(rendered, root, true)).toThrow(/manually edited/);
+
+      writeChannelCatalogOutput(rendered, root);
+      const lockPath = path.join(root, 'channel-lock.json');
+      const newer = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
+      newer.source.version = '9.0.0';
+      newer.source.tag = 'v9.0.0';
+      newer.source.manifestUrl =
+        'https://github.com/ntanwir10/GuardScan/releases/download/v9.0.0/release-manifest.json';
+      fs.writeFileSync(lockPath, `${JSON.stringify(newer, null, 2)}\n`);
+      expect(classifyChannelCatalog(rendered, root)).toMatchObject({
+        classification: 'unexpected-newer',
+        integrityIncident: true,
+        action: 'stop',
+      });
+
+      const older = {
+        ...newer,
+        source: {
+          ...newer.source,
+          version: '1.2.2',
+          tag: 'v1.2.2',
+          manifestUrl:
+            'https://github.com/ntanwir10/GuardScan/releases/download/v1.2.2/release-manifest.json',
+        },
+      };
+      fs.writeFileSync(lockPath, `${JSON.stringify(older, null, 2)}\n`);
+      expect(classifyChannelCatalog(rendered, root)).toMatchObject({
+        classification: 'older',
+        integrityIncident: false,
+        action: 'open-or-reuse-update-pr',
+      });
+    } finally {
+      fs.rmSync(root, {recursive: true, force: true});
+    }
+  });
+
+  it('rejects catalog identity drift and renders a stable source formula for Homebrew Core', () => {
+    expect(() => renderChannelCatalog(makeManifest(), {
+      ...catalogOptions,
+      generatorCommit: 'b'.repeat(40),
+    })).toThrow(/exact release source commit/);
+    expect(() => renderChannelCatalog(makeManifest(), {
+      ...catalogOptions,
+      manifestUrl: 'https://github.com/ntanwir10/GuardScan/releases/latest/download/release-manifest.json',
+    })).toThrow(/canonical immutable/);
+
+    const manifest = makeManifest();
+    manifest.artifacts.push({
+      id: 'npm:guardscan@1.2.3',
+      kind: 'npm-tarball',
+      filename: 'guardscan-1.2.3.tgz',
+      size: 1024,
+      sha256: '8'.repeat(64),
+      source,
+      integrity: `sha512-${'A'.repeat(86)}==`,
+      url: 'https://registry.npmjs.org/guardscan/-/guardscan-1.2.3.tgz',
+      provenance: {
+        type: 'slsa',
+        url: 'https://github.com/ntanwir10/GuardScan/attestations/npm',
+        verified: true,
+      },
+    });
+    const core = renderAdapters(manifest, 'homebrew-core');
+    expect(core.files['homebrew-core/Formula/guardscan.rb']).toContain('depends_on "node"');
+    expect(core.files['homebrew-core/Formula/guardscan.rb']).toContain('*std_npm_args');
+
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'guardscan-homebrew-core-'));
+    try {
+      const output = path.join(root, 'adapters');
+      writeRenderedOutput(manifest, core, output);
+      expect(validateAdapters(manifest, output, 'homebrew-core')).toMatchObject({
+        valid: true,
+        structural: {'homebrew-core': {valid: true, files: 1}},
+      });
+      expect(nativeValidationPlan(output, ['homebrew-core'], 'darwin')).toEqual([
+        expect.objectContaining({
+          channel: 'homebrew-core',
+          command: 'brew',
+          args: expect.arrayContaining(['audit', '--new-formula']),
+        }),
+      ]);
+    } finally {
+      fs.rmSync(root, {recursive: true, force: true});
+    }
   });
 
   it('writes owned output atomically, detects drift, and refuses unmanaged replacement', () => {

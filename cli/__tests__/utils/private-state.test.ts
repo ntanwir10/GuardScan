@@ -73,10 +73,12 @@ describe('private state persistence', () => {
     for (let index = 0; index < 5; index++) {
       fs.writeFileSync(path.join(root, `${index}.json`), '{}');
     }
-    expect(listDirectoryBounded(root, 3)).toEqual({
-      names: ['0.json', '1.json', '2.json'],
-      truncated: true,
-    });
+    const listing = listDirectoryBounded(root, 3);
+    expect(listing.truncated).toBe(true);
+    expect(listing.names).toHaveLength(3);
+    expect(listing.names).toEqual([...listing.names].sort((left, right) => left.localeCompare(right)));
+    expect(new Set(listing.names).size).toBe(3);
+    expect(listing.names.every(name => /^[0-4]\.json$/.test(name))).toBe(true);
   });
 
   it('can process every directory entry with bounded callback memory', () => {

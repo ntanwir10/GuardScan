@@ -8,13 +8,17 @@ const {spawnSync} = require('child_process');
 const {builtinModules} = require('module');
 const esbuild = require('esbuild');
 const {inject} = require('postject');
+const {assertRuntimeArtifactClean} = require('./runtime-artifact-policy');
 
 const PROTOTYPE_SCHEMA = 'guardscan.standalone-prototype.v1';
+const RUNTIME_CAPABILITY_SCHEMA = 'guardscan.runtime-capabilities.v1';
 const SEA_FUSE = 'NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2';
 const OPTIONAL_EXTERNALS = Object.freeze(['chartjs-node-canvas', 'tiktoken']);
 const MAX_BUNDLE_BYTES = 256 * 1024 * 1024;
 const MAX_EXECUTABLE_BYTES = 512 * 1024 * 1024;
 const BUILTIN_MODULES = new Set(builtinModules.flatMap(name => [name, name.replace(/^node:/, '')]));
+const TRANSIENT_RENAME_CODES = new Set(['EACCES', 'EBUSY', 'EPERM']);
+const RENAME_RETRY_DELAYS_MS = Object.freeze([50, 100, 200, 400, 800, 1000, 1500, 2000]);
 
 function hostPlatform() {
   const osName = {darwin: 'darwin', linux: 'linux', win32: 'windows'}[process.platform];
@@ -103,6 +107,21 @@ function hashRegularFile(file, maxBytes, label) {
   }
 }
 
+async function renameWithTransientRetry(source, destination, options = {}) {
+  const rename = options.rename || fs.promises.rename;
+  const wait = options.wait || (delay => new Promise(resolve => setTimeout(resolve, delay)));
+  const delays = options.delays || RENAME_RETRY_DELAYS_MS;
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      await rename(source, destination);
+      return;
+    } catch (error) {
+      if (!TRANSIENT_RENAME_CODES.has(error?.code) || attempt >= delays.length) throw error;
+      await wait(delays[attempt]);
+    }
+  }
+}
+
 function run(command, args, cwd, env) {
   const result = spawnSync(command, args, {
     cwd,
@@ -144,6 +163,26 @@ function assertSuccessfulOutput(result, expected, label) {
   if (!result.stdout.split(/\r?\n/).map(line => line.trim()).includes(expected)) {
     throw new Error(`${label} output did not contain ${expected}`);
   }
+}
+
+function assertReducedCapabilityEvidence(evidence) {
+  const tokenCounting = evidence?.tokenCounting;
+  const chartRendering = evidence?.chartRendering;
+  const valid = evidence?.schemaVersion === RUNTIME_CAPABILITY_SCHEMA
+    && tokenCounting?.dependency === 'tiktoken'
+    && tokenCounting.dependencyAvailable === false
+    && tokenCounting.mode === 'estimated'
+    && Number.isInteger(tokenCounting.sampleTokenCount)
+    && tokenCounting.sampleTokenCount > 0
+    && tokenCounting.safeFallbackObserved === true
+    && chartRendering?.dependency === 'chartjs-node-canvas'
+    && chartRendering.dependencyAvailable === false
+    && chartRendering.mode === 'unavailable'
+    && chartRendering.safeFallbackObserved === true;
+  if (!valid) {
+    throw new Error('standalone reduced-capability contract failed');
+  }
+  return evidence;
 }
 
 function smokeStandalone(executable, version) {
@@ -198,11 +237,31 @@ function smokeStandalone(executable, version) {
     if (!telemetry.stdout.includes('Consent: disabled')) {
       throw new Error('standalone telemetry opt-out contract failed');
     }
+    const capabilityResult = run(
+      executable,
+      ['--no-telemetry', 'capabilities', '--json'],
+      project,
+      env
+    );
+    let optionalCapabilities;
+    try {
+      optionalCapabilities = assertReducedCapabilityEvidence(
+        JSON.parse(capabilityResult.stdout.trim())
+      );
+    } catch (error) {
+      throw new Error(
+        `standalone capability evidence was invalid: ${error instanceof Error ? error.message : error}`
+      );
+    }
+    const optionalCapabilitiesUnavailableSafely =
+      optionalCapabilities.tokenCounting.safeFallbackObserved === true
+      && optionalCapabilities.chartRendering.safeFallbackObserved === true;
     return {
       valid: true,
       nodeAbsentFromPath: true,
       packageManagersAbsentFromPath: true,
-      optionalCapabilitiesUnavailableSafely: true,
+      optionalCapabilitiesUnavailableSafely,
+      optionalCapabilities,
       spdx: true,
       cyclonedx: true,
     };
@@ -221,6 +280,7 @@ async function prepareExecutable(bundleFile, blobFile, executable) {
     useCodeCache: false,
   }, null, 2)}\n`, {encoding: 'utf8', mode: 0o600});
   run(process.execPath, ['--experimental-sea-config', seaConfig], path.dirname(bundleFile), process.env);
+  assertRuntimeArtifactClean(fs.readFileSync(blobFile), 'standalone SEA payload');
   fs.copyFileSync(process.execPath, executable);
   fs.chmodSync(executable, 0o755);
   if (process.platform === 'darwin') {
@@ -256,6 +316,7 @@ async function buildHostPrototype(source, outputDir) {
     const executable = path.join(stage, executableName);
     const build = await esbuild.build(bundleOptions(entryPoint, bundleFile));
     const externals = assertExternalAllowlist(build.metafile);
+    assertRuntimeArtifactClean(fs.readFileSync(bundleFile), 'standalone bundle');
     const bundle = hashRegularFile(bundleFile, MAX_BUNDLE_BYTES, 'standalone bundle');
     await prepareExecutable(bundleFile, blobFile, executable);
     const smoke = smokeStandalone(executable, source.version);
@@ -276,8 +337,8 @@ async function buildHostPrototype(source, outputDir) {
       capabilities: {
         coreScan: true,
         sbom: true,
-        chartRendering: false,
-        accurateTokenCounting: false,
+        chartRendering: smoke.optionalCapabilities.chartRendering.dependencyAvailable,
+        accurateTokenCounting: smoke.optionalCapabilities.tokenCounting.mode === 'accurate',
       },
       optionalExternalPackages: externals,
       bundle,
@@ -297,7 +358,7 @@ async function buildHostPrototype(source, outputDir) {
     });
     fs.rmSync(bundleFile, {force: true});
     fs.rmSync(blobFile, {force: true});
-    fs.renameSync(stage, resolved);
+    await renameWithTransientRetry(stage, resolved);
     return {outputDir: resolved, metadata};
   } finally {
     fs.rmSync(stage, {recursive: true, force: true});
@@ -309,9 +370,11 @@ module.exports = {
   PROTOTYPE_SCHEMA,
   assertEmbeddableNodeRuntime,
   assertExternalAllowlist,
+  assertReducedCapabilityEvidence,
   buildHostPrototype,
   bundleOptions,
   externalPackages,
   hostPlatform,
+  renameWithTransientRetry,
   smokeStandalone,
 };

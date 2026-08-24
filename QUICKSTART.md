@@ -2,7 +2,7 @@
 
 **Get started with GuardScan in under 2 minutes!**
 
-GuardScan is a privacy-first, open-source security scanning and AI code review CLI. All static analysis features work **100% free and offline** - no API keys required!
+GuardScan is a privacy-first, open-source security scanning and AI code review CLI. Local static analysis and SBOM inventory work offline without an API key. Current CVE data requires OSV access or a fresh matching local snapshot.
 
 ---
 
@@ -18,8 +18,8 @@ guardscan --version
 
 **Requirements:**
 
-- Node.js >= 18.0.0
-- npm or yarn
+- Node.js >= 22.0.0
+- npm (pnpm, Yarn, and Bun compatibility is release-gated before those install paths are advertised)
 
 ---
 
@@ -31,25 +31,25 @@ guardscan --version
 guardscan init
 ```
 
-This creates a local configuration file and generates a client ID for optional telemetry.
+This creates a private local configuration file. GuardScan does not generate or transmit an installation identifier.
 
 ### Step 2: Run Your First Security Scan
 
 ```bash
-# Scan your current project (100% FREE, works offline)
-guardscan security
+# Scan your current project with local checks only
+guardscan security --offline --no-cve
 ```
 
 This will:
 
 - ✅ Detect secrets in your code (API keys, passwords, tokens)
-- ✅ Scan dependencies for known vulnerabilities
+- ✅ Scan dependencies for known vulnerabilities when OSV or a matching snapshot is available
 - ✅ Check Dockerfiles for security issues
 - ✅ Analyze Infrastructure as Code (Terraform, CloudFormation, K8s)
 - ✅ Detect OWASP Top 10 vulnerabilities
 - ✅ Generate a comprehensive markdown report
 
-**No API key needed** - all security scanning works completely offline!
+**No API key needed** - local security scanning and SBOM inventory work offline. Current CVE results need OSV access or a fresh matching local snapshot.
 
 ### Step 3: (Optional) Configure AI Provider
 
@@ -71,15 +71,18 @@ Follow the prompts to set:
 
 ## 📋 Available Commands
 
-GuardScan provides **21 commands** organized by category:
+GuardScan provides **29 top-level commands** organized by category:
 
 ### Setup & Configuration
 
 ```bash
-guardscan init                    # Initialize GuardScan (generates client_id for telemetry)
+guardscan init                    # Initialize local GuardScan configuration
 guardscan config                  # Configure AI provider and settings (OpenAI, Claude, Gemini, Ollama)
-guardscan status                  # Show current status (credits, provider, repo info)
+guardscan status                  # Show provider, repo, and local config status
 guardscan reset                   # Clear local cache and config
+guardscan cache                   # Inspect or clear repository/global cache
+guardscan telemetry               # Inspect, explicitly sync, or clear telemetry
+guardscan capabilities            # Inspect optional runtime capabilities and safe fallbacks
 ```
 
 ### Security & Scanning (Offline-Capable, 100% FREE)
@@ -90,6 +93,7 @@ guardscan scan                    # Comprehensive scan (all security and quality
 guardscan test                    # Run tests and code quality analysis
 guardscan sbom                    # Generate Software Bill of Materials (SBOM)
 guardscan rules                   # Run custom YAML-based rules engine
+guardscan vuln                    # Audit exact dependency versions with OSV
 ```
 
 ### Testing & Performance
@@ -129,6 +133,15 @@ guardscan migrate                 # AI-powered code migration assistant
 guardscan chat                    # Interactive AI chat about your codebase (RAG feature)
 ```
 
+### AI Model Operations
+
+```bash
+guardscan models                  # Inspect supported AI models
+guardscan routing                 # Configure task-to-model routing
+guardscan budget                  # Inspect and configure local budget limits
+guardscan metrics                 # Inspect locally recorded AI metrics
+```
+
 ---
 
 ## 💡 Common Use Cases
@@ -140,11 +153,19 @@ guardscan chat                    # Interactive AI chat about your codebase (RAG
 guardscan security
 
 # Check for dependency vulnerabilities
-guardscan security --licenses
+guardscan config --offline=false
+guardscan vuln . --ci --format json --output vulnerabilities.json
 
 # Generate SBOM for compliance
 guardscan sbom --format spdx
+guardscan sbom --format cyclonedx
 ```
+
+SBOM output is validated against the official SPDX 2.3 and CycloneDX 1.7 JSON schemas.
+
+For the combined security, quality, and SBOM workflow, `guardscan scan` remains
+static-safe by default. Only add `--run-project-code` for a repository you trust;
+add `--isolate-project-network` when you also require an available OS network sandbox.
 
 ### AI-Powered Code Review
 
@@ -195,21 +216,23 @@ guardscan chat
 ### What GuardScan Does
 
 - ✅ Scans your code **locally** on your machine
-- ✅ Never uploads source code to any server
-- ✅ Works **completely offline** for static analysis
+- ✅ Does not upload source code to GuardScan servers
+- ✅ Runs local static analysis offline
+- ✅ Does not execute repository tests or linters during `guardscan scan` unless explicitly enabled
 - ✅ Uses your own AI API keys (BYOK - Bring Your Own Key)
 
-### What GuardScan Sends (Optional Telemetry)
+### Optional telemetry
 
-- Client ID (anonymous identifier)
-- Repository ID (hashed, anonymous)
-- Lines of code count
-- Command usage statistics
+- Telemetry is disabled by default.
+- After consent, GuardScan queues only action, aggregate LOC, duration, coarse execution mode, event ID, and timestamp.
+- Source, paths, prompts, responses, findings, dependency names, and errors are excluded.
+- Delivery happens only through `guardscan telemetry sync` to an HTTPS endpoint you configure.
 
-**You can disable telemetry:**
+Inspect or suppress it:
 
 ```bash
 guardscan --no-telemetry security
+guardscan telemetry status
 ```
 
 ---
@@ -218,23 +241,36 @@ guardscan --no-telemetry security
 
 ### Offline-First Architecture
 
-**Static Analysis** (Works completely offline, 100% FREE):
+**Static Analysis** (Offline-first, 100% FREE):
 
 - Secrets detection (20+ patterns)
-- Dependency vulnerability scanning
+- Dependency inventory and vulnerability evaluation from a fresh matching snapshot
 - Code metrics and complexity analysis
 - LOC counting (20+ languages)
 - OWASP Top 10 detection
 - Docker security scanning
 - Infrastructure as Code analysis
 
+OSV lookups and snapshot refreshes require online mode:
+
+```bash
+guardscan config --offline=false
+guardscan vuln db update .
+guardscan vuln .
+```
+
+See [Dependency Vulnerability Scanning](./docs/VULNERABILITY_SCANNING.md) for supported lockfiles, limitations, and CI policy.
+
 **AI-Enhanced** (Optional, requires your API key):
 
 - OpenAI GPT-4, GPT-3.5
 - Anthropic Claude (Opus, Sonnet, Haiku)
 - Google Gemini
-- Ollama (local/offline AI)
-- LM Studio (local AI)
+- Ollama (offline only at literal `127/8` or `::1` endpoints)
+- LM Studio (offline only at literal `127/8` or `::1` endpoints)
+
+Remote self-hosted Ollama or LM Studio endpoints require online mode and the
+explicit `allowRemoteSelfHosted: true` configuration approval.
 
 ---
 
@@ -313,7 +349,7 @@ guardscan init
 
 1. ✅ **Install**: `npm install -g guardscan`
 2. ✅ **Initialize**: `guardscan init`
-3. ✅ **Scan**: `guardscan security` (works offline, 100% free!)
+3. ✅ **Scan**: `guardscan security --offline --no-cve` (local checks, 100% free)
 4. ✅ **Configure AI** (optional): `guardscan config`
 5. ✅ **Explore**: Try `guardscan --help` to see all commands
 

@@ -3,11 +3,13 @@ const {
   installArgs,
   parseManager,
   parseTarball,
+  scanArgsFor,
 } = require('../../scripts/package-manager-smoke') as {
   execArgs: (manager: string, args: string[]) => string[];
   installArgs: (manager: string, tarball: string) => string[];
   parseManager: (args: string[]) => string;
   parseTarball: (args: string[]) => string | undefined;
+  scanArgsFor: (manager: string, output: string) => string[];
 };
 
 describe('package-manager smoke command contracts', () => {
@@ -24,8 +26,21 @@ describe('package-manager smoke command contracts', () => {
     expect(installArgs(manager, '/tmp/guardscan.tgz')).toContain('--ignore-scripts');
   });
 
+  it('asks Bun to emit the supported Yarn inventory alongside bun.lock', () => {
+    expect(installArgs('bun', '/tmp/guardscan.tgz')).toEqual([
+      'add',
+      '--ignore-scripts',
+      '--yarn',
+      '/tmp/guardscan.tgz',
+    ]);
+  });
+
   it('uses Yarn configuration rather than an unsupported install flag', () => {
     expect(installArgs('yarn', '/tmp/guardscan.tgz')).toEqual(['add', '/tmp/guardscan.tgz']);
+  });
+
+  it.each(['npm', 'pnpm', 'yarn', 'bun'])('keeps the %s scan canary strict', manager => {
+    expect(scanArgsFor(manager, '/tmp/scan.json')).not.toContain('--allow-partial');
   });
 
   it('rejects omitted and unknown managers', () => {

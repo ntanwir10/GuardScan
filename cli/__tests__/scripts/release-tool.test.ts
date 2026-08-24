@@ -9,6 +9,7 @@ const {
   createInitialState,
   createPlan,
   prepareRelease,
+  releaseTrainChannels,
   summarizeState,
   validateSource,
 } = require('../../scripts/release/lib') as {
@@ -31,6 +32,10 @@ const {
     source: Record<string, string>,
     options: Record<string, string>
   ) => {created: boolean; outputDir: string};
+  releaseTrainChannels: (
+    channel: 'rc' | 'stable',
+    options?: {homebrewCoreEnabled?: boolean}
+  ) => string[];
   summarizeState: (state: Record<string, unknown>) => Record<string, unknown>;
   validateSource: (options: Record<string, string>) => Record<string, string>;
 };
@@ -60,6 +65,19 @@ const {
     originalState: Record<string, any>,
     nextState: Record<string, any>
   ) => void;
+};
+const {
+  createEvent,
+  materializeReleaseState,
+} = require('../../scripts/release/events') as {
+  createEvent: (
+    input: Record<string, unknown>,
+    previous?: Record<string, unknown>
+  ) => Record<string, any>;
+  materializeReleaseState: (events: Array<Record<string, unknown>>) => Record<string, any>;
+};
+const {reconcileRelease} = require('../../scripts/release/reconcile') as {
+  reconcileRelease: (state: Record<string, any>) => Record<string, any>;
 };
 
 const COMMIT = 'a'.repeat(40);
@@ -116,6 +134,24 @@ describe('release source validation', () => {
     expect(() => validateSource({packageRoot, repositoryRoot: root, commit: 'not-a-sha'}))
       .toThrow(/commit must be a 40-character lowercase git SHA/);
   });
+
+  it('rejects split or duplicated stable release notes', () => {
+    fs.writeFileSync(
+      path.join(packageRoot, 'CHANGELOG.md'),
+      '# Changelog\n\n## [Unreleased]\n\n### Added\n\n- A 1.2.3 feature.\n\n'
+      + '## [1.2.3] - 2026-07-20\n\n- Older notes.\n'
+    );
+    expect(() => validateSource({packageRoot, repositoryRoot: root, commit: COMMIT}))
+      .toThrow(/Unreleased section must be empty for stable release 1\.2\.3/);
+
+    fs.writeFileSync(
+      path.join(packageRoot, 'CHANGELOG.md'),
+      '# Changelog\n\n## [Unreleased]\n\n## [1.2.3] - 2026-07-20\n\n'
+      + '## [1.2.3] - 2026-07-21\n'
+    );
+    expect(() => validateSource({packageRoot, repositoryRoot: root, commit: COMMIT}))
+      .toThrow(/exactly one release section for 1\.2\.3/);
+  });
 });
 
 describe('release planning and state summaries', () => {
@@ -134,6 +170,10 @@ describe('release planning and state summaries', () => {
     expect(channels.find(channel => channel.id === 'npm')?.status).toBe('planned');
     expect(channels.find(channel => channel.id === 'github')?.status).toBe('deferred');
     expect(channels.find(channel => channel.id === 'pypi')?.status).toBe('deferred');
+    expect(channels.find(channel => channel.id === 'homebrew-core')).toMatchObject({
+      status: 'deferred',
+      required: false,
+    });
   });
 
   it('reports failed and remaining channels without treating them as complete', () => {
@@ -161,6 +201,90 @@ describe('release planning and state summaries', () => {
       channels: Record<string, unknown>;
     };
     expect(Object.keys(state.channels)).toEqual(['npm', 'github']);
+  });
+
+  it('tracks optional Homebrew Core work without blocking release completion', () => {
+    expect(reconcileRelease({
+      incidents: {},
+      channels: {
+        npm: {status: 'verified'},
+        homebrew: {status: 'verified'},
+        scoop: {status: 'verified'},
+        'homebrew-core': {status: 'submitted'},
+      },
+    })).toMatchObject({
+      complete: true,
+      blocked: false,
+      blocking: [],
+      actions: [{
+        channel: 'homebrew-core',
+        required: false,
+        currentStatus: 'submitted',
+        action: 'poll-acceptance',
+      }],
+    });
+  });
+
+  it('selects Homebrew Core only when optional stable submission is enabled', () => {
+    expect(releaseTrainChannels('rc')).toEqual([
+      'npm', 'pnpm', 'yarn', 'bun', 'github', 'homebrew', 'scoop', 'pypi',
+    ]);
+    expect(releaseTrainChannels('stable')).toEqual([
+      'npm', 'pnpm', 'yarn', 'bun', 'github', 'homebrew', 'scoop', 'pypi',
+      'winget', 'chocolatey',
+    ]);
+    expect(releaseTrainChannels('stable', {homebrewCoreEnabled: true})).toEqual([
+      'npm', 'pnpm', 'yarn', 'bun', 'github', 'homebrew', 'scoop', 'pypi',
+      'homebrew-core', 'winget', 'chocolatey',
+    ]);
+  });
+
+  it('materializes catalog publication evidence and its immutable remote identity', () => {
+    const first = createEvent({
+      version: '1.2.3',
+      tag: 'v1.2.3',
+      commit: COMMIT,
+      timestamp: '2026-07-20T12:00:00.000Z',
+      type: 'train_started',
+      idempotencyKey: 'train:v1.2.3',
+      payload: {channels: ['homebrew']},
+    });
+    const catalogCommit = 'c'.repeat(40);
+    const fileDigest = 'd'.repeat(64);
+    const second = createEvent({
+      version: '1.2.3',
+      tag: 'v1.2.3',
+      commit: COMMIT,
+      timestamp: '2026-07-20T12:01:00.000Z',
+      type: 'channel_verified',
+      channel: 'homebrew',
+      idempotencyKey: 'catalog:homebrew:v1.2.3',
+      payload: {
+        remoteIdentity: `github:ntanwir10/homebrew-tap@${catalogCommit}#Formula/guardscan.rb`,
+        remoteDigest: fileDigest,
+        catalog: {
+          repository: 'ntanwir10/homebrew-tap',
+          commit: catalogCommit,
+          pullRequest: 42,
+          lockDigest: 'e'.repeat(64),
+          manifestDigest: 'f'.repeat(64),
+          path: 'Formula/guardscan.rb',
+          fileDigest,
+        },
+      },
+    }, first);
+    expect(materializeReleaseState([first, second]).channels.homebrew).toMatchObject({
+      status: 'verified',
+      remoteIdentity: `github:ntanwir10/homebrew-tap@${catalogCommit}#Formula/guardscan.rb`,
+      remoteDigest: fileDigest,
+      catalog: {
+        repository: 'ntanwir10/homebrew-tap',
+        commit: catalogCommit,
+        pullRequest: 42,
+        path: 'Formula/guardscan.rb',
+        fileDigest,
+      },
+    });
   });
 
   it('prepares one atomic ledger and treats an identical retry as a no-op', () => {

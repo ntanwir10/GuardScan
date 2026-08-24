@@ -43,6 +43,8 @@ jobs:
           npm run lint:ratchet
           npm audit --omit=dev --audit-level=high
           npm run test:release
+          npm run test:package
+          npm run test:package-manager -- --manager npm
       - run: git diff --check
 
   npm:
@@ -191,7 +193,7 @@ jobs:
             standalone/guardscan
           cosign verify-blob \
             --bundle standalone/guardscan.sigstore.json \
-            --certificate-identity-regexp "^https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release-build.yml@" \
+            --certificate-identity-regexp "^https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release-train.yml@" \
             --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
             standalone/guardscan
 
@@ -220,6 +222,8 @@ jobs:
           APPLE_NOTARY_PRIVATE_KEY: ${{ secrets.APPLE_NOTARY_PRIVATE_KEY }}
         run: |
           IDENTITY="Developer ID Application: Nauman Tanwir ($APPLE_TEAM_ID)"
+          KEYCHAIN="$RUNNER_TEMP/guardscan-signing.keychain-db"
+          security find-identity -v -p codesigning "$KEYCHAIN" | grep -F "$IDENTITY"
           codesign --force --options runtime --timestamp --sign "$IDENTITY" standalone/guardscan
           codesign --verify --deep --strict --verbose=2 standalone/guardscan
           printf '%s' "$APPLE_NOTARY_PRIVATE_KEY" > "$RUNNER_TEMP/AuthKey.p8"
@@ -255,6 +259,13 @@ jobs:
           cp "$RUNNER_TEMP/apple-notarization.json" standalone/apple-notarization.json
           cp "$RUNNER_TEMP/guardscan-notarization.dmg" standalone/stapled-notarization.dmg
           codesign -dvvv standalone/guardscan 2> standalone/apple-code-signing.txt
+
+      - name: Remove ephemeral Apple signing material
+        if: always() && matrix.os == 'darwin'
+        shell: bash
+        run: |
+          security delete-keychain "$RUNNER_TEMP/guardscan-signing.keychain-db" || true
+          rm -f "$RUNNER_TEMP/certificate.p12" "$RUNNER_TEMP/AuthKey.p8"
 
       - name: Azure OIDC login
         if: matrix.os == 'windows'
@@ -319,6 +330,32 @@ jobs:
           const tag = process.env.ARTIFACT_TAG;
           const base = `https://github.com/${process.env.GITHUB_REPOSITORY}/releases/download/${tag}`;
           const sbom = JSON.parse(fs.readFileSync('standalone-sbom/artifact-sbom.json'));
+          const prototype = JSON.parse(fs.readFileSync('standalone/standalone-prototype.json'));
+          const commit = cp.execFileSync('git', ['rev-parse', 'HEAD'], {encoding: 'utf8'}).trim();
+          for (const [field, expected] of Object.entries({version, tag, commit})) {
+            if (prototype[field] !== expected) {
+              throw new Error(`standalone prototype ${field} does not match release source`);
+            }
+          }
+          if (prototype.platform?.os !== process.env.ARTIFACT_OS
+              || prototype.platform?.arch !== process.env.ARTIFACT_ARCH) {
+            throw new Error('standalone prototype platform does not match native target');
+          }
+          const smoke = prototype.smoke;
+          const optionalCapabilities = smoke?.optionalCapabilities;
+          if (smoke?.valid !== true
+              || smoke.nodeAbsentFromPath !== true
+              || smoke.packageManagersAbsentFromPath !== true
+              || smoke.optionalCapabilitiesUnavailableSafely !== true
+              || !optionalCapabilities) {
+            throw new Error('standalone prototype lacks complete isolated smoke evidence');
+          }
+          if (prototype.capabilities?.chartRendering
+                !== optionalCapabilities.chartRendering?.dependencyAvailable
+              || prototype.capabilities?.accurateTokenCounting
+                !== (optionalCapabilities.tokenCounting?.mode === 'accurate')) {
+            throw new Error('standalone prototype capability metadata conflicts with smoke evidence');
+          }
           const signatureTypes = process.env.ARTIFACT_OS === 'darwin'
             ? ['apple-code-signing', 'apple-notarization']
             : [process.env.ARTIFACT_OS === 'windows' ? 'authenticode' : 'sigstore'];
@@ -332,12 +369,13 @@ jobs:
             schemaVersion: 'guardscan.standalone-evidence.v1',
             version,
             tag,
-            commit: cp.execFileSync('git', ['rev-parse', 'HEAD'], {encoding: 'utf8'}).trim(),
+            commit,
             platform: {
               os: process.env.ARTIFACT_OS,
               arch: process.env.ARTIFACT_ARCH,
               ...(process.env.ARTIFACT_LIBC ? {libc: process.env.ARTIFACT_LIBC} : {}),
             },
+            optionalCapabilities,
             signatures: signatureTypes.map(type => ({
               type,
               url: `${base}/${process.env.ARTIFACT_ID}.${signatureFile(type)}`,
@@ -556,7 +594,7 @@ jobs:
           cosign sign-blob --yes --bundle release/SHA256SUMS.sigstore.json release/SHA256SUMS
           cosign verify-blob \
             --bundle release/SHA256SUMS.sigstore.json \
-            --certificate-identity-regexp "^https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release-build.yml@" \
+            --certificate-identity-regexp "^https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release-train.yml@" \
             --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
             release/SHA256SUMS
       - name: Attest complete release payload

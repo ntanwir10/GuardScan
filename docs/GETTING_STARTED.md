@@ -12,7 +12,7 @@ GuardScan is a privacy-first CLI tool that uses AI to automatically review your 
 
 ## Key Features
 
-- **Privacy-First**: Never uploads source code, only anonymized metadata
+- **Privacy-First**: Built-in scanners stay local; cloud AI receives context only when you configure and invoke it
 - **Multi-Provider**: Supports OpenAI, Claude, Gemini, Ollama, and more
 - **Offline-Capable**: Works without internet using local AI models
 - **Universal**: Works with any git-based repository
@@ -45,7 +45,8 @@ cd your-project
 guardscan init
 ```
 
-This generates a unique `client_id` stored locally in `~/.guardscan/config.yml`.
+This creates local configuration under `~/.guardscan/config.yml`.
+New non-interactive configurations default to offline mode with telemetry disabled.
 
 ### 2. Configure AI Provider
 
@@ -69,9 +70,8 @@ guardscan run
 This will:
 
 1. Count lines of code
-2. Validate credits (if online)
-3. Analyze your codebase with AI
-4. Generate a detailed report
+2. Analyze your codebase with the configured AI provider
+3. Generate a detailed report
 
 ### 4. Check Your Status
 
@@ -79,7 +79,7 @@ This will:
 guardscan status
 ```
 
-View your configuration, repository info, and remaining credits.
+View your configuration, repository info, and local status.
 
 ## Using Local AI (Offline)
 
@@ -103,7 +103,7 @@ guardscan config
 4. Run offline:
 
 ```bash
-guardscan run --no-cloud
+guardscan run
 ```
 
 ### With LM Studio
@@ -115,7 +115,7 @@ guardscan run --no-cloud
 ```bash
 guardscan config
 # Select "lmstudio" as provider
-# Default endpoint: http://localhost:1234
+# Endpoint may be entered as http://localhost:1234; GuardScan normalizes the OpenAI-compatible /v1 base
 ```
 
 ## Security Scanning
@@ -124,6 +124,17 @@ Run a free security scan:
 
 ```bash
 guardscan security
+```
+
+For a guaranteed local-only run, disable CVE lookup or prepare an offline snapshot first:
+
+```bash
+guardscan security --offline --no-cve
+
+# Prepare exact-version CVE coverage, then reuse it offline
+guardscan config --offline=false
+guardscan vuln db update .
+guardscan vuln . --offline
 ```
 
 For verbose debug output, use the `--debug` flag:
@@ -140,6 +151,8 @@ This performs SAST-like scanning for:
 - Insecure cryptography
 - Code injection risks
 - And more...
+
+See [Dependency Vulnerability Scanning](./VULNERABILITY_SCANNING.md) for supported ecosystems, snapshot freshness, OSV/CVSS/CISA limitations, and CI thresholds.
 
 ## Review Specific Files
 
@@ -202,11 +215,12 @@ guardscan run > review.md
 ```bash
 # Add to .git/hooks/pre-commit
 #!/bin/bash
-guardscan security --no-cloud
-if [ $? -ne 0 ]; then
-  echo "Security issues found! Review before committing."
-  exit 1
-fi
+guardscan security --offline --no-cve --ci --format json --output guardscan.json
+case $? in
+  0) exit 0 ;;
+  1) echo "GuardScan policy failed; review guardscan.json." ; exit 1 ;;
+  2) echo "GuardScan could not complete required coverage." ; exit 2 ;;
+esac
 ```
 
 ### CI/CD Integration
@@ -216,9 +230,9 @@ fi
 - name: Run GuardScan
   run: |
     npm install -g guardscan
-    guardscan init
-    guardscan config --provider openai --key ${{ secrets.OPENAI_API_KEY }}
-    guardscan run --no-cloud
+    guardscan --no-telemetry init
+    guardscan security --offline --no-cve --ci \
+      --format sarif --output guardscan.sarif --fail-on high
 ```
 
 ## Command Flags and Options
@@ -230,7 +244,10 @@ GuardScan commands support various flags to customize behavior. Flags use kebab-
 - **File Selection**: `-f, --files <patterns...>` - Specify files or patterns to analyze
 - **Debug Mode**: `--debug` - Enable verbose debug logging (available for `security` command)
 - **Output**: `-o, --output <path>` - Specify output file path
-- **Negated Flags**: Flags like `--no-body` or `--no-cloud` disable features
+- **Offline boundary**: `--offline` - Block GuardScan cloud/advisory/telemetry clients for the invocation
+- **Cache boundary**: `--no-cache` - Disable exact, semantic, and advisory cache reads and writes
+- **Scanner completeness**: `--allow-partial` - Explicitly accept incomplete scanner coverage
+- **Negated Flags**: Flags like `--no-body` disable features
 
 ### Examples
 
@@ -247,6 +264,17 @@ guardscan commit --no-body
 # Run with AI enhancement disabled
 guardscan run --no-with-ai
 ```
+
+### CI results
+
+`scan` and `security` support versioned JSON and SARIF output:
+
+```bash
+guardscan security --ci --format json --output guardscan.json --fail-on high
+guardscan scan --ci --format sarif --output guardscan.sarif --max-findings 25
+```
+
+Exit code `0` means execution and policy passed, `1` means findings violated policy, and `2` means a required scanner or coverage step failed. JSON includes the same policy exit code and each scanner's succeeded, failed, or skipped state.
 
 ### Flag Naming Convention
 
@@ -293,34 +321,34 @@ guardscan security --debug
 Edit `~/.guardscan/config.yml`:
 
 ```yaml
-clientId: your-uuid
 provider: openai
 apiKey: sk-...
-telemetryEnabled: true
-offlineMode: false
+telemetryEnabled: false
+offlineMode: true
 createdAt: '2024-01-15T10:00:00Z'
 lastUsed: '2024-01-15T15:30:00Z'
 ```
 
 ## Privacy & Telemetry
 
-### What is Collected?
+### What is queued after opt-in?
 
-Only anonymized metadata:
+Only a strict aggregate allowlist:
 
-- Hashed repository ID
-- Lines of code count
-- AI provider used
+- Random event ID
+- Action category
+- Aggregate lines of code
 - Processing duration
-- Action type (review/security)
+- Coarse execution mode
+- Timestamp
 
 ### What is NOT Collected?
 
 - Source code
-- File names
-- Variable names
-- Comments
-- Any PII
+- File names or paths
+- Prompts or AI responses
+- Findings, dependency names, or errors
+- API keys
 
 ### Disabling Telemetry
 
@@ -335,6 +363,21 @@ Or edit config:
 telemetryEnabled: false
 ```
 
+Telemetry is disabled by default and never uploads automatically. GuardScan
+operates no hosted collector or default endpoint. After explicit consent,
+events are queued only while online and remain local until you configure a
+user-operated HTTPS collector and sync explicitly:
+
+```bash
+export GUARDSCAN_TELEMETRY_URL=https://telemetry.example.com
+guardscan telemetry sync
+```
+
+Failed delivery leaves the batch queued. `guardscan config --telemetry=false`
+deletes the queue. Use `guardscan telemetry status` and
+`guardscan telemetry clear --force` to inspect or delete it explicitly.
+`GUARDSCAN_API_URL` and the former `api.guardscancli.com` service are retired.
+
 ## Troubleshooting
 
 ### "Configuration not found"
@@ -345,13 +388,9 @@ Run `guardscan init` first.
 
 Run `guardscan config` and set up your provider.
 
-### "Insufficient credits"
+### "AI provider not configured"
 
-Either:
-
-- Purchase more credits online
-- Use `--no-cloud` flag
-- Switch to local AI provider (Ollama)
+Either run `guardscan config` to set up a BYOK provider or switch to a local AI provider such as Ollama or LM Studio.
 
 ### "Could not connect to provider"
 
@@ -399,4 +438,4 @@ done
 ## Next Steps
 
 - Read the [API Documentation](./API.md)
-- Check [Contributing Guide](./CONTRIBUTING.md)
+- Open a focused pull request with tests and a clear rationale

@@ -3,11 +3,11 @@ import * as path from "path";
 import * as crypto from "crypto";
 import { v4 as uuidv4 } from "uuid";
 import {
-  APIClient,
+  TelemetryClient,
   TelemetryAction,
   TelemetryEvent,
   TelemetryExecutionMode,
-} from "../utils/api-client";
+} from "../utils/telemetry-client";
 import { Config, configManager } from "./config";
 import { TELEMETRY_CONSTANTS } from "../constants/telemetry-constants";
 import { createDebugLogger } from "../utils/debug-logger";
@@ -147,11 +147,11 @@ export class TelemetryManager {
 
   async sync(): Promise<{ sent: number; remaining: number }> {
     this.assertSyncAllowed();
-    const endpoint =
-      process.env.GUARDSCAN_TELEMETRY_URL || process.env.GUARDSCAN_API_URL;
+    const endpoint = configuredTelemetryEndpoint();
     if (!endpoint) {
       throw new Error(
-        "Telemetry endpoint is not configured. Set GUARDSCAN_TELEMETRY_URL."
+        "Telemetry endpoint is not configured. " +
+        "Set GUARDSCAN_TELEMETRY_URL to your self-hosted collector URL before syncing."
       );
     }
 
@@ -169,7 +169,7 @@ export class TelemetryManager {
       if (events.length === 0) {return { sent: 0, remaining: 0 };}
 
       const batchId = uuidv4();
-      const response = await new APIClient(endpoint).sendTelemetry({
+      const response = await new TelemetryClient(endpoint).sendTelemetry({
         schemaVersion: "guardscan.telemetry.v1",
         batchId,
         sentAt: Date.now(),
@@ -225,9 +225,7 @@ export class TelemetryManager {
     return {
       enabled: this.config.telemetryEnabled,
       suppressed: isTelemetrySuppressed(this.config),
-      endpointConfigured: Boolean(
-        process.env.GUARDSCAN_TELEMETRY_URL || process.env.GUARDSCAN_API_URL
-      ),
+      endpointConfigured: configuredTelemetryEndpoint() !== undefined,
       pending,
       oldestEventAt: oldestEventAt === undefined
         ? undefined
@@ -518,6 +516,11 @@ export class TelemetryManager {
     };
   }
 
+}
+
+function configuredTelemetryEndpoint(): string | undefined {
+  const endpoint = process.env.GUARDSCAN_TELEMETRY_URL?.trim();
+  return endpoint || undefined;
 }
 
 export function createTelemetryManager(

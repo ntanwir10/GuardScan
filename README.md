@@ -13,7 +13,7 @@
 ```
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
-[![Node.js Version](https://img.shields.io/badge/node-%3E%3D18.0.0-brightgreen)](https://nodejs.org)
+[![Node.js Version](https://img.shields.io/badge/node-%3E%3D22.0.0-brightgreen)](https://nodejs.org)
 
 ---
 
@@ -25,8 +25,8 @@ GuardScan is **100% free and open source**! No credit system, no paywalls, no su
 
 - ✅ **Unlimited static analysis** - 9 security scanners + code quality tools
 - ✅ **AI-enhanced code review** - Bring your own API key (OpenAI, Claude, Gemini, Ollama)
-- ✅ **Works fully offline** - No internet required for static analysis
-- ✅ **Privacy-first** - Never uploads your source code
+- ✅ **Offline-first static analysis** - Local scanners and SBOM inventory run without internet; CVEs can reuse a fresh matching snapshot
+- ✅ **Privacy-first** - GuardScan does not upload your source code to GuardScan servers
 - ✅ **No usage limits** - Scan unlimited LOC, unlimited repositories
 
 ---
@@ -40,8 +40,12 @@ npm install -g guardscan
 # Initialize GuardScan
 guardscan init
 
-# Run comprehensive security scan (100% FREE, offline)
+# Run comprehensive security scan (100% FREE, offline-first)
 guardscan security
+
+# Audit exact dependency versions against OSV (online)
+guardscan config --offline=false
+guardscan vuln .
 
 # Configure AI provider for enhanced review (optional, BYOK)
 guardscan config
@@ -81,12 +85,12 @@ guardscan init
 
 ## 📋 Core Features
 
-### 🔒 Security Scanning (FREE, Offline)
+### 🔒 Security Scanning (FREE, Offline-First)
 
 GuardScan includes **comprehensive security scanners**:
 
 1. **Secrets Detection** - Find hardcoded API keys, passwords, tokens (20+ patterns)
-2. **Dependency Vulnerabilities** - Scan npm, pip, Maven, Cargo dependencies
+2. **Dependency Vulnerabilities** - Scan exact npm, PyPI, Go, RubyGems, Cargo, and Maven versions with OSV; reuse fresh snapshots offline
 3. **OWASP Top 10** - SQL injection, XSS, insecure configs, CSRF, XXE
 4. **Docker Security** - Dockerfile and container scanning
 5. **Infrastructure as Code** - Terraform, CloudFormation, Kubernetes security
@@ -160,7 +164,7 @@ All commands are **100% FREE** with no limits!
 
 | Command            | Description                           |
 | ------------------ | ------------------------------------- |
-| `guardscan init`   | Initialize config, generate client_id |
+| `guardscan init`   | Initialize local configuration        |
 | `guardscan config` | Configure AI provider & settings      |
 | `guardscan status` | Show configuration and repo info      |
 | `guardscan reset`  | Clear local cache & config            |
@@ -169,9 +173,27 @@ All commands are **100% FREE** with no limits!
 
 | Command              | Description                               |
 | -------------------- | ----------------------------------------- |
-| `guardscan security` | Run comprehensive security scan (offline) |
-| `guardscan scan`     | Quick security scan                       |
-| `guardscan run`      | AI-enhanced full code review (BYOK)       |
+| `guardscan security` | Run comprehensive local security scan      |
+| `guardscan scan`     | Static-safe security, quality, and SBOM scan |
+| `guardscan vuln`     | Audit exact dependency versions with OSV  |
+| `guardscan run`      | Required local review with optional AI enrichment |
+
+Dependency scanning details, offline snapshots, severity limitations, and CI examples are documented in [Dependency Vulnerability Scanning](./docs/VULNERABILITY_SCANNING.md).
+
+### CI output and exit codes
+
+```bash
+guardscan security --ci --format json --output guardscan.json --fail-on high
+guardscan security --format sarif --output guardscan.sarif
+```
+
+Structured scan output uses the `guardscan.scan.v1` envelope and includes security, quality, SBOM, AI, scanner status, errors, and policy state. Exit code `0` means the run and policy passed, `1` means findings violated policy, and `2` means scanner coverage or execution failed. `--allow-partial` is an explicit relaxation for incomplete coverage.
+
+`guardscan scan` does not execute repository-controlled tests or linters by default. Use
+`--run-project-code` only for a trusted repository; reports record whether they are
+`static-analysis` or `project-code-executed`. Child processes receive a scrubbed
+environment and isolated home. `--isolate-project-network` additionally requests an
+OS-backed network sandbox and fails the affected checks if the platform sandbox is unavailable.
 
 ### Testing & Quality Commands
 
@@ -187,22 +209,25 @@ All commands are **100% FREE** with no limits!
 
 | Command           | Description                         |
 | ----------------- | ----------------------------------- |
-| `guardscan sbom`  | Generate Software Bill of Materials |
+| `guardscan sbom`  | Generate schema-valid SPDX 2.3 or CycloneDX 1.7 |
 | `guardscan rules` | Custom YAML-based rule engine       |
+| `guardscan cache` | Inspect or clear local AI caches     |
+| `guardscan telemetry` | Inspect, sync, or clear opt-in telemetry |
+| `guardscan capabilities` | Inspect optional runtime capabilities and safe fallbacks |
 
 ### AI-Powered Commands (BYOK)
 
 | Command                     | Description                          |
 | --------------------------- | ------------------------------------ |
-| `guardscan explain <file>`  | Explain how code works               |
-| `guardscan review <file>`   | Comprehensive AI code review         |
-| `guardscan commit`          | Generate commit messages             |
-| `guardscan docs <file>`     | Auto-generate documentation          |
-| `guardscan test-gen <file>` | Generate unit tests                  |
-| `guardscan refactor <file>` | Get refactoring suggestions          |
-| `guardscan threat-model`    | Security architecture analysis       |
-| `guardscan migrate`         | Framework/language migration help    |
-| `guardscan chat`            | Interactive Q&A about codebase (RAG) |
+| `guardscan explain <file>`          | Explain how code works               |
+| `guardscan review --file <path>`    | Comprehensive AI code review         |
+| `guardscan commit`                  | Generate commit messages             |
+| `guardscan docs --type <type>`      | Auto-generate documentation          |
+| `guardscan test-gen --file <path>`  | Generate unit tests                  |
+| `guardscan refactor --file <path>`  | Get refactoring suggestions          |
+| `guardscan threat-model`            | Security architecture analysis       |
+| `guardscan migrate`                 | Framework/language migration help    |
+| `guardscan chat`                    | Interactive Q&A about codebase (RAG) |
 
 ---
 
@@ -210,7 +235,7 @@ All commands are **100% FREE** with no limits!
 
 We take privacy seriously:
 
-### ❌ Never Stored or Transmitted
+### ❌ No GuardScan-Hosted Processing
 
 - Your source code
 - File paths or file names
@@ -218,25 +243,32 @@ We take privacy seriously:
 - API keys or secrets
 - Proprietary information
 
-### ✅ Optional Telemetry (Anonymized)
+Local AI/RAG features can store prompts, responses, file paths, and code-derived snippets in your machine's `~/.guardscan/cache` for caching and retrieval. Use `guardscan cache clear --repo --force` or `guardscan cache clear --all --force` to remove cached source-derived data.
+
+### ✅ Opt-In Aggregate Telemetry
 
 - Command usage (e.g., "security" command ran)
 - Execution duration
 - LOC count (aggregate number only)
-- AI model used (e.g., "gpt-4")
+- Coarse execution mode (static, local AI, or cloud AI)
 
 **Telemetry is:**
 
-- Optional (easily disabled: `guardscan config --telemetry=false`)
-- Completely anonymized
-- Only used to improve GuardScan
-- Never sold or shared
+- Disabled by default and explicitly enabled with `guardscan config --telemetry=true`
+- Queued locally only after consent
+- Sent only by `guardscan telemetry sync` to a user-operated endpoint selected
+  with `GUARDSCAN_TELEMETRY_URL`
+- Recording and delivery are suppressed by offline mode or `--no-telemetry`
+- Never sent to a GuardScan-hosted collector; GuardScan operates no telemetry
+  ingestion service
+
+See the [Privacy Policy](./PRIVACY.md) for the exact event allowlist and local retention behavior.
 
 ---
 
 ## 🎯 How It Works
 
-### Static Analysis (Offline, No AI)
+### Static Analysis (Offline-First, No AI)
 
 ```bash
 guardscan security
@@ -246,7 +278,7 @@ Runs **9 security scanners** locally:
 
 - Scans your codebase
 - Generates markdown report
-- **100% offline** - no internet needed
+- **Offline-first** - local scanners and local SBOM inventory run without internet; CVE results require either OSV access or a fresh matching snapshot
 - **100% free** - no limits
 
 ### AI-Enhanced Review (Your API Key)
@@ -263,10 +295,11 @@ guardscan run
 
 How it works:
 
-1. GuardScan analyzes your code locally
-2. Sends anonymized context to **your AI provider** (using **your API key**)
-3. AI provides insights and suggestions
-4. Report saved locally
+1. GuardScan runs its required local security and quality analysis.
+2. If configured, it sends selected source-derived context to **your AI provider** using **your API key**.
+3. AI findings enrich the local report; they never replace scanner coverage.
+4. Incomplete required coverage is recorded in the report and exits with code `2`.
+5. The report is saved locally.
 
 **You pay your AI provider directly** - GuardScan is free!
 
@@ -280,18 +313,12 @@ No credit system. No subscriptions. No paywalls.
 
 ### AI Providers (If You Use AI Features)
 
-**You pay them directly (not GuardScan):**
+**You pay providers directly (not GuardScan):**
 
-- **OpenAI GPT-4**: ~$0.01-0.03 per 1K tokens
-- **Claude Sonnet**: ~$0.003 per 1K tokens
-- **Gemini Pro**: Free tier available
-- **Ollama**: 100% free (runs locally)
-
-**Example costs for 10K LOC codebase:**
-
-- Static analysis only: **$0**
-- With OpenAI GPT-4: **~$2-5** (paid to OpenAI)
-- With Ollama (local): **$0**
+- Cloud providers bill through your own account and pricing plan.
+- Ollama and LM Studio are local in offline mode only at literal `127/8` or `::1` endpoints.
+  Remote self-hosted endpoints require online mode and `allowRemoteSelfHosted: true`.
+- Static analysis only does not require an AI provider.
 
 ---
 
@@ -306,7 +333,7 @@ GuardScan follows a **privacy-first, client-side architecture** where all code a
 │  ┌─────────────────────────────────────────────────────┐   │
 │  │         GuardScan CLI (Node.js/TypeScript)          │   │
 │  │                                                      │   │
-│  │  • 21 Commands (security, run, test, explain...)    │   │
+│  │  • 29 Commands (security, vuln, run, test...)       │   │
 │  │  • 30 Core Modules (scanners, parsers, metrics)     │   │
 │  │  • 9 AI Features (explain, review, test-gen, etc.)  │   │
 │  │  • 7 Language Parsers (Python, Java, Go, Rust...)   │   │
@@ -316,7 +343,7 @@ GuardScan follows a **privacy-first, client-side architecture** where all code a
 │  │  Cache: ~/.guardscan/cache/                        │   │
 │  └─────────────────────────────────────────────────────┘   │
 │                           │                                  │
-│                           │ Optional telemetry only          │
+│                           │ Explicit network actions only     │
 │                           ▼                                  │
 └───────────────────────────────────────────────────────────────┘
                             │
@@ -324,35 +351,35 @@ GuardScan follows a **privacy-first, client-side architecture** where all code a
                 │                      │
                 ▼                      ▼
 ┌──────────────────────────┐  ┌──────────────────────────┐
-│  User's AI Provider      │  │  GuardScan Backend       │
-│  (User pays directly)    │  │  (Optional telemetry)    │
+│  User's AI Provider      │  │  User-operated HTTPS     │
+│  (User pays directly)    │  │  telemetry endpoint      │
 │                          │  │                          │
-│  • OpenAI (GPT-4)        │  │  Cloudflare Workers      │
-│  • Anthropic (Claude)    │  │  + Supabase              │
-│  • Google (Gemini)       │  │                          │
-│  • Ollama (Local)        │  │  • Health checks         │
-│                          │  │  • Anonymous telemetry   │
+│  • OpenAI                │  │  • Explicit sync only    │
+│  • Anthropic             │  │  • Aggregate allowlist   │
+│  • Google Gemini         │  │  • No default endpoint   │
+│  • Ollama/LM Studio      │  │  • No source or findings │
 │  User's API Key →        │  │  • NO source code        │
-│  User's billing →        │  │  • NO credit validation  │
+│  User controls billing   │  │  • Optional telemetry    │
 └──────────────────────────┘  └──────────────────────────┘
 ```
 
 ### Technology Stack
 
-**CLI (34,213 LOC):**
+**CLI:**
 
 - Language: TypeScript 5.3+ (strict mode)
-- Runtime: Node.js 18+
+- Runtime: Node.js 22+
 - Framework: Commander.js
-- Testing: Jest (70%+ coverage)
+- Testing: Jest with enforced coverage thresholds
 - Build: TypeScript Compiler (tsc)
 
-**Monitoring service (separate repo, optional):**
+**Self-hosted telemetry collector (optional):**
 
-- Lives in [ntanwir10/GuardScan-Monitoring](https://github.com/ntanwir10/GuardScan-Monitoring)
-- Platform: Cloudflare Workers + Supabase PostgreSQL
-- Purpose: Anonymous telemetry and error/usage analytics
-- The CLI talks to it over HTTP only; override the URL with `GUARDSCAN_API_URL`
+- GuardScan does not operate a hosted telemetry collector or provide a default
+  endpoint.
+- Operators may deploy their own compatible HTTPS collector.
+- Delivery occurs only through `guardscan telemetry sync` after setting `GUARDSCAN_TELEMETRY_URL`.
+- The payload is the strict aggregate event allowlist described in [PRIVACY.md](./PRIVACY.md); errors and findings are excluded.
 
 ---
 
@@ -392,18 +419,16 @@ GuardScan is **open source** and we welcome contributions!
 
 - **Report bugs**: [GitHub Issues](https://github.com/ntanwir10/GuardScan/issues)
 - **Request features**: [GitHub Issues](https://github.com/ntanwir10/GuardScan/issues)
-- **Submit PRs**: See [CONTRIBUTING.md](docs/CONTRIBUTING.md)
+- **Submit PRs**: Open a focused pull request with tests and a clear rationale
 
 ---
 
 ## 📚 Documentation
 
 - [Installation Guide](docs/GETTING_STARTED.md)
-- [Configuration Guide](docs/CONFIGURATION.md)
 - [Chat Guide](docs/CHAT_GUIDE.md)
 - [API Documentation](docs/API.md)
-- [Security Scanners](docs/SECURITY_SCANNERS.md)
-- [Contributing Guidelines](docs/CONTRIBUTING.md)
+- [Dependency Vulnerability Scanning](docs/VULNERABILITY_SCANNING.md)
 
 ---
 
@@ -422,10 +447,10 @@ A: Only if you want AI-enhanced review. Static analysis (9 security scanners) wo
 A: Your choice! OpenAI (powerful), Claude (balanced), Gemini (affordable), Ollama (free, local).
 
 **Q: Does GuardScan upload my code?**
-A: **Never**. GuardScan only uploads anonymized metadata for optional telemetry.
+A: GuardScan does not upload source code to GuardScan servers. If you enable AI features, prompts are sent directly to your configured provider; local caches may store prompts/responses on your machine.
 
 **Q: Can I disable telemetry?**
-A: Yes! Run `guardscan config --telemetry=false` or set `telemetryEnabled: false` in `~/.guardscan/config.yml`.
+A: Yes. Telemetry is disabled by default. `guardscan config --telemetry=false` persists the setting and deletes queued events, while `--no-telemetry` suppresses one invocation.
 
 **Q: How do I support this project?**
 A: Star the repo on GitHub, contribute code, report bugs, or sponsor the project!
@@ -445,8 +470,7 @@ GuardScan is built with these amazing open-source tools:
 - [Commander.js](https://github.com/tj/commander.js) - CLI framework
 - [Chalk](https://github.com/chalk/chalk) - Terminal styling
 - [Axios](https://github.com/axios/axios) - HTTP client
-- [Cloudflare Workers](https://workers.cloudflare.com/) - Serverless backend
-- [Supabase](https://supabase.com/) - Open-source Firebase alternative
+- [OSV](https://osv.dev/) - Open vulnerability data and package-version queries
 
 ---
 

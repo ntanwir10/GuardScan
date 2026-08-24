@@ -43,17 +43,12 @@ export class TelemetryDeliveryError extends Error {
   }
 }
 
-export class APIClient {
+export class TelemetryClient {
   private client?: AxiosInstance;
   private baseUrl: string;
 
-  constructor(baseUrl?: string) {
-    this.baseUrl = (
-      baseUrl ||
-      process.env.GUARDSCAN_TELEMETRY_URL ||
-      process.env.GUARDSCAN_API_URL ||
-      ""
-    ).replace(/\/+$/, "");
+  constructor(baseUrl: string) {
+    this.baseUrl = baseUrl.trim().replace(/\/+$/, "");
 
     if (this.baseUrl) {
       this.validateBaseUrl(this.baseUrl);
@@ -178,18 +173,6 @@ export class APIClient {
     }
   }
 
-  async ping(): Promise<boolean> {
-    if (!this.client) {
-      return false;
-    }
-    try {
-      await this.client.get("/health", { timeout: 3000 });
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
   getBaseUrl(): string {
     return this.baseUrl;
   }
@@ -226,6 +209,3 @@ export class APIClient {
     }
   }
 }
-
-/** @deprecated Construct APIClient with the explicit telemetry URL instead. */
-export const apiClient = new APIClient();

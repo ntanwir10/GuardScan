@@ -51,6 +51,7 @@ async function main(): Promise<void> {
     { createMetricsCommand },
     { createCacheCommand },
     { createTelemetryCommand },
+    { createCapabilitiesCommand },
     { createVulnerabilityCommand },
     { checkForUpdates },
     { displayLogo },
@@ -82,6 +83,7 @@ async function main(): Promise<void> {
     import("./commands/metrics"),
     import("./commands/cache"),
     import("./commands/telemetry"),
+    import("./commands/capabilities"),
     import("./commands/vuln"),
     import("./utils/version"),
     import("./utils/ascii-art"),
@@ -415,6 +417,7 @@ async function main(): Promise<void> {
   program.addCommand(createMetricsCommand());
   program.addCommand(createCacheCommand());
   program.addCommand(createTelemetryCommand());
+  program.addCommand(createCapabilitiesCommand());
   program.addCommand(createVulnerabilityCommand());
 
   if (
