@@ -1,5 +1,6 @@
 # Release authority is intentionally narrow. Repository settings must require
 # code-owner review before these paths can merge to a protected branch.
+/.github/CODEOWNERS @ntanwir10
 /.github/workflows/release-*.yml @ntanwir10
 /.github/workflows/ci.yml @ntanwir10
 /.github/release-ledger/ @ntanwir10

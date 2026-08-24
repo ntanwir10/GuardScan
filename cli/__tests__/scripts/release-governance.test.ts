@@ -7,6 +7,7 @@ describe('release control-plane governance', () => {
   it('routes every release-authority change through an explicit code owner', () => {
     const source = fs.readFileSync(path.join(repositoryRoot, '.github/CODEOWNERS'), 'utf8');
     for (const pattern of [
+      '/.github/CODEOWNERS',
       '/.github/workflows/release-*.yml',
       '/.github/release-ledger/',
       '/.github/scripts/',
