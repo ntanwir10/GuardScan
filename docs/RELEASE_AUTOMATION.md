@@ -272,12 +272,15 @@ The repository also contains:
 
 Before the first candidate, merge the inert automation bootstrap to `main`
 while `RELEASE_AUTOMATION_ENABLED=false` and `RELEASE_PLEASE_ENABLED=false`,
-complete every onboarding check, and
+with `RELEASE_PROVIDER_ONBOARDING_ATTESTATION=false`; complete every onboarding
+check, set that provider attestation only as described in
+`RELEASE_ONBOARDING.md`, and
 verify that the release PR head and full gate are unchanged. Refetch the
 protected `release-ledger` branch and fail if its tree contains anything other
 than the empty `active-versions.json` seed; this is the explicit no-migration
-boundary for the first source-bound event schema. Then set the variable to
-`true` and start the candidate from the default-branch workflow:
+boundary for the first source-bound event schema. Then set
+`RELEASE_AUTOMATION_ENABLED=true` and start the candidate from the
+default-branch workflow:
 
 ```bash
 EXPECTED_HEAD="$(gh pr view RELEASE_PR_NUMBER --json headRefOid --jq .headRefOid)"

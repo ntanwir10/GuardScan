@@ -13,7 +13,8 @@ Use this order for the first train:
 1. Reauthenticate the maintainer and set the GuardScan repository variable
    `RELEASE_AUTOMATION_ENABLED=false` and the independent variable
    `RELEASE_PLEASE_ENABLED=false`, plus
-   `RELEASE_PROVIDER_REHEARSAL_ENABLED=false`, **before** merging release
+   `RELEASE_PROVIDER_REHEARSAL_ENABLED=false` and
+   `RELEASE_PROVIDER_ONBOARDING_ATTESTATION=false`, **before** merging release
    automation to the default branch.
 2. Land a reviewed bootstrap PR on `main` containing the inert release
    workflows, schemas, renderer, and ledger seed. It must not change a public
@@ -33,8 +34,13 @@ Use this order for the first train:
 6. Recheck that the protected `release/1.1.0` PR head is unchanged and that its
    complete release gate passes. The bootstrap merge to `main` is not release
    approval.
-7. Set `RELEASE_AUTOMATION_ENABLED=true` only when every checklist item and
-   provider rehearsal is complete, then dispatch exactly the candidate command
+7. After every provider-owned binding and account check below is complete, run
+   `node .github/scripts/provider-onboarding-attestation.js --attestation` from the reviewed
+   bootstrap on `main` and set `RELEASE_PROVIDER_ONBOARDING_ATTESTATION` to the
+   exact printed value. This authority is bound to the reviewed provider
+   control-plane bytes and expires after 30 days; it never changes monitoring
+   evidence from `unknown`. Then set
+   `RELEASE_AUTOMATION_ENABLED=true` and dispatch exactly the candidate command
    in `RELEASE_AUTOMATION.md`.
 
 GitHub only accepts manual and scheduled workflow execution from workflow files
@@ -82,7 +88,9 @@ required first-release exception.
 - Keep repository variables `RELEASE_AUTOMATION_ENABLED=false` and
   `RELEASE_PLEASE_ENABLED=false` until their separate activation gates pass.
   Keep `RELEASE_PROVIDER_REHEARSAL_ENABLED=false` except for an explicitly
-  authorized non-publishing rehearsal window.
+  authorized non-publishing rehearsal window. Keep
+  `RELEASE_PROVIDER_ONBOARDING_ATTESTATION=false` until the full provider
+  checklist and rehearsal have passed.
   Scheduled reconciliation and automatic canaries remain dormant while release
   automation is false; Release Please remains dormant until its own flag is
   deliberately enabled after the first train is aligned.
@@ -311,9 +319,23 @@ If the provider does not expose expiry metadata, use a bounded authentication
 preflight and record `unknown` rather than inventing a date. Monitoring is not
 complete until at least one alert path has been tested.
 
+The credential workflow keeps those unobservable fields `unknown`. For a
+release preflight only, it separately requires
+`RELEASE_PROVIDER_ONBOARDING_ATTESTATION` to match the SHA-256 subject computed
+from the exact trusted control plane and rejects every machine-observed
+`warning` or `unhealthy` provider status. Only the documented Azure,
+Chocolatey, trusted-publisher, and WinGet visibility boundaries may remain
+`unknown`. Keep the attestation false until all provider configuration and
+rehearsal steps above have passed; set it false again whenever a binding,
+account, environment, publisher identity, or attested control-plane file
+changes. A control-plane edit changes the computed subject and therefore blocks
+release eligibility until the provider bindings are rechecked. Re-run the
+onboarding checks and issue a new attestation at least every 30 days; the
+workflow rejects future-dated, expired, or longer-lived attestations.
+
 After every onboarding item, functional acceptance prerequisite, and monitoring
-rehearsal passes, enable the variable and immediately dispatch the first
-candidate. No later release requires a human promotion click. Only
+rehearsal passes, set `RELEASE_AUTOMATION_ENABLED=true` and immediately dispatch
+the first candidate. No later release requires a human promotion click. Only
 provider-mandated identity, MFA, legal, certificate-renewal, account
 verification, or moderator requests remain human boundaries; automation must
 report those states rather than claiming completion.
