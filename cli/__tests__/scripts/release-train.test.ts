@@ -137,6 +137,23 @@ const source = {
   packageRoot: '/tmp/package',
 };
 const timestamp = '2026-07-20T00:00:00.000Z';
+const workflowSha = 'f'.repeat(40);
+
+function attestation(subjectSha256: string, name: string): Record<string, any> {
+  return {
+    type: 'slsa',
+    url: `https://github.com/ntanwir10/GuardScan/releases/download/${source.tag}/${name}.provenance.sigstore.json`,
+    verified: true,
+    sha256: 'e'.repeat(64),
+    subjectSha256,
+    sourceVersion: source.version,
+    sourceTag: source.tag,
+    sourceCommit: source.commit,
+    signerIdentity: 'https://github.com/ntanwir10/GuardScan/.github/workflows/release-build.yml',
+    signerDigest: workflowSha,
+    predicateType: 'https://slsa.dev/provenance/v1',
+  };
+}
 
 function eventInput(
   type: string,
@@ -216,11 +233,7 @@ function standalone(
     }],
     signatures,
     sboms: [evidence('spdx'), evidence('cyclonedx')],
-    provenance: {
-      type: 'slsa',
-      url: `https://github.com/ntanwir10/GuardScan/attestations/${suffix}`,
-      verified: true,
-    },
+    provenance: attestation(digest.repeat(64), suffix),
   };
 }
 
@@ -236,11 +249,7 @@ function wheel(native: Record<string, any>, digest: string): Record<string, any>
     platform: native.platform,
     embeddedStandaloneId: native.id,
     embeddedExecutableSha256: native.archiveEntries[0].sha256,
-    provenance: {
-      type: 'slsa',
-      url: `https://github.com/ntanwir10/GuardScan/attestations/wheel-${digest}`,
-      verified: true,
-    },
+    provenance: attestation(digest.repeat(64), `wheel-${digest}`),
   };
 }
 
@@ -1052,7 +1061,7 @@ describe('append-only release train', () => {
 
 describe('promotion policy and remote idempotency', () => {
   function decisionInput(): Record<string, any> {
-    const channels = ['npm', 'github', 'pypi'];
+    const channels = ['npm', 'pnpm', 'yarn', 'bun', 'github', 'homebrew', 'scoop', 'pypi'];
     const canaries = channels.flatMap(channel => Array.from({length: 24}, (_, index) => ({
       channel,
       status: 'passed',
@@ -1174,6 +1183,7 @@ describe('deterministic artifacts and manifest aggregation', () => {
         provider: 'github-actions',
         repository: 'ntanwir10/GuardScan',
         workflow: '.github/workflows/release-build.yml',
+        workflowSha,
         runId: '123456',
         runAttempt: 1,
         sourceRef: source.tag,
@@ -1201,6 +1211,11 @@ describe('deterministic artifacts and manifest aggregation', () => {
       producer: {
         provider: 'github-actions',
         repository: 'ntanwir10/GuardScan',
+        workflow: '.github/workflows/release-build.yml',
+        workflowSha,
+        runId: '123456',
+        runAttempt: 1,
+        sourceRef: source.tag,
       },
       toolchain: {node: '22.23.1', packageManager: {}, tools: [{}]},
       artifacts: mismatched,

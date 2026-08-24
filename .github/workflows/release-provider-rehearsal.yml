@@ -1,0 +1,112 @@
+name: Release provider rehearsal
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_pr:
+        description: Open release pull request number targeting main
+        required: true
+        type: string
+      expected_head:
+        description: Exact 40-character release pull request head SHA
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  pull-requests: read
+  checks: read
+
+concurrency:
+  group: release-provider-rehearsal-${{ inputs.release_pr }}-${{ inputs.expected_head }}
+  cancel-in-progress: false
+
+jobs:
+  manual-guard:
+    name: Refuse provider rehearsal unless explicitly enabled
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require rehearsal-only enablement and disabled production automation
+        env:
+          AUTOMATION_ENABLED: ${{ vars.RELEASE_AUTOMATION_ENABLED }}
+          REHEARSAL_ENABLED: ${{ vars.RELEASE_PROVIDER_REHEARSAL_ENABLED }}
+        run: |
+          test "$AUTOMATION_ENABLED" != true
+          test "$REHEARSAL_ENABLED" = true || {
+            echo 'Provider rehearsal is disabled; manual rehearsal dispatch refused.' >&2
+            exit 1
+          }
+
+  validate:
+    name: Validate exact same-repository main PR
+    if: vars.RELEASE_AUTOMATION_ENABLED != 'true' && vars.RELEASE_PROVIDER_REHEARSAL_ENABLED == 'true'
+    runs-on: ubuntu-24.04
+    outputs:
+      head: ${{ steps.source.outputs.head }}
+    steps:
+      - name: Validate request syntax
+        env:
+          REQUEST_RELEASE_PR: ${{ inputs.release_pr }}
+          REQUEST_EXPECTED_HEAD: ${{ inputs.expected_head }}
+        run: |
+          node - <<'NODE'
+          const pr = process.env.REQUEST_RELEASE_PR;
+          const head = process.env.REQUEST_EXPECTED_HEAD;
+          if (!/^[1-9][0-9]*$/.test(pr || '') || !Number.isSafeInteger(Number(pr))) {
+            throw new Error('release rehearsal PR number is invalid');
+          }
+          if (!/^[a-f0-9]{40}$/.test(head || '')) throw new Error('release rehearsal head SHA is invalid');
+          NODE
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.workflow_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22.23.1
+      - name: Install trusted policy dependencies without lifecycle scripts
+        working-directory: cli
+        run: npm ci --ignore-scripts
+      - name: Validate open same-repository PR targeting main and exact head
+        id: source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUEST_RELEASE_PR: ${{ inputs.release_pr }}
+          REQUEST_EXPECTED_HEAD: ${{ inputs.expected_head }}
+        run: |
+          gh api "repos/${GITHUB_REPOSITORY}/pulls/$REQUEST_RELEASE_PR" > pull-request.json
+          gh api "repos/${GITHUB_REPOSITORY}/commits/$REQUEST_EXPECTED_HEAD/check-runs?per_page=100&filter=latest" \
+            --jq '.check_runs' \
+            > release-check-runs.json
+          gh api "repos/${GITHUB_REPOSITORY}/pulls/$REQUEST_RELEASE_PR/reviews?per_page=100" \
+            > release-reviews.json
+          node cli/scripts/release/index.js validate-pr \
+            --pull-request pull-request.json \
+            --check-runs release-check-runs.json \
+            --reviews release-reviews.json \
+            --expected-head "$REQUEST_EXPECTED_HEAD" \
+            > release-pr-authorization.json
+          echo "head=$REQUEST_EXPECTED_HEAD" >> "$GITHUB_OUTPUT"
+
+  rehearsal:
+    name: Run non-production provider rehearsal
+    if: vars.RELEASE_AUTOMATION_ENABLED != 'true' && vars.RELEASE_PROVIDER_REHEARSAL_ENABLED == 'true'
+    needs: [validate]
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/release-build.yml
+    with:
+      ref: ${{ needs.validate.outputs.head }}
+      tag: provider-rehearsal
+      channel: rehearsal
+      mode: rehearsal
+    secrets:
+      APPLE_CERTIFICATE_P12: ${{ secrets.APPLE_CERTIFICATE_P12 }}
+      APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+      APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+      APPLE_NOTARY_PRIVATE_KEY: ${{ secrets.APPLE_NOTARY_PRIVATE_KEY }}

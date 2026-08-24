@@ -4,6 +4,7 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const zlib = require('zlib');
+const {compareUtf8} = require('./deterministic');
 
 const MAX_ARCHIVE_BYTES = 768 * 1024 * 1024;
 const MAX_EXPANDED_BYTES = 512 * 1024 * 1024;
@@ -64,7 +65,7 @@ function normalizeEntries(entries) {
       throw new Error(`archive entry mode is invalid: ${name}`);
     }
     return {name, data, mode};
-  }).sort((a, b) => a.name.localeCompare(b.name));
+  }).sort((a, b) => compareUtf8(a.name, b.name));
 }
 
 function dosTimestamp(timestamp) {
@@ -118,7 +119,7 @@ function buildZip(entries, timestamp) {
     central.writeUInt16LE(0, 32);
     central.writeUInt16LE(0, 34);
     central.writeUInt16LE(0, 36);
-    central.writeUInt32LE((entry.mode & 0xffff) << 16, 38);
+    central.writeUInt32LE(((0x8000 | entry.mode) << 16) >>> 0, 38);
     central.writeUInt32LE(offset, 42);
     centralParts.push(central, name);
     offset += local.length + name.length + entry.data.length;
@@ -307,7 +308,11 @@ function inspectZip(buffer) {
     if (name !== entries[index].path || extraLength !== 0 || commentLength !== 0) {
       throw new Error('zip central directory conflicts with local entries');
     }
-    entries[index].mode = ((externalAttributes >>> 16) & 0xffff).toString(8).padStart(4, '0');
+    const unixMode = (externalAttributes >>> 16) & 0xffff;
+    if ((unixMode & 0xf000) !== 0x8000) {
+      throw new Error(`zip entry is not a regular file: ${entries[index].path}`);
+    }
+    entries[index].mode = (unixMode & 0o777).toString(8).padStart(4, '0');
     offset += 46 + nameLength;
   }
   if (offset + 22 !== buffer.length || buffer.readUInt32LE(offset) !== 0x06054b50) {
@@ -336,8 +341,8 @@ function inspectArchive(file, format, expectedEntries) {
       ? inspectTarGz(buffer)
       : (() => { throw new Error(`unsupported archive format: ${format}`); })();
   if (expectedEntries) {
-    const expected = [...expectedEntries].sort();
-    const actual = entries.map(entry => entry.path).sort();
+    const expected = [...expectedEntries].sort(compareUtf8);
+    const actual = entries.map(entry => entry.path).sort(compareUtf8);
     if (actual.join('\n') !== expected.join('\n')) {
       throw new Error(`archive entries differ from the allowlist: ${actual.join(', ')}`);
     }

@@ -9,6 +9,7 @@ const {builtinModules} = require('module');
 const esbuild = require('esbuild');
 const {inject} = require('postject');
 const {assertRuntimeArtifactClean} = require('./runtime-artifact-policy');
+const {compareUtf8} = require('./deterministic');
 
 const PROTOTYPE_SCHEMA = 'guardscan.standalone-prototype.v1';
 const RUNTIME_CAPABILITY_SCHEMA = 'guardscan.runtime-capabilities.v1';
@@ -63,6 +64,13 @@ function bundleOptions(entryPoint, outputFile) {
   };
 }
 
+function releaseToolchainVersions() {
+  return {
+    esbuild: esbuild.version,
+    postject: require('postject/package.json').version,
+  };
+}
+
 function externalPackages(metafile) {
   const imports = Object.values(metafile.outputs).flatMap(output => output.imports || []);
   return [...new Set(imports
@@ -73,7 +81,7 @@ function externalPackages(metafile) {
       && !BUILTIN_MODULES.has(entry.path.split('/').slice(0, 2).join('/'))
     ))
     .map(entry => entry.path.split('/').slice(0, entry.path.startsWith('@') ? 2 : 1).join('/')))]
-    .sort();
+    .sort(compareUtf8);
 }
 
 function assertExternalAllowlist(metafile) {
@@ -330,10 +338,7 @@ async function buildHostPrototype(source, outputDir) {
       createdAt: new Date().toISOString(),
       platform,
       node: process.version.slice(1),
-      toolchain: {
-        esbuild: require('esbuild/package.json').version,
-        postject: require('postject/package.json').version,
-      },
+      toolchain: releaseToolchainVersions(),
       capabilities: {
         coreScan: true,
         sbom: true,
@@ -375,6 +380,7 @@ module.exports = {
   bundleOptions,
   externalPackages,
   hostPlatform,
+  releaseToolchainVersions,
   renameWithTransientRetry,
   smokeStandalone,
 };

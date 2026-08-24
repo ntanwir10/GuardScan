@@ -39,6 +39,7 @@ const {
   readEvents,
 } = require('./events');
 const {createPromotionDecision} = require('./promotion');
+const {recordCanary} = require('./canary');
 const {classifyRemoteArtifact} = require('./remote');
 const {planFirstReleaseWithdrawal, planRollback, reconcileRelease} = require('./reconcile');
 const {
@@ -50,9 +51,12 @@ const {writeArtifactSboms} = require('./artifact-sbom');
 const {buildStandaloneArtifact} = require('./standalone-artifact');
 const {createReleaseCandidate} = require('./candidate');
 const {createPublicationEvidence} = require('./publication-evidence');
+const {createCheckpoint, verifyCheckpoint} = require('./checkpoint');
+const {authorizePullRequest} = require('./pull-request-policy');
 
 const BOOLEAN_OPTIONS = new Set([
   'accepted',
+  'allowMerged',
   'check',
   'firstReleaseWithdrawal',
   'native',
@@ -80,6 +84,10 @@ const COMMANDS = new Set([
   'verify-npm-artifact',
   'npm-preflight',
   'advance',
+  'checkpoint',
+  'verify-checkpoint',
+  'record-canary',
+  'validate-pr',
 ]);
 
 function parseOptions(args) {
@@ -114,6 +122,8 @@ function printHelp() {
     '  verify      Verify local/remote identities and record acceptance or public verification',
     '  reconcile   Materialize the ledger and plan only incomplete remote operations',
     '  promote     Generate the machine 24-hour promotion decision',
+    '  record-canary  Validate and append one report per expected canary target',
+    '  validate-pr  Authorize an unchanged, reviewed release pull request head',
     '  rollback    Append rollback_started and produce a verified recovery plan',
     '  status      Materialize and summarize release state',
     '  catalog     Render or check the authoritative shared channel catalog',
@@ -122,10 +132,12 @@ function printHelp() {
     'Foundation and compatibility commands:',
     '  validate, plan, prepare, dry-run, render, validate-adapters',
     '  package, verify-npm-artifact, npm-preflight, standalone-prototype',
+    '  checkpoint, verify-checkpoint',
     '  advance (legacy mutable-state compatibility only), resume',
     '',
     'Common options:',
     '  --package-root PATH      CLI package directory',
+    '  --schema-root PATH       Trusted CLI directory containing release schemas',
     '  --repository-root PATH   Git repository directory',
     '  --commit SHA             Exact 40-character source commit',
     '  --tag TAG                Expected v-prefixed package version',
@@ -136,6 +148,13 @@ function printHelp() {
     '  --manifest PATH          Release manifest',
     '  --ledger PATH            Append-only JSONL release ledger',
     '  --idempotency-key KEY    Stable retry identity for one event',
+    '  --reports PATH           JSON array of canary reports',
+    '  --pull-request PATH      GitHub pull request JSON fixture',
+    '  --check-runs PATH        GitHub check-runs JSON array fixture',
+    '  --reviews PATH           GitHub pull request reviews JSON array fixture',
+    '  --expected-head SHA      Exact reviewed pull request head',
+    '  --expected-targets PATH  JSON channel-to-target-list contract',
+    '  --evaluated-at ISO       Canonical canary evaluation timestamp',
     '  --channel CHANNEL        Distribution channel',
     '  --artifact-id ID         Manifest artifact identity',
     '  --remote-identity ID     Immutable public identity',
@@ -175,9 +194,9 @@ function eventIdentity(source, options, type, payload, channel) {
   };
 }
 
-function readState(options, packageRoot) {
+function readState(options, schemaRoot) {
   if (options.ledger) return materializeReleaseState(readEvents(options.ledger));
-  if (options.state) return validateDocument('state', options.state, packageRoot);
+  if (options.state) return validateDocument('state', options.state, schemaRoot);
   throw new Error('status requires --ledger or --state');
 }
 
@@ -274,14 +293,18 @@ async function handleBuild(source, options) {
     requireOptions('build', options, [
       'wheelMetadata',
       'standaloneMetadata',
-      'provenanceUrl',
+      'provenanceEvidence',
       'output',
     ]);
+    const provenanceEvidence = JSON.parse(readBounded(
+      path.resolve(options.provenanceEvidence),
+      'Python wheel provenance evidence',
+    ));
     return finalizeWheelArtifact(
       source,
       options.wheelMetadata,
       options.standaloneMetadata,
-      options.provenanceUrl,
+      provenanceEvidence,
       options.output
     ).metadata;
   }
@@ -389,7 +412,7 @@ function handlePublication(command, source, manifest, options) {
   return {changed: result.changed, classification, event: result.event};
 }
 
-function writePromotionDecision(source, options, packageRoot) {
+function writePromotionDecision(source, options, schemaRoot) {
   requireOptions('promote', options, [
     'promotionInput',
     'output',
@@ -412,7 +435,7 @@ function writePromotionDecision(source, options, packageRoot) {
     fs.mkdirSync(path.dirname(output), {recursive: true, mode: 0o700});
     fs.writeFileSync(output, text, {encoding: 'utf8', mode: 0o600, flag: 'wx'});
   }
-  validateDocument('decision', output, packageRoot);
+  validateDocument('decision', output, schemaRoot);
   const result = appendEvent(options.ledger, {
     version: source.version,
     tag: source.tag,
@@ -438,9 +461,48 @@ async function main(argv) {
   }
   const options = parseOptions(rawOptions);
   const packageRoot = path.resolve(options.packageRoot || path.resolve(__dirname, '..', '..'));
+  const schemaRoot = path.resolve(options.schemaRoot || packageRoot);
+
+  if (command === 'record-canary') {
+    requireOptions('record-canary', options, ['ledger', 'reports', 'evaluatedAt']);
+    const reports = JSON.parse(readBounded(path.resolve(options.reports), 'canary reports'));
+    const expectedTargets = options.expectedTargets
+      ? JSON.parse(readBounded(path.resolve(options.expectedTargets), 'canary expected targets'))
+      : undefined;
+    const result = recordCanary({
+      ledgerFile: options.ledger,
+      reports,
+      expectedTargets,
+      evaluatedAt: options.evaluatedAt,
+      maxAgeMilliseconds: options.maxAgeMinutes === undefined
+        ? undefined
+        : Number(options.maxAgeMinutes) * 60 * 1000,
+    });
+    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+    if (result.failures.length > 0) process.exitCode = 2;
+    return;
+  }
+
+  if (command === 'validate-pr') {
+    requireOptions('validate-pr', options, [
+      'pullRequest',
+      'checkRuns',
+      'reviews',
+      'expectedHead',
+    ]);
+    const result = authorizePullRequest({
+      pullRequest: JSON.parse(readBounded(path.resolve(options.pullRequest), 'pull request')),
+      checkRuns: JSON.parse(readBounded(path.resolve(options.checkRuns), 'check runs')),
+      reviews: JSON.parse(readBounded(path.resolve(options.reviews), 'pull request reviews')),
+      expectedHead: options.expectedHead,
+      allowMerged: options.allowMerged === true,
+    });
+    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+    return;
+  }
 
   if (command === 'status' || command === 'resume') {
-    const state = readState(options, packageRoot);
+    const state = readState(options, schemaRoot);
     const summary = summarizeState(state);
     const output = command === 'resume'
       ? {...summary, resumable: summary.failedChannels.length === 0, nextChannels: summary.remainingChannels}
@@ -450,13 +512,13 @@ async function main(argv) {
   }
 
   if (!COMMANDS.has(command)) throw new Error(`Unknown command: ${command}`);
-  const source = validateSource({...options, packageRoot});
+  const source = validateSource({...options, packageRoot, schemaRoot});
   const manifest = options.manifest
-    ? validateDocument('manifest', options.manifest, packageRoot)
+    ? validateDocument('manifest', options.manifest, schemaRoot)
     : undefined;
-  const state = options.state ? validateDocument('state', options.state, packageRoot) : undefined;
+  const state = options.state ? validateDocument('state', options.state, schemaRoot) : undefined;
   const approval = options.approval
-    ? validateDocument('approval', options.approval, packageRoot)
+    ? validateDocument('approval', options.approval, schemaRoot)
     : undefined;
   if (manifest) assertDocumentMatchesSource('manifest', manifest, source);
   if (state) assertDocumentMatchesSource('state', state, source);
@@ -486,6 +548,32 @@ async function main(argv) {
 
   if (command === 'build') {
     process.stdout.write(`${JSON.stringify(await handleBuild(source, options), null, 2)}\n`);
+    return;
+  }
+
+  if (command === 'checkpoint') {
+    requireOptions('checkpoint', options, ['outputDir', 'files', 'producer', 'timestamp']);
+    const producer = JSON.parse(readBounded(path.resolve(options.producer), 'checkpoint producer'));
+    const result = createCheckpoint(source, {
+      outputDir: options.outputDir,
+      root: options.root || source.repositoryRoot,
+      files: options.files.split(',').map(value => value.trim()).filter(Boolean),
+      producer,
+      timestamp: options.timestamp,
+    });
+    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+    return;
+  }
+
+  if (command === 'verify-checkpoint') {
+    requireOptions('verify-checkpoint', options, ['archiveFile', 'sidecarFile']);
+    const result = verifyCheckpoint(source, {
+      archiveFile: options.archiveFile,
+      sidecarFile: options.sidecarFile,
+      ...(options.root ? {root: options.root} : {}),
+      extractDir: options.extractDir,
+    });
+    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
     return;
   }
 
@@ -529,7 +617,7 @@ async function main(argv) {
   }
 
   if (command === 'promote') {
-    const result = writePromotionDecision(source, options, packageRoot);
+    const result = writePromotionDecision(source, options, schemaRoot);
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
     if (!result.decision.eligible) process.exitCode = 2;
     return;
@@ -649,7 +737,7 @@ async function main(argv) {
     if (result.changed) {
       assertStateReferencesManifest(result.state, manifest);
       writeStateTransition(options.state, state, result.state);
-      validateDocument('state', options.state, packageRoot);
+      validateDocument('state', options.state, schemaRoot);
     }
     process.stdout.write(`${JSON.stringify({
       changed: result.changed,
@@ -728,7 +816,7 @@ async function main(argv) {
       options.outputDir,
       options.check === true
     );
-    validateDocument('catalog', path.join(result.outputDir, 'channel-lock.json'), packageRoot);
+    validateDocument('catalog', path.join(result.outputDir, 'channel-lock.json'), schemaRoot);
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
     return;
   }
@@ -742,7 +830,7 @@ async function main(argv) {
       validateDocument(
         'catalog',
         path.join(path.resolve(options.catalogRoot), 'channel-lock.json'),
-        packageRoot
+        schemaRoot
       );
     }
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);

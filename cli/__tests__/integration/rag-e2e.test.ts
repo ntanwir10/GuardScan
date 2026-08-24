@@ -17,7 +17,7 @@ import {EmbeddingChunker} from '../../src/core/embedding-chunker';
 import {EmbeddingIndexer} from '../../src/core/embedding-indexer';
 import {EmbeddingSearchEngine} from '../../src/core/embedding-search';
 import {FileBasedEmbeddingStore} from '../../src/core/embedding-store';
-import {EmbeddingProvider} from '../../src/core/embeddings';
+import {EMBEDDING_INDEX_VERSION, EmbeddingProvider} from '../../src/core/embeddings';
 import {RAGContextBuilder} from '../../src/core/rag-context';
 import {AIMessage, AIProvider, AIResponse, ProviderCapabilities} from '../../src/providers/base';
 
@@ -45,6 +45,12 @@ class DeterministicEmbeddingProvider implements EmbeddingProvider {
 
   async generateBulkEmbeddings(texts: string[]): Promise<number[][]> {
     return Promise.all(texts.map(text => this.generateEmbedding(text)));
+  }
+}
+
+class RejectingEmbeddingProvider extends DeterministicEmbeddingProvider {
+  async generateBulkEmbeddings(): Promise<number[][]> {
+    throw new Error('intentional migration failure');
   }
 }
 
@@ -87,6 +93,7 @@ describe('RAG system end to end', () => {
   let indexer: CodebaseIndexer;
   let store: FileBasedEmbeddingStore;
   let embeddingIndexer: EmbeddingIndexer;
+  let embeddingProvider: DeterministicEmbeddingProvider;
   let search: EmbeddingSearchEngine;
   let contextBuilder: RAGContextBuilder;
 
@@ -123,7 +130,7 @@ and user management backed by a database.
 `);
 
     const repoId = `rag-${path.basename(repository)}`;
-    const embeddingProvider = new DeterministicEmbeddingProvider();
+    embeddingProvider = new DeterministicEmbeddingProvider();
     indexer = new CodebaseIndexer(repository, repoId);
     store = new FileBasedEmbeddingStore(repoId, stateRoot);
     embeddingIndexer = new EmbeddingIndexer(
@@ -200,8 +207,9 @@ and user management backed by a database.
     );
     await indexer.clearCache();
 
-    const updated = await embeddingIndexer.indexCodebase({
-      incremental: true,
+    const updated = await embeddingIndexer.updateIndex([
+      path.join(repository, 'src', 'auth.ts'),
+    ], {
       showProgress: false,
     });
     expect(updated.success).toBe(true);
@@ -209,6 +217,60 @@ and user management backed by a database.
     expect(updated.stats.embeddingsGenerated).toBeGreaterThan(0);
     const stored = await store.loadEmbeddings();
     expect(stored.some(embedding => embedding.content.includes('resetPassword'))).toBe(true);
+  });
+
+  it('rebuilds legacy absolute-path embeddings without retaining stale vectors', async () => {
+    await embeddingIndexer.indexCodebase({incremental: false, showProgress: false});
+    const indexPath = path.join(stateRoot, 'embeddings', 'index.json');
+    const legacyIndex = JSON.parse(fs.readFileSync(indexPath, 'utf-8'));
+    legacyIndex.version = '1.0.0';
+    legacyIndex.embeddings[0].id = 'legacy-absolute-path';
+    legacyIndex.embeddings[0].source = path.join(repository, 'src', 'auth.ts');
+    fs.writeFileSync(indexPath, JSON.stringify(legacyIndex));
+
+    const migratedStore = new FileBasedEmbeddingStore(`rag-${path.basename(repository)}`, stateRoot);
+    const migratedIndexer = new EmbeddingIndexer(
+      indexer,
+      new EmbeddingChunker(indexer, repository),
+      embeddingProvider,
+      migratedStore,
+      repository
+    );
+    const result = await migratedIndexer.indexCodebase({incremental: true, showProgress: false});
+    const migratedIndex = await migratedStore.loadIndex();
+    const migratedEmbeddings = await migratedStore.loadEmbeddings();
+
+    expect(result.success).toBe(true);
+    expect(result.stats.chunksCached).toBe(0);
+    expect(migratedIndex?.version).toBe(EMBEDDING_INDEX_VERSION);
+    expect(migratedEmbeddings.some(embedding => embedding.id === 'legacy-absolute-path')).toBe(false);
+    expect(migratedEmbeddings.every(embedding => !path.isAbsolute(embedding.source))).toBe(true);
+  });
+
+  it('preserves a legacy embedding index when its replacement fails', async () => {
+    await embeddingIndexer.indexCodebase({incremental: false, showProgress: false});
+    const indexPath = path.join(stateRoot, 'embeddings', 'index.json');
+    const legacyIndex = JSON.parse(fs.readFileSync(indexPath, 'utf-8'));
+    legacyIndex.version = '1.0.0';
+    legacyIndex.embeddings[0].id = 'legacy-preserved';
+    legacyIndex.embeddings[0].source = path.join(repository, 'src', 'auth.ts');
+    fs.writeFileSync(indexPath, JSON.stringify(legacyIndex));
+    const beforeMigration = fs.readFileSync(indexPath, 'utf-8');
+
+    const legacyStore = new FileBasedEmbeddingStore(`rag-${path.basename(repository)}`, stateRoot);
+    const failingIndexer = new EmbeddingIndexer(
+      indexer,
+      new EmbeddingChunker(indexer, repository),
+      new RejectingEmbeddingProvider(),
+      legacyStore,
+      repository
+    );
+    const result = await failingIndexer.updateIndex([
+      path.join(repository, 'src', 'auth.ts'),
+    ], {showProgress: false});
+
+    expect(result.success).toBe(false);
+    expect(fs.readFileSync(indexPath, 'utf-8')).toBe(beforeMigration);
   });
 
   it('combines recent conversation history without exceeding its token budget', async () => {

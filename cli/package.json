@@ -22,7 +22,7 @@
     "test": "jest",
     "test:package": "node scripts/package-smoke.js",
     "test:package-manager": "node scripts/package-manager-smoke.js",
-    "test:release": "jest __tests__/contracts/release-contracts.test.ts __tests__/scripts/release-tool.test.ts __tests__/scripts/release-train.test.ts __tests__/scripts/release-workflows.test.ts __tests__/scripts/release-renderers.test.ts __tests__/scripts/release-please-config.test.ts __tests__/scripts/package-manager-smoke.test.ts __tests__/scripts/standalone-builder.test.ts --runInBand",
+    "test:release": "jest __tests__/contracts/release-contracts.test.ts __tests__/release/artifact-determinism.test.ts __tests__/release/pull-request-policy.test.ts __tests__/scripts/release-tool.test.ts __tests__/scripts/release-train.test.ts __tests__/scripts/release-workflows.test.ts __tests__/scripts/release-renderers.test.ts __tests__/scripts/release-please-config.test.ts __tests__/scripts/release-credential-monitor.test.ts __tests__/scripts/checkpoint.test.ts __tests__/scripts/package-manager-smoke.test.ts __tests__/scripts/standalone-builder.test.ts __tests__/scripts/catalog-workflow.test.ts __tests__/scripts/release-governance.test.ts __tests__/scripts/deterministic-serialization.test.ts __tests__/scripts/release-canary.test.ts --runInBand",
     "release": "node scripts/release/index.js",
     "release:validate": "node scripts/release/index.js validate",
     "release:build": "node scripts/release/index.js build",
@@ -105,7 +105,6 @@
   "devDependencies": {
     "@jest/test-sequencer": "^29.7.0",
     "@stryker-mutator/core": "^9.3.0",
-    "@types/chart.js": "^2.9.41",
     "@types/cli-progress": "^3.11.6",
     "@types/inquirer": "^8.2.10",
     "@types/jest": "^29.5.14",

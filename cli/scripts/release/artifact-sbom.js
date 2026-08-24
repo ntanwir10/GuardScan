@@ -3,6 +3,7 @@
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
+const {compareUtf8} = require('./deterministic');
 
 const SBOM_SCHEMA = 'guardscan.artifact-sbom.v1';
 
@@ -41,7 +42,7 @@ function createArtifactSboms(input) {
       purl: `pkg:npm/guardscan@${encodeURIComponent(input.version)}`,
     },
     ...(input.components || []),
-  ].sort((a, b) => `${a.name}@${a.version}`.localeCompare(`${b.name}@${b.version}`));
+  ].sort((a, b) => compareUtf8(`${a.name}@${a.version}`, `${b.name}@${b.version}`));
   const namespaceSeed = `${input.commit}\0${input.platformId}\0${input.executable.sha256}`;
   const spdxPackages = components.map(component => ({
     name: component.name,

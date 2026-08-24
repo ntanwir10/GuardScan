@@ -2,6 +2,7 @@
 
 const semver = require('semver');
 const {CHANNELS} = require('./lib');
+const {compareUtf8} = require('./deterministic');
 
 function channelOperation(channel) {
   const definition = CHANNELS.find(candidate => candidate.id === channel);
@@ -21,7 +22,11 @@ function reconcileRelease(state) {
     const definition = CHANNELS.find(candidate => candidate.id === channel);
     const operation = channelOperation(channel);
     const required = definition.required !== false;
-    if (['verified', 'withdrawn', 'superseded'].includes(channelState.status)) continue;
+    if (channelState.status === 'verified') continue;
+    if (['withdrawn', 'superseded'].includes(channelState.status)) {
+      (required ? blocking : optionalBlocking).push(`${channel} ${channelState.status}`);
+      continue;
+    }
     if (channelState.status === 'failed') {
       (required ? blocking : optionalBlocking).push(`${channel} failed`);
       continue;
@@ -54,7 +59,7 @@ function reconcileRelease(state) {
     blocked: blocking.length > 0,
     blocking,
     optionalBlocking,
-    actions: actions.sort((a, b) => a.channel.localeCompare(b.channel)),
+    actions: actions.sort((a, b) => compareUtf8(a.channel, b.channel)),
   };
 }
 
@@ -130,7 +135,7 @@ function planRollback(state, knownGoodVersion, knownGoodCommit) {
       {id: 'forward-fix-pr', action: 'open-or-update-pull-request', status: 'planned'},
       {id: 'shared-catalog-rollback', action: 'open-or-update-catalog-pull-request', status: 'planned'},
     ],
-    actions: actions.sort((a, b) => a.channel.localeCompare(b.channel)),
+    actions: actions.sort((a, b) => compareUtf8(a.channel, b.channel)),
   };
 }
 
@@ -207,7 +212,7 @@ function planFirstReleaseWithdrawal(state, authority) {
       {id: 'shared-catalog-withdrawal', action: 'remove-first-release-listing', status: 'planned'},
       {id: 'deactivate-train', action: 'remove-from-active-versions', status: 'planned'},
     ],
-    actions: actions.sort((a, b) => a.channel.localeCompare(b.channel)),
+    actions: actions.sort((a, b) => compareUtf8(a.channel, b.channel)),
   };
 }
 

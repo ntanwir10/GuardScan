@@ -11,8 +11,11 @@ candidate commit and artifacts.
 Use this order for the first train:
 
 1. Reauthenticate the maintainer and set the GuardScan repository variable
-   `RELEASE_AUTOMATION_ENABLED=false` **before** merging release automation to
-   the default branch.
+   `RELEASE_AUTOMATION_ENABLED=false` and the independent variable
+   `RELEASE_PLEASE_ENABLED=false`, plus
+   `RELEASE_PROVIDER_REHEARSAL_ENABLED=false` and
+   `RELEASE_PROVIDER_ONBOARDING_ATTESTATION=false`, **before** merging release
+   automation to the default branch.
 2. Land a reviewed bootstrap PR on `main` containing the inert release
    workflows, schemas, renderer, and ledger seed. It must not change a public
    version, create a tag, or publish an artifact.
@@ -23,17 +26,38 @@ Use this order for the first train:
 4. Complete the GitHub App, branch/tag protections, environments, catalog, OIDC
    publishers, signing identities, moderated-registry accounts, and monitoring
    below. Keep the automation variable false throughout.
-5. Recheck that the protected `release/1.1.0` PR head is unchanged and that its
+5. Temporarily enable `RELEASE_PROVIDER_REHEARSAL_ENABLED`, dispatch
+   `release-provider-rehearsal.yml` with the exact reviewed PR head, require
+   Apple and Azure evidence with `productionReady=false`, and turn the rehearsal
+   flag off again. This operation signs and notarizes transient bytes but cannot
+   create a tag, release, package publication, catalog update, or ledger event.
+6. Recheck that the protected `release/1.1.0` PR head is unchanged and that its
    complete release gate passes. The bootstrap merge to `main` is not release
    approval.
-6. Set `RELEASE_AUTOMATION_ENABLED=true` only when every checklist item and
-   provider rehearsal is complete, then dispatch exactly the candidate command
+7. After every provider-owned binding and account check below is complete, run
+   `node .github/scripts/provider-onboarding-attestation.js --attestation` from the reviewed
+   bootstrap on `main` and set `RELEASE_PROVIDER_ONBOARDING_ATTESTATION` to the
+   exact printed value. This authority is bound to the reviewed provider
+   control-plane bytes and expires after 30 days; it never changes monitoring
+   evidence from `unknown`. Then set
+   `RELEASE_AUTOMATION_ENABLED=true` and dispatch exactly the candidate command
    in `RELEASE_AUTOMATION.md`.
 
 GitHub only accepts manual and scheduled workflow execution from workflow files
 present on the default branch. Keeping the implementation solely on the release
 PR would therefore leave the orchestrator unavailable; the inert bootstrap is a
 required first-release exception.
+
+### Inert 1.0.5 bootstrap CI exception
+
+The temporary default-branch bootstrap preserves the complete public `1.0.5`
+application and production dependency graph. Its CI therefore substitutes strict
+source-byte, package-graph, installed-package, audit-regression, and workflow
+security gates for the package-manager and five-host SEA checks that exercise the
+`1.1.0` product/runtime changes. The complete release gate, including those
+package-manager and SEA matrices, must pass on the exact protected release source
+and again after that source lands. Bootstrap CI is not acceptance evidence for
+product changes that it intentionally does not contain.
 
 ## GitHub
 
@@ -61,15 +85,33 @@ required first-release exception.
 - Enable immutable releases for GuardScan.
 - Enable squash merge and auto-merge, and require the full `Release gate`
   status on the stable release PR.
-- Keep repository variable `RELEASE_AUTOMATION_ENABLED=false` until every
-  onboarding rehearsal below passes. Scheduled reconciliation and automatic
-  canaries remain dormant while it is false.
+- Require code-owner review for release control-plane changes, including
+  workflows, release tooling, schemas, package-toolchain pins, catalog
+  verification, and release governance documentation. Protect `CODEOWNERS`
+  through the same branch rule, dismiss stale approvals, and require the latest
+  push to be approved by someone other than its author. Before activation,
+  `CODEOWNERS` must name an independent maintainer or team in addition to the
+  change author; the bootstrap's single-owner seed is not sufficient when that
+  owner authors the change. This approval guards changes to publication
+  authority and is the immutable control used for production PyPI OIDC. It does
+  not require a per-release promotion click after an exact reviewed workflow
+  revision and candidate have passed every automated gate.
+- Keep repository variables `RELEASE_AUTOMATION_ENABLED=false` and
+  `RELEASE_PLEASE_ENABLED=false` until their separate activation gates pass.
+  Keep `RELEASE_PROVIDER_REHEARSAL_ENABLED=false` except for an explicitly
+  authorized non-publishing rehearsal window. Keep
+  `RELEASE_PROVIDER_ONBOARDING_ATTESTATION=false` until the full provider
+  checklist and rehearsal have passed.
+  Scheduled reconciliation and automatic canaries remain dormant while release
+  automation is false; Release Please remains dormant until its own flag is
+  deliberately enabled after the first train is aligned.
 
 Create environments without manual reviewers:
 
 - `release-rc`
 - `release-stable`
 - `npm-publish`
+- `testpypi`
 - `pypi`
 - `apple-notarization`
 - `windows-signing`
@@ -81,11 +123,12 @@ Allow protected branch `main` in these environments because the authorized
 where an environment needs them. Fork pull requests must not receive
 environment secrets or OIDC tokens.
 
-The reusable build and publish workflows run in the security context of their
-caller. In npm and PyPI provider forms, enter the workflow **filename**
-`release-train.yml` (not a path), which identifies the caller; do not register
-the reusable `release-publish.yml`. PyPI does not accept a reusable workflow as
-the trusted-publisher workflow. See the current
+The reusable build and publication workflows run in the security context of
+their caller. For npm, enter the workflow **filename** `release-train.yml` (not
+a path), which identifies the caller; do not register the reusable
+`release-publish.yml`. The TestPyPI and PyPI publishing jobs live directly in
+`release-train.yml`, because PyPI does not accept a reusable workflow as the
+trusted-publisher workflow. See the current
 [npm trusted-publisher fields](https://docs.npmjs.com/trusted-publishers/) and
 [PyPI reusable-workflow limitation](https://docs.pypi.org/trusted-publishers/troubleshooting/#reusable-workflows-on-github).
 
@@ -145,8 +188,16 @@ generated projection.
 
 - Reserve `guardscan-cli`.
 - Configure pending trusted publishers for both TestPyPI and PyPI.
-- Bind them exactly to GitHub owner `ntanwir10`, repository `GuardScan`,
-  workflow filename `release-train.yml`, and environment `pypi`.
+- Bind them exactly to GitHub owner `ntanwir10`, repository `GuardScan`, and
+  workflow filename `release-train.yml`. Bind TestPyPI to environment
+  `testpypi` and production PyPI to environment `pypi`; never share their OIDC
+  subjects.
+- Do not activate the production PyPI trusted publisher until the protected
+  workflow paths have an independent code-owner approval and the branch rule
+  requires approval of the latest push by someone other than its author. If an
+  independent reviewer cannot be configured, add required reviewers to the
+  `pypi` environment and accept the per-release approval instead; never remove
+  both controls to preserve zero-touch behavior.
 - Confirm both publishers accept the PEP 440 identity `1.1.0rc1` derived from
   tag `v1.1.0-rc.1`. TestPyPI must converge to all five tested wheels and pass
   pip/pipx native lifecycles before the production PyPI job can run.
@@ -186,18 +237,24 @@ Configure these GitHub environment **variables** (not secrets) in
 
 Grant only the Artifact Signing Certificate Profile Signer role needed by the federated identity.
 
-Set the GitHub OIDC federated credential subject exactly to
-`repo:ntanwir10/GuardScan:environment:windows-signing`. The environment's
-protected-branch policy and the repository's protected workflows constrain the
-caller separately. The job must verify Authenticode status and timestamp before
-the executable is archived. Do not add an Azure client secret fallback.
+Create the federated credential from the exact `sub` claim observed during a
+non-publishing rehearsal. Prefer an immutable workflow identity template when
+GitHub and Azure both support the selected claim shape; do not hard-code a
+legacy subject assumption. The `windows-signing` environment's protected-branch
+policy and the repository's protected workflows constrain the caller
+separately. The job must verify Authenticode status and timestamp before the
+executable is archived. Do not add an Azure client secret fallback.
 
 ## WinGet and Chocolatey
 
 - Accept the Microsoft CLA for the submitting identity.
-- Store a narrowly scoped, expiry-bounded `WINGET_GITHUB_TOKEN` in `winget`.
-  It may submit the generated manifests to `microsoft/winget-pkgs`; it must not
-  have GuardScan administration or release authority.
+- Store an expiry-bounded classic PAT named `WINGET_CREATE_GITHUB_TOKEN` in
+  `winget`, with only the `public_repo` scope required by `winget-create`.
+  Fine-grained tokens are not supported by the tool. Accept and monitor the
+  residual access to public repositories explicitly; the identity must have no
+  GuardScan administration or release authority. The workflow supplies this
+  token only through the documented environment variable, never a command-line
+  argument.
 - Create/validate the Chocolatey publisher account.
 - Store `CHOCO_API_KEY` in `chocolatey`.
 
@@ -262,7 +319,7 @@ status/expiry metadata, never secret values.
 | --- | --- | --- |
 | GitHub App | Installation exists on exactly both repositories; required permissions remain; token mint succeeds | Check daily and before every candidate. Alert immediately on installation/permission drift and at the configured private-key age limit. |
 | npm trusted publisher | Repository, caller workflow, and `npm-publish` environment match; no token fallback exists | Check before every candidate and monthly. A mismatch keeps automation off. |
-| TestPyPI/PyPI trusted publishers | Project, repository, caller workflow, and `pypi` environment match | Check both services before every candidate and monthly; rehearse TestPyPI before production. |
+| TestPyPI/PyPI trusted publishers | Project, repository, caller workflow, and the distinct `testpypi`/`pypi` environments match | Check both services before every candidate and monthly; rehearse TestPyPI before production. |
 | Apple certificate/notary identity | Certificate subject/team, expiry, and notary authentication are valid | Check daily; alert at 60, 30, 14, and 7 days. Renewal/identity revalidation requires the publisher. |
 | Azure federation/signing profile | Federated subject, signer role, account/profile state, and timestamp service are healthy | Check weekly and before every candidate with a non-secret signing preflight. Alert immediately on role or federation drift. |
 | WinGet submitter | Token expiry/scope and Microsoft CLA state are valid | Check weekly; alert at 30, 14, and 7 days. CLA or account challenges remain external authority boundaries. |
@@ -273,9 +330,23 @@ If the provider does not expose expiry metadata, use a bounded authentication
 preflight and record `unknown` rather than inventing a date. Monitoring is not
 complete until at least one alert path has been tested.
 
+The credential workflow keeps those unobservable fields `unknown`. For a
+release preflight only, it separately requires
+`RELEASE_PROVIDER_ONBOARDING_ATTESTATION` to match the SHA-256 subject computed
+from the exact trusted control plane and rejects every machine-observed
+`warning` or `unhealthy` provider status. Only the documented Azure,
+Chocolatey, trusted-publisher, and WinGet visibility boundaries may remain
+`unknown`. Keep the attestation false until all provider configuration and
+rehearsal steps above have passed; set it false again whenever a binding,
+account, environment, publisher identity, or attested control-plane file
+changes. A control-plane edit changes the computed subject and therefore blocks
+release eligibility until the provider bindings are rechecked. Re-run the
+onboarding checks and issue a new attestation at least every 30 days; the
+workflow rejects future-dated, expired, or longer-lived attestations.
+
 After every onboarding item, functional acceptance prerequisite, and monitoring
-rehearsal passes, enable the variable and immediately dispatch the first
-candidate. No later release requires a human promotion click. Only
+rehearsal passes, set `RELEASE_AUTOMATION_ENABLED=true` and immediately dispatch
+the first candidate. No later release requires a human promotion click. Only
 provider-mandated identity, MFA, legal, certificate-renewal, account
 verification, or moderator requests remain human boundaries; automation must
 report those states rather than claiming completion.

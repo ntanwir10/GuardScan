@@ -20,6 +20,27 @@ function clone<T>(value: T): T {
 const timestamp = '2026-07-20T14:30:00.000Z';
 const commit = 'a'.repeat(40);
 const digest = 'b'.repeat(64);
+const workflowSha = 'f'.repeat(40);
+
+function provenance(
+  source: Record<string, string>,
+  subjectSha256: string,
+  name: string
+): Record<string, unknown> {
+  return {
+    type: 'slsa',
+    url: `https://github.com/ntanwir10/GuardScan/releases/download/${source.tag}/${name}.provenance.sigstore.json`,
+    verified: true,
+    sha256: 'c'.repeat(64),
+    subjectSha256,
+    sourceVersion: source.version,
+    sourceTag: source.tag,
+    sourceCommit: source.commit,
+    signerIdentity: 'https://github.com/ntanwir10/GuardScan/.github/workflows/release-build.yml',
+    signerDigest: workflowSha,
+    predicateType: 'https://slsa.dev/provenance/v1',
+  };
+}
 
 function makeManifest(): JsonDocument {
   const capabilities = {
@@ -44,6 +65,7 @@ function makeManifest(): JsonDocument {
       provider: 'github-actions',
       repository: 'ntanwir10/GuardScan',
       workflow: '.github/workflows/release-build.yml',
+      workflowSha,
       runId: '123456789',
       runAttempt: 1,
       sourceRef: 'refs/tags/v1.2.0-rc.1',
@@ -71,13 +93,7 @@ function makeManifest(): JsonDocument {
         },
         url: 'https://registry.npmjs.org/guardscan/-/guardscan-1.2.0-rc.1.tgz',
         integrity: `sha512-${'A'.repeat(86)}==`,
-        provenance: {
-          type: 'slsa',
-          url: 'https://github.com/ntanwir10/GuardScan/attestations/1',
-          sha256: 'c'.repeat(64),
-          predicateType: 'https://slsa.dev/provenance/v1',
-          verified: true,
-        },
+        provenance: provenance(source, digest, 'npm'),
       },
       {
         id: 'binary:linux-x64-glibc',
@@ -132,11 +148,7 @@ function makeManifest(): JsonDocument {
           mode: '0755',
           sha256: 'd'.repeat(64),
         }],
-        provenance: {
-          type: 'slsa',
-          url: 'https://github.com/ntanwir10/GuardScan/attestations/2',
-          verified: true,
-        },
+        provenance: provenance(source, 'd'.repeat(64), 'linux-x64'),
       },
       {
         id: 'pypi:guardscan@1.2.0rc1',
@@ -149,11 +161,7 @@ function makeManifest(): JsonDocument {
         platform: { os: 'linux', arch: 'x64', libc: 'glibc' },
         embeddedStandaloneId: 'binary:linux-x64-glibc',
         embeddedExecutableSha256: 'd'.repeat(64),
-        provenance: {
-          type: 'slsa',
-          url: 'https://github.com/ntanwir10/GuardScan/attestations/3',
-          verified: true,
-        },
+        provenance: provenance(source, 'e'.repeat(64), 'wheel-linux-x64'),
       },
       {
         id: 'sbom:release',
@@ -486,6 +494,12 @@ describe('release contract schemas', () => {
     const badDigest = clone(makeManifest()) as { artifacts: Array<{ sha256: string }> };
     badDigest.artifacts[0].sha256 = 'ABC123';
     expect(validateManifest(badDigest)).toBe(false);
+
+    const missingAttestationBinding = clone(makeManifest()) as {
+      artifacts: Array<{provenance: {subjectSha256?: string}}>;
+    };
+    delete missingAttestationBinding.artifacts[0].provenance.subjectSha256;
+    expect(validateManifest(missingAttestationBinding)).toBe(false);
   });
 
   it('rejects unknown manifest fields at every modeled boundary', () => {

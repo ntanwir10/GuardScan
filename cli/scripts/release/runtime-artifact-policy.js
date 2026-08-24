@@ -2,6 +2,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const {compareUtf8} = require('./deterministic');
 
 const FORBIDDEN_RUNTIME_LITERALS = Object.freeze([
   'api.guardscancli.com',
@@ -26,7 +27,7 @@ function assertCompiledRuntimeFilesClean(root, files, label = 'compiled runtime'
   const runtimeFiles = [...files]
     .map(file => String(file).replace(/\\/g, '/'))
     .filter(file => file.startsWith('dist/') && /\.(?:c|m)?js$/i.test(file))
-    .sort();
+    .sort(compareUtf8);
   if (runtimeFiles.length === 0) {
     throw new Error(`${label} contains no compiled JavaScript under dist/`);
   }

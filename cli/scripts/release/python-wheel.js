@@ -6,6 +6,7 @@ const path = require('path');
 const {buildArchive, inspectArchive} = require('./archive');
 const {toPep440} = require('./renderers');
 const {readJson} = require('./lib');
+const {assertVerifiedAttestation} = require('./provenance');
 
 const WHEEL_SCHEMA = 'guardscan.python-wheel.v1';
 const PLATFORM_TAGS = Object.freeze({
@@ -43,8 +44,11 @@ function launcherSource(binaryName, digest) {
     'def main():',
     '    binary = files("guardscan_cli").joinpath("bin", BINARY_NAME)',
     '    executable = os.fspath(binary)',
+    '    digest = hashlib.sha256()',
     '    with open(executable, "rb") as stream:',
-    '        digest = hashlib.file_digest(stream, "sha256").hexdigest()',
+    '        for chunk in iter(lambda: stream.read(1024 * 1024), b""):',
+    '            digest.update(chunk)',
+    '    digest = digest.hexdigest()',
     '    if digest != EXPECTED_SHA256:',
     '        raise RuntimeError("bundled GuardScan executable failed integrity verification")',
     '    argv = [executable, *sys.argv[1:]]',
@@ -146,7 +150,7 @@ function finalizeWheelArtifact(
   source,
   wheelMetadataFile,
   standaloneMetadataFile,
-  provenanceUrl,
+  provenanceEvidence,
   outputFile
 ) {
   const wheel = readJson(path.resolve(wheelMetadataFile), 'Python wheel metadata');
@@ -164,10 +168,14 @@ function finalizeWheelArtifact(
   if (!executable || executable.sha256 !== wheel.embeddedExecutable.sha256) {
     throw new Error('Python wheel does not contain the signed standalone executable');
   }
-  const parsed = new URL(provenanceUrl);
-  if (parsed.protocol !== 'https:' || parsed.username || parsed.password) {
-    throw new Error('Python wheel provenance URL is invalid');
-  }
+  const provenance = assertVerifiedAttestation(
+    provenanceEvidence,
+    {
+      artifactSha256: wheel.sha256,
+      source,
+    },
+    'Python wheel provenance',
+  );
   const artifact = {
     id: `python-wheel:${targetId(wheel.platform)}`,
     kind: 'python-wheel',
@@ -184,9 +192,17 @@ function finalizeWheelArtifact(
     embeddedStandaloneId: standalone.id,
     embeddedExecutableSha256: wheel.embeddedExecutable.sha256,
     provenance: {
-      type: 'slsa',
-      url: provenanceUrl,
+      type: provenance.type,
+      url: provenance.url,
       verified: true,
+      sha256: provenance.sha256,
+      subjectSha256: provenance.subjectSha256,
+      sourceVersion: provenance.sourceVersion,
+      sourceTag: provenance.sourceTag,
+      sourceCommit: provenance.sourceCommit,
+      signerIdentity: provenance.signerIdentity,
+      signerDigest: provenance.signerDigest,
+      predicateType: provenance.predicateType,
     },
   };
   const metadata = {

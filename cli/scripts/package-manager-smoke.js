@@ -5,6 +5,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const {spawnSync} = require('child_process');
+const {parseNpmPackResult} = require('./release/npm-artifact');
 
 const SUPPORTED_MANAGERS = new Set(['npm', 'pnpm', 'yarn', 'bun']);
 
@@ -69,7 +70,7 @@ function main(argv = process.argv.slice(2)) {
     let tarball = suppliedTarball;
     if (!tarball) {
       const pack = run(commandFor('npm'), ['pack', '--json', '--pack-destination', tempRoot], packageRoot, npmEnv);
-      const packed = JSON.parse(pack.stdout)[0];
+      const packed = parseNpmPackResult(pack.stdout);
       tarball = path.join(tempRoot, packed.filename);
     }
     const project = path.join(tempRoot, 'project');

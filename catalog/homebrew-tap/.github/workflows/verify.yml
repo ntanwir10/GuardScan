@@ -44,17 +44,47 @@ jobs:
         shell: bash
         run: |
           node <<'NODE'
+          const crypto = require('crypto');
           const fs = require('fs');
           const fail = message => { throw new Error(message); };
           const sha = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
           const commit = value => typeof value === 'string' && /^[a-f0-9]{40}$/.test(value);
+          const version = value => typeof value === 'string'
+            && /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/.test(value);
+          const compareUtf8 = (left, right) => Buffer.compare(
+            Buffer.from(String(left), 'utf8'),
+            Buffer.from(String(right), 'utf8'),
+          );
+          const bootstrapFiles = [
+            '.github/workflows/verify.yml',
+            'README.md',
+          ];
           const catalogFiles = [
             'channel-lock.json',
             'Formula/guardscan.rb',
             'bucket/guardscan.json',
           ];
+          const listFiles = directory => fs.readdirSync(directory, {withFileTypes: true})
+            .filter(entry => !(directory === '.' && entry.name === '.git'))
+            .flatMap(entry => {
+              const relative = directory === '.' ? entry.name : `${directory.slice(2)}/${entry.name}`;
+              const absolute = directory === '.' ? `./${entry.name}` : `${directory}/${entry.name}`;
+              if (entry.isSymbolicLink()) fail(`catalog contains a symlink: ${relative}`);
+              if (entry.isDirectory()) return listFiles(absolute);
+              if (!entry.isFile()) fail(`catalog contains a non-regular path: ${relative}`);
+              return [relative];
+            });
+          const assertExactTree = expected => {
+            const actual = listFiles('.').sort(compareUtf8);
+            const wanted = [...expected].sort(compareUtf8);
+            const unexpected = actual.filter(file => !wanted.includes(file));
+            const missing = wanted.filter(file => !actual.includes(file));
+            if (unexpected.length > 0) fail(`catalog contains unexpected paths: ${unexpected.join(', ')}`);
+            if (missing.length > 0) fail(`catalog is missing required paths: ${missing.join(', ')}`);
+          };
           const present = catalogFiles.filter(file => fs.existsSync(file));
           if (present.length === 0) {
+            assertExactTree(bootstrapFiles);
             fs.appendFileSync(process.env.GITHUB_OUTPUT, 'published=false\n');
             process.stdout.write('Catalog is initialized but has no published GuardScan release.\n');
             process.exit(0);
@@ -62,33 +92,42 @@ jobs:
           if (present.length !== catalogFiles.length) {
             fail(`catalog metadata is partially initialized: ${present.join(', ')}`);
           }
+          assertExactTree([...bootstrapFiles, ...catalogFiles]);
           const lock = JSON.parse(fs.readFileSync('channel-lock.json', 'utf8'));
           if (lock.schemaVersion !== 'guardscan.channel-catalog.v1') fail('unsupported channel lock');
           if (lock.source?.repository !== 'ntanwir10/GuardScan') fail('unexpected source repository');
           if (lock.generator?.repository !== 'ntanwir10/GuardScan') fail('unexpected generator repository');
           if (!commit(lock.source?.commit) || !commit(lock.generator?.commit)) fail('invalid commit identity');
           if (lock.source.commit !== lock.generator.commit) fail('generator must come from the release source commit');
+          if (!version(lock.source?.version)) fail('invalid source version');
           if (lock.source?.tag !== `v${lock.source?.version}`) fail('tag and version do not match');
           const expectedUrl =
             `https://github.com/ntanwir10/GuardScan/releases/download/${lock.source.tag}/release-manifest.json`;
           if (lock.source?.manifestUrl !== expectedUrl) fail('manifest URL is not canonical');
           if (!sha(lock.source?.manifestSha256)) fail('invalid manifest digest');
           const expectedFiles = ['Formula/guardscan.rb', 'bucket/guardscan.json'];
-          if (JSON.stringify(Object.keys(lock.files || {}).sort()) !== JSON.stringify(expectedFiles)) {
+          if (JSON.stringify(Object.keys(lock.files || {}).sort(compareUtf8)) !== JSON.stringify(expectedFiles)) {
             fail('channel lock has unexpected generated files');
           }
           for (const filename of expectedFiles) {
             if (!sha(lock.files[filename]?.sha256)) fail(`invalid digest for ${filename}`);
           }
-          const output = [
-            'published=true',
-            `source_commit=${lock.source.commit}`,
-            `manifest_url=${lock.source.manifestUrl}`,
-            `manifest_sha256=${lock.source.manifestSha256}`,
-            `generator_repository=${lock.generator.repository}`,
-            `generator_commit=${lock.generator.commit}`,
-          ].join('\n');
-          fs.appendFileSync(process.env.GITHUB_OUTPUT, `${output}\n`);
+          const outputs = {
+            published: 'true',
+            source_commit: lock.source.commit,
+            manifest_url: lock.source.manifestUrl,
+            manifest_sha256: lock.source.manifestSha256,
+            generator_repository: lock.generator.repository,
+            generator_commit: lock.generator.commit,
+          };
+          for (const [key, value] of Object.entries(outputs)) {
+            if (/[\r\n]/.test(value)) fail(`untrusted newline in ${key}`);
+            const delimiter = `guardscan_${crypto.randomUUID()}`;
+            fs.appendFileSync(
+              process.env.GITHUB_OUTPUT,
+              `${key}<<${delimiter}\n${value}\n${delimiter}\n`,
+            );
+          }
           NODE
 
       - name: Download and authenticate the immutable release manifest
@@ -129,8 +168,6 @@ jobs:
         if: steps.lock.outputs.published == 'true'
         with:
           node-version: ${{ env.RELEASE_NODE_VERSION }}
-          cache: npm
-          cache-dependency-path: .guardscan-source/cli/package-lock.json
 
       - name: Reproduce every generated byte
         if: steps.lock.outputs.published == 'true'

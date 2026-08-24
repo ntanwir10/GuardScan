@@ -13,9 +13,23 @@ permissions:
   contents: read
 
 jobs:
+  manual-guard:
+    name: Refuse manual release-please dispatch while disabled
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require explicit Release Please enablement
+        env:
+          RELEASE_PLEASE_ENABLED: ${{ vars.RELEASE_PLEASE_ENABLED }}
+        run: |
+          test "$RELEASE_PLEASE_ENABLED" = true || {
+            echo 'Release Please automation is disabled; manual dispatch refused.' >&2
+            exit 1
+          }
+
   release-pr:
     name: Update release pull request
-    if: ${{ vars.RELEASE_AUTOMATION_ENABLED == 'true' && vars.RELEASE_APP_ID != '' }}
+    if: ${{ vars.RELEASE_PLEASE_ENABLED == 'true' && vars.RELEASE_APP_ID != '' }}
     runs-on: ubuntu-latest
     steps:
       - name: Create short-lived release app token
@@ -24,6 +38,10 @@ jobs:
         with:
           app-id: ${{ vars.RELEASE_APP_ID }}
           private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+          permission-issues: write
+          permission-metadata: read
 
       - name: Prepare or update release pull request only
         uses: googleapis/release-please-action@5c625bfb5d1ff62eadeeb3772007f7f66fdcf071 # v4

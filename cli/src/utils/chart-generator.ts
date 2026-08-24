@@ -1,5 +1,28 @@
-import { ChartJSNodeCanvas } from 'chartjs-node-canvas';
-import { ChartConfiguration } from 'chart.js';
+interface ChartConfiguration {
+  type: 'bar' | 'doughnut';
+  data: {
+    labels: string[];
+    datasets: Array<Record<string, unknown>>;
+  };
+  options: Record<string, unknown>;
+}
+
+interface ChartRenderer {
+  renderToBuffer(configuration: ChartConfiguration): Promise<Buffer>;
+}
+
+interface ChartRendererConstructor {
+  new(options: {width: number; height: number; backgroundColour: string}): ChartRenderer;
+}
+
+// chartjs-node-canvas and chart.js are optional runtime capabilities. Keep the
+// compile-time boundary structural so npm may legitimately omit a failed
+// native canvas install without making the core CLI unbuildable. The literal
+// require also lets esbuild identify and preserve the package as an external.
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const { ChartJSNodeCanvas } = require('chartjs-node-canvas') as {
+  ChartJSNodeCanvas: ChartRendererConstructor;
+};
 
 export interface SeveritySummary {
   critical: number;
@@ -22,7 +45,7 @@ export interface CoverageData {
 }
 
 export class ChartGenerator {
-  private chartJSNodeCanvas: ChartJSNodeCanvas;
+  private chartJSNodeCanvas: ChartRenderer;
 
   constructor() {
     this.chartJSNodeCanvas = new ChartJSNodeCanvas({

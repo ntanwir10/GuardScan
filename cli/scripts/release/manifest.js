@@ -10,6 +10,8 @@ const {
   validateDocument,
 } = require('./lib');
 const {canonicalJson} = require('./events');
+const {compareUtf8} = require('./deterministic');
+const {assertVerifiedAttestation} = require('./provenance');
 
 const MANIFEST_SCHEMA = 'guardscan.release-manifest.v1';
 const INPUT_SCHEMA = 'guardscan.release-manifest-input.v1';
@@ -28,6 +30,13 @@ const REQUIRED_SIGNATURE = Object.freeze({
 
 function sha256Text(value) {
   return crypto.createHash('sha256').update(value).digest('hex');
+}
+
+function assertPrivateRegularFile(file, label) {
+  const stat = fs.lstatSync(file);
+  if (!stat.isFile() || stat.nlink !== 1) {
+    throw new Error(`${label} must be a private regular file`);
+  }
 }
 
 function canonicalTimestamp(value, label) {
@@ -87,7 +96,15 @@ function assertEvidenceCollection(values, label, artifactId) {
   return types;
 }
 
-function assertStandaloneArtifact(source, artifact) {
+function assertArtifactProvenance(source, producer, artifact) {
+  return assertVerifiedAttestation(artifact.provenance, {
+    artifactSha256: artifact.sha256,
+    source,
+    signerDigest: producer.workflowSha,
+  }, `${artifact.id} provenance`);
+}
+
+function assertStandaloneArtifact(source, producer, artifact) {
   if (artifact.productionReady !== true) {
     throw new Error(`standalone artifact is not production ready: ${artifact.id}`);
   }
@@ -122,10 +139,7 @@ function assertStandaloneArtifact(source, artifact) {
   for (const required of ['spdx', 'cyclonedx']) {
     if (!sbomFormats.has(required)) throw new Error(`${artifact.id} lacks required ${required} SBOM`);
   }
-  if (!artifact.provenance || artifact.provenance.verified !== true) {
-    throw new Error(`${artifact.id} lacks verified provenance`);
-  }
-  assertHttps(artifact.provenance.url, `${artifact.id} provenance`);
+  assertArtifactProvenance(source, producer, artifact);
   if (artifact.capabilities?.coreScan !== true || artifact.capabilities?.sbom !== true
       || artifact.capabilities?.chartRendering !== false
       || artifact.capabilities?.accurateTokenCounting !== false) {
@@ -133,7 +147,7 @@ function assertStandaloneArtifact(source, artifact) {
   }
 }
 
-function assertArtifact(source, artifact) {
+function assertArtifact(source, producer, artifact) {
   if (!artifact || typeof artifact !== 'object' || typeof artifact.id !== 'string') {
     throw new Error('artifact metadata is invalid');
   }
@@ -143,24 +157,19 @@ function assertArtifact(source, artifact) {
   }
   assertDigest(artifact.sha256, artifact.id);
   if (artifact.url) assertHttps(artifact.url, `${artifact.id} URL`);
-  if (artifact.kind === 'standalone') assertStandaloneArtifact(source, artifact);
+  if (artifact.kind === 'standalone') assertStandaloneArtifact(source, producer, artifact);
   if (artifact.kind === 'npm-tarball') {
     if (!/^sha512-[A-Za-z0-9+/]+={0,2}$/.test(artifact.integrity || '')) {
       throw new Error(`npm tarball integrity is invalid: ${artifact.id}`);
     }
-    if (!artifact.provenance || artifact.provenance.verified !== true) {
-      throw new Error(`npm tarball lacks verified build provenance: ${artifact.id}`);
-    }
-    assertHttps(artifact.provenance.url, `${artifact.id} provenance`);
+    assertArtifactProvenance(source, producer, artifact);
   }
   if (artifact.kind === 'python-wheel') {
     if (!artifact.platform || !artifact.embeddedStandaloneId) {
       throw new Error(`python wheel is not bound to a standalone artifact: ${artifact.id}`);
     }
     assertDigest(artifact.embeddedExecutableSha256, `${artifact.id} embedded executable`);
-    if (!artifact.provenance || artifact.provenance.verified !== true) {
-      throw new Error(`python wheel lacks verified provenance: ${artifact.id}`);
-    }
+    assertArtifactProvenance(source, producer, artifact);
   }
   return artifact;
 }
@@ -171,7 +180,8 @@ function createReleaseManifest(source, input) {
   }
   canonicalTimestamp(input.createdAt, 'manifest createdAt');
   if (!input.producer || input.producer.provider !== 'github-actions'
-      || input.producer.repository !== 'ntanwir10/GuardScan') {
+      || input.producer.repository !== 'ntanwir10/GuardScan'
+      || !/^[a-f0-9]{40}$/.test(input.producer.workflowSha || '')) {
     throw new Error('manifest producer must be the GuardScan GitHub Actions release workflow');
   }
   if (!input.toolchain || !input.toolchain.node || !input.toolchain.packageManager
@@ -181,7 +191,7 @@ function createReleaseManifest(source, input) {
   if (!Array.isArray(input.artifacts) || input.artifacts.length === 0) {
     throw new Error('manifest input contains no artifacts');
   }
-  const artifacts = input.artifacts.map(artifact => assertArtifact(source, artifact));
+  const artifacts = input.artifacts.map(artifact => assertArtifact(source, input.producer, artifact));
   const ids = new Set();
   const filenames = new Set();
   for (const artifact of artifacts) {
@@ -194,15 +204,15 @@ function createReleaseManifest(source, input) {
     const targets = artifacts
       .filter(artifact => artifact.kind === 'standalone')
       .map(artifact => platformId(artifact.platform))
-      .sort();
-    if (targets.join('\n') !== [...REQUIRED_NATIVE_TARGETS].sort().join('\n')) {
+      .sort(compareUtf8);
+    if (targets.join('\n') !== [...REQUIRED_NATIVE_TARGETS].sort(compareUtf8).join('\n')) {
       throw new Error(`full release requires exact native target matrix: ${REQUIRED_NATIVE_TARGETS.join(', ')}`);
     }
     const wheelTargets = artifacts
       .filter(artifact => artifact.kind === 'python-wheel')
       .map(artifact => platformId(artifact.platform))
-      .sort();
-    if (wheelTargets.join('\n') !== [...REQUIRED_NATIVE_TARGETS].sort().join('\n')) {
+      .sort(compareUtf8);
+    if (wheelTargets.join('\n') !== [...REQUIRED_NATIVE_TARGETS].sort(compareUtf8).join('\n')) {
       throw new Error('full release requires one Python wheel for every native target');
     }
   }
@@ -225,7 +235,7 @@ function createReleaseManifest(source, input) {
     createdAt: input.createdAt,
     producer: input.producer,
     toolchain: input.toolchain,
-    artifacts: artifacts.sort((a, b) => a.id.localeCompare(b.id)),
+    artifacts: artifacts.sort((a, b) => compareUtf8(a.id, b.id)),
   };
 }
 
@@ -251,15 +261,40 @@ function writeReleaseManifest(source, descriptorFile, outputFile) {
   const resolved = path.resolve(outputFile);
   const contents = `${JSON.stringify(manifest, null, 2)}\n`;
   if (fs.existsSync(resolved)) {
+    assertPrivateRegularFile(resolved, 'release manifest');
+    validateDocument('manifest', resolved, source.schemaRoot || source.packageRoot);
     if (readBounded(resolved, 'release manifest') !== contents) {
       throw new Error(`release manifest conflicts with existing output: ${resolved}`);
     }
     return {created: false, manifest, sha256: sha256Text(contents), outputFile: resolved};
   }
   fs.mkdirSync(path.dirname(resolved), {recursive: true, mode: 0o700});
-  fs.writeFileSync(resolved, contents, {encoding: 'utf8', mode: 0o600, flag: 'wx'});
-  validateDocument('manifest', resolved, source.packageRoot);
-  return {created: true, manifest, sha256: sha256Text(contents), outputFile: resolved};
+  const staged = path.join(
+    path.dirname(resolved),
+    `.${path.basename(resolved)}.tmp-${process.pid}-${crypto.randomUUID()}`,
+  );
+  try {
+    fs.writeFileSync(staged, contents, {encoding: 'utf8', mode: 0o600, flag: 'wx'});
+    assertPrivateRegularFile(staged, 'staged release manifest');
+    validateDocument('manifest', staged, source.schemaRoot || source.packageRoot);
+    try {
+      fs.linkSync(staged, resolved);
+    } catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+      assertPrivateRegularFile(resolved, 'release manifest');
+      validateDocument('manifest', resolved, source.schemaRoot || source.packageRoot);
+      if (readBounded(resolved, 'release manifest') !== contents) {
+        throw new Error(`release manifest conflicts with existing output: ${resolved}`);
+      }
+      return {created: false, manifest, sha256: sha256Text(contents), outputFile: resolved};
+    }
+    fs.rmSync(staged, {force: true});
+    assertPrivateRegularFile(resolved, 'release manifest');
+    validateDocument('manifest', resolved, source.schemaRoot || source.packageRoot);
+    return {created: true, manifest, sha256: sha256Text(contents), outputFile: resolved};
+  } finally {
+    fs.rmSync(staged, {force: true});
+  }
 }
 
 function verifyManifestFiles(manifest, artifactRoot) {
@@ -274,7 +309,7 @@ function verifyManifestFiles(manifest, artifactRoot) {
     if (digest !== artifact.sha256) throw new Error(`artifact digest mismatch: ${artifact.id}`);
     verified.push(artifact.id);
   }
-  return {valid: true, verified: verified.sort()};
+  return {valid: true, verified: verified.sort(compareUtf8)};
 }
 
 module.exports = {

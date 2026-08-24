@@ -16,35 +16,55 @@ function tokenCounter(available: boolean, mode: 'accurate' | 'estimated') {
 }
 
 describe('runtime capability evidence', () => {
-  it('records both safe reduced-capability paths when optional modules are unavailable', async () => {
-    const counter = tokenCounter(false, 'estimated');
-    const missingChart = Object.assign(
-      new Error("Cannot find module 'chartjs-node-canvas'"),
-      {code: 'MODULE_NOT_FOUND'}
+  it.each([
+    ['MODULE_NOT_FOUND', "Cannot find module 'chartjs-node-canvas'"],
+    ['ERR_MODULE_NOT_FOUND', "Cannot find package 'chartjs-node-canvas'"],
+    ['ERR_UNKNOWN_BUILTIN_MODULE', 'No such built-in module: chartjs-node-canvas'],
+    ['ERR_UNKNOWN_BUILTIN_MODULE', 'No such built-in module: node:chartjs-node-canvas'],
+  ])(
+    'records the safe reduced-capability path when the chart module fails with %s',
+    async (code, message) => {
+      const counter = tokenCounter(false, 'estimated');
+      const missingChart = Object.assign(
+        new Error(message),
+        {code}
+      );
+
+      const evidence = await collectRuntimeCapabilities({
+        createTokenCounter: () => counter,
+        loadChartRenderer: async () => { throw missingChart; },
+      });
+
+      expect(evidence).toEqual({
+        schemaVersion: RUNTIME_CAPABILITY_SCHEMA,
+        tokenCounting: {
+          dependency: 'tiktoken',
+          dependencyAvailable: false,
+          mode: 'estimated',
+          sampleTokenCount: 7,
+          safeFallbackObserved: true,
+        },
+        chartRendering: {
+          dependency: 'chartjs-node-canvas',
+          dependencyAvailable: false,
+          mode: 'unavailable',
+          safeFallbackObserved: true,
+        },
+      });
+      expect(counter.cleanup).toHaveBeenCalledTimes(1);
+    }
+  );
+
+  it('fails closed for a similarly named unknown builtin module', async () => {
+    const unexpectedBuiltin = Object.assign(
+      new Error('No such built-in module: chartjs-node-canvas-helper'),
+      {code: 'ERR_UNKNOWN_BUILTIN_MODULE'}
     );
 
-    const evidence = await collectRuntimeCapabilities({
-      createTokenCounter: () => counter,
-      loadChartRenderer: async () => { throw missingChart; },
-    });
-
-    expect(evidence).toEqual({
-      schemaVersion: RUNTIME_CAPABILITY_SCHEMA,
-      tokenCounting: {
-        dependency: 'tiktoken',
-        dependencyAvailable: false,
-        mode: 'estimated',
-        sampleTokenCount: 7,
-        safeFallbackObserved: true,
-      },
-      chartRendering: {
-        dependency: 'chartjs-node-canvas',
-        dependencyAvailable: false,
-        mode: 'unavailable',
-        safeFallbackObserved: true,
-      },
-    });
-    expect(counter.cleanup).toHaveBeenCalledTimes(1);
+    await expect(collectRuntimeCapabilities({
+      createTokenCounter: () => tokenCounter(false, 'estimated'),
+      loadChartRenderer: async () => { throw unexpectedBuiltin; },
+    })).rejects.toBe(unexpectedBuiltin);
   });
 
   it('preserves native optional capabilities when the modules are installed', async () => {

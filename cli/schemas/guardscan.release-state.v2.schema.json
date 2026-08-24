@@ -174,9 +174,10 @@
     "canary": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["status", "checkedAt"],
+      "required": ["status", "checkedAt", "evidenceUrl"],
       "properties": {
         "status": { "enum": ["passed", "failed"] },
+        "target": { "type": "string", "minLength": 1, "maxLength": 200 },
         "checkedAt": { "type": "string", "format": "date-time" },
         "evidenceUrl": { "type": "string", "format": "uri" }
       }
