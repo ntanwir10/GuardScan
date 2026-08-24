@@ -1,0 +1,421 @@
+'use strict';
+
+const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
+const semver = require('semver');
+const {readJson} = require('./lib');
+
+const RENDER_SCHEMA = 'guardscan.release-render.v1';
+const MARKER_FILE = '.guardscan-release-render.json';
+const SUPPORTED_CHANNELS = Object.freeze(['homebrew', 'scoop', 'winget', 'chocolatey', 'pypi']);
+const DEFAULT_CHANNELS = Object.freeze(['homebrew', 'scoop', 'winget', 'chocolatey', 'pypi']);
+const MAX_RENDERED_FILES = 100;
+
+function parseChannels(value) {
+  const channels = value
+    ? String(value).split(',').map(channel => channel.trim()).filter(Boolean)
+    : [...DEFAULT_CHANNELS];
+  if (channels.length === 0) throw new Error('at least one render channel is required');
+  if (new Set(channels).size !== channels.length) throw new Error('render channels must be unique');
+  for (const channel of channels) {
+    if (!SUPPORTED_CHANNELS.includes(channel)) throw new Error(`unsupported render channel: ${channel}`);
+  }
+  return channels.sort((a, b) => SUPPORTED_CHANNELS.indexOf(a) - SUPPORTED_CHANNELS.indexOf(b));
+}
+
+function assertImmutableReleaseArtifact(manifest, artifact, expectedEntrypoint) {
+  if (!artifact.url) throw new Error(`standalone artifact has no immutable URL: ${artifact.id}`);
+  const expectedUrl = `https://github.com/ntanwir10/GuardScan/releases/download/${manifest.tag}/${artifact.filename}`;
+  if (artifact.url !== expectedUrl) {
+    throw new Error(`standalone artifact URL is not the canonical versioned release URL: ${artifact.id}`);
+  }
+  if (artifact.entrypoint !== expectedEntrypoint) {
+    throw new Error(`standalone artifact has unexpected entrypoint ${artifact.entrypoint}: ${artifact.id}`);
+  }
+  if (!artifact.provenance || artifact.provenance.verified !== true
+      || !isSecureUrl(artifact.provenance.url)) {
+    throw new Error(`standalone artifact has no secure provenance: ${artifact.id}`);
+  }
+  const requiredSignatures = {
+    darwin: ['apple-code-signing', 'apple-notarization'],
+    linux: ['sigstore'],
+    windows: ['authenticode'],
+  }[artifact.platform.os];
+  const signatures = new Map((artifact.signatures || []).map(signature => [signature.type, signature]));
+  for (const requiredSignature of requiredSignatures) {
+    const signature = signatures.get(requiredSignature);
+    if (signature?.verified !== true || !isSecureUrl(signature.url)) {
+      throw new Error(`standalone artifact lacks required ${requiredSignature} evidence: ${artifact.id}`);
+    }
+  }
+  const sboms = new Set((artifact.sboms || [])
+    .filter(sbom => sbom.verified === true && isSecureUrl(sbom.url))
+    .map(sbom => sbom.type));
+  if (!sboms.has('spdx') || !sboms.has('cyclonedx')) {
+    throw new Error(`standalone artifact lacks required SBOM evidence: ${artifact.id}`);
+  }
+  if (artifact.capabilities?.coreScan !== true || artifact.capabilities?.sbom !== true
+      || artifact.capabilities?.chartRendering !== false
+      || artifact.capabilities?.accurateTokenCounting !== false) {
+    throw new Error(`standalone artifact lacks required core capabilities: ${artifact.id}`);
+  }
+}
+
+function isSecureUrl(value) {
+  try {
+    const url = new URL(value);
+    return url.protocol === 'https:' && !url.username && !url.password;
+  } catch {
+    return false;
+  }
+}
+
+function selectStandalone(manifest, os, arch, libc) {
+  const matches = manifest.artifacts.filter(artifact => (
+    artifact.kind === 'standalone'
+      && artifact.platform?.os === os
+      && artifact.platform?.arch === arch
+      && (libc ? artifact.platform?.libc === libc : artifact.platform?.libc === undefined)
+  ));
+  const label = [os, arch, libc].filter(Boolean).join('-');
+  if (matches.length !== 1) throw new Error(`release manifest must contain exactly one ${label} standalone artifact`);
+  const artifact = matches[0];
+  const expectedFormat = os === 'windows' ? 'zip' : 'tar.gz';
+  if (artifact.archiveFormat !== expectedFormat) {
+    throw new Error(`${label} standalone artifact must use ${expectedFormat}`);
+  }
+  assertImmutableReleaseArtifact(manifest, artifact, os === 'windows' ? 'guardscan.exe' : 'guardscan');
+  return artifact;
+}
+
+function selectNativeArtifacts(manifest, channels) {
+  const selected = {};
+  if (channels.includes('homebrew')) {
+    selected.darwinArm64 = selectStandalone(manifest, 'darwin', 'arm64');
+    selected.darwinX64 = selectStandalone(manifest, 'darwin', 'x64');
+    selected.linuxArm64 = selectStandalone(manifest, 'linux', 'arm64', 'glibc');
+    selected.linuxX64 = selectStandalone(manifest, 'linux', 'x64', 'glibc');
+  }
+  if (channels.some(channel => ['scoop', 'winget', 'chocolatey'].includes(channel))) {
+    selected.windowsX64 = selectStandalone(manifest, 'windows', 'x64');
+  }
+  return selected;
+}
+
+function renderHomebrew(manifest, artifacts) {
+  const block = (name, artifact) => [
+    `    ${name} do`,
+    `      url "${artifact.url}"`,
+    `      sha256 "${artifact.sha256}"`,
+    '    end',
+  ];
+  return [
+    '# Generated by GuardScan release automation. Do not edit by hand.',
+    'class Guardscan < Formula',
+    '  desc "Privacy-first code review and security scanning CLI"',
+    '  homepage "https://guardscancli.com"',
+    `  version "${manifest.version}"`,
+    '  license "MIT"',
+    '',
+    '  on_macos do',
+    ...block('on_arm', artifacts.darwinArm64),
+    ...block('on_intel', artifacts.darwinX64),
+    '  end',
+    '',
+    '  on_linux do',
+    ...block('on_arm', artifacts.linuxArm64),
+    ...block('on_intel', artifacts.linuxX64),
+    '  end',
+    '',
+    '  def install',
+    '    bin.install "guardscan"',
+    '  end',
+    '',
+    '  test do',
+    '    assert_match version.to_s, shell_output("#{bin}/guardscan --version")',
+    '  end',
+    'end',
+    '',
+  ].join('\n');
+}
+
+function renderScoop(manifest, artifact) {
+  return `${JSON.stringify({
+    version: manifest.version,
+    description: 'Privacy-first code review and security scanning CLI',
+    homepage: 'https://guardscancli.com',
+    license: 'MIT',
+    architecture: {
+      '64bit': {
+        url: artifact.url,
+        hash: artifact.sha256,
+      },
+    },
+    bin: 'guardscan.exe',
+  }, null, 2)}\n`;
+}
+
+function renderWinget(manifest, artifact) {
+  const id = 'NaumanTanwir.GuardScan';
+  const schemaVersion = '1.10.0';
+  const base = `${id}\nPackageVersion: ${manifest.version}`;
+  const version = [
+    '# Generated by GuardScan release automation. Do not edit by hand.',
+    `# yaml-language-server: $schema=https://aka.ms/winget-manifest.version.${schemaVersion}.schema.json`,
+    `PackageIdentifier: ${base}`,
+    'DefaultLocale: en-US',
+    'ManifestType: version',
+    `ManifestVersion: ${schemaVersion}`,
+    '',
+  ].join('\n');
+  const locale = [
+    '# Generated by GuardScan release automation. Do not edit by hand.',
+    `# yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.${schemaVersion}.schema.json`,
+    `PackageIdentifier: ${base}`,
+    'PackageLocale: en-US',
+    'Publisher: Nauman Tanwir',
+    'PackageName: GuardScan',
+    'License: MIT',
+    'ShortDescription: Privacy-first code review and security scanning CLI',
+    'PackageUrl: https://guardscancli.com',
+    'ManifestType: defaultLocale',
+    `ManifestVersion: ${schemaVersion}`,
+    '',
+  ].join('\n');
+  const installer = [
+    '# Generated by GuardScan release automation. Do not edit by hand.',
+    `# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.${schemaVersion}.schema.json`,
+    `PackageIdentifier: ${base}`,
+    'InstallerType: zip',
+    'NestedInstallerType: portable',
+    'Commands:',
+    '- guardscan',
+    'Installers:',
+    '- Architecture: x64',
+    '  NestedInstallerFiles:',
+    `  - RelativeFilePath: ${artifact.entrypoint}`,
+    '    PortableCommandAlias: guardscan',
+    `  InstallerUrl: ${artifact.url}`,
+    `  InstallerSha256: ${artifact.sha256.toUpperCase()}`,
+    'ManifestType: installer',
+    `ManifestVersion: ${schemaVersion}`,
+    '',
+  ].join('\n');
+  const root = `winget/manifests/n/NaumanTanwir/GuardScan/${manifest.version}`;
+  return {
+    [`${root}/${id}.yaml`]: version,
+    [`${root}/${id}.locale.en-US.yaml`]: locale,
+    [`${root}/${id}.installer.yaml`]: installer,
+  };
+}
+
+function renderChocolatey(manifest, artifact) {
+  const nuspec = [
+    '<?xml version="1.0" encoding="utf-8"?>',
+    '<!-- Generated by GuardScan release automation. Do not edit by hand. -->',
+    '<package xmlns="http://schemas.microsoft.com/packaging/2015/06/nuspec.xsd">',
+    '  <metadata>',
+    '    <id>guardscan</id>',
+    `    <version>${manifest.version}</version>`,
+    '    <title>GuardScan</title>',
+    '    <authors>Nauman Tanwir</authors>',
+    '    <owners>Nauman Tanwir</owners>',
+    '    <projectUrl>https://guardscancli.com</projectUrl>',
+    '    <licenseUrl>https://github.com/ntanwir10/GuardScan/blob/main/LICENSE</licenseUrl>',
+    '    <requireLicenseAcceptance>false</requireLicenseAcceptance>',
+    '    <description>Privacy-first code review and security scanning CLI.</description>',
+    '    <summary>Privacy-first code review and security scanning CLI.</summary>',
+    '    <tags>guardscan security sast cli code-review</tags>',
+    '  </metadata>',
+    '  <files>',
+    '    <file src="tools\\**" target="tools" />',
+    '  </files>',
+    '</package>',
+    '',
+  ].join('\n');
+  const install = [
+    '# Generated by GuardScan release automation. Do not edit by hand.',
+    '$ErrorActionPreference = \'Stop\'',
+    '$toolsDir = Split-Path -Parent $MyInvocation.MyCommand.Definition',
+    '$packageArgs = @{',
+    '  packageName = $env:ChocolateyPackageName',
+    `  url64bit = '${artifact.url}'`,
+    `  checksum64 = '${artifact.sha256}'`,
+    "  checksumType64 = 'sha256'",
+    '  unzipLocation = $toolsDir',
+    '}',
+    'Install-ChocolateyZipPackage @packageArgs',
+    '',
+  ].join('\n');
+  return {
+    'chocolatey/guardscan.nuspec': nuspec,
+    'chocolatey/tools/chocolateyInstall.ps1': install,
+  };
+}
+
+function toPep440(version) {
+  const parsed = semver.parse(version);
+  if (!parsed) throw new Error(`cannot convert invalid semantic version to PEP 440: ${version}`);
+  if (parsed.build.length > 0) throw new Error('PyPI rendering rejects semantic versions with build metadata');
+  let result = `${parsed.major}.${parsed.minor}.${parsed.patch}`;
+  if (parsed.prerelease.length > 0) {
+    if (parsed.prerelease.length !== 2 || !Number.isInteger(parsed.prerelease[1])) {
+      throw new Error(`unsupported prerelease for PyPI: ${version}`);
+    }
+    const prefix = {alpha: 'a', beta: 'b', rc: 'rc'}[parsed.prerelease[0]];
+    if (!prefix) throw new Error(`unsupported prerelease for PyPI: ${version}`);
+    result += `${prefix}${parsed.prerelease[1]}`;
+  }
+  return result;
+}
+
+function renderPyPI(manifest) {
+  const wheels = manifest.artifacts.filter(artifact => artifact.kind === 'python-wheel');
+  if (wheels.length === 0) throw new Error('PyPI rendering requires at least one prebuilt python-wheel artifact');
+  for (const wheel of wheels) {
+    if (!wheel.provenance || wheel.provenance.verified !== true
+        || !isSecureUrl(wheel.provenance.url)) {
+      throw new Error(`python wheel has no secure provenance: ${wheel.id}`);
+    }
+    if (!wheel.embeddedStandaloneId || !wheel.embeddedExecutableSha256) {
+      throw new Error(`python wheel is not bound to a standalone executable: ${wheel.id}`);
+    }
+  }
+  return `${JSON.stringify({
+    schemaVersion: 'guardscan.pypi-publication.v1',
+    project: 'guardscan-cli',
+    version: toPep440(manifest.version),
+    source: {tag: manifest.tag, commit: manifest.commit},
+    wheels: wheels.map(wheel => ({
+      id: wheel.id,
+      filename: wheel.filename,
+      size: wheel.size,
+      sha256: wheel.sha256,
+      platform: wheel.platform,
+    })).sort((a, b) => a.filename.localeCompare(b.filename)),
+  }, null, 2)}\n`;
+}
+
+function renderAdapters(manifest, channelInput) {
+  const channels = parseChannels(channelInput);
+  const artifacts = selectNativeArtifacts(manifest, channels);
+  const files = {};
+  if (channels.includes('homebrew')) {
+    files['homebrew/Formula/guardscan.rb'] = renderHomebrew(manifest, artifacts);
+  }
+  if (channels.includes('scoop')) {
+    files['scoop/bucket/guardscan.json'] = renderScoop(manifest, artifacts.windowsX64);
+  }
+  if (channels.includes('winget')) Object.assign(files, renderWinget(manifest, artifacts.windowsX64));
+  if (channels.includes('chocolatey')) Object.assign(files, renderChocolatey(manifest, artifacts.windowsX64));
+  if (channels.includes('pypi')) files['pypi/publication.json'] = renderPyPI(manifest);
+  return {channels, files};
+}
+
+function expectedOutput(manifest, rendered) {
+  const paths = Object.keys(rendered.files).sort();
+  const marker = {
+    schemaVersion: RENDER_SCHEMA,
+    version: manifest.version,
+    tag: manifest.tag,
+    commit: manifest.commit,
+    channels: rendered.channels,
+    files: paths,
+  };
+  return {...rendered.files, [MARKER_FILE]: `${JSON.stringify(marker, null, 2)}\n`};
+}
+
+function listFiles(root) {
+  const files = [];
+  function visit(directory, relative = '') {
+    for (const entry of fs.readdirSync(directory, {withFileTypes: true})) {
+      if (entry.isSymbolicLink()) throw new Error(`render output contains a symbolic link: ${entry.name}`);
+      const nextRelative = relative ? `${relative}/${entry.name}` : entry.name;
+      const absolute = path.join(directory, entry.name);
+      if (entry.isDirectory()) visit(absolute, nextRelative);
+      else if (entry.isFile()) files.push(nextRelative);
+      else throw new Error(`render output contains a non-regular entry: ${nextRelative}`);
+      if (files.length > MAX_RENDERED_FILES) throw new Error('render output contains too many files');
+    }
+  }
+  visit(root);
+  return files.sort();
+}
+
+function compareOutput(outputDir, expected) {
+  if (!fs.existsSync(outputDir) || !fs.statSync(outputDir).isDirectory()) return false;
+  const actualFiles = listFiles(outputDir);
+  const expectedFiles = Object.keys(expected).sort();
+  if (actualFiles.join('\n') !== expectedFiles.join('\n')) return false;
+  return expectedFiles.every(file => fs.readFileSync(path.join(outputDir, file), 'utf8') === expected[file]);
+}
+
+function assertOwnedOutput(outputDir) {
+  const markerPath = path.join(outputDir, MARKER_FILE);
+  if (!fs.existsSync(markerPath)) throw new Error(`refusing to replace unmanaged render output: ${outputDir}`);
+  const marker = readJson(markerPath, 'render marker');
+  if (marker.schemaVersion !== RENDER_SCHEMA || !Array.isArray(marker.files)) {
+    throw new Error(`render output has an invalid ownership marker: ${outputDir}`);
+  }
+  const actual = listFiles(outputDir);
+  const owned = [...marker.files, MARKER_FILE].sort();
+  if (actual.join('\n') !== owned.join('\n')) {
+    throw new Error(`render output contains files outside its ownership marker: ${outputDir}`);
+  }
+}
+
+function writeFiles(root, files) {
+  fs.mkdirSync(root, {recursive: true, mode: 0o700});
+  for (const [relative, contents] of Object.entries(files)) {
+    const target = path.join(root, ...relative.split('/'));
+    fs.mkdirSync(path.dirname(target), {recursive: true, mode: 0o700});
+    fs.writeFileSync(target, contents, {encoding: 'utf8', mode: 0o600, flag: 'wx'});
+  }
+}
+
+function writeRenderedOutput(manifest, rendered, outputDir, checkOnly = false) {
+  const resolved = path.resolve(outputDir);
+  if (path.dirname(resolved) === resolved) throw new Error('refusing to use a filesystem root as render output');
+  const expected = expectedOutput(manifest, rendered);
+  if (checkOnly) {
+    if (!compareOutput(resolved, expected)) throw new Error(`rendered adapters are missing or stale: ${resolved}`);
+    return {changed: false, checked: true, outputDir: resolved, files: Object.keys(rendered.files).sort()};
+  }
+  if (compareOutput(resolved, expected)) {
+    return {changed: false, checked: false, outputDir: resolved, files: Object.keys(rendered.files).sort()};
+  }
+  if (fs.existsSync(resolved)) assertOwnedOutput(resolved);
+  const parent = path.dirname(resolved);
+  fs.mkdirSync(parent, {recursive: true, mode: 0o700});
+  const suffix = `${process.pid}-${crypto.randomUUID()}`;
+  const stage = path.join(parent, `.${path.basename(resolved)}.tmp-${suffix}`);
+  const backup = path.join(parent, `.${path.basename(resolved)}.backup-${suffix}`);
+  let movedExisting = false;
+  try {
+    writeFiles(stage, expected);
+    if (fs.existsSync(resolved)) {
+      fs.renameSync(resolved, backup);
+      movedExisting = true;
+    }
+    fs.renameSync(stage, resolved);
+    if (movedExisting) fs.rmSync(backup, {recursive: true, force: true});
+  } catch (error) {
+    if (!fs.existsSync(resolved) && movedExisting && fs.existsSync(backup)) fs.renameSync(backup, resolved);
+    throw error;
+  } finally {
+    fs.rmSync(stage, {recursive: true, force: true});
+  }
+  return {changed: true, checked: false, outputDir: resolved, files: Object.keys(rendered.files).sort()};
+}
+
+module.exports = {
+  DEFAULT_CHANNELS,
+  MARKER_FILE,
+  RENDER_SCHEMA,
+  SUPPORTED_CHANNELS,
+  parseChannels,
+  renderAdapters,
+  toPep440,
+  writeRenderedOutput,
+};

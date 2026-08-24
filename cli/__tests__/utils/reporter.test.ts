@@ -153,9 +153,9 @@ describe("Reporter", () => {
   });
 
   describe("saveReport", () => {
-    it("should save markdown report to file", () => {
+    it("should save markdown report to file", async () => {
       const outputPath = path.join(testDir, "report.md");
-      const savedPath = reporter.saveReport(mockResult, "markdown", outputPath);
+      const savedPath = await reporter.saveReport(mockResult, "markdown", outputPath);
 
       expect(savedPath).toBe(outputPath);
       expect(fs.existsSync(outputPath)).toBe(true);
@@ -164,11 +164,11 @@ describe("Reporter", () => {
       expect(content).toContain("# GuardScan Report");
     });
 
-    it("should generate default filename if not specified", () => {
+    it("should generate default filename if not specified", async () => {
       const originalCwd = process.cwd();
       process.chdir(testDir);
 
-      const savedPath = reporter.saveReport(mockResult, "markdown");
+      const savedPath = await reporter.saveReport(mockResult, "markdown");
 
       expect(savedPath).toMatch(/code-review-.*\.md/);
       expect(fs.existsSync(savedPath)).toBe(true);
@@ -176,12 +176,33 @@ describe("Reporter", () => {
       process.chdir(originalCwd);
     });
 
-    it("should handle markdown format", () => {
+    it("should handle markdown format", async () => {
       const outputPath = path.join(testDir, "report.md");
-      reporter.saveReport(mockResult, "markdown", outputPath);
+      await reporter.saveReport(mockResult, "markdown", outputPath);
 
       const content = fs.readFileSync(outputPath, "utf-8");
       expect(content).toContain("# GuardScan Report");
+    });
+
+    it("should save resolved HTML content to file", async () => {
+      const outputPath = path.join(testDir, "report.html");
+      const htmlResult = {
+        ...mockResult,
+        findings: [],
+        metadata: {
+          ...mockResult.metadata,
+          provider: "static-analysis",
+        },
+      };
+
+      const savedPath = await reporter.saveReport(htmlResult, "html", outputPath);
+
+      expect(savedPath).toBe(outputPath);
+      const content = fs.readFileSync(outputPath, "utf-8");
+      expect(content).toContain("<!DOCTYPE html>");
+      expect(content).toContain("AI Review Not Configured");
+      expect(content).not.toContain("[object Promise]");
+      expect(content).not.toContain("Upgrade to Pro");
     });
   });
 

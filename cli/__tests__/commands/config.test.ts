@@ -2,8 +2,6 @@
  * Tests for config command
  */
 
-import { configCommand } from "../../src/commands/config";
-import { configManager } from "../../src/core/config";
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
@@ -22,11 +20,11 @@ jest.mock("inquirer");
 describe("config command", () => {
   let originalEnv: NodeJS.ProcessEnv;
   let testConfigDir: string;
-  let originalHome: string | undefined;
+  let configCommand: typeof import("../../src/commands/config").configCommand;
+  let configManager: typeof import("../../src/core/config").configManager;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     originalEnv = { ...process.env };
-    originalHome = process.env.HOME;
     testConfigDir = path.join(os.tmpdir(), `guardscan-test-${Date.now()}`);
     process.env.GUARDSCAN_HOME = testConfigDir;
     process.env.HOME = testConfigDir; // Also set HOME to ensure consistency
@@ -35,16 +33,15 @@ describe("config command", () => {
       fs.rmSync(testConfigDir, { recursive: true, force: true });
     }
 
+    jest.resetModules();
+    ({ configCommand } = await import("../../src/commands/config"));
+    ({ configManager } = await import("../../src/core/config"));
+
     // Clear all mocks
     jest.clearAllMocks();
   });
 
   afterEach(() => {
-    if (originalHome) {
-      process.env.HOME = originalHome;
-    } else {
-      delete process.env.HOME;
-    }
     process.env = originalEnv;
     if (fs.existsSync(testConfigDir)) {
       fs.rmSync(testConfigDir, { recursive: true, force: true });
@@ -67,9 +64,12 @@ describe("config command", () => {
       consoleSpy.mock.calls.some(
         (call) =>
           call[0] &&
-          (call[0].includes("Configuration") || call[0].includes("Client ID"))
+          call[0].includes("Configuration")
       )
     ).toBe(true);
+    expect(
+      consoleSpy.mock.calls.some((call) => String(call[0]).includes("Client ID"))
+    ).toBe(false);
 
     consoleSpy.mockRestore();
   });
@@ -114,6 +114,50 @@ describe("config command", () => {
 
     // Restore all mocks
     providerFactorySpy.mockRestore();
+    consoleLogSpy.mockRestore();
+  });
+
+  it("should update telemetry without changing offline mode", async () => {
+    if (!configManager.exists()) {
+      configManager.init();
+    }
+
+    const consoleLogSpy = jest
+      .spyOn(console, "log")
+      .mockImplementation(() => {});
+
+    await configCommand({ telemetry: "true" });
+    let config = configManager.load();
+    expect(config.telemetryEnabled).toBe(true);
+    expect(config.offlineMode).toBe(true);
+
+    await configCommand({ offline: "false" });
+    config = configManager.load();
+    expect(config.telemetryEnabled).toBe(true);
+    expect(config.offlineMode).toBe(false);
+
+    consoleLogSpy.mockRestore();
+  });
+
+  it("should purge queued events when telemetry is disabled", async () => {
+    const config = configManager.init();
+    config.telemetryEnabled = true;
+    config.offlineMode = false;
+    configManager.save(config);
+    const { createTelemetryManager } = await import("../../src/core/telemetry");
+    const manager = createTelemetryManager(config);
+    await manager.record({ action: "scan", loc: 10, durationMs: 20 });
+    expect(manager.getStats().pending).toBe(1);
+
+    const consoleLogSpy = jest.spyOn(console, "log").mockImplementation(() => {});
+    await configCommand({ telemetry: "false" });
+
+    expect(createTelemetryManager(configManager.load()).getStats().pending).toBe(0);
+    expect(
+      consoleLogSpy.mock.calls.some((call) =>
+        String(call[0]).includes("Cleared 1 queued telemetry event")
+      )
+    ).toBe(true);
     consoleLogSpy.mockRestore();
   });
 

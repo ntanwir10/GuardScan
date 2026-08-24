@@ -9,24 +9,22 @@ import {
   afterEach,
   jest,
 } from "@jest/globals";
-import { configManager } from "../../src/core/config";
-import { initCommand } from "../../src/commands/init";
-import { configCommand } from "../../src/commands/config";
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
 
 describe("Config Lifecycle Integration", () => {
   let testConfigDir: string;
-  let originalHome: string | undefined;
-  let originalDebug: string | undefined;
+  let originalEnv: NodeJS.ProcessEnv;
+  let configManager: typeof import("../../src/core/config").configManager;
+  let initCommand: typeof import("../../src/commands/init").initCommand;
+  let configCommand: typeof import("../../src/commands/config").configCommand;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     testConfigDir = path.join(os.tmpdir(), `guardscan-test-${Date.now()}`);
-    originalHome = process.env.GUARDSCAN_HOME;
-    originalDebug = process.env.GUARDSCAN_DEBUG;
-    // Set env var before any imports that might use it
+    originalEnv = { ...process.env };
     process.env.GUARDSCAN_HOME = testConfigDir;
+    process.env.HOME = testConfigDir;
 
     if (fs.existsSync(testConfigDir)) {
       fs.rmSync(testConfigDir, { recursive: true, force: true });
@@ -34,39 +32,25 @@ describe("Config Lifecycle Integration", () => {
 
     // Ensure the directory exists
     fs.mkdirSync(testConfigDir, { recursive: true });
+
+    jest.resetModules();
+    ({ configManager } = await import("../../src/core/config"));
+    ({ initCommand } = await import("../../src/commands/init"));
+    ({ configCommand } = await import("../../src/commands/config"));
   });
 
   afterEach(() => {
-    if (originalHome !== undefined) {
-      process.env.GUARDSCAN_HOME = originalHome;
-    } else {
-      delete process.env.GUARDSCAN_HOME;
-    }
-    if (originalDebug !== undefined) {
-      process.env.GUARDSCAN_DEBUG = originalDebug;
-    } else {
-      delete process.env.GUARDSCAN_DEBUG;
-    }
+    process.env = originalEnv;
     if (fs.existsSync(testConfigDir)) {
       fs.rmSync(testConfigDir, { recursive: true, force: true });
     }
   });
 
   it("should complete full config lifecycle: init -> load -> update -> reset", async () => {
-    // Note: configManager singleton is created at module load time, so it may use
-    // the default path. The test will still work if GUARDSCAN_HOME is set correctly.
-    // Verify the config directory matches our test directory
     const expectedConfigDir = path.join(testConfigDir, ".guardscan");
     const actualConfigDir = configManager.getConfigDir();
 
-    // If paths don't match, the singleton was created before env var was set
-    // This is expected in some test environments - just verify config works
-    if (actualConfigDir !== expectedConfigDir) {
-      console.warn(
-        `ConfigManager using ${actualConfigDir} instead of ${expectedConfigDir}`
-      );
-      // Continue anyway - the test will verify functionality
-    }
+    expect(actualConfigDir).toBe(expectedConfigDir);
 
     // 1. Init
     // Check if config exists in the actual directory being used
@@ -94,7 +78,7 @@ describe("Config Lifecycle Integration", () => {
 
     // 2. Load
     const config1 = configManager.load();
-    expect(config1.clientId).toBeDefined();
+    expect(config1.clientId).toBeUndefined();
     expect(config1.provider).toBe("none");
 
     // 3. Update

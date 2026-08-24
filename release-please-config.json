@@ -1,0 +1,13 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "bootstrap-sha": "ae98219e10d0f0bf9118c0ed00b024f429fea3e7",
+  "skip-github-release": true,
+  "packages": {
+    "cli": {
+      "release-type": "node",
+      "package-name": "guardscan",
+      "changelog-path": "CHANGELOG.md",
+      "include-component-in-tag": false
+    }
+  }
+}

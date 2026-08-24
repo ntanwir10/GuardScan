@@ -1,0 +1,533 @@
+name: Zero-touch release train
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: candidate, reconcile, promote, or rollback
+        required: true
+        type: choice
+        options: [candidate, reconcile, promote, rollback]
+      version:
+        description: Semantic release version for this operation
+        required: true
+        type: string
+      release_pr:
+        description: Stable Release Please pull request number
+        required: false
+        type: string
+      known_good:
+        description: Verified rollback target
+        required: false
+        type: string
+  schedule:
+    - cron: "*/30 * * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-train-${{ inputs.version || 'scheduler' }}
+  cancel-in-progress: false
+
+env:
+  RELEASE_NODE_VERSION: 22.23.1
+
+jobs:
+  scheduler:
+    name: Dispatch reconciliation for every active train
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Create short-lived release app token
+        id: app
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        with:
+          app-id: ${{ vars.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+      - name: Dispatch one concurrency-isolated reconciliation per version
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        run: |
+          gh api \
+            -H "Accept: application/vnd.github.raw+json" \
+            "repos/${GITHUB_REPOSITORY}/contents/active-versions.json?ref=release-ledger" \
+            > active-versions.json
+          node -e '
+            const cp = require("child_process");
+            for (const train of require("./active-versions.json").trains || []) {
+              cp.execFileSync("gh", [
+                "workflow", "run", "release-train.yml",
+                "--repo", process.env.GITHUB_REPOSITORY,
+                "-f", "action=reconcile",
+                "-f", `version=${train.version}`,
+                "-f", `release_pr=${train.releasePr}`,
+              ], {stdio: "inherit"});
+            }
+          '
+
+  prepare:
+    name: Resolve exact source and create protected tag
+    if: github.event_name == 'workflow_dispatch' && (inputs.action == 'candidate' || inputs.action == 'promote')
+    runs-on: ubuntu-24.04
+    concurrency:
+      group: release-ledger
+      cancel-in-progress: false
+    outputs:
+      build: ${{ steps.result.outputs.build }}
+      ref: ${{ steps.result.outputs.ref }}
+      tag: ${{ steps.result.outputs.tag }}
+      channel: ${{ steps.result.outputs.channel }}
+      release_pr: ${{ steps.result.outputs.release_pr }}
+      source_pr_head: ${{ steps.result.outputs.source_pr_head }}
+    steps:
+      - name: Create short-lived release app token
+        id: app
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        with:
+          app-id: ${{ vars.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+      - name: Validate request and resolve unchanged release PR head
+        id: source
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        run: |
+          test -n "${{ inputs.release_pr }}"
+          HEAD_SHA="$(gh pr view "${{ inputs.release_pr }}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --json headRefOid \
+            --jq .headRefOid)"
+          test "${#HEAD_SHA}" = 40
+          echo "head_sha=$HEAD_SHA" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ steps.source.outputs.head_sha }}
+          fetch-depth: 0
+          token: ${{ steps.app.outputs.token }}
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.RELEASE_NODE_VERSION }}
+      - working-directory: cli
+        run: npm ci
+
+      - name: Derive bot-owned RC commit from exact stable PR head
+        if: inputs.action == 'candidate'
+        env:
+          RELEASE_APP_TOKEN: ${{ steps.app.outputs.token }}
+        run: |
+          case "${{ inputs.version }}" in
+            *-rc.[0-9]*) ;;
+            *) echo "Candidate version must end in -rc.N" >&2; exit 1 ;;
+          esac
+          CREATED_AT="$(node -e '
+            const cp = require("child_process");
+            const value = cp.execFileSync("git", ["show", "-s", "--format=%cI", "HEAD"], {encoding: "utf8"}).trim();
+            process.stdout.write(new Date(value).toISOString());
+          ')"
+          node cli/scripts/release/index.js candidate \
+            --candidate-version "${{ inputs.version }}" \
+            --source-pr "${{ inputs.release_pr }}" \
+            --source-pr-head "${{ steps.source.outputs.head_sha }}" \
+            --timestamp "$CREATED_AT"
+          npm --prefix cli run release:validate -- --tag "v${{ inputs.version }}"
+          git config user.name guardscan-release-bot
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add cli/package.json cli/package-lock.json cli/CHANGELOG.md .release-candidate.json
+          GIT_AUTHOR_DATE="$CREATED_AT" GIT_COMMITTER_DATE="$CREATED_AT" \
+            git commit -m "chore(release): candidate ${{ inputs.version }}"
+          if git rev-parse --verify "refs/tags/v${{ inputs.version }}" >/dev/null 2>&1; then
+            test "$(git rev-list -n 1 "v${{ inputs.version }}")" = "$(git rev-parse HEAD)"
+          else
+            git tag "v${{ inputs.version }}"
+          fi
+          git push origin "HEAD:refs/heads/release-candidate/v${{ inputs.version }}"
+          git push origin "refs/tags/v${{ inputs.version }}"
+      - name: Emit candidate build identity
+        if: inputs.action == 'candidate'
+        id: candidate
+        run: |
+          echo "ref=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "tag=v${{ inputs.version }}" >> "$GITHUB_OUTPUT"
+
+      - name: Materialize machine promotion decision
+        if: inputs.action == 'promote'
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          CURRENT_HEAD: ${{ steps.source.outputs.head_sha }}
+        run: |
+          git fetch origin release-ledger
+          git show "origin/release-ledger:events/v${{ inputs.version }}.jsonl" > release-events.jsonl
+          RC_TAG="v${{ inputs.version }}"
+          git fetch origin "refs/tags/$RC_TAG:refs/tags/$RC_TAG"
+          git switch --detach "$RC_TAG"
+          npm --prefix cli ci
+          CURRENT_HEAD="$(gh pr view "${{ inputs.release_pr }}" \
+            --repo "${GITHUB_REPOSITORY}" --json headRefOid --jq .headRefOid)"
+          node - <<'NODE'
+          const fs = require('fs');
+          const {readEvents, materializeReleaseState} = require('./cli/scripts/release/events');
+          const events = readEvents('release-events.jsonl');
+          const state = materializeReleaseState(events);
+          const candidate = JSON.parse(fs.readFileSync('.release-candidate.json'));
+          const published = events.find(event => event.type === 'channel_published' && event.channel === 'github');
+          if (!published || !state.manifestSha256) throw new Error('RC has no published manifest identity');
+          const canaries = Object.entries(state.canaries).flatMap(([channel, samples]) =>
+            samples.map(sample => ({channel, status: sample.status, checkedAt: sample.checkedAt}))
+          );
+          const incidents = Object.entries(state.incidents).map(([incidentId, value]) => ({incidentId, ...value}));
+          const input = {
+            rc: {
+              version: state.version,
+              tag: state.tag,
+              commit: state.commit,
+              manifestSha256: state.manifestSha256,
+              publishedAt: published.timestamp,
+              sourcePr: candidate.sourcePr,
+              sourcePrHead: candidate.sourcePrHead,
+            },
+            currentSourcePrHead: process.env.CURRENT_HEAD,
+            evaluatedAt: new Date().toISOString(),
+            requiredChannels: ['npm', 'pnpm', 'yarn', 'bun', 'github', 'homebrew', 'scoop', 'pypi'],
+            canaries,
+            incidents,
+          };
+          fs.writeFileSync('promotion-input.json', `${JSON.stringify(input, null, 2)}\n`);
+          NODE
+          node cli/scripts/release/index.js promote \
+            --promotion-input promotion-input.json \
+            --output promotion-decision.json \
+            --ledger release-events.jsonl \
+            --idempotency-key "promotion:${{ inputs.version }}:${GITHUB_RUN_ID}:${GITHUB_RUN_ATTEMPT}" \
+            --tag "$RC_TAG"
+          git worktree add decision-ledger origin/release-ledger
+          mkdir -p decision-ledger/events decision-ledger/decisions
+          cp release-events.jsonl "decision-ledger/events/v${{ inputs.version }}.jsonl"
+          cp promotion-decision.json \
+            "decision-ledger/decisions/v${{ inputs.version }}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.json"
+          (
+            cd decision-ledger
+            git config user.name guardscan-release-bot
+            git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+            git add events decisions
+            git commit -m "promotion decision: v${{ inputs.version }}"
+            git push origin HEAD:release-ledger
+          )
+      - name: Auto-merge unchanged stable release PR and create stable tag
+        if: inputs.action == 'promote'
+        id: stable
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        run: |
+          STABLE_VERSION="$(node -p 'require("./promotion-decision.json").stable.version')"
+          gh pr merge "${{ inputs.release_pr }}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --auto --squash --match-head-commit "${{ steps.source.outputs.head_sha }}"
+          for ATTEMPT in $(seq 1 60); do
+            STATE="$(gh pr view "${{ inputs.release_pr }}" --repo "${GITHUB_REPOSITORY}" --json state --jq .state)"
+            if [ "$STATE" = MERGED ]; then break; fi
+            sleep 10
+          done
+          test "$STATE" = MERGED
+          MERGE_SHA="$(gh pr view "${{ inputs.release_pr }}" \
+            --repo "${GITHUB_REPOSITORY}" --json mergeCommit --jq .mergeCommit.oid)"
+          git fetch origin "$MERGE_SHA"
+          git switch --detach "$MERGE_SHA"
+          test "$(node -p 'require("./cli/package.json").version')" = "$STABLE_VERSION"
+          git tag "v$STABLE_VERSION"
+          git push origin "refs/tags/v$STABLE_VERSION"
+          echo "ref=$MERGE_SHA" >> "$GITHUB_OUTPUT"
+          echo "tag=v$STABLE_VERSION" >> "$GITHUB_OUTPUT"
+      - name: Select build result
+        id: result
+        run: |
+          if [ "${{ inputs.action }}" = candidate ]; then
+            echo "ref=${{ steps.candidate.outputs.ref }}" >> "$GITHUB_OUTPUT"
+            echo "tag=${{ steps.candidate.outputs.tag }}" >> "$GITHUB_OUTPUT"
+            echo "channel=rc" >> "$GITHUB_OUTPUT"
+          else
+            echo "ref=${{ steps.stable.outputs.ref }}" >> "$GITHUB_OUTPUT"
+            echo "tag=${{ steps.stable.outputs.tag }}" >> "$GITHUB_OUTPUT"
+            echo "channel=stable" >> "$GITHUB_OUTPUT"
+          fi
+          echo "build=true" >> "$GITHUB_OUTPUT"
+          echo "release_pr=${{ inputs.release_pr }}" >> "$GITHUB_OUTPUT"
+          echo "source_pr_head=${{ steps.source.outputs.head_sha }}" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build exact tagged release
+    if: needs.prepare.outputs.build == 'true'
+    needs: [prepare]
+    uses: ./.github/workflows/release-build.yml
+    with:
+      ref: ${{ needs.prepare.outputs.ref }}
+      tag: ${{ needs.prepare.outputs.tag }}
+      channel: ${{ needs.prepare.outputs.channel }}
+    secrets: inherit
+
+  publish:
+    name: Publish every automated channel
+    if: needs.prepare.outputs.build == 'true'
+    needs: [prepare, build]
+    uses: ./.github/workflows/release-publish.yml
+    with:
+      ref: ${{ needs.prepare.outputs.ref }}
+      tag: ${{ needs.prepare.outputs.tag }}
+      channel: ${{ needs.prepare.outputs.channel }}
+    secrets: inherit
+
+  record:
+    name: Append publication evidence to protected ledger
+    if: needs.prepare.outputs.build == 'true'
+    needs: [prepare, publish]
+    runs-on: ubuntu-24.04
+    concurrency:
+      group: release-ledger
+      cancel-in-progress: false
+    steps:
+      - name: Create short-lived release app token
+        id: app
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        with:
+          app-id: ${{ vars.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.prepare.outputs.ref }}
+          fetch-depth: 0
+          token: ${{ steps.app.outputs.token }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-payload-${{ needs.prepare.outputs.tag }}
+          path: payload
+      - name: Fetch ledger, append chained events, and push
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+          RELEASE_PR: ${{ needs.prepare.outputs.release_pr }}
+          SOURCE_PR_HEAD: ${{ needs.prepare.outputs.source_pr_head }}
+          RELEASE_CHANNEL: ${{ needs.prepare.outputs.channel }}
+        run: |
+          git fetch origin release-ledger
+          mkdir ledger
+          git show "origin/release-ledger:events/${RELEASE_TAG}.jsonl" > "ledger/${RELEASE_TAG}.jsonl" 2>/dev/null || true
+          node - <<'NODE'
+          const crypto = require('crypto');
+          const fs = require('fs');
+          const cp = require('child_process');
+          const {appendEvent, readEvents} = require('./cli/scripts/release/events');
+          const tag = process.env.RELEASE_TAG;
+          const version = tag.slice(1);
+          const commit = cp.execFileSync('git', ['rev-parse', 'HEAD'], {encoding: 'utf8'}).trim();
+          const ledger = `ledger/${tag}.jsonl`;
+          const manifest = fs.readFileSync('payload/release-manifest.json');
+          const manifestDocument = JSON.parse(manifest);
+          const manifestSha256 = crypto.createHash('sha256').update(manifest).digest('hex');
+          const now = new Date().toISOString();
+          const timestampFor = idempotencyKey => (
+            readEvents(ledger).find(event => event.idempotencyKey === idempotencyKey)?.timestamp || now
+          );
+          const base = {version, tag, commit};
+          if (readEvents(ledger).length === 0) {
+            const idempotencyKey = `train:${tag}`;
+            appendEvent(ledger, {
+              ...base, timestamp: timestampFor(idempotencyKey), type: 'train_started',
+              idempotencyKey,
+              payload: {
+                profile: 'full',
+                releasePr: Number(process.env.RELEASE_PR),
+                sourcePrHead: process.env.SOURCE_PR_HEAD,
+                channels: ['npm', 'pnpm', 'yarn', 'bun', 'github', 'homebrew', 'scoop', 'winget', 'chocolatey', 'pypi'],
+              },
+            });
+          }
+          const manifestKey = `manifest:${manifestSha256}`;
+          appendEvent(ledger, {
+            ...base, timestamp: timestampFor(manifestKey), type: 'manifest_created',
+            idempotencyKey: manifestKey,
+            payload: {manifestSha256},
+          });
+          const artifactIds = {
+            github: manifestDocument.artifacts.map(artifact => artifact.id),
+            npm: manifestDocument.artifacts.filter(artifact => artifact.kind === 'npm-tarball').map(artifact => artifact.id),
+            pypi: manifestDocument.artifacts.filter(artifact => artifact.kind === 'python-wheel').map(artifact => artifact.id),
+            homebrew: manifestDocument.artifacts.filter(artifact =>
+              artifact.kind === 'standalone' && ['darwin', 'linux'].includes(artifact.platform.os)
+            ).map(artifact => artifact.id),
+            scoop: manifestDocument.artifacts.filter(artifact =>
+              artifact.kind === 'standalone' && artifact.platform.os === 'windows'
+            ).map(artifact => artifact.id),
+          };
+          for (const channel of ['github', 'npm', 'pypi']) {
+            const idempotencyKey = `published:${channel}:${tag}`;
+            appendEvent(ledger, {
+              ...base, timestamp: timestampFor(idempotencyKey), type: 'channel_published', channel,
+              idempotencyKey,
+              payload: {
+                artifactIds: artifactIds[channel],
+                remoteIdentity: `${channel}:${tag}`,
+                remoteDigest: manifestSha256,
+              },
+            });
+          }
+          for (const channel of ['homebrew', 'scoop']) {
+            const idempotencyKey = `adapter:${channel}:${tag}`;
+            appendEvent(ledger, {
+              ...base, timestamp: timestampFor(idempotencyKey),
+              type: process.env.RELEASE_CHANNEL === 'stable' ? 'channel_published' : 'channel_submitted',
+              channel,
+              idempotencyKey,
+              payload: {
+                artifactIds: artifactIds[channel],
+                remoteIdentity: `ntanwir10/${channel}:${tag}`,
+                remoteDigest: manifestSha256,
+              },
+            });
+          }
+          if (process.env.RELEASE_CHANNEL === 'stable') {
+            for (const channel of ['winget', 'chocolatey']) {
+              const idempotencyKey = `submitted:${channel}:${tag}`;
+              appendEvent(ledger, {
+                ...base, timestamp: timestampFor(idempotencyKey), type: 'channel_submitted', channel,
+                idempotencyKey,
+                payload: {
+                  artifactIds: artifactIds.scoop,
+                  remoteIdentity: `${channel}:${tag}`,
+                  remoteDigest: manifestSha256,
+                },
+              });
+            }
+          }
+          NODE
+          git worktree add ledger-branch origin/release-ledger
+          mkdir -p ledger-branch/events
+          cp "ledger/${RELEASE_TAG}.jsonl" "ledger-branch/events/${RELEASE_TAG}.jsonl"
+          node - <<'NODE'
+          const fs = require('fs');
+          const file = 'ledger-branch/active-versions.json';
+          const active = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file)) : {schemaVersion: 'guardscan.active-trains.v1', trains: []};
+          active.trains = active.trains.filter(train => train.version !== process.env.RELEASE_TAG.slice(1));
+          if (process.env.RELEASE_CHANNEL === 'stable') {
+            active.trains = active.trains.filter(train => !(
+              train.channel === 'rc'
+              && train.releasePr === Number(process.env.RELEASE_PR)
+            ));
+          }
+          active.trains.push({
+            version: process.env.RELEASE_TAG.slice(1),
+            releasePr: Number(process.env.RELEASE_PR),
+            channel: process.env.RELEASE_CHANNEL,
+          });
+          active.trains.sort((a, b) => a.version.localeCompare(b.version));
+          fs.writeFileSync(file, `${JSON.stringify(active, null, 2)}\n`);
+          NODE
+          (
+            cd ledger-branch
+            git config user.name guardscan-release-bot
+            git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+            git add events active-versions.json
+            git commit -m "release ledger: ${RELEASE_TAG}" || exit 0
+            git push origin HEAD:release-ledger
+          )
+
+  reconcile:
+    name: Reconcile remote state and trigger eligible promotion
+    if: github.event_name == 'workflow_dispatch' && inputs.action == 'reconcile'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Create short-lived release app token
+        id: app
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        with:
+          app-id: ${{ vars.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: v${{ inputs.version }}
+          fetch-depth: 0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.RELEASE_NODE_VERSION }}
+      - working-directory: cli
+        run: npm ci
+      - name: Materialize and reconcile ledger
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        run: |
+          git fetch origin release-ledger
+          git show "origin/release-ledger:events/v${{ inputs.version }}.jsonl" > release-events.jsonl
+          node cli/scripts/release/index.js reconcile \
+            --ledger release-events.jsonl \
+            --tag "v${{ inputs.version }}" > reconciliation.json
+          cat reconciliation.json
+      - name: Trigger promotion when the machine policy is eligible
+        if: contains(inputs.version, '-rc.')
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        run: |
+          ELIGIBLE="$(node - <<'NODE'
+          const {readEvents, materializeReleaseState} = require('./cli/scripts/release/events');
+          const state = materializeReleaseState(readEvents('release-events.jsonl'));
+          const channels = ['npm', 'pnpm', 'yarn', 'bun', 'github', 'homebrew', 'scoop', 'pypi'];
+          const enough = channels.every(channel => {
+            const samples = state.canaries[channel] || [];
+            return samples.length >= 24 && samples.every(sample => sample.status === 'passed');
+          });
+          const noIncidents = Object.values(state.incidents).every(incident => incident.status !== 'open');
+          process.stdout.write(String(enough && noIncidents));
+          NODE
+          )"
+          if [ "$ELIGIBLE" = true ]; then
+            gh workflow run release-train.yml \
+              --repo "${GITHUB_REPOSITORY}" \
+              -f action=promote \
+              -f version="${{ inputs.version }}" \
+              -f release_pr="${{ inputs.release_pr }}"
+          fi
+
+  rollback:
+    name: Append rollback and prepare forward fix
+    if: github.event_name == 'workflow_dispatch' && inputs.action == 'rollback'
+    runs-on: ubuntu-24.04
+    concurrency:
+      group: release-ledger
+      cancel-in-progress: false
+    steps:
+      - name: Create short-lived release app token
+        id: app
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        with:
+          app-id: ${{ vars.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: v${{ inputs.version }}
+          fetch-depth: 0
+          token: ${{ steps.app.outputs.token }}
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.RELEASE_NODE_VERSION }}
+      - working-directory: cli
+        run: npm ci
+      - name: Generate append-only recovery plan
+        env:
+          RELEASE_APP_TOKEN: ${{ steps.app.outputs.token }}
+        run: |
+          git fetch origin release-ledger
+          git show "origin/release-ledger:events/v${{ inputs.version }}.jsonl" > release-events.jsonl
+          ARGS=(--ledger release-events.jsonl \
+            --timestamp "$(date -u +%Y-%m-%dT%H:%M:%S.000Z)" \
+            --idempotency-key "rollback:${{ inputs.version }}:${GITHUB_RUN_ID}" \
+            --tag "v${{ inputs.version }}")
+          if [ -n "${{ inputs.known_good }}" ]; then ARGS+=(--known-good "${{ inputs.known_good }}"); fi
+          node cli/scripts/release/index.js rollback "${ARGS[@]}" > rollback-plan.json
+          cat rollback-plan.json
+          git worktree add ledger-branch origin/release-ledger
+          cp release-events.jsonl "ledger-branch/events/v${{ inputs.version }}.jsonl"
+          (
+            cd ledger-branch
+            git config user.name guardscan-release-bot
+            git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+            git add "events/v${{ inputs.version }}.jsonl"
+            git commit -m "rollback started: v${{ inputs.version }}"
+            git push origin HEAD:release-ledger
+          )

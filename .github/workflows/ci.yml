@@ -1,378 +1,272 @@
-name: CI/CD Pipeline
+name: CI
 
 on:
   push:
-    branches: [main, develop]
-    tags:
-      - "v*"
+    branches: [main, develop, "release/**"]
   pull_request:
     branches: [main, develop]
 
+permissions:
+  contents: read
+
+env:
+  RELEASE_NODE_VERSION: 22.23.1
+
 jobs:
-  lint:
-    name: Lint Code
-    runs-on: ubuntu-latest
+  source-contract:
+    name: Source and release contract
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "18"
-          cache: "npm"
-          cache-dependency-path: "**/package-lock.json"
-
-      - name: Install CLI dependencies
-        working-directory: ./cli
-        run: npm ci
-
-      - name: Run ESLint on CLI
-        working-directory: ./cli
-        run: npm run lint
-
-  test-cli:
-    name: Test CLI
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        node-version: [20]
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup Node.js ${{ matrix.node-version }}
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ matrix.node-version }}
-          cache: "npm"
-          cache-dependency-path: "cli/package-lock.json"
-
-      - name: Install dependencies
-        working-directory: ./cli
-        run: npm ci
-
-      - name: Build TypeScript (required for E2E tests)
-        working-directory: ./cli
-        run: npm run build
-
-      - name: Run tests with coverage
-        working-directory: ./cli
-        run: npm test -- --coverage
-        # Coverage threshold enforced via jest.config.js (70%)
-
-      - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v3
-        with:
-          files: ./cli/coverage/lcov.info
-          flags: cli
-          name: cli-coverage
-          fail_ci_if_error: false
-          token: ${{ secrets.CODECOV_TOKEN }}
-        if: matrix.node-version == 20 && always()
-        continue-on-error: true
-
-  build-cli:
-    name: Build CLI
-    runs-on: ubuntu-latest
-    needs: [test-cli]
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "18"
-          cache: "npm"
-          cache-dependency-path: "cli/package-lock.json"
-
-      - name: Install dependencies
-        working-directory: ./cli
-        run: npm ci
-
-      - name: Build TypeScript
-        working-directory: ./cli
-        run: npm run build
-
-      - name: Verify build artifacts
-        working-directory: ./cli
-        run: |
-          ls -la dist/
-          test -f dist/index.js
-
-      - name: Upload build artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: cli-dist
-          path: cli/dist/
-
-  security-scan:
-    name: Security Scan
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Run npm audit (CLI)
-        working-directory: ./cli
-        run: npm audit --audit-level=moderate || true
-        continue-on-error: true
-
-  integration-test:
-    name: Integration Tests
-    runs-on: ubuntu-latest
-    needs: [build-cli]
-    if: always()
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "18"
-
-      - name: Install CLI dependencies
-        working-directory: ./cli
-        run: npm ci
-
-      - name: Build CLI
-        working-directory: ./cli
-        run: npm run build
-
-      - name: Link CLI globally
-        working-directory: ./cli
-        run: npm link
-        continue-on-error: true
-
-      - name: Test CLI commands
-        run: |
-          guardscan --version || echo "guardscan --version failed"
-          guardscan --help || echo "guardscan --help failed"
-          guardscan init --no-telemetry || echo "guardscan init failed"
-        continue-on-error: true
-
-      - name: Run self-scan
-        run: |
-          cd cli
-          guardscan security --files "src/**/*.ts" --no-telemetry || echo "Self-scan failed"
-        continue-on-error: true
-
-  publish-npm:
-    name: Publish to NPM
-    runs-on: ubuntu-latest
-    needs: [build-cli, integration-test]
-    if: |
-      github.event_name == 'push' &&
-      startsWith(github.ref, 'refs/tags/v') &&
-      needs.build-cli.result == 'success'
-    environment:
-      name: npm-publish
-      url: https://www.npmjs.com/package/guardscan
-    permissions:
-      id-token: write # Required for Trusted Publishing (OIDC)
-      contents: read
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "18"
-          registry-url: "https://registry.npmjs.org"
-
-      - name: Install dependencies
-        working-directory: ./cli
-        run: npm ci
-
-      - name: Build
-        working-directory: ./cli
-        run: npm run build
-
-      - name: Extract version from package.json
-        id: version
-        working-directory: ./cli
-        run: |
-          VERSION=$(node -p "require('./package.json').version")
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "tag=v$VERSION" >> $GITHUB_OUTPUT
-          echo "Package version: $VERSION"
-
-      - name: Verify tag matches package version
-        working-directory: ./cli
-        run: |
-          PACKAGE_VERSION=$(node -p "require('./package.json').version")
-          TAG_VERSION=${GITHUB_REF#refs/tags/v}
-          if [ "$PACKAGE_VERSION" != "$TAG_VERSION" ]; then
-            echo "Error: Tag version ($TAG_VERSION) doesn't match package version ($PACKAGE_VERSION)"
-            exit 1
-          fi
-          echo "✓ Tag version matches package version: $PACKAGE_VERSION"
-
-      - name: Verify NPM authentication and permissions
-        id: verify_npm
-        working-directory: ./cli
-        run: |
-          PACKAGE_NAME=$(node -p "require('./package.json').name")
-          PACKAGE_VERSION=$(node -p "require('./package.json').version")
-
-          echo "Using Trusted Publishing with environment: npm-publish"
-
-          # Check if using Trusted Publishing (no token needed) or Granular Access Token
-          if [ -n "${{ secrets.NPM_TOKEN }}" ]; then
-            echo "Using NPM_TOKEN (Granular Access Token method) as fallback"
-            # Verify authentication with token
-            echo "Verifying NPM authentication..."
-            NPM_USER=$(npm whoami --registry=https://registry.npmjs.org 2>&1) || {
-              echo "Error: NPM authentication failed"
-              echo "Please verify your NPM_TOKEN is a valid Granular Access Token with 'Publish' permissions"
-              echo "Create one at: https://www.npmjs.com/settings/[YOUR_USERNAME]/tokens"
-              exit 1
-            }
-            echo "✓ Authenticated as: $NPM_USER"
-          else
-            echo "Using Trusted Publishing (OIDC)"
-            echo "✓ Trusted Publishing configured - no token needed"
-          fi
-
-          echo "Checking package: $PACKAGE_NAME"
-
-          # Try to check if package exists
-          if npm view "$PACKAGE_NAME" version > /dev/null 2>&1; then
-            echo "✓ Package exists on NPM"
-          else
-            echo "ℹ Package doesn't exist yet, will be created on first publish"
-          fi
-
-          # Check if version already exists
-          if npm view "$PACKAGE_NAME@$PACKAGE_VERSION" version > /dev/null 2>&1; then
-            echo "Error: Version $PACKAGE_VERSION already exists on NPM"
-            echo "Please bump the version in package.json before publishing"
-            exit 1
-          fi
-
-          echo "✓ Pre-publish checks completed"
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-
-      - name: Publish to NPM
-        working-directory: ./cli
-        run: npm publish
-        env:
-          # Trusted Publishing uses OIDC (no token needed)
-          # Fallback to NPM_TOKEN if Trusted Publishing is not configured
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-
-  # Worker deployment lives in https://github.com/ntanwir10/GuardScan-Monitoring.
-
-  create-release:
-    name: Create GitHub Release
-    runs-on: ubuntu-latest
-    needs: [publish-npm]
-    if: |
-      github.event_name == 'push' &&
-      startsWith(github.ref, 'refs/tags/v') &&
-      needs.publish-npm.result == 'success'
-    permissions:
-      contents: write
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: "18"
-
-      - name: Extract version from tag
-        id: tag
+          node-version: ${{ env.RELEASE_NODE_VERSION }}
+      - name: Install locked dependencies
+        working-directory: cli
+        run: npm ci
+      - name: Validate version, lockfile, changelog, and release contracts
+        working-directory: cli
         run: |
-          TAG=${GITHUB_REF#refs/tags/}
-          VERSION=${TAG#v}
-          echo "tag=$TAG" >> $GITHUB_OUTPUT
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "Tag: $TAG"
-          echo "Version: $VERSION"
+          npm run release:validate
+          npm run test:release
+      - name: Reject whitespace and patch corruption
+        run: git diff --check
+      - name: Audit production dependency graph
+        working-directory: cli
+        run: npm audit --omit=dev --audit-level=high
 
-      - name: Verify package is published on NPM
-        run: |
-          PACKAGE_NAME="guardscan"
-          PACKAGE_VERSION="${{ steps.tag.outputs.version }}"
-          echo "Checking ${PACKAGE_NAME}@${PACKAGE_VERSION} on NPM..."
-          # Give NPM registry a moment to reflect the new version
-          sleep 10
-          if npm view "${PACKAGE_NAME}@${PACKAGE_VERSION}" version > /dev/null 2>&1; then
-            echo "✓ Package ${PACKAGE_NAME}@${PACKAGE_VERSION} is published on NPM"
-          else
-            echo "Error: Package ${PACKAGE_NAME}@${PACKAGE_VERSION} not found on NPM"
-            echo "Release will not be created until package is published"
-            exit 1
-          fi
-
-      - name: Extract changelog entry
-        id: changelog
-        working-directory: ./cli
-        run: |
-          VERSION="${{ steps.tag.outputs.version }}"
-          CHANGELOG_FILE="CHANGELOG.md"
-
-          if [ ! -f "$CHANGELOG_FILE" ]; then
-            echo "Error: $CHANGELOG_FILE not found"
-            exit 1
-          fi
-
-          # Extract the changelog section for this version
-          # Look for pattern: ## [VERSION] - DATE
-          # Extract until next version section or end of file
-          awk -v version="$VERSION" '
-            BEGIN { in_section = 0; found = 0 }
-            /^## \[/ {
-              if (in_section) exit
-              if ($0 ~ "\\[" version "\\]") {
-                in_section = 1
-                found = 1
-                print
-                next
-              }
-            }
-            in_section {
-              if (/^## \[/) exit
-              print
-            }
-            END {
-              if (!found) {
-                print "## Changelog entry not found for version " version
-                print ""
-                print "Please ensure CHANGELOG.md contains an entry for version " version
-              }
-            }
-          ' "$CHANGELOG_FILE" > /tmp/changelog_entry.txt
-
-          CHANGELOG_CONTENT=$(cat /tmp/changelog_entry.txt)
-
-          if [ -z "$CHANGELOG_CONTENT" ] || echo "$CHANGELOG_CONTENT" | grep -q "Changelog entry not found"; then
-            CHANGELOG_CONTENT="## GuardScan ${{ steps.tag.outputs.tag }}
-
-          Release notes for version ${{ steps.tag.outputs.version }}.
-
-          See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/${{ github.ref }}/cli/CHANGELOG.md) for details."
-          fi
-
-          {
-            echo "content<<EOF"
-            echo "$CHANGELOG_CONTENT"
-            echo "EOF"
-          } >> $GITHUB_OUTPUT
-
-          echo "Extracted changelog entry:"
-          cat /tmp/changelog_entry.txt
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v1
+  lint:
+    name: Typecheck and lint ratchet
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          tag_name: ${{ steps.tag.outputs.tag }}
-          name: GuardScan ${{ steps.tag.outputs.tag }}
-          body: ${{ steps.changelog.outputs.content }}
-          draft: false
-          prerelease: false
-          generate_release_notes: false
+          node-version: ${{ env.RELEASE_NODE_VERSION }}
+      - working-directory: cli
+        run: npm ci
+      - working-directory: cli
+        run: |
+          npm run typecheck
+          npm run lint:ratchet
+
+  test:
+    name: Test (${{ matrix.os }}, Node ${{ matrix.node }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025]
+        node: [22.23.1, 24.18.0, 26.5.0]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ matrix.node }}
+      - working-directory: cli
+        run: npm ci
+      - name: Run full suite
+        if: matrix.os != 'ubuntu-24.04' || matrix.node != '24.18.0'
+        working-directory: cli
+        run: npm test -- --runInBand
+      - name: Run full suite with enforced coverage
+        if: matrix.os == 'ubuntu-24.04' && matrix.node == '24.18.0'
+        working-directory: cli
+        run: npm test -- --coverage --runInBand
+      - name: Upload coverage
+        if: matrix.os == 'ubuntu-24.04' && matrix.node == '24.18.0' && always()
+        uses: codecov/codecov-action@0fb7174895f61a3b6b78fc075e0cd60383518dac # v5
+        with:
+          files: cli/coverage/lcov.info
+          flags: cli
+          fail_ci_if_error: false
+          token: ${{ secrets.CODECOV_TOKEN }}
+
+  npm-artifact:
+    name: Immutable npm artifact
+    runs-on: ubuntu-24.04
+    needs: [source-contract, lint, test]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.RELEASE_NODE_VERSION }}
+      - working-directory: cli
+        run: npm ci
+      - name: Build exact publish handoff
+        working-directory: cli
+        run: npm run release:package -- --output-dir ../release-artifacts
+      - name: Verify exact publish handoff
+        working-directory: cli
+        run: npm run release:verify-npm -- --artifact-dir ../release-artifacts
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: guardscan-npm-${{ github.sha }}
+          path: release-artifacts/
+          if-no-files-found: error
+          retention-days: 14
+
+  installed-package:
+    name: npm package smoke (${{ matrix.os }}, Node ${{ matrix.node }})
+    runs-on: ${{ matrix.os }}
+    needs: [npm-artifact]
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15, windows-2025]
+        node: [22.23.1, 24.18.0]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: guardscan-npm-${{ github.sha }}
+          path: release-artifacts
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ matrix.node }}
+      - working-directory: cli
+        run: npm ci
+      - working-directory: cli
+        run: npm run release:verify-npm -- --artifact-dir ../release-artifacts
+      - working-directory: cli
+        run: npm run test:package
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GUARDSCAN_PACKAGE_ARTIFACT_DIR: ${{ github.workspace }}/release-artifacts
+
+  package-manager:
+    name: Package manager smoke (${{ matrix.id }})
+    runs-on: ubuntu-24.04
+    needs: [npm-artifact]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: npm
+            manager: npm
+          - id: pnpm
+            manager: pnpm
+            version: 10.34.0
+          - id: yarn-modern
+            manager: yarn
+            version: 4.9.2
+          - id: yarn-classic
+            manager: yarn
+            version: 1.22.22
+          - id: bun
+            manager: bun
+            version: 1.3.14
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: guardscan-npm-${{ github.sha }}
+          path: release-artifacts
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.RELEASE_NODE_VERSION }}
+      - working-directory: cli
+        run: npm ci
+      - if: matrix.manager == 'pnpm'
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6
+        with:
+          version: ${{ matrix.version }}
+      - if: matrix.manager == 'yarn'
+        run: |
+          corepack enable
+          corepack prepare yarn@${{ matrix.version }} --activate
+      - if: matrix.manager == 'bun'
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: ${{ matrix.version }}
+      - working-directory: cli
+        run: npm run test:package-manager -- --manager ${{ matrix.manager }}
+        env:
+          GUARDSCAN_PACKAGE_ARTIFACT_DIR: ${{ github.workspace }}/release-artifacts
+
+  standalone:
+    name: Required standalone SEA (${{ matrix.id }})
+    runs-on: ${{ matrix.os }}
+    needs: [source-contract, lint, test]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: linux-x64
+            os: ubuntu-24.04
+          - id: linux-arm64
+            os: ubuntu-24.04-arm
+          - id: macos-arm64
+            os: macos-15
+          - id: macos-x64
+            os: macos-15-intel
+          - id: windows-x64
+            os: windows-2025
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.RELEASE_NODE_VERSION }}
+      - working-directory: cli
+        run: npm ci
+      - working-directory: cli
+        run: npm run build
+      - name: Build and smoke host SEA with Node absent from PATH
+        working-directory: cli
+        run: npm run release:build -- --kind standalone --output-dir ../standalone-build
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: guardscan-unsigned-${{ matrix.id }}-${{ github.sha }}
+          path: standalone-build/
+          if-no-files-found: error
+          retention-days: 7
+
+  integration:
+    name: Offline CLI integration
+    runs-on: ubuntu-24.04
+    needs: [npm-artifact]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.RELEASE_NODE_VERSION }}
+      - working-directory: cli
+        run: npm ci
+      - working-directory: cli
+        run: npm run build
+      - working-directory: cli
+        run: npm link
+      - name: Exercise static scan and both SBOM formats
+        working-directory: cli
+        run: |
+          guardscan --version
+          guardscan --help
+          guardscan --no-telemetry scan --offline --no-cve --skip-ai --ci --format json --output guardscan-scan.json --max-findings 10000
+          guardscan --no-telemetry sbom --offline --format spdx --output guardscan.spdx.json
+          guardscan --no-telemetry sbom --offline --format cyclonedx --output guardscan.cyclonedx.json
+
+  release-gate:
+    name: Release gate
+    runs-on: ubuntu-24.04
+    if: always()
+    needs:
+      - source-contract
+      - lint
+      - test
+      - npm-artifact
+      - installed-package
+      - package-manager
+      - standalone
+      - integration
+    steps:
+      - name: Require every release quality gate
+        env:
+          RESULTS: >-
+            ${{ join(needs.*.result, ' ') }}
+        run: |
+          test "$RESULTS" = "success success success success success success success success"
