@@ -94,6 +94,49 @@ describe('release credential and provider health workflow', () => {
     expect(source).toContain("apiKeyAuthentication: {status: 'unknown'");
   });
 
+  it('separates honest monitoring status from explicit release eligibility', () => {
+    const {source} = loadWorkflow();
+    expect(source).toContain('release_preflight:');
+    expect(source).toContain('release_eligible:');
+    expect(source).toContain('RELEASE_PROVIDER_ONBOARDING_ATTESTATION');
+    expect(source).toContain('validateProviderOnboardingAttestation');
+    expect(source).toContain("'azure-artifact-signing'");
+    expect(source).toContain("'chocolatey-publisher'");
+    expect(source).toContain("'trusted-publishers'");
+    expect(source).toContain("'winget-submitter'");
+    expect(source).toContain("status: releaseEligible ? 'eligible' : 'blocked'");
+    expect(source).toContain("report.releaseEligibility.status !== 'eligible'");
+    expect(source).toContain("report.status !== 'healthy'");
+
+    const policySource = source.match(
+      /function isReleaseEligible\([^)]*\) \{[\s\S]*?\n          \}/
+    )?.[0];
+    expect(policySource).toBeTruthy();
+    const isReleaseEligible = new Function(
+      `${policySource}; return isReleaseEligible;`
+    )() as (
+      preflight: boolean,
+      onboardingVerified: boolean,
+      evidence: Array<{provider: string; status: string}>
+    ) => boolean;
+    const observable = [
+      {provider: 'github-app-catalog', status: 'healthy'},
+      {provider: 'trusted-publishers', status: 'unknown'},
+    ];
+    expect(isReleaseEligible(false, true, observable)).toBe(false);
+    expect(isReleaseEligible(true, false, observable)).toBe(false);
+    expect(isReleaseEligible(true, true, observable)).toBe(true);
+    expect(isReleaseEligible(true, true, [
+      {provider: 'apple-signing-notary', status: 'unknown'},
+    ])).toBe(false);
+    expect(isReleaseEligible(true, true, [
+      {provider: 'trusted-publishers', status: 'warning'},
+    ])).toBe(false);
+    expect(isReleaseEligible(true, true, [
+      {provider: 'trusted-publishers', status: 'unhealthy'},
+    ])).toBe(false);
+  });
+
   it('is non-publishing and does not contain secret-printing constructs', () => {
     const {source} = loadWorkflow();
     for (const forbidden of [

@@ -219,6 +219,8 @@ jobs:
       contents: read
       id-token: write
     uses: ./.github/workflows/release-credential-health.yml
+    with:
+      release_preflight: true
     secrets:
       RELEASE_APP_PRIVATE_KEY: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
       APPLE_CERTIFICATE_P12: ${{ secrets.APPLE_CERTIFICATE_P12 }}
@@ -235,7 +237,7 @@ jobs:
     if: >-
       github.event_name == 'workflow_dispatch'
       && vars.RELEASE_AUTOMATION_ENABLED == 'true'
-      && needs.credential-health.outputs.status == 'healthy'
+      && needs.credential-health.outputs.release_eligible == 'true'
       && (inputs.action == 'candidate' || inputs.action == 'promote')
     needs: [credential-health]
     runs-on: ubuntu-24.04
@@ -1687,7 +1689,7 @@ jobs:
     if: >-
       github.event_name == 'workflow_dispatch'
       && vars.RELEASE_AUTOMATION_ENABLED == 'true'
-      && needs.credential-health.outputs.status == 'healthy'
+      && needs.credential-health.outputs.release_eligible == 'true'
       && inputs.action == 'reconcile'
     needs: [credential-health]
     runs-on: ubuntu-24.04
@@ -2040,7 +2042,7 @@ jobs:
     if: >-
       github.event_name == 'workflow_dispatch'
       && vars.RELEASE_AUTOMATION_ENABLED == 'true'
-      && needs.credential-health.outputs.status == 'healthy'
+      && needs.credential-health.outputs.release_eligible == 'true'
       && inputs.action == 'rollback'
       && inputs.known_good == ''
     needs: [credential-health]
@@ -2058,7 +2060,7 @@ jobs:
     if: >-
       github.event_name == 'workflow_dispatch'
       && vars.RELEASE_AUTOMATION_ENABLED == 'true'
-      && needs.credential-health.outputs.status == 'healthy'
+      && needs.credential-health.outputs.release_eligible == 'true'
       && inputs.action == 'rollback'
       && inputs.known_good != ''
     needs: [credential-health]
