@@ -2,9 +2,16 @@
 
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 const yaml = require('../../cli/node_modules/js-yaml');
+const {
+  ATTESTED_PATHS,
+  computeProviderOnboardingAttestation,
+  createProviderOnboardingAttestation,
+  validateProviderOnboardingAttestation,
+} = require('./provider-onboarding-attestation');
 
 const root = path.resolve(__dirname, '..', '..');
 const workflowRoot = path.join(root, '.github', 'workflows');
@@ -27,6 +34,62 @@ function walk(value, visit) {
   if (!value || typeof value !== 'object') return;
   for (const child of Object.values(value)) walk(child, visit);
 }
+
+test('provider onboarding attestation is deterministic and content-bound', () => {
+  assert.equal(new Set(ATTESTED_PATHS).size, ATTESTED_PATHS.length);
+  for (const required of [
+    '.github/CODEOWNERS',
+    '.github/workflows/ci.yml',
+    '.github/workflows/release-credential-health.yml',
+    '.github/workflows/release-provider-rehearsal.yml',
+    '.github/workflows/release-publish.yml',
+    '.github/workflows/release-train.yml',
+    'docs/RELEASE_ONBOARDING.md',
+  ]) assert(ATTESTED_PATHS.includes(required), `${required} must be attested`);
+
+  const fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'guardscan-provider-attestation-'));
+  try {
+    for (const file of ATTESTED_PATHS) {
+      const absolute = path.join(fixture, file);
+      fs.mkdirSync(path.dirname(absolute), {recursive: true});
+      fs.writeFileSync(absolute, `${file}\n`);
+    }
+    const first = computeProviderOnboardingAttestation(fixture);
+    assert.match(first, /^sha256:[a-f0-9]{64}$/);
+    assert.equal(computeProviderOnboardingAttestation(fixture), first);
+    const issuedAt = new Date('2026-08-24T12:00:00.000Z');
+    const attestation = createProviderOnboardingAttestation(first, issuedAt, 30);
+    assert.match(
+      attestation,
+      /^guardscan\.provider-onboarding\.v1\|sha256:[a-f0-9]{64}\|issued=.+Z\|expires=.+Z$/
+    );
+    assert.equal(
+      validateProviderOnboardingAttestation(attestation, first, issuedAt).valid,
+      true
+    );
+    assert.equal(
+      validateProviderOnboardingAttestation(
+        attestation,
+        first,
+        new Date('2026-09-24T00:00:00.000Z')
+      ).valid,
+      false
+    );
+    assert.equal(
+      validateProviderOnboardingAttestation(attestation, `sha256:${'0'.repeat(64)}`, issuedAt).valid,
+      false
+    );
+    assert.throws(() => createProviderOnboardingAttestation(first, issuedAt, 31), /between 1 and 30/);
+    fs.appendFileSync(path.join(fixture, ATTESTED_PATHS[0]), 'changed\n');
+    assert.notEqual(computeProviderOnboardingAttestation(fixture), first);
+    assert.throws(
+      () => computeProviderOnboardingAttestation(fixture, 'other/repository'),
+      /repository identity drifted/
+    );
+  } finally {
+    fs.rmSync(fixture, {recursive: true, force: true});
+  }
+});
 
 test('every checkout explicitly disables persisted credentials', () => {
   for (const name of workflowFiles) {
@@ -106,7 +169,7 @@ test('rollback pins trusted control-plane code and fetches the defective tag as 
   }
 });
 
-test('release train depends on healthy provider credentials and blocks unknown state', () => {
+test('release train requires explicit preflight eligibility while monitoring preserves unknown state', () => {
   const train = readWorkflow('release-train.yml');
   const workflow = parseWorkflow('release-train.yml');
   const health = readWorkflow('release-credential-health.yml');
@@ -114,8 +177,15 @@ test('release train depends on healthy provider credentials and blocks unknown s
   assert.deepEqual(workflow.jobs['credential-health'].needs, ['validate-request']);
   assert.equal(workflow.jobs['credential-health'].permissions?.['id-token'], 'write');
   assert.equal(workflow.jobs['credential-health'].permissions?.contents, 'read');
-  assert.match(train, /needs\.credential-health\.outputs\.status == 'healthy'/);
-  assert.match(health, /if\(report\.status!==['"]healthy['"]\) process\.exit\(1\)/);
+  assert.equal(workflow.jobs['credential-health'].with?.release_preflight, true);
+  assert.match(train, /needs\.credential-health\.outputs\.release_eligible == 'true'/);
+  assert.doesNotMatch(train, /needs\.credential-health\.outputs\.status == 'healthy'/);
+  assert.match(health, /RELEASE_PROVIDER_ONBOARDING_ATTESTATION/);
+  assert.match(health, /provider-onboarding-attestation\.js/);
+  assert.match(health, /ref: \$\{\{ job\.workflow_sha \}\}/);
+  assert.match(health, /item\.status === 'unknown' && allowedUnknown\.has\(item\.provider\)/);
+  assert.match(health, /report\.releaseEligibility\.status !== 'eligible'/);
+  assert.match(health, /report\.status !== 'healthy'/);
 });
 
 test('canary aggregation delegates fail-closed incident handling to record-canary', () => {
