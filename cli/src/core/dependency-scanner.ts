@@ -9,8 +9,9 @@ import {
   PackageInventory,
   PackageInventoryError,
 } from './package-inventory';
-import { OsvClient, OsvMatch, OsvSeverity, OsvVulnerability } from './osv-client';
+import { OsvClient, OsvClientError, OsvMatch, OsvSeverity, OsvVulnerability } from './osv-client';
 import {
+  VulnerabilitySnapshot,
   VulnerabilitySnapshotStatus,
   VulnerabilitySnapshotStore,
 } from './vulnerability-cache';
@@ -118,6 +119,7 @@ export type DependencyScanErrorCode =
   | 'OFFLINE_COVERAGE_UNAVAILABLE'
   | 'OFFLINE_COVERAGE_STALE'
   | 'OFFLINE_COVERAGE_MISMATCH'
+  | 'OFFLINE_COVERAGE_INCOMPLETE'
   | 'INVENTORY_INCOMPLETE'
   | 'KEV_COVERAGE_UNAVAILABLE'
   | 'INVALID_OPTIONS';
@@ -200,8 +202,10 @@ function severityFromEntries(entries: OsvSeverity[] | undefined, source: string)
   severity: AdvisorySeverity;
   cvss?: DependencyVulnerability['cvss'];
 } {
+  let rawCvss: DependencyVulnerability['cvss'] | undefined;
   for (const entry of entries || []) {
     if (typeof entry.score !== 'string') {continue;}
+    if (!entry.score.trim()) {continue;}
     const numeric = Number(entry.score);
     if (Number.isFinite(numeric) && numeric >= 0 && numeric <= 10) {
       return {
@@ -226,10 +230,10 @@ function severityFromEntries(entries: OsvSeverity[] | undefined, source: string)
       } catch {
         // Preserve malformed or unsupported upstream vectors without trusting them for policy severity.
       }
-      return { severity: 'unknown', cvss: { version: entry.type, vector: entry.score, source } };
+      rawCvss ||= { version: entry.type, vector: entry.score, source };
     }
   }
-  return { severity: 'unknown' };
+  return { severity: 'unknown', cvss: rawCvss };
 }
 
 function selectSeverity(records: OsvVulnerability[], coordinate: DependencyCoordinate): {
@@ -273,8 +277,10 @@ function fixedVersions(records: OsvVulnerability[], coordinate: DependencyCoordi
   }
   const values = [...versions];
   if (coordinate.ecosystem === 'npm') {
+    const currentVersion = semver.valid(coordinate.exactVersion, { loose: true });
+    if (!currentVersion) {return [];}
     return values
-      .filter(version => semver.valid(version, { loose: true }) && semver.gt(version, coordinate.exactVersion, { loose: true }))
+      .filter(version => semver.valid(version, { loose: true }) && semver.gt(version, currentVersion, { loose: true }))
       .sort(semver.compare);
   }
   return values.sort();
@@ -387,8 +393,15 @@ function inventoryErrors(errors: PackageInventoryError[]): DependencyScanErrorIn
   return errors.map(error => ({ code: error.code, message: error.message, file: error.file }));
 }
 
+function operationalError(error: unknown, fallbackCode: string): DependencyScanErrorInfo {
+  return {
+    code: error instanceof OsvClientError ? error.code : fallbackCode,
+    message: error instanceof Error ? error.message : String(error),
+  };
+}
+
 function resultFor(
-  ecosystem: PackageEcosystem,
+  ecosystem: string,
   inventory: PackageInventory,
   vulnerabilities: DependencyVulnerability[],
   freshness: DependencyScanResult['dataFreshness'],
@@ -504,8 +517,8 @@ function statusError(status: VulnerabilitySnapshotStatus): DependencyScanError {
   if (!status.exists) {
     return new DependencyScanError('OFFLINE_COVERAGE_UNAVAILABLE', 'No offline vulnerability snapshot exists. Run "guardscan vuln db update" while online.');
   }
-  if (!status.inventoryMatches) {
-    return new DependencyScanError('OFFLINE_COVERAGE_MISMATCH', 'The offline vulnerability snapshot does not cover the current dependency inventory. Refresh it online.');
+  if (!status.inventoryMatches || status.sourceMatches === false) {
+    return new DependencyScanError('OFFLINE_COVERAGE_MISMATCH', 'The offline vulnerability snapshot does not cover the current dependency inventory and OSV source. Refresh it online.');
   }
   return new DependencyScanError('OFFLINE_COVERAGE_STALE', 'The offline vulnerability snapshot is stale. Refresh it online or use --allow-partial.');
 }
@@ -530,41 +543,96 @@ export class DependencyScanner {
     if (options.strictInventory && errors.length > 0 && !options.allowPartial) {
       throw new DependencyScanError('INVENTORY_INCOMPLETE', 'Dependency inventory contains unresolved or invalid package data', errors);
     }
-    if (inventory.coordinates.length === 0) {return [];}
+    if (inventory.coordinates.length === 0) {
+      return errors.length > 0 && options.allowPartial
+        ? [resultFor('inventory', inventory, [], 'unavailable', errors, kevMetadata('disabled'))]
+        : [];
+    }
     const store = options.snapshotStore || new VulnerabilitySnapshotStore();
+    const client = options.client || new OsvClient({
+      endpoint: options.endpoint,
+      timeoutMs: options.timeoutMs,
+      detailConcurrency: options.concurrency,
+    });
     let matches: OsvMatch[] = [];
     let freshness: DependencyScanResult['dataFreshness'] = 'live';
+    const recordDroppedMatches = (snapshot: VulnerabilitySnapshot): void => {
+      if (snapshot.droppedMatches === 0) {return;}
+      const error = new DependencyScanError(
+        'OFFLINE_COVERAGE_INCOMPLETE',
+        `The offline vulnerability snapshot omitted ${snapshot.droppedMatches} malformed ${snapshot.droppedMatches === 1 ? 'advisory' : 'advisories'}. Refresh it online or use --allow-partial.`
+      );
+      if (!options.allowPartial) {throw error;}
+      errors.push({ code: error.code, message: error.message });
+    };
 
     if (options.offline) {
-      const status = store.status(inventory, maxSnapshotAgeDays);
-      if (!status.exists || !status.inventoryMatches || !status.fresh || !status.snapshot) {
+      const status = store.status(inventory, maxSnapshotAgeDays, client.endpoint);
+      if (!status.exists || !status.inventoryMatches || status.sourceMatches === false || !status.fresh || !status.snapshot) {
         const error = statusError(status);
         if (!options.allowPartial) {throw error;}
         errors.push({ code: error.code, message: error.message });
-        freshness = status.exists ? 'stale-cache' : 'unavailable';
-        if (status.exists && status.inventoryMatches && status.snapshot) {
-          matches = store.matches(inventory, status.snapshot);
+        const reusableSnapshot = status.exists && status.inventoryMatches && status.sourceMatches !== false
+          ? status.snapshot
+          : undefined;
+        freshness = reusableSnapshot ? 'stale-cache' : 'unavailable';
+        if (reusableSnapshot) {
+          recordDroppedMatches(reusableSnapshot);
+          matches = store.matches(inventory, reusableSnapshot);
         }
       } else {
+        recordDroppedMatches(status.snapshot);
         matches = store.matches(inventory, status.snapshot);
         freshness = 'fresh-cache';
       }
     } else {
-      const client = options.client || new OsvClient({
-        endpoint: options.endpoint,
-        timeoutMs: options.timeoutMs,
-        detailConcurrency: options.concurrency,
-      });
-      matches = await client.query(inventory.coordinates);
-      if (options.cache !== false) {store.save(inventory, matches, client.endpoint);}
+      const cachedStatus = options.cache !== false && !options.refresh
+        ? store.status(inventory, maxSnapshotAgeDays, client.endpoint)
+        : undefined;
+      if (cachedStatus?.fresh
+          && cachedStatus.inventoryMatches
+          && cachedStatus.sourceMatches !== false
+          && cachedStatus.snapshot
+          && cachedStatus.snapshot.droppedMatches === 0) {
+        matches = store.matches(inventory, cachedStatus.snapshot);
+        freshness = 'fresh-cache';
+      } else {
+        try {
+          matches = await client.query(inventory.coordinates);
+        } catch (error: unknown) {
+          if (!options.allowPartial) {throw error;}
+          errors.push(operationalError(error, 'OSV_QUERY_FAILED'));
+          const reusableSnapshot = cachedStatus?.exists
+            && cachedStatus.inventoryMatches
+            && cachedStatus.sourceMatches !== false
+            ? cachedStatus.snapshot
+            : undefined;
+          if (reusableSnapshot) {
+            recordDroppedMatches(reusableSnapshot);
+            matches = store.matches(inventory, reusableSnapshot);
+            freshness = cachedStatus?.fresh ? 'fresh-cache' : 'stale-cache';
+          } else {
+            freshness = 'unavailable';
+          }
+        }
+        if (freshness === 'live' && options.cache !== false) {
+          try {
+            store.save(inventory, matches, client.endpoint);
+          } catch (error: unknown) {
+            errors.push(operationalError(error, 'SNAPSHOT_PERSIST_FAILED'));
+          }
+        }
+      }
     }
 
     const knownExploited = await knownExploitedData(options);
-    const kevUnavailable = knownExploited.metadata.status === 'unavailable';
-    if (kevUnavailable) {
+    const kevIncomplete = ['stale-cache', 'unavailable'].includes(knownExploited.metadata.status);
+    if (kevIncomplete) {
       const kevError = knownExploited.metadata.error || {
         code: 'KEV_COVERAGE_UNAVAILABLE',
-        message: 'CISA KEV coverage is unavailable',
+        message: knownExploited.metadata.status === 'stale-cache'
+          ? 'CISA KEV coverage is stale'
+          : 'CISA KEV coverage is unavailable',
       };
       const error = new DependencyScanError(
         'KEV_COVERAGE_UNAVAILABLE',
@@ -574,7 +642,7 @@ export class DependencyScanner {
       if (!options.allowPartial) {throw error;}
       errors.push({ code: error.code, message: error.message });
     }
-    const vulnerabilities = normalizeMatches(matches, kevUnavailable ? 'unknown' : knownExploited.cves);
+    const vulnerabilities = normalizeMatches(matches, kevIncomplete ? 'unknown' : knownExploited.cves);
     const ecosystems = ECOSYSTEM_ORDER.filter(ecosystem => inventory.coordinates.some(item => item.ecosystem === ecosystem));
     return ecosystems.map(ecosystem => resultFor(
       ecosystem,

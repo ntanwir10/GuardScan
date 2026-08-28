@@ -240,6 +240,7 @@ export async function runStaticAnalysis(
   let securityCount = 0;
   let qualityCount = 0;
   let operationalFailure = false;
+  const dependencyAllowPartial = executionPolicy.includeCve && executionPolicy.allowPartial;
   const scannerCoverage: NonNullable<ReviewResult['metadata']['scannerCoverage']> = {
     status: 'failed',
     scanners: [],
@@ -260,7 +261,7 @@ export async function runStaticAnalysis(
       offline: executionPolicy.offline,
       includeLicenses: true,
       includeVulnerabilities: executionPolicy.includeCve,
-      allowPartial: executionPolicy.allowPartial,
+      allowPartial: dependencyAllowPartial,
     });
     findings.push(...scanResult.findings);
     securityCount = scanResult.findings.length;
@@ -280,7 +281,7 @@ export async function runStaticAnalysis(
       scanner.required === true && scanner.status === 'failed' && scanner.scanner !== 'dependencies'
     );
     operationalFailure = scanResult.status === 'failed' || requiredLocalFailure ||
-      (scanResult.status === 'partial' && !executionPolicy.allowPartial);
+      (scanResult.status === 'partial' && !dependencyAllowPartial);
     if (operationalFailure) {
       securitySpinner.fail(`Security coverage ${scannerCoverage.status}`);
     } else {
@@ -343,6 +344,9 @@ export async function runStaticAnalysis(
   } catch (error) {
     qualitySpinner.fail('Code quality analysis failed');
     operationalFailure = true;
+    if (scannerCoverage.status === 'complete') {
+      scannerCoverage.status = 'partial';
+    }
     scannerCoverage.errors.push({
       scanner: 'quality',
       code: 'QUALITY_EXECUTION_FAILED',

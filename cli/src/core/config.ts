@@ -8,6 +8,7 @@ import {
   bestEffortChmod,
   readTextFileBounded,
 } from "../utils/private-state";
+import { isAllowedNetworkEndpoint } from "./bounded-response";
 
 const MAX_CONFIG_BYTES = 1024 * 1024;
 const MAX_CONFIG_DEPTH = 20;
@@ -254,9 +255,16 @@ export class ConfigManager {
   private readConfigFile(): Config {
     const content = readTextFileBounded(this.configPath, MAX_CONFIG_BYTES);
     this.log(`Config file read, length: ${content.length}`);
-    const parsed = yaml.load(content, {schema: yaml.JSON_SCHEMA});
-    assertConfigDocumentBounds(parsed);
-    const config = parseConfig(parsed);
+    let config: Config;
+    try {
+      const parsed = yaml.load(content, {schema: yaml.JSON_SCHEMA});
+      assertConfigDocumentBounds(parsed);
+      config = parseConfig(parsed);
+    } catch (error) {
+      throw new Error(
+        `${errorMessage(error)}. Back up or remove the invalid configuration file, then run "guardscan init" to recreate it.`
+      );
+    }
     this.log("Config parsed successfully");
     bestEffortChmod(this.configPath, 0o600);
     return config;
@@ -528,6 +536,8 @@ export function parseConfig(value: unknown): Config {
   validateOptionalEndpoint(input, 'apiEndpoint', 'configuration.apiEndpoint');
   validateOptionalTimestamp(input, 'createdAt');
   validateOptionalTimestamp(input, 'lastUsed');
+  validateOptionalBoolean(input, 'telemetryEnabled');
+  validateOptionalBoolean(input, 'offlineMode');
 
   const config: Config = {
     provider,
@@ -620,7 +630,7 @@ function normalizeVulnerabilities(value: unknown): NonNullable<Config['vulnerabi
   const section = sectionRecord(value, 'vulnerabilities', [
     'enabled', 'source', 'endpoint', 'scope', 'snapshotMaxAgeDays', 'enrichKnownExploited',
   ]);
-  const endpoint = optionalValue(section, 'endpoint', isAllowedEndpoint, defaults.endpoint, 'configuration.vulnerabilities');
+  const endpoint = optionalValue(section, 'endpoint', isAllowedNetworkEndpoint, defaults.endpoint, 'configuration.vulnerabilities');
   return {
     enabled: optionalValue(section, 'enabled', isBoolean, defaults.enabled, 'configuration.vulnerabilities'),
     source: optionalValue(section, 'source', (candidate): candidate is 'osv' => candidate === 'osv', defaults.source, 'configuration.vulnerabilities'),
@@ -732,6 +742,12 @@ function validateOptionalString(input: UnknownRecord, key: string): void {
   }
 }
 
+function validateOptionalBoolean(input: UnknownRecord, key: string): void {
+  if (input[key] !== undefined && typeof input[key] !== 'boolean') {
+    throw new Error(`configuration.${key} must be a boolean`);
+  }
+}
+
 function validateOptionalStringAt(input: UnknownRecord, key: string, pathName: string): void {
   if (input[key] !== undefined && !isString(input[key])) {
     throw new Error(`${pathName}.${key} must be a string`);
@@ -760,7 +776,7 @@ function validateOptionalEnumAt(
 }
 
 function validateOptionalEndpoint(input: UnknownRecord, key: string, pathName: string): void {
-  if (input[key] !== undefined && !isAllowedEndpoint(input[key])) {
+  if (input[key] !== undefined && !isAllowedNetworkEndpoint(input[key])) {
     throw new Error(`${pathName} has an invalid value`);
   }
 }
@@ -804,23 +820,6 @@ function isValidTimestamp(value: unknown): value is string {
   return calendarCheck.getUTCFullYear() === year
     && calendarCheck.getUTCMonth() + 1 === month
     && calendarCheck.getUTCDate() === day;
-}
-
-function isAllowedEndpoint(value: unknown): value is string {
-  if (typeof value !== 'string') {return false;}
-  try {
-    const endpoint = new URL(value);
-    if (endpoint.username || endpoint.password || endpoint.search || endpoint.hash) {return false;}
-    if (endpoint.protocol === 'https:') {return true;}
-    if (endpoint.protocol !== 'http:') {return false;}
-    const hostname = endpoint.hostname.toLowerCase();
-    return hostname === 'localhost'
-      || hostname === '::1'
-      || hostname === '[::1]'
-      || /^127(?:\.\d{1,3}){3}$/.test(hostname);
-  } catch {
-    return false;
-  }
 }
 
 /** Merge user config with enhanced-feature defaults (retry, cache, observability, etc.). */

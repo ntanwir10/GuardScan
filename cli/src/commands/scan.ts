@@ -387,14 +387,18 @@ export function evaluateComprehensivePolicy(
 
   for (const [name, check] of Object.entries(quality.checks)) {
     if (check.status === 'failed' && check.error) {
-      operationalReasons.push(`Quality check failed to execute: ${name}`);
+      if (!policy.allowPartial || quality.status === 'failed') {
+        operationalReasons.push(`Quality check failed to execute: ${name}`);
+      }
       errors.push({ scanner: `quality.${name}`, ...check.error });
     }
   }
   if (sbom.status !== 'succeeded' && sbom.error) {
-    operationalReasons.push(
-      sbom.status === 'failed' ? 'SBOM generation failed' : 'SBOM inventory is incomplete'
-    );
+    if (!policy.allowPartial || sbom.status === 'failed') {
+      operationalReasons.push(
+        sbom.status === 'failed' ? 'SBOM generation failed' : 'SBOM inventory is incomplete'
+      );
+    }
     errors.push({ scanner: 'sbom', ...sbom.error });
   }
 
@@ -423,7 +427,10 @@ export function evaluateComprehensivePolicy(
     exitCode: outcome === 'operational-failed' ? 2 : outcome === 'policy-failed' ? 1 : 0,
     reasons,
   };
-  const anyOperationalFailure = operationalReasons.length > 0 || security.status !== 'complete';
+  const anyOperationalFailure = operationalReasons.length > 0
+    || security.status !== 'complete'
+    || quality.status !== 'complete'
+    || sbom.status !== 'succeeded';
   const everyMajorSectionFailed = security.status === 'failed' && quality.status === 'failed' && sbom.status === 'failed';
   return {
     result,

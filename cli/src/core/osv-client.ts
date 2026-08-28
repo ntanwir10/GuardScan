@@ -1,6 +1,5 @@
-import { setTimeout as delay } from 'timers/promises';
 import { DependencyCoordinate } from './package-inventory';
-import { readBoundedResponseBody } from './bounded-response';
+import { isAllowedNetworkEndpoint, readBoundedResponseBody } from './bounded-response';
 
 export interface OsvCompactVulnerability {
   id: string;
@@ -87,6 +86,10 @@ interface BatchResult {
   next_page_token?: string;
 }
 
+function delay(milliseconds: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, milliseconds));
+}
+
 function normalizeEndpoint(value: string): string {
   let url: URL;
   try {
@@ -97,9 +100,8 @@ function normalizeEndpoint(value: string): string {
   if (url.username || url.password || url.search || url.hash) {
     throw new OsvClientError('INVALID_ENDPOINT', 'OSV endpoint cannot contain credentials, query parameters, or fragments');
   }
-  const loopback = url.hostname === '127.0.0.1' || url.hostname === '[::1]' || url.hostname === '::1';
-  if (url.protocol !== 'https:' && !(url.protocol === 'http:' && loopback)) {
-    throw new OsvClientError('INVALID_ENDPOINT', 'OSV endpoint must use HTTPS (HTTP is allowed only for literal loopback addresses)');
+  if (!isAllowedNetworkEndpoint(value)) {
+    throw new OsvClientError('INVALID_ENDPOINT', 'OSV endpoint must use HTTPS (HTTP is allowed only for approved loopback hosts)');
   }
   return url.toString().replace(/\/+$/, '');
 }
@@ -236,7 +238,10 @@ export class OsvClient {
         if (!response.ok) {
           if (retryable && attempt < this.retries) {
             const retryAfter = Number(response.headers.get('retry-after'));
-            await delay(Number.isFinite(retryAfter) ? Math.min(retryAfter * 1000, 5_000) : Math.min(250 * 2 ** attempt, 2_000));
+            const fallbackDelay = Math.min(250 * 2 ** attempt, 2_000);
+            await delay(Number.isFinite(retryAfter) && retryAfter > 0
+              ? Math.min(retryAfter * 1000, 5_000)
+              : fallbackDelay);
             continue;
           }
           throw new OsvClientError('HTTP_ERROR', `OSV request failed with HTTP ${response.status}`, response.status);

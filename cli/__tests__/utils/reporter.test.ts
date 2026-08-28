@@ -2,6 +2,12 @@ import { Reporter, ReviewResult, Finding } from "../../src/utils/reporter";
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
+import { runProcess, sanitizeChildEnvironment } from "../../src/utils/process-runner";
+import {
+  APIClient,
+  TelemetryDeliveryError,
+  TelemetryRequest,
+} from "../../src/utils/api-client";
 
 import { describe, it, beforeEach, afterEach, expect } from "@jest/globals";
 
@@ -153,9 +159,9 @@ describe("Reporter", () => {
   });
 
   describe("saveReport", () => {
-    it("should save markdown report to file", () => {
+    it("should save markdown report to file", async () => {
       const outputPath = path.join(testDir, "report.md");
-      const savedPath = reporter.saveReport(mockResult, "markdown", outputPath);
+      const savedPath = await reporter.saveReport(mockResult, "markdown", outputPath);
 
       expect(savedPath).toBe(outputPath);
       expect(fs.existsSync(outputPath)).toBe(true);
@@ -164,11 +170,11 @@ describe("Reporter", () => {
       expect(content).toContain("# GuardScan Report");
     });
 
-    it("should generate default filename if not specified", () => {
+    it("should generate default filename if not specified", async () => {
       const originalCwd = process.cwd();
       process.chdir(testDir);
 
-      const savedPath = reporter.saveReport(mockResult, "markdown");
+      const savedPath = await reporter.saveReport(mockResult, "markdown");
 
       expect(savedPath).toMatch(/code-review-.*\.md/);
       expect(fs.existsSync(savedPath)).toBe(true);
@@ -176,12 +182,33 @@ describe("Reporter", () => {
       process.chdir(originalCwd);
     });
 
-    it("should handle markdown format", () => {
+    it("should handle markdown format", async () => {
       const outputPath = path.join(testDir, "report.md");
-      reporter.saveReport(mockResult, "markdown", outputPath);
+      await reporter.saveReport(mockResult, "markdown", outputPath);
 
       const content = fs.readFileSync(outputPath, "utf-8");
       expect(content).toContain("# GuardScan Report");
+    });
+
+    it("should save resolved HTML content to file", async () => {
+      const outputPath = path.join(testDir, "report.html");
+      const htmlResult = {
+        ...mockResult,
+        findings: [],
+        metadata: {
+          ...mockResult.metadata,
+          provider: "static-analysis",
+        },
+      };
+
+      const savedPath = await reporter.saveReport(htmlResult, "html", outputPath);
+
+      expect(savedPath).toBe(outputPath);
+      const content = fs.readFileSync(outputPath, "utf-8");
+      expect(content).toContain("<!DOCTYPE html>");
+      expect(content).toContain("AI Review Not Configured");
+      expect(content).not.toContain("[object Promise]");
+      expect(content).not.toContain("Upgrade to Pro");
     });
   });
 
@@ -269,6 +296,85 @@ describe("Reporter", () => {
       );
 
       expect(distribution["Security"]).toBe(3);
+    });
+  });
+});
+
+describe("sanitizeChildEnvironment", () => {
+  it("blocks runtime-injection variables from child processes", () => {
+    const sanitized = sanitizeChildEnvironment(
+      {
+        SAFE_VALUE: "preserved",
+        LD_LIBRARY_PATH: "/tmp/injected",
+        LD_AUDIT: "audit.so",
+        DYLD_FRAMEWORK_PATH: "/tmp/frameworks",
+        DYLD_FALLBACK_LIBRARY_PATH: "/tmp/libraries",
+        NODE_EXTRA_CA_CERTS: "/tmp/ca.pem",
+        NODE_REPL_EXTERNAL_MODULE: "/tmp/module.js",
+      },
+      "/tmp/isolated-home"
+    );
+
+    expect(sanitized.SAFE_VALUE).toBe("preserved");
+    expect(sanitized.LD_LIBRARY_PATH).toBeUndefined();
+    expect(sanitized.LD_AUDIT).toBeUndefined();
+    expect(sanitized.DYLD_FRAMEWORK_PATH).toBeUndefined();
+    expect(sanitized.DYLD_FALLBACK_LIBRARY_PATH).toBeUndefined();
+    expect(sanitized.NODE_EXTRA_CA_CERTS).toBeUndefined();
+    expect(sanitized.NODE_REPL_EXTERNAL_MODULE).toBeUndefined();
+  });
+});
+
+describe("runProcess", () => {
+  it("returns a non-zero status when the child is terminated by a signal", () => {
+    const result = runProcess(process.execPath, [
+      "-e",
+      "process.kill(process.pid, 'SIGTERM')",
+    ]);
+
+    expect(result.status).not.toBe(0);
+  });
+});
+
+describe("APIClient endpoint validation", () => {
+  it("defers invalid endpoint errors until telemetry delivery", async () => {
+    let client: APIClient | undefined;
+
+    expect(() => {
+      client = new APIClient("not a URL");
+    }).not.toThrow();
+
+    const request: TelemetryRequest = {
+      schemaVersion: "guardscan.telemetry.v1",
+      batchId: "fixture-batch",
+      sentAt: 1,
+      cliVersion: "1.1.0",
+      events: [],
+    };
+    await expect(client!.sendTelemetry(request)).rejects.toBeInstanceOf(
+      TelemetryDeliveryError
+    );
+    await expect(client!.ping()).resolves.toBe(false);
+  });
+
+  it("does not retry unexpected local telemetry failures", async () => {
+    const client = new APIClient("https://example.test") as unknown as {
+      sendTelemetry: APIClient["sendTelemetry"];
+      client: { post: () => Promise<never> };
+    };
+    client.client = {
+      post: async () => { throw new Error("local fixture failure"); },
+    };
+
+    await expect(client.sendTelemetry({
+      schemaVersion: "guardscan.telemetry.v1",
+      batchId: "fixture-batch",
+      sentAt: 1,
+      cliVersion: "1.1.0",
+      events: [],
+    })).rejects.toMatchObject({
+      message: "Telemetry delivery failed.",
+      retryable: false,
     });
   });
 });

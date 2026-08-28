@@ -11,6 +11,7 @@ import {
 import { Config, configManager } from "./config";
 import { TELEMETRY_CONSTANTS } from "../constants/telemetry-constants";
 import { createDebugLogger } from "../utils/debug-logger";
+import { environmentRequestsOffline } from "../utils/execution-policy";
 import {
   acquireFileLease,
   atomicReplaceJson,
@@ -81,7 +82,7 @@ export function isTelemetrySuppressed(config: Config): boolean {
     !config.telemetryEnabled ||
     config.offlineMode ||
     process.env.GUARDSCAN_NO_TELEMETRY === "true" ||
-    process.env.GUARDSCAN_OFFLINE === "true"
+    environmentRequestsOffline()
   );
 }
 
@@ -242,7 +243,7 @@ export class TelemetryManager {
     }
     if (
       this.config.offlineMode ||
-      process.env.GUARDSCAN_OFFLINE === "true"
+      environmentRequestsOffline()
     ) {
       throw new Error("Telemetry cannot sync while offline mode is enabled.");
     }
@@ -406,15 +407,16 @@ export class TelemetryManager {
         const legacy = isRecord(parsed) ? parsed : {};
         const events = Array.isArray(legacy.events) ? legacy.events : [];
         if (events.length > MAX_MIGRATION_EVENTS) {throw new Error("legacy telemetry exceeds event limit");}
-        const normalized = events.map(legacyEvent);
-        if (normalized.some(event => event === undefined)) {throw new Error("legacy telemetry contains invalid event");}
+        const normalized = events
+          .map(legacyEvent)
+          .filter((event): event is TelemetryEvent => event !== undefined);
         const lastSyncAt = legacy.lastSyncAt;
         if (lastSyncAt !== undefined && !isIsoTimestamp(lastSyncAt)) {
           throw new Error("invalid legacy telemetry sync timestamp");
         }
         this.commitMigration(
           legacyFile,
-          normalized as TelemetryEvent[],
+          normalized,
           typeof lastSyncAt === "string" ? lastSyncAt : undefined
         );
       } catch (error) {
@@ -469,10 +471,9 @@ export class TelemetryManager {
   private recoverMigrationJournal(): void {
     if (!fs.existsSync(this.migrationJournalFile)) {return;}
     try {
-      const journal = readJsonFileBounded(this.migrationJournalFile, MAX_MIGRATION_FILE_BYTES) as TelemetryMigrationJournal;
-      if (journal.schemaVersion !== MIGRATION_JOURNAL_VERSION || !Array.isArray(journal.createdFiles)) {
-        throw new Error("invalid telemetry migration journal");
-      }
+      const journal = this.validateMigrationJournal(
+        readJsonFileBounded(this.migrationJournalFile, MAX_MIGRATION_FILE_BYTES)
+      );
       if (journal.phase === "committed" || (!fs.existsSync(journal.source) && fs.existsSync(journal.migrated))) {
         unlinkIfPresent(this.migrationJournalFile);
       } else {
@@ -502,6 +503,62 @@ export class TelemetryManager {
       fs.renameSync(journal.migrated, journal.source);
     }
     unlinkIfPresent(this.migrationJournalFile);
+  }
+
+  private validateMigrationJournal(value: unknown): TelemetryMigrationJournal {
+    if (!isRecord(value) || !hasExactKeys(
+      value,
+      ["schemaVersion", "source", "migrated", "phase", "createdFiles", "metadataChanged"],
+      ["previousMetadata"]
+    ) || value.schemaVersion !== MIGRATION_JOURNAL_VERSION ||
+        typeof value.source !== "string" || typeof value.migrated !== "string" ||
+        (value.phase !== "committing" && value.phase !== "committed") ||
+        !Array.isArray(value.createdFiles) ||
+        value.createdFiles.length > MAX_MIGRATION_EVENTS ||
+        typeof value.metadataChanged !== "boolean") {
+      throw new Error("invalid telemetry migration journal");
+    }
+
+    const allowedSources = [this.outboxFile, ...this.legacyFiles];
+    if (!allowedSources.includes(value.source) || value.migrated !== `${value.source}.migrated`) {
+      throw new Error("telemetry migration journal path is outside the spool");
+    }
+
+    const createdFiles = value.createdFiles.map(entry => {
+      if (!isRecord(entry) || !hasExactKeys(entry, ["file", "event"]) ||
+          typeof entry.file !== "string" || !isTelemetryEvent(entry.event) ||
+          entry.file !== this.eventFile(entry.event.eventId)) {
+        throw new Error("invalid telemetry migration journal event path");
+      }
+      return {file: entry.file, event: entry.event};
+    });
+
+    let previousMetadata: TelemetryMetadata | undefined;
+    if (value.previousMetadata !== undefined) {
+      if (!isRecord(value.previousMetadata) ||
+          !hasExactKeys(value.previousMetadata, ["schemaVersion"], ["lastSyncAt"]) ||
+          value.previousMetadata.schemaVersion !== SPOOL_VERSION ||
+          (value.previousMetadata.lastSyncAt !== undefined &&
+            !isIsoTimestamp(value.previousMetadata.lastSyncAt))) {
+        throw new Error("invalid telemetry migration journal metadata");
+      }
+      previousMetadata = {
+        schemaVersion: SPOOL_VERSION,
+        lastSyncAt: typeof value.previousMetadata.lastSyncAt === "string"
+          ? value.previousMetadata.lastSyncAt
+          : undefined,
+      };
+    }
+
+    return {
+      schemaVersion: MIGRATION_JOURNAL_VERSION,
+      source: value.source,
+      migrated: value.migrated,
+      phase: value.phase,
+      createdFiles,
+      metadataChanged: value.metadataChanged,
+      previousMetadata,
+    };
   }
 
   private readMetadataForMigration(): TelemetryMetadata | undefined {
@@ -623,7 +680,13 @@ function isIsoTimestamp(value: unknown): value is string {
 
 function executionModeFromLegacyModel(model?: string): TelemetryExecutionMode {
   if (!model || model === "unknown") {return "unknown";}
-  if (model === "sast" || model === "static-analysis") {return "static";}
+  if ([
+    "sast",
+    "static-analysis",
+    "comprehensive-scan",
+    "quality-tools",
+    "local static scanners + quality analysis",
+  ].includes(model)) {return "static";}
   if (model === "ollama" || model === "lmstudio") {return "local-ai";}
   return "cloud-ai";
 }

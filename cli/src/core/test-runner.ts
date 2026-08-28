@@ -29,6 +29,49 @@ export interface CoverageResult {
   statements: number;
 }
 
+interface JestAssertionReport {
+  status: string;
+  fullName?: string;
+  title: string;
+  failureMessages?: string[];
+}
+
+interface JestSuiteReport {
+  name: string;
+  status: string;
+  message?: string;
+  assertionResults?: JestAssertionReport[];
+}
+
+interface JestJsonReport {
+  startTime?: number;
+  endTime?: number;
+  testResults?: JestSuiteReport[];
+}
+
+interface PytestJsonReport {
+  duration?: number;
+  summary?: {
+    total?: number;
+    passed?: number;
+    failed?: number;
+    skipped?: number;
+  };
+  collectors?: Array<{outcome?: string; longrepr?: string}>;
+  tests?: Array<{
+    outcome?: string;
+    nodeid: string;
+    call?: {longrepr?: string};
+  }>;
+}
+
+interface GoTestEvent {
+  Action?: string;
+  Package?: string;
+  Test?: string;
+  Output?: string;
+}
+
 export class TestRunner {
   /**
    * Auto-detect and run tests for the project
@@ -129,7 +172,7 @@ export class TestRunner {
       if (!fs.existsSync(reportPath)) {
         throw new Error(`Jest exited ${processResult.status} without producing a JSON report`);
       }
-      const result = JSON.parse(fs.readFileSync(reportPath, 'utf8'));
+      const result = JSON.parse(fs.readFileSync(reportPath, 'utf8')) as JestJsonReport;
 
       const failures: TestFailure[] = [];
       let totalTests = 0;
@@ -138,7 +181,8 @@ export class TestRunner {
       let skipped = 0;
 
       for (const testFile of result.testResults || []) {
-        for (const testCase of testFile.assertionResults || []) {
+        const assertionResults = testFile.assertionResults || [];
+        for (const testCase of assertionResults) {
           totalTests++;
           if (testCase.status === 'passed') {passed++;}
           else if (testCase.status === 'failed') {
@@ -149,6 +193,15 @@ export class TestRunner {
               file: testFile.name,
             });
           } else if (testCase.status === 'skipped') {skipped++;}
+        }
+        if (testFile.status === 'failed' && assertionResults.length === 0) {
+          totalTests++;
+          failed++;
+          failures.push({
+            testName: testFile.name || 'Jest test suite',
+            error: testFile.message || 'Test suite failed to run',
+            file: testFile.name,
+          });
         }
       }
 
@@ -242,10 +295,26 @@ export class TestRunner {
         if (!parsed) {
           throw new Error(`pytest exited ${processResult.status} without a parseable report`);
         }
+        if (processResult.status !== 0 && parsed.failed === 0) {
+          throw new Error(
+            `pytest exited ${processResult.status} before completing tests: ${output.trim()}`
+          );
+        }
         return parsed;
       }
 
-      const report = JSON.parse(fs.readFileSync(reportPath, 'utf-8'));
+      const report = JSON.parse(fs.readFileSync(reportPath, 'utf-8')) as PytestJsonReport;
+      const reportedFailures = report.summary?.failed || 0;
+      if (processResult.status !== 0 && reportedFailures === 0) {
+        const collectionFailure = (report.collectors || []).find(
+          (collector: {outcome?: string}) => collector.outcome === 'failed'
+        );
+        const detail = collectionFailure?.longrepr || output.trim() ||
+          'no failed test assertions were reported';
+        throw new Error(
+          `pytest exited ${processResult.status} before completing tests: ${detail}`
+        );
+      }
 
       const failures: TestFailure[] = [];
       for (const test of report.tests || []) {
@@ -354,12 +423,19 @@ export class TestRunner {
       let failed = 0;
       let skipped = 0;
       const failures: TestFailure[] = [];
+      const packageOutput = new Map<string, string[]>();
+      const packagesWithFailedTests = new Set<string>();
 
       // Parse line-delimited JSON
       const lines = output.split('\n').filter(l => l.trim());
       for (const line of lines) {
         try {
-          const event = JSON.parse(line);
+          const event = JSON.parse(line) as GoTestEvent;
+          if (event.Package && event.Output) {
+            const messages = packageOutput.get(event.Package) || [];
+            messages.push(event.Output);
+            packageOutput.set(event.Package, messages);
+          }
           if (event.Test && event.Action) {
             if (event.Action === 'pass') {
               totalTests++;
@@ -367,6 +443,7 @@ export class TestRunner {
             } else if (event.Action === 'fail') {
               totalTests++;
               failed++;
+              if (event.Package) {packagesWithFailedTests.add(event.Package);}
               failures.push({
                 testName: event.Test,
                 error: event.Output || 'Test failed',
@@ -375,10 +452,26 @@ export class TestRunner {
               totalTests++;
               skipped++;
             }
+          } else if (event.Action === 'fail' && event.Package &&
+                     !packagesWithFailedTests.has(event.Package)) {
+            totalTests++;
+            failed++;
+            failures.push({
+              testName: event.Package,
+              error: packageOutput.get(event.Package)?.join('').trim() || 'Go package failed',
+            });
           }
         } catch {
           // Skip invalid JSON lines
         }
+      }
+
+      if (processResult.status !== 0 && failed === 0) {
+        const diagnostic = [...packageOutput.values()].flat().join('').trim() ||
+          processResult.stderr.trim() || processResult.stdout.trim() || 'no diagnostics were reported';
+        throw new Error(
+          `go test exited ${processResult.status} without reporting a test or package failure: ${diagnostic}`
+        );
       }
 
       return {

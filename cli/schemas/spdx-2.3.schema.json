@@ -735,6 +735,6 @@
       }
     }
   },
-  "required" : [ "SPDXID", "creationInfo", "dataLicense", "name", "spdxVersion" ],
+  "required" : [ "SPDXID", "creationInfo", "dataLicense", "documentNamespace", "name", "spdxVersion" ],
   "additionalProperties" : false
 }

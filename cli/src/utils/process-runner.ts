@@ -43,6 +43,12 @@ const RUNTIME_INJECTION_ENVIRONMENT = new Set([
   'NPM_CONFIG_USERCONFIG',
   'npm_config_userconfig',
   'PIP_CONFIG_FILE',
+  'LD_LIBRARY_PATH',
+  'LD_AUDIT',
+  'DYLD_FRAMEWORK_PATH',
+  'DYLD_FALLBACK_LIBRARY_PATH',
+  'NODE_EXTRA_CA_CERTS',
+  'NODE_REPL_EXTERNAL_MODULE',
 ]);
 
 function isBlockedEnvironmentName(name: string): boolean {
@@ -137,7 +143,7 @@ export function runProcess(
   return {
     command: invocation.command,
     args: [...invocation.args],
-    status: result.status ?? (result.error ? 2 : 0),
+    status: result.status ?? (result.error ? 2 : 1),
     stdout: typeof result.stdout === 'string' ? result.stdout : result.stdout?.toString() || '',
     stderr: typeof result.stderr === 'string' ? result.stderr : result.stderr?.toString() || '',
     signal: result.signal,

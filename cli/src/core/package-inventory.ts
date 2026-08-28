@@ -60,15 +60,30 @@ function relative(root: string, file: string): string {
   return path.relative(root, file).split(path.sep).join('/') || '.';
 }
 
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 function isWithinRoot(root: string, candidate: string): boolean {
   const rel = path.relative(root, candidate);
   return rel === '' || (!rel.startsWith(`..${path.sep}`) && rel !== '..' && !path.isAbsolute(rel));
 }
 
-function findInventoryFiles(root: string): string[] {
+function findInventoryFiles(root: string, errors: PackageInventoryError[]): string[] {
   const files: string[] = [];
   const visit = (directory: string): void => {
-    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(directory, { withFileTypes: true });
+    } catch (error: unknown) {
+      errors.push({
+        file: relative(root, directory),
+        code: 'INVALID_MANIFEST',
+        message: `Unable to read inventory directory: ${errorMessage(error)}`,
+      });
+      return;
+    }
+    for (const entry of entries) {
       if (IGNORED_DIRS.has(entry.name)) {continue;}
       const absolute = path.join(directory, entry.name);
       if (entry.isSymbolicLink()) {continue;}
@@ -166,8 +181,8 @@ function parseNpmLock(
       }
     };
     walk(data.dependencies, []);
-  } catch (error: any) {
-    errors.push({ file: rel, code: 'INVALID_MANIFEST', message: `Unable to parse npm lockfile: ${error?.message || error}` });
+  } catch (error: unknown) {
+    errors.push({ file: rel, code: 'INVALID_MANIFEST', message: `Unable to parse npm lockfile: ${errorMessage(error)}` });
   }
 }
 
@@ -208,8 +223,8 @@ function parseExactPackageJson(
         });
       }
     }
-  } catch (error: any) {
-    errors.push({ file: rel, code: 'INVALID_MANIFEST', message: `Unable to parse package.json: ${error?.message || error}` });
+  } catch (error: unknown) {
+    errors.push({ file: rel, code: 'INVALID_MANIFEST', message: `Unable to parse package.json: ${errorMessage(error)}` });
   }
 }
 
@@ -229,8 +244,8 @@ function parsePnpmLock(root: string, file: string, coordinates: DependencyCoordi
         lockfilePath: rel, dependencyPaths: [rawKey],
       });
     }
-  } catch (error: any) {
-    errors.push({ file: rel, code: 'INVALID_MANIFEST', message: `Unable to parse pnpm lockfile: ${error?.message || error}` });
+  } catch (error: unknown) {
+    errors.push({ file: rel, code: 'INVALID_MANIFEST', message: `Unable to parse pnpm lockfile: ${errorMessage(error)}` });
   }
 }
 
@@ -238,62 +253,118 @@ function parseYarnLock(root: string, file: string, coordinates: DependencyCoordi
   const rel = relative(root, file);
   try {
     const lines = fs.readFileSync(file, 'utf8').split(/\r?\n/);
+    let descriptor: string | undefined;
     let packageName: string | undefined;
+    let resolved = false;
+    const finishRecord = (): void => {
+      if (descriptor && descriptor !== '__metadata' && !resolved) {
+        errors.push({
+          file: rel,
+          code: 'UNSUPPORTED_FORMAT',
+          message: `Yarn record is missing a supported exact version: ${descriptor.slice(0, 120)}`,
+        });
+      }
+      descriptor = undefined;
+      packageName = undefined;
+      resolved = false;
+    };
     for (const line of lines) {
       if (line && !/^\s/.test(line) && line.endsWith(':')) {
-        const descriptor = line.slice(0, -1).split(',')[0].trim().replace(/^['"]|['"]$/g, '');
+        finishRecord();
+        descriptor = line.slice(0, -1).split(',')[0].trim().replace(/^['"]|['"]$/g, '');
         const scoped = descriptor.match(/^(@[^/]+\/[^@]+)@/);
         const plain = descriptor.match(/^([^@]+)@/);
         packageName = scoped?.[1] || plain?.[1];
       } else if (packageName) {
-        const versionMatch = line.match(/^\s+version\s+["']?([^"'\s]+)["']?/);
+        const versionMatch = line.match(/^\s+version(?::\s*|\s+)["']?([^"'\s]+)["']?/);
         if (versionMatch && semver.valid(versionMatch[1], { loose: true })) {
           addCoordinate(coordinates, {
             ecosystem: 'npm', osvEcosystem: 'npm', name: packageName, exactVersion: versionMatch[1],
             scope: 'unknown', direct: false, manifestPath: relative(root, path.join(path.dirname(file), 'package.json')),
             lockfilePath: rel, dependencyPaths: [packageName],
           });
-          packageName = undefined;
+          resolved = true;
         }
       }
     }
-  } catch (error: any) {
-    errors.push({ file: rel, code: 'INVALID_MANIFEST', message: `Unable to parse yarn lockfile: ${error?.message || error}` });
+    finishRecord();
+  } catch (error: unknown) {
+    errors.push({ file: rel, code: 'INVALID_MANIFEST', message: `Unable to parse yarn lockfile: ${errorMessage(error)}` });
   }
 }
 
 function parseRequirements(root: string, file: string, coordinates: DependencyCoordinate[], errors: PackageInventoryError[]): void {
   const rel = relative(root, file);
-  for (const raw of fs.readFileSync(file, 'utf8').split(/\r?\n/)) {
-    const line = raw.trim();
-    if (!line || line.startsWith('#') || line.startsWith('-')) {continue;}
-    const match = line.match(/^([A-Za-z0-9_.-]+)==([^;\s\\]+)(?:\s|;|$)/);
-    if (!match) {
-      errors.push({ file: rel, code: 'UNRESOLVED_VERSION', message: `Python requirement is not pinned: ${line.slice(0, 120)}` });
-      continue;
+  try {
+    for (const raw of fs.readFileSync(file, 'utf8').split(/\r?\n/)) {
+      const line = raw.trim();
+      if (!line || line.startsWith('#')) {continue;}
+      if (/^(?:-r(?:\s|$)|--requirement(?:=|\s)|-e(?:\s|$)|--editable(?:=|\s))/.test(line)) {
+        errors.push({
+          file: rel,
+          code: 'UNSUPPORTED_FORMAT',
+          message: `Python requirement directive is not followed automatically: ${line.slice(0, 120)}`,
+        });
+        continue;
+      }
+      if (line.startsWith('-')) {continue;}
+      const match = line.match(/^([A-Za-z0-9_.-]+)==([^;\s\\]+)(?:\s|;|$)/);
+      if (!match) {
+        errors.push({ file: rel, code: 'UNRESOLVED_VERSION', message: `Python requirement is not pinned: ${line.slice(0, 120)}` });
+        continue;
+      }
+      addCoordinate(coordinates, {
+        ecosystem: 'pip', osvEcosystem: 'PyPI', name: match[1], exactVersion: match[2],
+        scope: 'runtime', direct: true, manifestPath: rel, lockfilePath: rel, dependencyPaths: [match[1]],
+      });
     }
-    addCoordinate(coordinates, {
-      ecosystem: 'pip', osvEcosystem: 'PyPI', name: match[1], exactVersion: match[2],
-      scope: 'runtime', direct: true, manifestPath: rel, lockfilePath: rel, dependencyPaths: [match[1]],
+  } catch (error: unknown) {
+    errors.push({
+      file: rel,
+      code: 'INVALID_MANIFEST',
+      message: `Unable to parse requirements.txt: ${errorMessage(error)}`,
     });
   }
 }
 
-function parseGoMod(root: string, file: string, coordinates: DependencyCoordinate[]): void {
+function parseGoMod(
+  root: string,
+  file: string,
+  coordinates: DependencyCoordinate[],
+  errors: PackageInventoryError[]
+): void {
   const rel = relative(root, file);
-  let inRequire = false;
-  for (const raw of fs.readFileSync(file, 'utf8').split(/\r?\n/)) {
-    const line = raw.trim();
-    if (line === 'require (') {inRequire = true; continue;}
-    if (inRequire && line === ')') {inRequire = false; continue;}
-    const content = line.replace(/^require\s+/, '');
-    if (!inRequire && content === line) {continue;}
-    const match = content.match(/^([^\s]+)\s+(v[^\s]+)(?:\s+\/\/\s+indirect)?$/);
-    if (!match) {continue;}
-    addCoordinate(coordinates, {
-      ecosystem: 'go', osvEcosystem: 'Go', name: match[1], exactVersion: match[2],
-      scope: 'runtime', direct: !line.includes('// indirect'), manifestPath: rel, lockfilePath: rel,
-      dependencyPaths: [match[1]],
+  try {
+    let inRequire = false;
+    for (const raw of fs.readFileSync(file, 'utf8').split(/\r?\n/)) {
+      const line = raw.trim();
+      if (line === 'require (') {inRequire = true; continue;}
+      if (inRequire && line === ')') {inRequire = false; continue;}
+      const isRequireLine = inRequire || /^require\s+/.test(line);
+      if (!isRequireLine) {continue;}
+      const content = line.replace(/^require\s+/, '');
+      const withoutComment = content.replace(/\s+\/\/.*$/, '').trim();
+      if (!withoutComment) {continue;}
+      const match = withoutComment.match(/^([^\s]+)\s+(v[^\s]+)$/);
+      if (!match) {
+        errors.push({
+          file: rel,
+          code: 'UNRESOLVED_VERSION',
+          message: `Go requirement is not pinned to an exact version: ${line.slice(0, 120)}`,
+        });
+        continue;
+      }
+      addCoordinate(coordinates, {
+        ecosystem: 'go', osvEcosystem: 'Go', name: match[1], exactVersion: match[2],
+        scope: 'runtime', direct: !line.includes('// indirect'), manifestPath: rel, lockfilePath: rel,
+        dependencyPaths: [match[1]],
+      });
+    }
+  } catch (error: unknown) {
+    errors.push({
+      file: rel,
+      code: 'INVALID_MANIFEST',
+      message: `Unable to parse go.mod: ${errorMessage(error)}`,
     });
   }
 }
@@ -312,24 +383,37 @@ function parseCargoLock(root: string, file: string, coordinates: DependencyCoord
         lockfilePath: rel, dependencyPaths: [name],
       });
     }
-  } catch (error: any) {
-    errors.push({ file: rel, code: 'INVALID_MANIFEST', message: `Unable to parse Cargo.lock: ${error?.message || error}` });
+  } catch (error: unknown) {
+    errors.push({ file: rel, code: 'INVALID_MANIFEST', message: `Unable to parse Cargo.lock: ${errorMessage(error)}` });
   }
 }
 
-function parseGemfileLock(root: string, file: string, coordinates: DependencyCoordinate[]): void {
+function parseGemfileLock(
+  root: string,
+  file: string,
+  coordinates: DependencyCoordinate[],
+  errors: PackageInventoryError[]
+): void {
   const rel = relative(root, file);
-  let inSpecs = false;
-  for (const line of fs.readFileSync(file, 'utf8').split(/\r?\n/)) {
-    if (/^\s{2}specs:$/.test(line)) {inSpecs = true; continue;}
-    if (inSpecs && line && !/^\s/.test(line)) {inSpecs = false;}
-    if (!inSpecs) {continue;}
-    const match = line.match(/^\s{4}([A-Za-z0-9_.-]+) \(([^ )]+)\)/);
-    if (!match) {continue;}
-    addCoordinate(coordinates, {
-      ecosystem: 'ruby', osvEcosystem: 'RubyGems', name: match[1], exactVersion: match[2],
-      scope: 'unknown', direct: false, manifestPath: relative(root, path.join(path.dirname(file), 'Gemfile')),
-      lockfilePath: rel, dependencyPaths: [match[1]],
+  try {
+    let inSpecs = false;
+    for (const line of fs.readFileSync(file, 'utf8').split(/\r?\n/)) {
+      if (/^\s{2}specs:$/.test(line)) {inSpecs = true; continue;}
+      if (inSpecs && line && !/^\s/.test(line)) {inSpecs = false;}
+      if (!inSpecs) {continue;}
+      const match = line.match(/^\s{4}([A-Za-z0-9_.-]+) \(([^ )]+)\)/);
+      if (!match) {continue;}
+      addCoordinate(coordinates, {
+        ecosystem: 'ruby', osvEcosystem: 'RubyGems', name: match[1], exactVersion: match[2],
+        scope: 'unknown', direct: false, manifestPath: relative(root, path.join(path.dirname(file), 'Gemfile')),
+        lockfilePath: rel, dependencyPaths: [match[1]],
+      });
+    }
+  } catch (error: unknown) {
+    errors.push({
+      file: rel,
+      code: 'INVALID_MANIFEST',
+      message: `Unable to parse Gemfile.lock: ${errorMessage(error)}`,
     });
   }
 }
@@ -338,15 +422,62 @@ function parsePom(root: string, file: string, coordinates: DependencyCoordinate[
   const rel = relative(root, file);
   try {
     const xml = fs.readFileSync(file, 'utf8');
-    for (const block of xml.match(/<dependency>[\s\S]*?<\/dependency>/g) || []) {
+    const properties = new Map<string, string>();
+    const propertiesBlock = xml.match(/<properties(?:\s[^>]*)?>([\s\S]*?)<\/properties>/)?.[1] || '';
+    const propertyPattern = /<([A-Za-z_][A-Za-z0-9_.-]*)>\s*([^<]+?)\s*<\/\1>/g;
+    for (const match of propertiesBlock.matchAll(propertyPattern)) {
+      properties.set(match[1], match[2].trim());
+    }
+    const exactVersion = (value: string): string | undefined => {
+      const normalized = value.trim();
+      if (!normalized || normalized.includes('${') || normalized.includes('[') || normalized.includes(']') || /[(),]/.test(normalized) || /&[^;]+;/.test(normalized)) {return undefined;}
+      if (/^(?:LATEST|RELEASE)$/i.test(normalized)) {return undefined;}
+      return normalized;
+    };
+    const resolveVersion = (raw: string | undefined): string | undefined => {
+      let value = raw?.trim();
+      const visited = new Set<string>();
+      while (value) {
+        const property = value.match(/^\$\{([A-Za-z_][A-Za-z0-9_.-]*)\}$/)?.[1];
+        if (!property) {return exactVersion(value);}
+        if (visited.has(property)) {return undefined;}
+        visited.add(property);
+        value = properties.get(property)?.trim();
+      }
+      return undefined;
+    };
+    const dependencyName = (block: string): { group?: string; artifact?: string; name?: string } => {
       const group = block.match(/<groupId>\s*([^<\s]+)\s*<\/groupId>/)?.[1];
       const artifact = block.match(/<artifactId>\s*([^<\s]+)\s*<\/artifactId>/)?.[1];
-      const version = block.match(/<version>\s*([^<\s]+)\s*<\/version>/)?.[1];
-      if (!group || !artifact || !version || version.includes('${')) {continue;}
-      const name = `${group}:${artifact}`;
+      return { group, artifact, name: group && artifact ? `${group}:${artifact}` : undefined };
+    };
+    const managedVersions = new Map<string, string | undefined>();
+    const dependencyManagementPattern = /<dependencyManagement(?:\s[^>]*)?>[\s\S]*?<\/dependencyManagement>/g;
+    const dependencyManagement = xml.match(dependencyManagementPattern) || [];
+    for (const section of dependencyManagement) {
+      for (const block of section.match(/<dependency(?:\s[^>]*)?>[\s\S]*?<\/dependency>/g) || []) {
+        const { name } = dependencyName(block);
+        const version = resolveVersion(block.match(/<version>\s*([^<]+?)\s*<\/version>/)?.[1]);
+        if (name) {managedVersions.set(name, version);}
+      }
+    }
+    const dependencies = xml.replace(dependencyManagementPattern, '');
+    for (const block of dependencies.match(/<dependency(?:\s[^>]*)?>[\s\S]*?<\/dependency>/g) || []) {
+      const { group, artifact, name } = dependencyName(block);
+      const declaredVersion = block.match(/<version>\s*([^<]+?)\s*<\/version>/)?.[1];
+      const version = declaredVersion ? resolveVersion(declaredVersion) : name ? managedVersions.get(name) : undefined;
+      if (!group || !artifact || !name) {continue;}
+      if (!version) {
+        errors.push({
+          file: rel,
+          code: 'UNRESOLVED_VERSION',
+          message: `Maven dependency version is unresolved for ${name}`,
+        });
+        continue;
+      }
       addCoordinate(coordinates, {
         ecosystem: 'maven', osvEcosystem: 'Maven', name, exactVersion: version,
-        scope: block.includes('<scope>test</scope>') ? 'development' : 'runtime', direct: true,
+        scope: /<scope>\s*test\s*<\/scope>/.test(block) ? 'development' : 'runtime', direct: true,
         manifestPath: rel, lockfilePath: rel, dependencyPaths: [name],
       });
     }
@@ -359,7 +490,12 @@ function mergeCoordinates(coordinates: DependencyCoordinate[]): DependencyCoordi
   const merged = new Map<string, DependencyCoordinate>();
   const scopeRank: Record<DependencyScope, number> = { unknown: 0, development: 1, optional: 2, runtime: 3 };
   for (const coordinate of coordinates) {
-    const key = [coordinate.ecosystem, coordinate.name, coordinate.exactVersion].join('\0');
+    const key = [
+      coordinate.ecosystem,
+      coordinate.name,
+      coordinate.exactVersion,
+      coordinate.lockfilePath,
+    ].join('\0');
     const existing = merged.get(key);
     if (!existing) {
       merged.set(key, { ...coordinate });
@@ -372,8 +508,8 @@ function mergeCoordinates(coordinates: DependencyCoordinate[]): DependencyCoordi
     }
   }
   return [...merged.values()].sort((a, b) =>
-    `${a.osvEcosystem}\0${a.name}\0${a.exactVersion}\0${a.scope}`.localeCompare(
-      `${b.osvEcosystem}\0${b.name}\0${b.exactVersion}\0${b.scope}`
+    `${a.osvEcosystem}\0${a.name}\0${a.exactVersion}\0${a.lockfilePath}\0${a.scope}`.localeCompare(
+      `${b.osvEcosystem}\0${b.name}\0${b.exactVersion}\0${b.lockfilePath}\0${b.scope}`
     )
   );
 }
@@ -383,6 +519,7 @@ function inventoryDigest(coordinates: DependencyCoordinate[]): string {
     ecosystem: coordinate.osvEcosystem,
     name: coordinate.name,
     version: coordinate.exactVersion,
+    lockfilePath: coordinate.lockfilePath,
     scope: coordinate.scope,
   })))).digest('hex');
 }
@@ -400,7 +537,18 @@ export function collectPackageInventory(repoPath: string = process.cwd()): Packa
   if (!fs.statSync(root).isDirectory()) {throw new Error(`Repository path is not a directory: ${repoPath}`);}
   const coordinates: DependencyCoordinate[] = [];
   const errors: PackageInventoryError[] = [];
-  const files = findInventoryFiles(root).filter(file => isWithinRoot(root, fs.realpathSync(file)));
+  const files = findInventoryFiles(root, errors).filter(file => {
+    try {
+      return isWithinRoot(root, fs.realpathSync(file));
+    } catch (error: unknown) {
+      errors.push({
+        file: relative(root, file),
+        code: 'INVALID_MANIFEST',
+        message: `Unable to resolve inventory file: ${errorMessage(error)}`,
+      });
+      return false;
+    }
+  });
   const names = new Set(files.map(file => relative(root, file)));
 
   for (const file of files) {
@@ -409,9 +557,9 @@ export function collectPackageInventory(repoPath: string = process.cwd()): Packa
     else if (name === 'pnpm-lock.yaml') {parsePnpmLock(root, file, coordinates, errors);}
     else if (name === 'yarn.lock') {parseYarnLock(root, file, coordinates, errors);}
     else if (name === 'requirements.txt') {parseRequirements(root, file, coordinates, errors);}
-    else if (name === 'go.mod') {parseGoMod(root, file, coordinates);}
+    else if (name === 'go.mod') {parseGoMod(root, file, coordinates, errors);}
     else if (name === 'Cargo.lock') {parseCargoLock(root, file, coordinates, errors);}
-    else if (name === 'Gemfile.lock') {parseGemfileLock(root, file, coordinates);}
+    else if (name === 'Gemfile.lock') {parseGemfileLock(root, file, coordinates, errors);}
     else if (name === 'pom.xml') {parsePom(root, file, coordinates, errors);}
   }
   for (const file of files.filter(file => path.basename(file) === 'package.json')) {

@@ -28,8 +28,8 @@
     "warnings": 12
   },
   "src/commands/init.ts": {
-    "errors": 45,
-    "warnings": 47
+    "errors": 44,
+    "warnings": 46
   },
   "src/commands/metrics.ts": {
     "errors": 0,
@@ -232,7 +232,7 @@
     "warnings": 0
   },
   "src/core/test-runner.ts": {
-    "errors": 70,
+    "errors": 25,
     "warnings": 0
   },
   "src/core/usage-tracker.ts": {

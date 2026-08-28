@@ -243,9 +243,24 @@ export class ScanEngine {
         required: true,
         run: async () => {
           const patternFindings: Finding[] = [];
+          let skippedFiles = 0;
           for (const file of files) {
-            const content = fs.readFileSync(file.path, 'utf-8');
-            patternFindings.push(...scanFileForVulnerabilities(file.path, content));
+            try {
+              const content = fs.readFileSync(file.path, 'utf-8');
+              patternFindings.push(...scanFileForVulnerabilities(file.path, content));
+            } catch {
+              skippedFiles += 1;
+            }
+          }
+          if (skippedFiles > 0) {
+            return {
+              findings: patternFindings,
+              error: {
+                code: 'PATTERN_SCAN_PARTIAL',
+                message: `Pattern coverage skipped ${skippedFiles} unreadable or missing file(s).`,
+                retryable: true,
+              },
+            };
           }
           return patternFindings;
         },
@@ -535,9 +550,15 @@ export class ScanEngine {
       }
     );
 
-    return files
-      .map(file => ({ path: assertInsideRepository(file, repoRoot) }))
-      .sort((a, b) => a.path.localeCompare(b.path));
+    const resolved: ScanFile[] = [];
+    for (const file of files) {
+      try {
+        resolved.push({ path: assertInsideRepository(file, repoRoot) });
+      } catch {
+        // Files can disappear or become unreadable between globbing and canonicalization.
+      }
+    }
+    return resolved.sort((a, b) => a.path.localeCompare(b.path));
   }
 }
 

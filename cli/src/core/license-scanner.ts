@@ -12,6 +12,8 @@ import { runProcess } from '../utils/process-runner';
 export interface LicenseFinding {
   package: string;
   version: string;
+  scope?: DependencyCoordinate['scope'];
+  direct?: boolean;
   license: string; // SPDX identifier
   category: 'permissive' | 'weak-copyleft' | 'strong-copyleft' | 'proprietary' | 'unknown';
   risk: 'critical' | 'high' | 'medium' | 'low' | 'info';
@@ -113,7 +115,7 @@ export interface CycloneDx17Component {
   name: string;
   version: string;
   purl: string;
-  scope: 'required';
+  scope?: 'required' | 'optional' | 'excluded';
   licenses: Array<{ license: { id?: string; name?: string } }>;
 }
 
@@ -219,6 +221,8 @@ export class LicenseScanner {
     return {
       package: coordinate.name,
       version: coordinate.exactVersion,
+      scope: coordinate.scope,
+      direct: coordinate.direct,
       license,
       category: this.categorizeLicense(license),
       risk: 'info',
@@ -265,8 +269,21 @@ export class LicenseScanner {
     for (const value of values) {
       const key = `${value.source}\u0000${value.package}\u0000${value.version}`;
       const existing = findings.get(key);
-      if (!existing || (existing.license === 'Unknown' && value.license !== 'Unknown')) {
+      if (!existing) {
         findings.set(key, value);
+      } else if (existing.license === 'Unknown' && value.license !== 'Unknown') {
+        findings.set(key, {
+          ...value,
+          scope: existing.scope ?? value.scope,
+          direct: existing.direct ?? value.direct,
+        });
+      } else if ((existing.scope === undefined && value.scope !== undefined) ||
+                 (existing.direct === undefined && value.direct !== undefined)) {
+        findings.set(key, {
+          ...existing,
+          scope: existing.scope ?? value.scope,
+          direct: existing.direct ?? value.direct,
+        });
       }
     }
     return [...findings.values()].sort((left, right) =>
@@ -746,7 +763,7 @@ export class LicenseScanner {
           name: finding.package,
           version: finding.version,
           purl,
-          scope: 'required',
+          scope: cycloneDxScope(finding.scope),
           licenses: [{
             license: isSimpleSpdxIdentifier(finding.license)
               ? { id: finding.license }
@@ -767,7 +784,12 @@ export class LicenseScanner {
         },
         components,
         dependencies: [
-          { ref: rootReference, dependsOn: components.map(value => value['bom-ref']) },
+          {
+            ref: rootReference,
+            dependsOn: components.flatMap((value, index) =>
+              isDirectInstallDependency(ordered[index]) ? [value['bom-ref']] : []
+            ),
+          },
           ...components.map(value => ({ ref: value['bom-ref'], dependsOn: [] })),
         ],
       };
@@ -838,6 +860,19 @@ function runLicenseTool(
     throw new Error(`${command} exited ${result.status} without usable license metadata`);
   }
   return result.stdout;
+}
+
+function cycloneDxScope(
+  scope: DependencyCoordinate['scope'] | undefined
+): CycloneDx17Component['scope'] {
+  if (scope === 'development') {return 'excluded';}
+  if (scope === 'optional') {return 'optional';}
+  if (scope === 'unknown') {return undefined;}
+  return 'required';
+}
+
+function isDirectInstallDependency(finding: LicenseFinding): boolean {
+  return finding.direct === true && finding.scope !== 'development';
 }
 
 function stableIdentifier(value: string): string {

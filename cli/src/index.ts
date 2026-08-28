@@ -431,7 +431,7 @@ async function main(): Promise<void> {
     // Silent fail
   });
 
-  program.parse();
+  await program.parseAsync();
 }
 
 main().catch((error) => {

@@ -13,6 +13,15 @@ type SetupMode = 'cloud' | 'local' | 'static';
 const logger = createDebugLogger('init');
 const perfTracker = createPerformanceTracker('guardscan init');
 
+export function validateOfflineLocalEndpoint(
+  provider: AIProvider,
+  endpoint: string
+): true | string {
+  return ProviderFactory.getEndpointTrustWarning(provider, endpoint)
+    ? 'Offline local AI requires a literal loopback endpoint such as 127.0.0.1 or ::1.'
+    : true;
+}
+
 export async function initCommand(): Promise<void> {
   logger.debug('Init command started');
   perfTracker.start('init-total');
@@ -303,6 +312,8 @@ async function setupLocalAI(config: any): Promise<void> {
       message: 'Enter API endpoint:',
       default: (answers: any) =>
         answers.provider === 'ollama' ? 'http://127.0.0.1:11434' : 'http://127.0.0.1:1234',
+      validate: (value: string, answers: { provider: AIProvider }) =>
+        validateOfflineLocalEndpoint(answers.provider, value),
     },
     {
       type: 'confirm',
@@ -312,21 +323,18 @@ async function setupLocalAI(config: any): Promise<void> {
     },
   ]);
 
+  const endpointValidation = validateOfflineLocalEndpoint(
+    answers.provider as AIProvider,
+    answers.apiEndpoint
+  );
+  if (endpointValidation !== true) {throw new Error(endpointValidation);}
   config.provider = answers.provider as AIProvider;
   config.apiEndpoint = answers.apiEndpoint;
   config.telemetryEnabled = answers.telemetry;
   config.offlineMode = true; // Always offline for local AI
 
   console.log(chalk.green('\n✓ Configuration saved'));
-  const trustWarning = ProviderFactory.getEndpointTrustWarning(
-    config.provider,
-    config.apiEndpoint
-  );
-  if (trustWarning) {
-    console.log(chalk.yellow(`⚠ ${trustWarning}`));
-  } else {
-    console.log(chalk.green('✓ Configured to use a loopback AI endpoint'));
-  }
+  console.log(chalk.green('✓ Configured to use a loopback AI endpoint'));
   console.log(chalk.gray('\nℹ  Make sure your local AI server is running:'));
   console.log(chalk.gray(`   ${answers.apiEndpoint}`));
 }

@@ -16,10 +16,14 @@ export interface EffectiveExecutionPolicy {
   allowPartial: boolean;
 }
 
-export function resolveExecutionPolicy(input: ExecutionPolicyInput = {}): EffectiveExecutionPolicy {
-  const environmentOffline = ['true', '1'].includes(
+export function environmentRequestsOffline(): boolean {
+  return ['true', '1'].includes(
     process.env.GUARDSCAN_OFFLINE?.trim().toLowerCase() || ''
   );
+}
+
+export function resolveExecutionPolicy(input: ExecutionPolicyInput = {}): EffectiveExecutionPolicy {
+  const environmentOffline = environmentRequestsOffline();
   const offline = input.configOffline === true ||
     input.offline === true ||
     input.cloud === false ||
@@ -32,6 +36,6 @@ export function resolveExecutionPolicy(input: ExecutionPolicyInput = {}): Effect
     runProjectCode,
     isolateProjectNetwork: runProjectCode && input.isolateProjectNetwork === true,
     includeCve,
-    allowPartial: includeCve && input.allowPartial === true,
+    allowPartial: input.allowPartial === true,
   };
 }

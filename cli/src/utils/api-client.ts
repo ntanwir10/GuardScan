@@ -46,6 +46,7 @@ export class TelemetryDeliveryError extends Error {
 export class APIClient {
   private client?: AxiosInstance;
   private baseUrl: string;
+  private configurationError?: TelemetryDeliveryError;
 
   constructor(baseUrl?: string) {
     this.baseUrl = (
@@ -56,7 +57,15 @@ export class APIClient {
     ).replace(/\/+$/, "");
 
     if (this.baseUrl) {
-      this.validateBaseUrl(this.baseUrl);
+      try {
+        this.validateBaseUrl(this.baseUrl);
+      } catch (error) {
+        if (error instanceof TelemetryDeliveryError) {
+          this.configurationError = error;
+          return;
+        }
+        throw error;
+      }
       this.client = axios.create({
         baseURL: this.baseUrl,
         timeout: API_CONSTANTS.API_CLIENT_TIMEOUT,
@@ -71,6 +80,9 @@ export class APIClient {
   }
 
   async sendTelemetry(request: TelemetryRequest): Promise<TelemetryResponse> {
+    if (this.configurationError) {
+      throw this.configurationError;
+    }
     if (!this.client) {
       throw new TelemetryDeliveryError(
         "Telemetry endpoint is not configured. Set GUARDSCAN_TELEMETRY_URL.",
@@ -174,12 +186,12 @@ export class APIClient {
           retryable
         );
       }
-      throw new TelemetryDeliveryError("Telemetry delivery failed.");
+      throw new TelemetryDeliveryError("Telemetry delivery failed.", undefined, false);
     }
   }
 
   async ping(): Promise<boolean> {
-    if (!this.client) {
+    if (this.configurationError || !this.client) {
       return false;
     }
     try {
