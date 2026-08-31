@@ -154,13 +154,19 @@ export function createVulnerabilityCommand(scanner: DependencyScanner = dependen
       try {
         const config = configManager.loadOrInit({ touchLastUsed: false });
         const maxAgeDays = parseSnapshotMaxAge(config.vulnerabilities?.snapshotMaxAgeDays);
-        const { inventory, status } = scanner.snapshotStatus(path.resolve(repoPath), maxAgeDays);
+        const { inventory, status } = scanner.snapshotStatus(
+          path.resolve(repoPath),
+          maxAgeDays,
+          undefined,
+          config.vulnerabilities?.endpoint
+        );
         const kevStatus = scanner.knownExploitedStatus(maxAgeDays);
         console.log(JSON.stringify({
           schemaVersion: 'guardscan.vulnerability-snapshot-status.v1',
           exists: status.exists,
           fresh: status.fresh,
           inventoryMatches: status.inventoryMatches,
+          sourceMatches: status.sourceMatches,
           ageDays: status.ageDays,
           packages: inventory.coordinates.length,
           unresolvedPackages: inventory.errors.length,

@@ -193,6 +193,143 @@ describe('DependencyScanner OSV integration', () => {
     ]));
   });
 
+  it('parses pinned Python requirements with multiple extras', () => {
+    fs.writeFileSync(
+      path.join(repository, 'requirements.txt'),
+      'Requests [ security, tests ] == 2.32.4\n'
+    );
+
+    const inventory = collectPackageInventory(repository);
+
+    expect(inventory.coordinates).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        ecosystem: 'pip',
+        name: 'requests',
+        exactVersion: '2.32.4',
+        direct: true,
+      }),
+    ]));
+    expect(inventory.errors).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ file: 'requirements.txt' }),
+    ]));
+  });
+
+  it('marks only package.json dependencies direct in npm v1 lockfiles', () => {
+    fs.writeFileSync(path.join(repository, 'package.json'), JSON.stringify({
+      dependencies: { direct: '1.0.0' },
+    }));
+    fs.writeFileSync(path.join(repository, 'package-lock.json'), JSON.stringify({
+      lockfileVersion: 1,
+      dependencies: {
+        direct: { version: '1.0.0' },
+        hoisted: { version: '2.0.0' },
+      },
+    }));
+
+    const inventory = collectPackageInventory(repository);
+
+    expect(inventory.coordinates).toEqual(expect.arrayContaining([
+      expect.objectContaining({ ecosystem: 'npm', name: 'direct', direct: true }),
+      expect.objectContaining({ ecosystem: 'npm', name: 'hoisted', direct: false }),
+    ]));
+  });
+
+  it('applies remote Go module replacements and rejects local replacements', () => {
+    fs.writeFileSync(path.join(repository, 'go.mod'), [
+      'module example.test/fixture',
+      'require (',
+      '  example.test/original v1.2.3',
+      '  example.test/local v2.0.0',
+      ')',
+      'replace (',
+      '  example.test/original => example.test/fork v1.4.0',
+      '  example.test/local => ./local-module',
+      ')',
+    ].join('\n'));
+
+    const inventory = collectPackageInventory(repository);
+
+    expect(inventory.coordinates).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        ecosystem: 'go',
+        name: 'example.test/fork',
+        exactVersion: 'v1.4.0',
+      }),
+    ]));
+    const goNames = inventory.coordinates
+      .filter(coordinate => coordinate.ecosystem === 'go')
+      .map(coordinate => coordinate.name);
+    expect(goNames).not.toContain('example.test/original');
+    expect(goNames).not.toContain('example.test/local');
+    expect(inventory.errors).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        file: 'go.mod',
+        code: 'UNSUPPORTED_FORMAT',
+        message: expect.stringContaining('example.test/local'),
+      }),
+    ]));
+  });
+
+  it('prefers version-specific Go replacements over wildcard replacements', () => {
+    fs.writeFileSync(path.join(repository, 'go.mod'), [
+      'module example.test/fixture',
+      'require example.test/original v1.2.3',
+      'replace example.test/original v1.2.3 => example.test/specific v1.2.4',
+      'replace example.test/original => example.test/wildcard v1.9.0',
+    ].join('\n'));
+
+    const inventory = collectPackageInventory(repository);
+
+    expect(inventory.coordinates).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        ecosystem: 'go',
+        name: 'example.test/specific',
+        exactVersion: 'v1.2.4',
+      }),
+    ]));
+    expect(inventory.coordinates).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: 'example.test/wildcard' }),
+    ]));
+  });
+
+  it('emits crates.io coordinates only for crates.io Cargo packages', () => {
+    fs.writeFileSync(path.join(repository, 'Cargo.lock'), [
+      'version = 3',
+      '',
+      '[[package]]',
+      'name = "fixture-root"',
+      'version = "0.1.0"',
+      '',
+      '[[package]]',
+      'name = "serde"',
+      'version = "1.0.219"',
+      'source = "registry+https://github.com/rust-lang/crates.io-index"',
+      '',
+      '[[package]]',
+      'name = "git-only"',
+      'version = "1.2.3"',
+      'source = "git+https://example.test/git-only#abcdef"',
+    ].join('\n'));
+
+    const inventory = collectPackageInventory(repository);
+
+    expect(inventory.coordinates).toEqual(expect.arrayContaining([
+      expect.objectContaining({ ecosystem: 'cargo', name: 'serde', exactVersion: '1.0.219' }),
+    ]));
+    const cargoNames = inventory.coordinates
+      .filter(coordinate => coordinate.ecosystem === 'cargo')
+      .map(coordinate => coordinate.name);
+    expect(cargoNames).not.toContain('fixture-root');
+    expect(cargoNames).not.toContain('git-only');
+    expect(inventory.errors).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        file: 'Cargo.lock',
+        code: 'UNSUPPORTED_FORMAT',
+        message: expect.stringContaining('git-only'),
+      }),
+    ]));
+  });
+
   it('keeps pattern findings when another scan file has disappeared', async () => {
     const readable = path.join(repository, 'readable.ts');
     fs.writeFileSync(readable, 'eval("fixture");');
@@ -721,7 +858,86 @@ describe('DependencyScanner OSV integration', () => {
       enrichKnownExploited: false,
     });
 
-    expect(results[0].vulnerabilities[0].fixedVersions).toEqual([]);
+    expect(results[0].vulnerabilities[0]).toMatchObject({
+      fixedVersions: [],
+      recommendation: expect.stringMatching(/not semver-comparable.*upstream advisory/i),
+    });
+  });
+
+  it('selects the highest severity across aliased advisory records', async () => {
+    const low = {
+      ...advisory('GHSA-low-alias', ['CVE-2026-9999']),
+      database_specific: { severity: 'LOW' },
+    };
+    const critical = {
+      ...advisory('CVE-2026-9999', ['GHSA-low-alias']),
+      database_specific: { severity: 'CRITICAL' },
+    };
+    const fetchImpl = jest.fn(async (input: string | URL | Request) => {
+      if (String(input).endsWith('/v1/querybatch')) {
+        return jsonResponse({ results: [{ vulns: [
+          { id: low.id, modified: low.modified },
+          { id: critical.id, modified: critical.modified },
+        ] }] });
+      }
+      return jsonResponse(String(input).endsWith(low.id) ? low : critical);
+    }) as typeof fetch;
+
+    const results = await new DependencyScanner().scan(repository, {
+      client: new OsvClient({ fetchImpl, retries: 0 }),
+      snapshotStore: new VulnerabilitySnapshotStore(cache),
+      enrichKnownExploited: false,
+    });
+
+    expect(results[0].vulnerabilities).toHaveLength(1);
+    expect(results[0].vulnerabilities[0]).toMatchObject({
+      advisorySeverity: 'critical',
+      policySeverity: 'critical',
+      severity: 'critical',
+    });
+  });
+
+  it('does not invent an ordered upgrade target for non-npm OSV versions', async () => {
+    fs.rmSync(path.join(repository, 'package.json'));
+    fs.rmSync(path.join(repository, 'package-lock.json'));
+    fs.writeFileSync(path.join(repository, 'requirements.txt'), 'demo==1.0.dev1\n');
+    const record = {
+      schema_version: '1.6.0',
+      id: 'PYSEC-2026-1',
+      modified: '2026-01-02T00:00:00Z',
+      summary: 'Fixture advisory',
+      affected: [{
+        package: { ecosystem: 'PyPI', name: 'demo' },
+        ranges: [{
+          type: 'ECOSYSTEM',
+          events: [
+            { introduced: '0' },
+            { fixed: '1.0.post1' },
+            { introduced: '1.0.post2' },
+            { fixed: '1.0rc2' },
+          ],
+        }],
+      }],
+    };
+    const fetchImpl = jest.fn(async (input: string | URL | Request) =>
+      String(input).endsWith('/v1/querybatch')
+        ? jsonResponse({ results: [{ vulns: [{ id: record.id, modified: record.modified }] }] })
+        : jsonResponse(record)
+    ) as typeof fetch;
+
+    const results = await new DependencyScanner().scan(repository, {
+      client: new OsvClient({ fetchImpl, retries: 0 }),
+      snapshotStore: new VulnerabilitySnapshotStore(cache),
+      enrichKnownExploited: false,
+    });
+
+    expect(results[0].vulnerabilities[0].fixedVersions).toEqual(
+      expect.arrayContaining(['1.0.post1', '1.0rc2'])
+    );
+    expect(results[0].vulnerabilities[0].recommendation).toMatch(
+      /review published fixed versions.*ecosystem tooling/i
+    );
+    expect(results[0].vulnerabilities[0].recommendation).not.toMatch(/or later/i);
   });
 
   it('keeps valid live advisories cacheable when another advisory is malformed', async () => {
@@ -790,6 +1006,21 @@ describe('DependencyScanner OSV integration', () => {
       exists: true,
       snapshot: { droppedMatches: 0 },
     });
+  });
+
+  it('reports snapshot source mismatch against the configured OSV endpoint', () => {
+    const inventory = collectPackageInventory(repository);
+    const store = new VulnerabilitySnapshotStore(cache);
+    store.save(inventory, [], 'https://one.example.test');
+
+    const { status } = new DependencyScanner().snapshotStatus(
+      repository,
+      7,
+      store,
+      'https://two.example.test'
+    );
+
+    expect(status.sourceMatches).toBe(false);
   });
 
   it('clears a repository snapshot after the checkout is deleted', () => {

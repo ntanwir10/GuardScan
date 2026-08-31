@@ -52,6 +52,14 @@ export async function sbomCommand(options: SBOMOptions): Promise<void> {
 
     const licenseReport = await licenseScanner.scan(repoPath, 'proprietary', { offline: executionPolicy.offline });
 
+    if (licenseReport.inventoryErrors.length > 0) {
+      const first = licenseReport.inventoryErrors[0];
+      throw new Error(
+        `SBOM inventory is incomplete (${licenseReport.inventoryErrors.length} package metadata error(s)); ` +
+        `${first.file}: ${first.message}`
+      );
+    }
+
     progressBar.update(1, { status: `Found ${licenseReport.totalDependencies} dependencies` });
 
     // Step 2: Generate SBOM

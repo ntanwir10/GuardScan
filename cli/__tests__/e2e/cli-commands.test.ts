@@ -281,6 +281,31 @@ describe('CLI end-to-end contracts', () => {
     ]));
   }, 90_000);
 
+  it('fails standalone SBOM generation when package inventory is incomplete', () => {
+    const requirements = path.join(project, 'requirements.txt');
+    const output = path.join(project, 'incomplete-sbom.json');
+    fs.writeFileSync(requirements, 'unpinned-package>=1\n');
+
+    try {
+      const result = runCli([
+        '--no-telemetry',
+        '--offline',
+        'sbom',
+        '--format',
+        'spdx',
+        '--output',
+        output,
+      ]);
+
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toMatch(/inventory.*incomplete/i);
+      expect(fs.existsSync(output)).toBe(false);
+    } finally {
+      fs.rmSync(requirements, { force: true });
+      fs.rmSync(output, { force: true });
+    }
+  }, 90_000);
+
   it('fails closed with exit code 2 when offline CVE coverage is unavailable', () => {
     const result = runCli([
       '--no-telemetry',

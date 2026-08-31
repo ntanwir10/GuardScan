@@ -171,7 +171,7 @@ function parseNpmLock(
           addCoordinate(coordinates, {
             ecosystem: 'npm', osvEcosystem: 'npm', name, exactVersion: version,
             scope: value.optional ? 'optional' : value.dev ? 'development' : directScope || 'runtime',
-            direct: chain.length === 0,
+            direct: directScope !== undefined,
             manifestPath: manifest, lockfilePath: rel, dependencyPaths: [[...chain, name].join(' > ')],
           });
         }
@@ -308,7 +308,9 @@ function parseRequirements(root: string, file: string, coordinates: DependencyCo
         continue;
       }
       if (line.startsWith('-')) {continue;}
-      const match = line.match(/^([A-Za-z0-9_.-]+)==([^;\s\\]+)(?:\s|;|$)/);
+      const match = line.match(
+        /^([A-Za-z0-9_.-]+)(?:\s*\[\s*[A-Za-z0-9_.-]+(?:\s*,\s*[A-Za-z0-9_.-]+)*\s*\])?\s*==\s*([^;\s\\]+)(?:\s|;|$)/
+      );
       if (!match) {
         errors.push({ file: rel, code: 'UNRESOLVED_VERSION', message: `Python requirement is not pinned: ${line.slice(0, 120)}` });
         continue;
@@ -335,11 +337,57 @@ function parseGoMod(
 ): void {
   const rel = relative(root, file);
   try {
+    type GoRequirement = {
+      name: string;
+      version: string;
+      direct: boolean;
+    };
+    type GoReplacement = {
+      oldName: string;
+      oldVersion?: string;
+      newName?: string;
+      newVersion?: string;
+      localPath?: string;
+    };
+
+    const requirements: GoRequirement[] = [];
+    const replacements: GoReplacement[] = [];
     let inRequire = false;
+    let inReplace = false;
     for (const raw of fs.readFileSync(file, 'utf8').split(/\r?\n/)) {
       const line = raw.trim();
       if (line === 'require (') {inRequire = true; continue;}
       if (inRequire && line === ')') {inRequire = false; continue;}
+      if (line === 'replace (') {inReplace = true; continue;}
+      if (inReplace && line === ')') {inReplace = false; continue;}
+
+      const isReplaceLine = inReplace || /^replace\s+/.test(line);
+      if (isReplaceLine) {
+        const content = line.replace(/^replace\s+/, '').replace(/\s+\/\/.*$/, '').trim();
+        const [left, right, ...extra] = content.split(/\s*=>\s*/);
+        const oldParts = left?.trim().split(/\s+/).filter(Boolean) || [];
+        const newParts = right?.trim().split(/\s+/).filter(Boolean) || [];
+        const validOld = oldParts.length === 1 || (oldParts.length === 2 && /^v\S+$/.test(oldParts[1]));
+        const localPath = newParts.length === 1 && /^(?:\.{1,2}(?:\/|$)|\/)/.test(newParts[0]);
+        const validRemote = newParts.length === 2 && /^v\S+$/.test(newParts[1]);
+        if (extra.length > 0 || !validOld || (!localPath && !validRemote)) {
+          errors.push({
+            file: rel,
+            code: 'UNSUPPORTED_FORMAT',
+            message: `Go replacement is not supported: ${line.slice(0, 120)}`,
+          });
+          continue;
+        }
+        replacements.push({
+          oldName: oldParts[0],
+          oldVersion: oldParts[1],
+          newName: validRemote ? newParts[0] : undefined,
+          newVersion: validRemote ? newParts[1] : undefined,
+          localPath: localPath ? newParts[0] : undefined,
+        });
+        continue;
+      }
+
       const isRequireLine = inRequire || /^require\s+/.test(line);
       if (!isRequireLine) {continue;}
       const content = line.replace(/^require\s+/, '');
@@ -354,10 +402,34 @@ function parseGoMod(
         });
         continue;
       }
+      requirements.push({
+        name: match[1],
+        version: match[2],
+        direct: !line.includes('// indirect'),
+      });
+    }
+
+    for (const requirement of requirements) {
+      const matchingReplacements = [...replacements].reverse().filter(candidate =>
+        candidate.oldName === requirement.name
+      );
+      const replacement = matchingReplacements.find(candidate =>
+        candidate.oldVersion === requirement.version
+      ) || matchingReplacements.find(candidate => candidate.oldVersion === undefined);
+      if (replacement?.localPath) {
+        errors.push({
+          file: rel,
+          code: 'UNSUPPORTED_FORMAT',
+          message: `Go requirement ${requirement.name} is replaced by local path ${replacement.localPath}`,
+        });
+        continue;
+      }
+      const name = replacement?.newName || requirement.name;
+      const version = replacement?.newVersion || requirement.version;
       addCoordinate(coordinates, {
-        ecosystem: 'go', osvEcosystem: 'Go', name: match[1], exactVersion: match[2],
-        scope: 'runtime', direct: !line.includes('// indirect'), manifestPath: rel, lockfilePath: rel,
-        dependencyPaths: [match[1]],
+        ecosystem: 'go', osvEcosystem: 'Go', name, exactVersion: version,
+        scope: 'runtime', direct: requirement.direct, manifestPath: rel, lockfilePath: rel,
+        dependencyPaths: [replacement ? `${requirement.name} => ${name}` : name],
       });
     }
   } catch (error: unknown) {
@@ -376,7 +448,17 @@ function parseCargoLock(root: string, file: string, coordinates: DependencyCoord
     for (const block of blocks) {
       const name = block.match(/^\s*name\s*=\s*"([^"]+)"/m)?.[1];
       const version = block.match(/^\s*version\s*=\s*"([^"]+)"/m)?.[1];
+      const source = block.match(/^\s*source\s*=\s*"([^"]+)"/m)?.[1];
       if (!name || !version) {continue;}
+      if (!source) {continue;}
+      if (!/^(?:registry\+https:\/\/(?:github\.com\/rust-lang\/crates\.io-index|index\.crates\.io\/?)|sparse\+https:\/\/index\.crates\.io\/?)$/.test(source)) {
+        errors.push({
+          file: rel,
+          code: 'UNSUPPORTED_FORMAT',
+          message: `Cargo package ${name} uses a non-crates.io source: ${source.slice(0, 120)}`,
+        });
+        continue;
+      }
       addCoordinate(coordinates, {
         ecosystem: 'cargo', osvEcosystem: 'crates.io', name, exactVersion: version,
         scope: 'unknown', direct: false, manifestPath: relative(root, path.join(path.dirname(file), 'Cargo.toml')),

@@ -1,6 +1,10 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { ProcessResult, runProcess } from '../utils/process-runner';
+import {
+  isNetworkIsolationError,
+  ProcessResult,
+  runProcess,
+} from '../utils/process-runner';
 import { EffectiveExecutionPolicy } from '../utils/execution-policy';
 
 export interface LintResult {
@@ -162,7 +166,8 @@ export class LinterIntegration {
           cwd: repoPath,
           networkIsolation: policy?.isolateProjectNetwork === true,
         }).status !== 0) {return null;}
-      } catch {
+      } catch (error) {
+        if (isNetworkIsolationError(error)) {throw error;}
         return null; // Flake8 not installed
       }
 
@@ -232,7 +237,8 @@ export class LinterIntegration {
           cwd: repoPath,
           networkIsolation: policy?.isolateProjectNetwork === true,
         }).status !== 0) {return null;}
-      } catch {
+      } catch (error) {
+        if (isNetworkIsolationError(error)) {throw error;}
         return null; // Pylint not installed
       }
 
@@ -306,7 +312,8 @@ export class LinterIntegration {
         });
         output = combinedOutput(execution);
         linter = 'golangci-lint';
-      } catch {
+      } catch (error) {
+        if (isNetworkIsolationError(error)) {throw error;}
         // Fall back to go vet
         execution = runProcess('go', ['vet', './...'], {
           cwd: repoPath,
@@ -372,7 +379,8 @@ export class LinterIntegration {
           cwd: repoPath,
           networkIsolation: policy?.isolateProjectNetwork === true,
         }).status !== 0) {return null;}
-      } catch {
+      } catch (error) {
+        if (isNetworkIsolationError(error)) {throw error;}
         return null; // Rubocop not installed
       }
 
@@ -437,7 +445,8 @@ export class LinterIntegration {
           cwd: repoPath,
           networkIsolation: policy?.isolateProjectNetwork === true,
         }).status !== 0) {return null;}
-      } catch {
+      } catch (error) {
+        if (isNetworkIsolationError(error)) {throw error;}
         return null; // PHP_CodeSniffer not installed
       }
 

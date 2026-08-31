@@ -117,17 +117,27 @@ export class TestRunner {
    * Check if Jest is configured
    */
   private hasJest(repoPath: string): boolean {
-    // Check package.json for jest dependency
     const packageJsonPath = path.join(repoPath, 'package.json');
-    if (fs.existsSync(packageJsonPath)) {
-      try {
-        const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf-8'));
-        if (packageJson.devDependencies?.jest || packageJson.dependencies?.jest) {
-          return true;
-        }
-      } catch {
-        // Continue to file-based detection
-      }
+    if (!fs.existsSync(packageJsonPath)) {return false;}
+
+    let packageJson: {
+      scripts?: { test?: unknown };
+      devDependencies?: Record<string, unknown>;
+      dependencies?: Record<string, unknown>;
+    };
+    try {
+      packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf-8')) as typeof packageJson;
+    } catch {
+      return false;
+    }
+
+    const rawTestScript = packageJson.scripts?.test;
+    const testScript = typeof rawTestScript === 'string'
+      ? rawTestScript.trim()
+      : '';
+    if (!testScript || /no test specified/i.test(testScript)) {return false;}
+    if (packageJson.devDependencies?.jest || packageJson.dependencies?.jest) {
+      return true;
     }
 
     // Check for Jest test file patterns
@@ -286,6 +296,7 @@ export class TestRunner {
         networkIsolation: policy?.isolateProjectNetwork === true,
       });
       if (processResult.timedOut) {throw new Error('pytest timed out');}
+      if (processResult.status === 5) {return null;}
       const output = `${processResult.stdout}\n${processResult.stderr}`;
 
       // Parse pytest JSON report

@@ -87,11 +87,11 @@ export class EmbeddingProviderFactory {
       );
       // User wants to use local provider regardless of AI provider
       if (embeddingFallback === "lmstudio") {
-        provider = new LMStudioEmbeddingProvider(endpoint);
+        provider = new LMStudioEmbeddingProvider(endpoint, offline, allowRemoteSelfHosted);
         dimensions = 768;
         fallbackProvider = "lmstudio";
       } else {
-        provider = new OllamaEmbeddingProvider(endpoint);
+        provider = new OllamaEmbeddingProvider(endpoint, offline, allowRemoteSelfHosted);
         dimensions = 768;
         fallbackProvider = "ollama";
       }
@@ -164,7 +164,9 @@ export class EmbeddingProviderFactory {
             apiEndpoint,
             offline,
             allowRemoteSelfHosted
-          )
+          ),
+          offline,
+          allowRemoteSelfHosted
         );
         dimensions = 768;
         fallbackReason = `Claude does not support embeddings natively. Using ${fallbackProvider} (local, free) for embeddings.`;
@@ -173,7 +175,9 @@ export class EmbeddingProviderFactory {
       case "ollama":
         // Ollama is already local, no fallback needed
         provider = new OllamaEmbeddingProvider(
-          ProviderFactory.normalizeEndpoint('ollama', apiEndpoint, offline, allowRemoteSelfHosted)
+          ProviderFactory.normalizeEndpoint('ollama', apiEndpoint, offline, allowRemoteSelfHosted),
+          offline,
+          allowRemoteSelfHosted
         );
         dimensions = 768;
         break;
@@ -181,7 +185,9 @@ export class EmbeddingProviderFactory {
       case "lmstudio":
         // LM Studio is already local, no fallback needed
         provider = new LMStudioEmbeddingProvider(
-          ProviderFactory.normalizeEndpoint('lmstudio', apiEndpoint, offline, allowRemoteSelfHosted)
+          ProviderFactory.normalizeEndpoint('lmstudio', apiEndpoint, offline, allowRemoteSelfHosted),
+          offline,
+          allowRemoteSelfHosted
         );
         dimensions = 768;
         break;
@@ -212,7 +218,9 @@ export class EmbeddingProviderFactory {
         isFallback = true;
         fallbackReason = `No AI provider configured or unknown provider "${aiProvider}". Using Ollama (local, free) for embeddings.`;
         provider = new OllamaEmbeddingProvider(
-          ProviderFactory.normalizeEndpoint('ollama', apiEndpoint, offline, allowRemoteSelfHosted)
+          ProviderFactory.normalizeEndpoint('ollama', apiEndpoint, offline, allowRemoteSelfHosted),
+          offline,
+          allowRemoteSelfHosted
         );
         dimensions = 768;
         fallbackProvider = "ollama";

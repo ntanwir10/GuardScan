@@ -13,6 +13,9 @@ import {
   jest,
 } from '@jest/globals';
 import type { Command } from 'commander';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 
 // Mock external dependencies before importing the module under test
 jest.mock('../../src/core/config', () => ({
@@ -71,12 +74,15 @@ const getConsoleOutput = (consoleSpy: ReturnType<typeof jest.spyOn>): string =>
 describe('createCacheCommand', () => {
   let consoleLogSpy: ReturnType<typeof jest.spyOn>;
   let consoleErrorSpy: ReturnType<typeof jest.spyOn>;
+  let testCacheDir: string;
   const mockedConfigManager = configManager as jest.Mocked<typeof configManager>;
 
   beforeEach(() => {
     consoleLogSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
     consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
     mockClear.mockClear();
+    testCacheDir = fs.mkdtempSync(path.join(os.tmpdir(), 'guardscan-cache-command-'));
+    mockedConfigManager.getCacheDir.mockReturnValue(testCacheDir);
 
     mockedConfigManager.loadOrInit.mockReturnValue({
       clientId: 'test-client',
@@ -98,6 +104,7 @@ describe('createCacheCommand', () => {
     consoleLogSpy.mockRestore();
     consoleErrorSpy.mockRestore();
     jest.clearAllMocks();
+    fs.rmSync(testCacheDir, { recursive: true, force: true });
   });
 
   describe('command structure', () => {
@@ -331,11 +338,15 @@ describe('createCacheCommand', () => {
     });
 
     it('should clear cache with --force flag', async () => {
+      const repositoryCache = path.join(testCacheDir, 'test-repo-id');
+      fs.mkdirSync(repositoryCache, { recursive: true });
+      fs.writeFileSync(path.join(repositoryCache, 'entry.json'), '{}');
       const cmd = createCacheCommand();
       const clearCmd = getSubcommand(cmd, 'clear');
 
       await clearCmd.parseAsync(['--force'], { from: 'user' });
 
+      expect(fs.existsSync(repositoryCache)).toBe(false);
       expect(consoleErrorSpy).not.toHaveBeenCalled();
     });
 

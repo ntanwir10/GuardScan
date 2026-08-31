@@ -8,6 +8,7 @@ import { EmbeddingProviderFactory } from "../../src/providers/embedding-factory"
 import { LMStudioEmbeddingProvider } from "../../src/providers/embedding-lmstudio";
 import { ClaudeEmbeddingProvider } from "../../src/providers/embedding-claude";
 import { OpenAIEmbeddingProvider } from "../../src/providers/embedding-openai";
+import { validateOfflineLocalEndpoint } from "../../src/commands/init";
 
 import { afterEach, beforeEach, describe, expect, it } from "@jest/globals";
 
@@ -39,6 +40,7 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
 
 beforeEach(() => {
   delete process.env.GUARDSCAN_OFFLINE;
+  delete process.env.OLLAMA_ENDPOINT;
 });
 
 afterEach(() => {
@@ -331,6 +333,12 @@ describe("ProviderFactory", () => {
   });
 
   describe("endpoint policy", () => {
+    it("returns prompt guidance for a malformed offline local endpoint", () => {
+      expect(validateOfflineLocalEndpoint("ollama", "localhost:11434")).toMatch(
+        /absolute HTTP or HTTPS URL/i
+      );
+    });
+
     it.each([
       [undefined, "http://127.0.0.1:1234/v1"],
       ["http://127.0.0.1:1234", "http://127.0.0.1:1234/v1"],
@@ -412,6 +420,31 @@ describe("ProviderFactory", () => {
         false,
         true
       )).toBe('https://models.example.test/base/v1');
+    });
+
+    it.each(["ollama", "lmstudio"] as const)(
+      "preserves remote endpoint approval for %s embeddings",
+      (provider) => {
+        expect(() => EmbeddingProviderFactory.create(
+          provider,
+          undefined,
+          "https://models.example.test/base",
+          undefined,
+          false,
+          true
+        )).not.toThrow();
+      }
+    );
+
+    it("preserves remote endpoint approval through Claude's local fallback", () => {
+      expect(() => EmbeddingProviderFactory.create(
+        "claude",
+        undefined,
+        "https://models.example.test/base",
+        undefined,
+        false,
+        true
+      )).not.toThrow();
     });
 
     it("does not treat an invalid 127/8 hostname as loopback", () => {

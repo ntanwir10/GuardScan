@@ -3,7 +3,7 @@ import inquirer from 'inquirer';
 import { configManager, AIProvider } from '../core/config';
 import { repositoryManager } from '../core/repository';
 import { displayWelcomeBanner } from '../utils/ascii-art';
-import { ProviderFactory } from '../providers/factory';
+import { ProviderConfigurationError, ProviderFactory } from '../providers/factory';
 import { createDebugLogger } from '../utils/debug-logger';
 import { createPerformanceTracker } from '../utils/performance-tracker';
 import { handleCommandError } from '../utils/error-handler';
@@ -17,9 +17,16 @@ export function validateOfflineLocalEndpoint(
   provider: AIProvider,
   endpoint: string
 ): true | string {
-  return ProviderFactory.getEndpointTrustWarning(provider, endpoint)
-    ? 'Offline local AI requires a literal loopback endpoint such as 127.0.0.1 or ::1.'
-    : true;
+  try {
+    return ProviderFactory.getEndpointTrustWarning(provider, endpoint)
+      ? 'Offline local AI requires a literal loopback endpoint such as 127.0.0.1 or ::1.'
+      : true;
+  } catch (error) {
+    if (error instanceof ProviderConfigurationError && error.code === 'INVALID_ENDPOINT') {
+      return 'Enter an absolute HTTP or HTTPS URL without credentials, a query, or a fragment.';
+    }
+    throw error;
+  }
 }
 
 export async function initCommand(): Promise<void> {

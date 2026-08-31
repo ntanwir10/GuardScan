@@ -240,27 +240,51 @@ function selectSeverity(records: OsvVulnerability[], coordinate: DependencyCoord
   severity: AdvisorySeverity;
   cvss?: DependencyVulnerability['cvss'];
 } {
+  const rank: Record<AdvisorySeverity, number> = {
+    unknown: 0,
+    low: 1,
+    medium: 2,
+    high: 3,
+    critical: 4,
+  };
+  let selected: {
+    severity: AdvisorySeverity;
+    cvss?: DependencyVulnerability['cvss'];
+  } = { severity: 'unknown' };
   let rawCvss: DependencyVulnerability['cvss'] | undefined;
+  const consider = (candidate: {
+    severity: AdvisorySeverity;
+    cvss?: DependencyVulnerability['cvss'];
+  }): void => {
+    rawCvss ||= candidate.cvss;
+    if (
+      rank[candidate.severity] > rank[selected.severity] ||
+      (candidate.severity === selected.severity && !selected.cvss && candidate.cvss)
+    ) {
+      selected = candidate;
+    }
+  };
+
   for (const record of records) {
     for (const affected of record.affected || []) {
       if (affected.package?.ecosystem === coordinate.osvEcosystem && affected.package?.name === coordinate.name) {
         const packageSeverity = severityFromEntries(affected.severity, `${record.id}:affected`);
-        if (packageSeverity.severity !== 'unknown') {return packageSeverity;}
-        rawCvss ||= packageSeverity.cvss;
+        consider(packageSeverity);
         const ecosystemSpecific = affected.ecosystem_specific || {};
         const named = severityName(ecosystemSpecific.severity);
-        if (named !== 'unknown') {return { severity: named, cvss: rawCvss };}
+        consider({ severity: named });
       }
     }
   }
   for (const record of records) {
     const topLevel = severityFromEntries(record.severity, record.id);
-    if (topLevel.severity !== 'unknown') {return topLevel;}
-    rawCvss ||= topLevel.cvss;
+    consider(topLevel);
     const named = severityName(record.database_specific?.severity);
-    if (named !== 'unknown') {return { severity: named, cvss: rawCvss };}
+    consider({ severity: named });
   }
-  return { severity: 'unknown', cvss: rawCvss };
+  return selected.severity === 'unknown'
+    ? { severity: 'unknown', cvss: rawCvss }
+    : selected;
 }
 
 function fixedVersions(records: OsvVulnerability[], coordinate: DependencyCoordinate): string[] {
@@ -284,6 +308,24 @@ function fixedVersions(records: OsvVulnerability[], coordinate: DependencyCoordi
       .sort(semver.compare);
   }
   return values.sort();
+}
+
+function remediationRecommendation(
+  coordinate: DependencyCoordinate,
+  fixed: string[]
+): string {
+  if (coordinate.ecosystem === 'npm') {
+    if (!semver.valid(coordinate.exactVersion, { loose: true })) {
+      return 'The installed npm version is not semver-comparable; review the upstream advisory for applicable remediation.';
+    }
+    return fixed.length > 0
+      ? `Update to ${fixed[0]} or later`
+      : 'No applicable fixed npm version is currently published; review upstream guidance';
+  }
+  if (fixed.length > 0) {
+    return `Review published fixed versions (${fixed.join(', ')}) with ${coordinate.ecosystem} ecosystem tooling; GuardScan cannot safely order these versions.`;
+  }
+  return 'No fixed version is currently published; review upstream guidance';
 }
 
 function safeReferences(records: OsvVulnerability[]): string[] {
@@ -345,7 +387,7 @@ function toVulnerability(
     aliases,
     advisoryIds: [canonical, ...aliases],
     cveIds,
-    recommendation: fixed.length > 0 ? `Update to ${fixed[0]} or later` : 'No fixed version is currently published; review upstream guidance',
+    recommendation: remediationRecommendation(coordinate, fixed),
     fixedVersions: fixed,
     ecosystem: coordinate.ecosystem,
     osvEcosystem: coordinate.osvEcosystem,
@@ -658,12 +700,17 @@ export class DependencyScanner {
     return this.scan(repoPath, { ...options, offline: false, refresh: true, cache: true, strictInventory: true });
   }
 
-  snapshotStatus(repoPath: string = process.cwd(), maxAgeDays: number = 7, store = new VulnerabilitySnapshotStore()): {
+  snapshotStatus(
+    repoPath: string = process.cwd(),
+    maxAgeDays: number = 7,
+    store = new VulnerabilitySnapshotStore(),
+    expectedSourceEndpoint?: string
+  ): {
     inventory: PackageInventory;
     status: VulnerabilitySnapshotStatus;
   } {
     const inventory = collectPackageInventory(repoPath);
-    return { inventory, status: store.status(inventory, maxAgeDays) };
+    return { inventory, status: store.status(inventory, maxAgeDays, expectedSourceEndpoint) };
   }
 
   clearSnapshot(repoPath: string = process.cwd(), store = new VulnerabilitySnapshotStore()): void {

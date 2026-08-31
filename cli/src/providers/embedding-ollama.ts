@@ -18,10 +18,15 @@ export class OllamaEmbeddingProvider extends BaseEmbeddingProvider {
   private client: AxiosInstance;
   private endpoint: string;
 
-  constructor(endpoint?: string) {
+  constructor(endpoint?: string, offline = false, allowRemoteSelfHosted = false) {
     super('ollama', 'nomic-embed-text', 768);
 
-    this.endpoint = ProviderFactory.normalizeEndpoint('ollama', endpoint)!;
+    this.endpoint = ProviderFactory.normalizeEndpoint(
+      'ollama',
+      endpoint,
+      offline,
+      allowRemoteSelfHosted
+    )!;
     this.client = axios.create({
       baseURL: this.endpoint,
       timeout: 30000, // 30 seconds per request

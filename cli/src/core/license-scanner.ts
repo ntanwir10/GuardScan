@@ -6,6 +6,7 @@ import {
   collectPackageInventory,
   DependencyCoordinate,
   PackageInventory,
+  PackageInventoryError,
 } from './package-inventory';
 import { runProcess } from '../utils/process-runner';
 
@@ -14,6 +15,7 @@ export interface LicenseFinding {
   version: string;
   scope?: DependencyCoordinate['scope'];
   direct?: boolean;
+  dependencyPaths?: string[];
   license: string; // SPDX identifier
   category: 'permissive' | 'weak-copyleft' | 'strong-copyleft' | 'proprietary' | 'unknown';
   risk: 'critical' | 'high' | 'medium' | 'low' | 'info';
@@ -49,6 +51,7 @@ export interface LicenseReport {
     proprietary: number;
     unknown: number;
   };
+  inventoryErrors: PackageInventoryError[];
   sbom?: SBOMDocument;
 }
 
@@ -203,6 +206,7 @@ export class LicenseScanner {
       compatibilityIssues,
       riskSummary,
       categorySummary,
+      inventoryErrors: inventory.errors.map(error => ({ ...error })),
     };
   }
 
@@ -223,6 +227,7 @@ export class LicenseScanner {
       version: coordinate.exactVersion,
       scope: coordinate.scope,
       direct: coordinate.direct,
+      dependencyPaths: [...coordinate.dependencyPaths],
       license,
       category: this.categorizeLicense(license),
       risk: 'info',
@@ -266,25 +271,43 @@ export class LicenseScanner {
 
   private mergeFindings(values: LicenseFinding[]): LicenseFinding[] {
     const findings = new Map<string, LicenseFinding>();
+    const scopeRank: Record<DependencyCoordinate['scope'], number> = {
+      unknown: 0,
+      development: 1,
+      optional: 2,
+      runtime: 3,
+    };
     for (const value of values) {
       const key = `${value.source}\u0000${value.package}\u0000${value.version}`;
       const existing = findings.get(key);
       if (!existing) {
-        findings.set(key, value);
-      } else if (existing.license === 'Unknown' && value.license !== 'Unknown') {
         findings.set(key, {
           ...value,
-          scope: existing.scope ?? value.scope,
-          direct: existing.direct ?? value.direct,
+          dependencyPaths: [...new Set(value.dependencyPaths || [])].sort(),
         });
-      } else if ((existing.scope === undefined && value.scope !== undefined) ||
-                 (existing.direct === undefined && value.direct !== undefined)) {
-        findings.set(key, {
-          ...existing,
-          scope: existing.scope ?? value.scope,
-          direct: existing.direct ?? value.direct,
-        });
+        continue;
       }
+      const preferred = existing.license === 'Unknown' && value.license !== 'Unknown'
+        ? value
+        : existing;
+      const scopes = [existing.scope, value.scope].filter(
+        (scope): scope is DependencyCoordinate['scope'] => scope !== undefined
+      );
+      const scope = scopes.sort((left, right) => scopeRank[right] - scopeRank[left])[0];
+      const direct = existing.direct === true || value.direct === true
+        ? true
+        : existing.direct === false || value.direct === false
+          ? false
+          : undefined;
+      findings.set(key, {
+        ...preferred,
+        scope,
+        direct,
+        dependencyPaths: [...new Set([
+          ...(existing.dependencyPaths || []),
+          ...(value.dependencyPaths || []),
+        ])].sort(),
+      });
     }
     return [...findings.values()].sort((left, right) =>
       left.source.localeCompare(right.source) ||
@@ -783,15 +806,7 @@ export class LicenseScanner {
           component: { type: 'application', name: projectName, 'bom-ref': rootReference },
         },
         components,
-        dependencies: [
-          {
-            ref: rootReference,
-            dependsOn: components.flatMap((value, index) =>
-              isDirectInstallDependency(ordered[index]) ? [value['bom-ref']] : []
-            ),
-          },
-          ...components.map(value => ({ ref: value['bom-ref'], dependsOn: [] })),
-        ],
+        dependencies: cycloneDxDependencies(ordered, components, rootReference),
       };
     }
 
@@ -873,6 +888,70 @@ function cycloneDxScope(
 
 function isDirectInstallDependency(finding: LicenseFinding): boolean {
   return finding.direct === true && finding.scope !== 'development';
+}
+
+function npmDependencyNames(dependencyPath: string): string[] {
+  if (dependencyPath.includes(' > ')) {
+    return dependencyPath.split(' > ').map(value => value.trim()).filter(Boolean);
+  }
+  const segments = dependencyPath.replace(/\\/g, '/').split('/').filter(Boolean);
+  const names: string[] = [];
+  for (let index = 0; index < segments.length; index++) {
+    if (segments[index] !== 'node_modules' || !segments[index + 1]) {continue;}
+    const first = segments[index + 1];
+    if (first.startsWith('@') && segments[index + 2]) {
+      names.push(`${first}/${segments[index + 2]}`);
+      index += 2;
+    } else {
+      names.push(first);
+      index += 1;
+    }
+  }
+  return names;
+}
+
+function cycloneDxDependencies(
+  findings: LicenseFinding[],
+  components: CycloneDx17Component[],
+  rootReference: string
+): Array<{ ref: string; dependsOn: string[] }> {
+  const referencesByPackage = new Map<string, string[]>();
+  for (let index = 0; index < findings.length; index++) {
+    const finding = findings[index];
+    const key = `${finding.source}\u0000${finding.package}`;
+    const references = referencesByPackage.get(key) || [];
+    references.push(components[index]['bom-ref']);
+    referencesByPackage.set(key, references);
+  }
+
+  const outgoing = new Map<string, Set<string>>();
+  for (let index = 0; index < findings.length; index++) {
+    const finding = findings[index];
+    if (finding.source !== 'npm') {continue;}
+    for (const dependencyPath of finding.dependencyPaths || []) {
+      const names = npmDependencyNames(dependencyPath);
+      if (names.length < 2 || names[names.length - 1] !== finding.package) {continue;}
+      const parentReferences = referencesByPackage.get(`npm\u0000${names[names.length - 2]}`) || [];
+      if (parentReferences.length !== 1) {continue;}
+      const children = outgoing.get(parentReferences[0]) || new Set<string>();
+      children.add(components[index]['bom-ref']);
+      outgoing.set(parentReferences[0], children);
+    }
+  }
+
+  const dependencies: Array<{ ref: string; dependsOn: string[] }> = [{
+    ref: rootReference,
+    dependsOn: components.flatMap((component, index) =>
+      isDirectInstallDependency(findings[index]) ? [component['bom-ref']] : []
+    ),
+  }];
+  for (const component of components) {
+    const dependsOn = outgoing.get(component['bom-ref']);
+    if (dependsOn && dependsOn.size > 0) {
+      dependencies.push({ ref: component['bom-ref'], dependsOn: [...dependsOn].sort() });
+    }
+  }
+  return dependencies;
 }
 
 function stableIdentifier(value: string): string {

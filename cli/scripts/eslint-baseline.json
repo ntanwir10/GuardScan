@@ -204,7 +204,7 @@
     "warnings": 0
   },
   "src/core/package-inventory.ts": {
-    "errors": 64,
+    "errors": 54,
     "warnings": 0
   },
   "src/core/performance-tester.ts": {
@@ -232,7 +232,7 @@
     "warnings": 0
   },
   "src/core/test-runner.ts": {
-    "errors": 25,
+    "errors": 22,
     "warnings": 0
   },
   "src/core/usage-tracker.ts": {

@@ -26,6 +26,25 @@ export interface ProcessInvocation {
   args: string[];
 }
 
+export class NetworkIsolationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'NetworkIsolationError';
+  }
+}
+
+export function isNetworkIsolationFailure(result: Pick<ProcessResult, 'status' | 'stdout' | 'stderr'>): boolean {
+  if (result.status === 0) {return false;}
+  const output = `${result.stderr}\n${result.stdout}`;
+  if (/^unshare:.*failed to execute/im.test(output)) {return false;}
+  return /^unshare:.*(?:unshare failed|write failed|operation not permitted|permission denied|cannot (?:open|write|create))/im.test(output) ||
+    /^sandbox-exec:.*(?:sandbox_apply|operation not permitted|permission denied)/im.test(output);
+}
+
+export function isNetworkIsolationError(error: unknown): error is NetworkIsolationError {
+  return error instanceof NetworkIsolationError;
+}
+
 const SENSITIVE_ENVIRONMENT = /(?:API[_-]?KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|PRIVATE[_-]?KEY|AUTH)/i;
 const RUNTIME_INJECTION_ENVIRONMENT = new Set([
   'NODE_OPTIONS',
@@ -102,7 +121,7 @@ export function resolveNetworkIsolatedInvocation(
       args: ['-p', '(version 1) (allow default) (deny network*)', executable, ...args],
     };
   }
-  throw new Error(`Network isolation is not supported on ${platform}`);
+  throw new NetworkIsolationError(`Network isolation is not supported on ${platform}`);
 }
 
 export function runProcess(
@@ -132,7 +151,7 @@ export function runProcess(
 
   if (result.error && (result.error as NodeJS.ErrnoException).code === 'ENOENT') {
     if (options.networkIsolation) {
-      throw new Error(`Network isolation is unavailable: ${invocation.command} was not found`);
+      throw new NetworkIsolationError(`Network isolation is unavailable: ${invocation.command} was not found`);
     }
     throw new Error(`Required executable not found: ${command}`);
   }
@@ -140,7 +159,7 @@ export function runProcess(
     throw new Error(`Failed to execute ${command}: ${result.error.message}`);
   }
 
-  return {
+  const processResult: ProcessResult = {
     command: invocation.command,
     args: [...invocation.args],
     status: result.status ?? (result.error ? 2 : 1),
@@ -149,4 +168,11 @@ export function runProcess(
     signal: result.signal,
     timedOut: (result.error as NodeJS.ErrnoException | undefined)?.code === 'ETIMEDOUT',
   };
+  if (options.networkIsolation && isNetworkIsolationFailure(processResult)) {
+    const detail = `${processResult.stderr}\n${processResult.stdout}`.trim().split(/\r?\n/)[0];
+    throw new NetworkIsolationError(
+      `Network isolation could not be established${detail ? `: ${detail.slice(0, 300)}` : ''}`
+    );
+  }
+  return processResult;
 }
