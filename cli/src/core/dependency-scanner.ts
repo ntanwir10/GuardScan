@@ -302,7 +302,11 @@ function fixedVersions(records: OsvVulnerability[], coordinate: DependencyCoordi
   const values = [...versions];
   if (coordinate.ecosystem === 'npm') {
     const currentVersion = semver.valid(coordinate.exactVersion, { loose: true });
-    if (!currentVersion) {return [];}
+    if (!currentVersion) {
+      return values
+        .filter(version => semver.valid(version, { loose: true }))
+        .sort(semver.compare);
+    }
     return values
       .filter(version => semver.valid(version, { loose: true }) && semver.gt(version, currentVersion, { loose: true }))
       .sort(semver.compare);

@@ -859,7 +859,7 @@ describe('DependencyScanner OSV integration', () => {
     });
 
     expect(results[0].vulnerabilities[0]).toMatchObject({
-      fixedVersions: [],
+      fixedVersions: ['4.17.21'],
       recommendation: expect.stringMatching(/not semver-comparable.*upstream advisory/i),
     });
   });
