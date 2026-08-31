@@ -23,6 +23,7 @@ export interface PackageInventoryError {
   file: string;
   code: 'INVALID_MANIFEST' | 'UNRESOLVED_VERSION' | 'UNSUPPORTED_FORMAT';
   message: string;
+  ecosystem?: PackageEcosystem;
 }
 
 export interface PackageInventory {
@@ -62,6 +63,12 @@ function relative(root: string, file: string): string {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
 }
 
 function isWithinRoot(root: string, candidate: string): boolean {
@@ -231,17 +238,79 @@ function parseExactPackageJson(
 function parsePnpmLock(root: string, file: string, coordinates: DependencyCoordinate[], errors: PackageInventoryError[]): void {
   const rel = relative(root, file);
   try {
-    const data = yaml.load(fs.readFileSync(file, 'utf8')) as any;
-    const records = { ...(data?.packages || {}), ...(data?.snapshots || {}) };
+    const data = asRecord(yaml.load(fs.readFileSync(file, 'utf8')));
+    const directDependencies = new Map<string, {
+      scope: DependencyScope;
+      manifestPath: string;
+      dependencyPaths: string[];
+    }>();
+    const scopeRank: Record<DependencyScope, number> = {
+      unknown: 0,
+      development: 1,
+      optional: 2,
+      runtime: 3,
+    };
+    const dependencyGroups: Array<[string, DependencyScope]> = [
+      ['dependencies', 'runtime'],
+      ['devDependencies', 'development'],
+      ['optionalDependencies', 'optional'],
+    ];
+    for (const [rawImporterPath, importer] of Object.entries(asRecord(data?.importers) || {})) {
+      const importerPath = rawImporterPath === '.' ? '' : rawImporterPath;
+      const manifest = path.resolve(path.dirname(file), importerPath, 'package.json');
+      if (!isWithinRoot(root, manifest)) {continue;}
+      const importerRecord = asRecord(importer);
+      for (const [group, scope] of dependencyGroups) {
+        const dependencies = asRecord(importerRecord?.[group]);
+        if (!dependencies) {continue;}
+        for (const [name, resolution] of Object.entries(dependencies)) {
+          const resolutionRecord = asRecord(resolution);
+          const rawVersion = typeof resolution === 'string'
+            ? resolution
+            : typeof resolutionRecord?.version === 'string'
+              ? resolutionRecord.version
+              : '';
+          const exactVersion = rawVersion.replace(/^\//, '').split('(')[0];
+          const version = semver.valid(exactVersion, { loose: true });
+          if (!version) {continue;}
+          const key = `${name}\0${version}`;
+          const existing = directDependencies.get(key);
+          const dependencyPath = rawImporterPath === '.' ? name : `${rawImporterPath}:${name}`;
+          if (!existing) {
+            directDependencies.set(key, {
+              scope,
+              manifestPath: relative(root, manifest),
+              dependencyPaths: [dependencyPath],
+            });
+          } else {
+            if (scopeRank[scope] > scopeRank[existing.scope]) {existing.scope = scope;}
+            existing.dependencyPaths = [...new Set([...existing.dependencyPaths, dependencyPath])].sort();
+            const candidateManifest = relative(root, manifest);
+            if (candidateManifest < existing.manifestPath) {existing.manifestPath = candidateManifest;}
+          }
+        }
+      }
+    }
+    const records = {
+      ...(asRecord(data?.packages) || {}),
+      ...(asRecord(data?.snapshots) || {}),
+    };
     for (const rawKey of Object.keys(records)) {
       const key = rawKey.replace(/^\//, '').split('(')[0];
       let match = key.match(/^(@[^/]+\/[^@/]+)@([^/]+)$/) || key.match(/^(@[^/]+\/[^/]+)\/([^/]+)$/);
       if (!match) {match = key.match(/^([^@/][^@]*?)@([^/]+)$/) || key.match(/^([^@/][^/]*)\/([^/]+)$/);}
-      if (!match || !semver.valid(match[2], { loose: true })) {continue;}
+      if (!match) {continue;}
+      const version = semver.valid(match[2], { loose: true });
+      if (!version) {continue;}
+      const direct = directDependencies.get(`${match[1]}\0${version}`);
       addCoordinate(coordinates, {
-        ecosystem: 'npm', osvEcosystem: 'npm', name: match[1], exactVersion: match[2],
-        scope: 'unknown', direct: false, manifestPath: relative(root, path.join(path.dirname(file), 'package.json')),
-        lockfilePath: rel, dependencyPaths: [rawKey],
+        ecosystem: 'npm', osvEcosystem: 'npm', name: match[1], exactVersion: version,
+        scope: direct?.scope || 'unknown', direct: direct !== undefined,
+        manifestPath: direct?.manifestPath || relative(root, path.join(path.dirname(file), 'package.json')),
+        lockfilePath: rel,
+        dependencyPaths: direct
+          ? [...new Set([rawKey, ...direct.dependencyPaths])]
+          : [rawKey],
       });
     }
   } catch (error: unknown) {
@@ -309,7 +378,7 @@ function parseRequirements(root: string, file: string, coordinates: DependencyCo
       }
       if (line.startsWith('-')) {continue;}
       const match = line.match(
-        /^([A-Za-z0-9_.-]+)(?:\s*\[\s*[A-Za-z0-9_.-]+(?:\s*,\s*[A-Za-z0-9_.-]+)*\s*\])?\s*==\s*([^;\s\\]+)(?:\s|;|$)/
+        /^([A-Za-z0-9_.-]+)(?:\s*\[\s*[A-Za-z0-9_.-]+(?:\s*,\s*[A-Za-z0-9_.-]+)*\s*\])?\s*==\s*([A-Za-z0-9][A-Za-z0-9._!+-]*)(?:\s|;|$)/
       );
       if (!match) {
         errors.push({ file: rel, code: 'UNRESOLVED_VERSION', message: `Python requirement is not pinned: ${line.slice(0, 120)}` });
@@ -606,12 +675,40 @@ function inventoryDigest(coordinates: DependencyCoordinate[]): string {
   })))).digest('hex');
 }
 
+function ecosystemForInventoryFile(file: string): PackageEcosystem | undefined {
+  switch (path.basename(file)) {
+    case 'package-lock.json':
+    case 'npm-shrinkwrap.json':
+    case 'package.json':
+    case 'pnpm-lock.yaml':
+    case 'yarn.lock':
+      return 'npm';
+    case 'requirements.txt':
+      return 'pip';
+    case 'go.mod':
+      return 'go';
+    case 'Gemfile.lock':
+      return 'ruby';
+    case 'Cargo.lock':
+      return 'cargo';
+    case 'pom.xml':
+      return 'maven';
+    default:
+      return undefined;
+  }
+}
+
 export function filterPackageInventory(inventory: PackageInventory, filter: PackageInventoryFilter): PackageInventory {
   const coordinates = inventory.coordinates.filter(coordinate =>
     (!filter.ecosystems || filter.ecosystems.includes(coordinate.ecosystem)) &&
     (filter.scope !== 'runtime' || coordinate.scope !== 'development')
   );
-  return { ...inventory, coordinates, digest: inventoryDigest(coordinates) };
+  const errors = inventory.errors.filter(error => {
+    if (!filter.ecosystems) {return true;}
+    const ecosystem = error.ecosystem || ecosystemForInventoryFile(error.file);
+    return ecosystem === undefined || filter.ecosystems.includes(ecosystem);
+  });
+  return { ...inventory, coordinates, errors, digest: inventoryDigest(coordinates) };
 }
 
 export function collectPackageInventory(repoPath: string = process.cwd()): PackageInventory {
@@ -655,7 +752,10 @@ export function collectPackageInventory(repoPath: string = process.cwd()): Packa
     repository: root,
     coordinates: normalized,
     manifests: [...names].sort(),
-    errors,
+    errors: errors.map(error => ({
+      ...error,
+      ecosystem: error.ecosystem || ecosystemForInventoryFile(error.file),
+    })),
     digest,
   };
 }

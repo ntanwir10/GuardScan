@@ -459,6 +459,18 @@ export class ScanEngine {
             });
           }
 
+          if (report.inventoryErrors.length > 0) {
+            const first = report.inventoryErrors[0];
+            return {
+              findings: licenseFindings,
+              error: {
+                code: 'LICENSE_INVENTORY_PARTIAL',
+                message: `License dependency inventory is incomplete (${report.inventoryErrors.length} error(s)); first: ${first.code} in ${first.file}`,
+                retryable: true,
+              },
+            };
+          }
+
           return licenseFindings;
         },
       });

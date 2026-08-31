@@ -23,7 +23,7 @@ export function validateOfflineLocalEndpoint(
       : true;
   } catch (error) {
     if (error instanceof ProviderConfigurationError && error.code === 'INVALID_ENDPOINT') {
-      return 'Enter an absolute HTTP or HTTPS URL without credentials, a query, or a fragment.';
+      return error.message;
     }
     throw error;
   }

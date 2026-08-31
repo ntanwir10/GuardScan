@@ -100,6 +100,16 @@ export class LinterIntegration {
     policy?: EffectiveExecutionPolicy
   ): Promise<LinterReport | null> {
     try {
+      try {
+        if (runProcess('npx', ['--no-install', 'eslint', '--version'], {
+          cwd: repoPath,
+          networkIsolation: policy?.isolateProjectNetwork === true,
+        }).status !== 0) {return null;}
+      } catch (error) {
+        if (isNetworkIsolationError(error)) {throw error;}
+        return null;
+      }
+
       const execution = runProcess('npx', ['--no-install', 'eslint', '.', '--format', 'json'], {
         cwd: repoPath,
         maxBuffer: 10 * 1024 * 1024,
@@ -138,6 +148,7 @@ export class LinterIntegration {
         info: results.filter(r => r.severity === 'info').length,
       };
     } catch (error) {
+      if (isNetworkIsolationError(error)) {throw error;}
       throw new Error(`ESLint execution failed: ${error instanceof Error ? error.message : String(error)}`);
     }
   }

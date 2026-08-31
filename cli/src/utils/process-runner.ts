@@ -37,7 +37,7 @@ export function isNetworkIsolationFailure(result: Pick<ProcessResult, 'status' |
   if (result.status === 0) {return false;}
   const output = `${result.stderr}\n${result.stdout}`;
   if (/^unshare:.*failed to execute/im.test(output)) {return false;}
-  return /^unshare:.*(?:unshare failed|write failed|operation not permitted|permission denied|cannot (?:open|write|create))/im.test(output) ||
+  return /^unshare:.*(?:unshare failed|write failed|operation not permitted|permission denied|cannot (?:open|write|create)|unrecognized option|invalid option|unknown option|option .*not supported)/im.test(output) ||
     /^sandbox-exec:.*(?:sandbox_apply|operation not permitted|permission denied)/im.test(output);
 }
 

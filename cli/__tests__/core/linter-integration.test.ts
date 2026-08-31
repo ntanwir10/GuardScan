@@ -52,6 +52,14 @@ describe('LinterIntegration isolation failures', () => {
     })).toBe(false);
   });
 
+  it('recognizes an unsupported unshare option as an isolation failure', () => {
+    expect(isNetworkIsolationFailure({
+      status: 1,
+      stdout: '',
+      stderr: "unshare: unrecognized option '--map-root-user'",
+    })).toBe(true);
+  });
+
   it('reports unsupported isolation platforms as isolation failures', () => {
     expect(() => resolveNetworkIsolatedInvocation('flake8', ['--version'], 'win32')).toThrow(
       NetworkIsolationError
@@ -70,5 +78,35 @@ describe('LinterIntegration isolation failures', () => {
       allowPartial: false,
       includeCve: true,
     })).rejects.toThrow(/network isolation could not be established/i);
+  });
+
+  it('skips a declared ESLint dependency when its executable is unavailable', async () => {
+    fs.rmSync(path.join(repository, 'fixture.py'));
+    fs.writeFileSync(path.join(repository, 'package.json'), JSON.stringify({
+      devDependencies: { eslint: '^9.0.0' },
+    }));
+    mockedRunProcess.mockReturnValue({
+      command: 'npx',
+      args: ['--no-install', 'eslint', '--version'],
+      status: 1,
+      stdout: '',
+      stderr: 'npm error could not determine executable to run',
+      signal: null,
+      timedOut: false,
+    });
+
+    await expect(new LinterIntegration().runAll(repository, {
+      offline: false,
+      runProjectCode: true,
+      isolateProjectNetwork: false,
+      allowPartial: false,
+      includeCve: true,
+    })).resolves.toEqual([]);
+    expect(mockedRunProcess).toHaveBeenCalledTimes(1);
+    expect(mockedRunProcess).toHaveBeenCalledWith(
+      'npx',
+      ['--no-install', 'eslint', '--version'],
+      expect.objectContaining({ cwd: repository })
+    );
   });
 });

@@ -339,6 +339,13 @@ describe("ProviderFactory", () => {
       );
     });
 
+    it('returns TLS guidance for a cleartext remote local-provider endpoint', () => {
+      expect(validateOfflineLocalEndpoint(
+        'ollama',
+        'http://models.example.test'
+      )).toMatch(/remote.*HTTPS/i);
+    });
+
     it.each([
       [undefined, "http://127.0.0.1:1234/v1"],
       ["http://127.0.0.1:1234", "http://127.0.0.1:1234/v1"],
@@ -421,6 +428,35 @@ describe("ProviderFactory", () => {
         true
       )).toBe('https://models.example.test/base/v1');
     });
+
+    it.each(['ollama', 'lmstudio'] as const)(
+      'rejects cleartext remote %s endpoints even when remote use is approved',
+      provider => {
+        expect(() => ProviderFactory.normalizeEndpoint(
+          provider,
+          'http://models.example.test/base',
+          false,
+          true
+        )).toThrow(expect.objectContaining({
+          code: 'INVALID_ENDPOINT',
+          message: expect.stringMatching(/remote.*HTTPS/i),
+        }));
+      }
+    );
+
+    it.each(['ollama', 'lmstudio', 'claude'] as const)(
+      'enforces remote TLS through %s embedding construction',
+      provider => {
+        expect(() => EmbeddingProviderFactory.create(
+          provider,
+          undefined,
+          'http://models.example.test/base',
+          undefined,
+          false,
+          true
+        )).toThrow(expect.objectContaining({ code: 'INVALID_ENDPOINT' }));
+      }
+    );
 
     it.each(["ollama", "lmstudio"] as const)(
       "preserves remote endpoint approval for %s embeddings",

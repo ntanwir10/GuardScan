@@ -851,8 +851,18 @@ export class LicenseScanner {
    */
   private generatePURL(finding: LicenseFinding): string {
     const type = finding.source === 'rubygems' ? 'gem' : finding.source;
-    const name = finding.package.split('/').map(segment => encodeURIComponent(segment)).join('/');
     const version = encodeURIComponent(finding.version);
+
+    if (type === 'maven') {
+      const separator = finding.package.indexOf(':');
+      if (separator > 0 && separator < finding.package.length - 1) {
+        const namespace = encodeURIComponent(finding.package.slice(0, separator));
+        const artifact = encodeURIComponent(finding.package.slice(separator + 1));
+        return `pkg:maven/${namespace}/${artifact}@${version}`;
+      }
+    }
+
+    const name = finding.package.split('/').map(segment => encodeURIComponent(segment)).join('/');
 
     return `pkg:${type}/${name}@${version}`;
   }
@@ -970,8 +980,68 @@ function isSimpleSpdxIdentifier(value: string): boolean {
 }
 
 function isSpdxExpression(value: string): boolean {
-  return value !== 'Unknown' &&
-    /^[A-Za-z0-9][A-Za-z0-9.+-]*(?: (?:AND|OR) [A-Za-z0-9][A-Za-z0-9.+-]*)*$/.test(value);
+  if (value === 'Unknown' || value.length > 4096) {return false;}
+  const tokens: string[] = [];
+  let cursor = 0;
+  while (cursor < value.length) {
+    const whitespace = value.slice(cursor).match(/^\s+/)?.[0];
+    if (whitespace) {
+      cursor += whitespace.length;
+      continue;
+    }
+    const character = value[cursor];
+    if (character === '(' || character === ')') {
+      tokens.push(character);
+      cursor += 1;
+      continue;
+    }
+    const identifier = value.slice(cursor).match(/^[A-Za-z0-9][A-Za-z0-9.+:-]*/)?.[0];
+    if (!identifier) {return false;}
+    tokens.push(identifier);
+    if (tokens.length > 256) {return false;}
+    cursor += identifier.length;
+  }
+  if (tokens.length === 0) {return false;}
+
+  let index = 0;
+  const isIdentifier = (token: string | undefined): boolean =>
+    token !== undefined && !['(', ')', 'AND', 'OR', 'WITH'].includes(token);
+  const parseLicense = (): boolean => {
+    if (!isIdentifier(tokens[index])) {return false;}
+    index += 1;
+    if (tokens[index] === 'WITH') {
+      index += 1;
+      if (!isIdentifier(tokens[index])) {return false;}
+      index += 1;
+    }
+    return true;
+  };
+  const parsePrimary = (depth: number): boolean => {
+    if (tokens[index] !== '(') {return parseLicense();}
+    if (depth >= 64) {return false;}
+    index += 1;
+    if (!parseOr(depth + 1) || tokens[index] !== ')') {return false;}
+    index += 1;
+    return true;
+  };
+  const parseAnd = (depth: number): boolean => {
+    if (!parsePrimary(depth)) {return false;}
+    while (tokens[index] === 'AND') {
+      index += 1;
+      if (!parsePrimary(depth)) {return false;}
+    }
+    return true;
+  };
+  const parseOr = (depth: number): boolean => {
+    if (!parseAnd(depth)) {return false;}
+    while (tokens[index] === 'OR') {
+      index += 1;
+      if (!parseAnd(depth)) {return false;}
+    }
+    return true;
+  };
+
+  return parseOr(0) && index === tokens.length;
 }
 
 export const licenseScanner = new LicenseScanner();

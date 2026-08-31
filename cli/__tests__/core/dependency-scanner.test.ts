@@ -8,7 +8,7 @@ import {
 import { OsvClient, OsvMatch } from '../../src/core/osv-client';
 import { VulnerabilitySnapshotStore } from '../../src/core/vulnerability-cache';
 import { CisaKevCatalogStore, CisaKevClient } from '../../src/core/cisa-kev';
-import { collectPackageInventory } from '../../src/core/package-inventory';
+import { collectPackageInventory, filterPackageInventory } from '../../src/core/package-inventory';
 import {
   ScanEngine,
   ScanEngineOptions,
@@ -214,6 +214,25 @@ describe('DependencyScanner OSV integration', () => {
     ]));
   });
 
+  it.each([
+    'requests==1.0.*',
+    'requests==1.0.0,<2.0',
+  ])('rejects non-exact Python requirement %s', requirement => {
+    fs.writeFileSync(path.join(repository, 'requirements.txt'), `${requirement}\n`);
+
+    const inventory = collectPackageInventory(repository);
+
+    expect(inventory.coordinates).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ ecosystem: 'pip', name: 'requests' }),
+    ]));
+    expect(inventory.errors).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        file: 'requirements.txt',
+        code: 'UNRESOLVED_VERSION',
+      }),
+    ]));
+  });
+
   it('marks only package.json dependencies direct in npm v1 lockfiles', () => {
     fs.writeFileSync(path.join(repository, 'package.json'), JSON.stringify({
       dependencies: { direct: '1.0.0' },
@@ -231,6 +250,39 @@ describe('DependencyScanner OSV integration', () => {
     expect(inventory.coordinates).toEqual(expect.arrayContaining([
       expect.objectContaining({ ecosystem: 'npm', name: 'direct', direct: true }),
       expect.objectContaining({ ecosystem: 'npm', name: 'hoisted', direct: false }),
+    ]));
+  });
+
+  it('derives pnpm directness and scope from lockfile importers', () => {
+    fs.rmSync(path.join(repository, 'package-lock.json'));
+    fs.writeFileSync(path.join(repository, 'package.json'), JSON.stringify({
+      dependencies: { direct: '^1.0.0' },
+      devDependencies: { tooling: '^2.0.0' },
+    }));
+    fs.writeFileSync(path.join(repository, 'pnpm-lock.yaml'), [
+      "lockfileVersion: '9.0'",
+      'importers:',
+      '  .:',
+      '    dependencies:',
+      '      direct:',
+      "        specifier: ^1.0.0",
+      "        version: 1.2.3",
+      '    devDependencies:',
+      '      tooling:',
+      "        specifier: ^2.0.0",
+      "        version: 2.1.0",
+      'packages:',
+      "  direct@1.2.3: {}",
+      "  tooling@2.1.0: {}",
+      "  transitive@3.0.0: {}",
+    ].join('\n'));
+
+    const inventory = collectPackageInventory(repository);
+
+    expect(inventory.coordinates).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: 'direct', exactVersion: '1.2.3', direct: true, scope: 'runtime' }),
+      expect.objectContaining({ name: 'tooling', exactVersion: '2.1.0', direct: true, scope: 'development' }),
+      expect.objectContaining({ name: 'transitive', exactVersion: '3.0.0', direct: false }),
     ]));
   });
 
@@ -740,6 +792,36 @@ describe('DependencyScanner OSV integration', () => {
     );
 
     expect(snapshot.sourceEndpoint).toBe('https://example.test/v1?token=//#fragment///');
+  });
+
+  it('rejects oversized vulnerability snapshots without replacing usable coverage', () => {
+    const inventory = collectPackageInventory(repository);
+    const store = new VulnerabilitySnapshotStore(cache);
+    store.save(inventory, [], 'https://api.osv.dev');
+    const match: OsvMatch = {
+      coordinate: inventory.coordinates[0],
+      vulnerability: {
+        ...advisory('GHSA-oversized', []),
+        summary: 'x'.repeat(17 * 1024 * 1024),
+      },
+    };
+
+    expect(() => store.save(inventory, [match], 'https://api.osv.dev')).toThrow(
+      /snapshot.*size|size.*snapshot/i
+    );
+    expect(store.status(inventory).snapshot?.matches).toEqual([]);
+  });
+
+  it('filters inventory errors with an ecosystem selection', () => {
+    fs.writeFileSync(path.join(repository, 'requirements.txt'), 'requests>=2\n');
+    const inventory = collectPackageInventory(repository);
+
+    const npmOnly = filterPackageInventory(inventory, { ecosystems: ['npm'] });
+
+    expect(npmOnly.coordinates.every(coordinate => coordinate.ecosystem === 'npm')).toBe(true);
+    expect(npmOnly.errors).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ file: 'requirements.txt' }),
+    ]));
   });
 
   it('rejects refresh in offline mode and can enforce unresolved inventory errors', async () => {

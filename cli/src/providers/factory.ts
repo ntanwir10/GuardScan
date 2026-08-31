@@ -157,7 +157,7 @@ export class ProviderFactory {
     ) {
       throw new ProviderConfigurationError(
         'INVALID_ENDPOINT',
-        `Invalid ${provider} endpoint. Use HTTP(S) without credentials, a query, or a fragment.`
+        `Invalid ${provider} endpoint. Configure an absolute HTTP or HTTPS URL without credentials, a query, or a fragment.`
       );
     }
 
@@ -168,6 +168,12 @@ export class ProviderFactory {
         throw new ProviderConfigurationError(
           'INVALID_ENDPOINT',
           `Offline mode only permits ${provider} endpoints at literal loopback IP addresses.`
+        );
+      }
+      if (parsed.protocol !== 'https:') {
+        throw new ProviderConfigurationError(
+          'INVALID_ENDPOINT',
+          `Remote ${provider} endpoints must use HTTPS to protect repository-derived content in transit.`
         );
       }
       if (!allowRemoteSelfHosted) {

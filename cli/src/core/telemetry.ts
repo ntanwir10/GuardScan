@@ -206,6 +206,14 @@ export class TelemetryManager {
         unlinkIfPresent(file);
         cleared += 1;
       });
+      for (const source of new Set([this.outboxFile, ...this.legacyFiles])) {
+        unlinkIfPresent(source);
+        unlinkIfPresent(`${source}.migrated`);
+      }
+      unlinkIfPresent(this.migrationJournalFile);
+      forEachDirectoryEntry(this.quarantineDir, entry => {
+        if (entry.dirent.isFile() || entry.dirent.isSymbolicLink()) {unlinkIfPresent(entry.path);}
+      });
       return cleared;
     } finally {
       lease.release();

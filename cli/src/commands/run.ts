@@ -1,6 +1,7 @@
 import chalk from 'chalk';
 import ora from 'ora';
 import { configManager } from '../core/config';
+import type { Config } from '../core/config';
 import { repositoryManager, RepositoryInfo } from '../core/repository';
 import { locCounter, LOCResult } from '../core/loc-counter';
 import {
@@ -29,6 +30,29 @@ interface RunOptions {
   cve?: boolean;
   allowPartial?: boolean;
   withAi?: boolean;  // Explicitly request AI enhancement
+}
+
+type RunVulnerabilitySettings = Pick<
+  import('../core/scan-engine').ScanEngineOptions,
+  | 'cache'
+  | 'vulnerabilityScope'
+  | 'vulnerabilityEndpoint'
+  | 'vulnerabilitySnapshotMaxAgeDays'
+  | 'vulnerabilityEnrichKnownExploited'
+  | 'vulnerabilityKevMaxCacheAgeDays'
+>;
+
+export function vulnerabilitySettingsForRun(
+  config: Pick<Config, 'cache' | 'vulnerabilities'>
+): RunVulnerabilitySettings {
+  return {
+    cache: process.env.GUARDSCAN_NO_CACHE !== 'true' && config.cache?.enabled !== false,
+    vulnerabilityScope: config.vulnerabilities?.scope,
+    vulnerabilityEndpoint: config.vulnerabilities?.endpoint,
+    vulnerabilitySnapshotMaxAgeDays: config.vulnerabilities?.snapshotMaxAgeDays,
+    vulnerabilityEnrichKnownExploited: config.vulnerabilities?.enrichKnownExploited !== false,
+    vulnerabilityKevMaxCacheAgeDays: config.vulnerabilities?.snapshotMaxAgeDays,
+  };
 }
 
 export async function runCommand(options: RunOptions): Promise<void> {
@@ -113,7 +137,8 @@ export async function runCommand(options: RunOptions): Promise<void> {
       repoInfo,
       locResult,
       options.files,
-      executionPolicy
+      executionPolicy,
+      vulnerabilitySettingsForRun(config)
     );
     perfTracker.end('static-analysis');
     logger.debug('Static analysis completed', { findingsCount: reviewResult.findings.length });
@@ -233,7 +258,8 @@ export async function runStaticAnalysis(
   repoInfo: RepositoryInfo,
   locResult: LOCResult,
   _filePatterns: string[] | undefined,
-  executionPolicy: EffectiveExecutionPolicy = resolveExecutionPolicy()
+  executionPolicy: EffectiveExecutionPolicy = resolveExecutionPolicy(),
+  vulnerabilitySettings: RunVulnerabilitySettings = {}
 ): Promise<ReviewResult> {
   const repoPath = repoInfo.path;
   const findings: Finding[] = [];
@@ -262,6 +288,7 @@ export async function runStaticAnalysis(
       includeLicenses: true,
       includeVulnerabilities: executionPolicy.includeCve,
       allowPartial: dependencyAllowPartial,
+      ...vulnerabilitySettings,
     });
     findings.push(...scanResult.findings);
     securityCount = scanResult.findings.length;
