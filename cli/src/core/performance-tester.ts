@@ -1,5 +1,6 @@
-import { execSync } from 'child_process';
+import { execFileSync } from 'child_process';
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 
 export interface PerformanceMetrics {
@@ -134,12 +135,13 @@ export class PerformanceTester {
       throw new Error('k6 is not installed. Please install k6: https://k6.io/docs/getting-started/installation/');
     }
 
-    // Generate k6 script
-    const scriptPath = await this.generateK6Script(mergedConfig, 'load');
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'guardscan-k6-'));
+    const scriptPath = await this.generateK6Script(mergedConfig, 'load', tempDir);
+    const resultPath = path.join(tempDir, 'k6-results.json');
 
     try {
       // Run k6
-      const output = execSync(`k6 run --out json=k6-results.json ${scriptPath}`, {
+      const output = execFileSync('k6', ['run', '--out', `json=${resultPath}`, scriptPath], {
         cwd: process.cwd(),
         encoding: 'utf-8',
         timeout: 300000,  // 5 minutes
@@ -154,15 +156,11 @@ export class PerformanceTester {
         result.failures = this.getThresholdFailures(result.metrics, mergedConfig.thresholds);
       }
 
-      // Clean up
-      fs.unlinkSync(scriptPath);
-      if (fs.existsSync('k6-results.json')) {
-        fs.unlinkSync('k6-results.json');
-      }
-
       return result;
     } catch (error) {
       throw new Error(`k6 load test failed: ${error}`);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
     }
   }
 
@@ -176,10 +174,11 @@ export class PerformanceTester {
       throw new Error('k6 is not installed');
     }
 
-    const scriptPath = await this.generateK6Script(mergedConfig, 'stress');
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'guardscan-k6-'));
+    const scriptPath = await this.generateK6Script(mergedConfig, 'stress', tempDir);
 
     try {
-      const output = execSync(`k6 run ${scriptPath}`, {
+      const output = execFileSync('k6', ['run', scriptPath], {
         cwd: process.cwd(),
         encoding: 'utf-8',
         timeout: 600000,  // 10 minutes
@@ -188,10 +187,11 @@ export class PerformanceTester {
       const result = this.parseK6Output(output, 'stress');
       result.passed = this.checkThresholds(result.metrics, mergedConfig.thresholds);
 
-      fs.unlinkSync(scriptPath);
       return result;
     } catch (error) {
       throw new Error(`k6 stress test failed: ${error}`);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
     }
   }
 
@@ -203,13 +203,15 @@ export class PerformanceTester {
       throw new Error('Lighthouse is not installed. Please install: npm install -g lighthouse');
     }
 
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'guardscan-lighthouse-'));
+    const reportPath = path.join(tempDir, 'lh-report.json');
+
     try {
-      const output = execSync(`lighthouse ${url} --output=json --output-path=/tmp/lh-report.json --chrome-flags="--headless"`, {
+      execFileSync('lighthouse', [url, '--output=json', `--output-path=${reportPath}`, '--chrome-flags=--headless'], {
         encoding: 'utf-8',
         timeout: 120000,  // 2 minutes
       });
 
-      const reportPath = '/tmp/lh-report.json';
       const report = JSON.parse(fs.readFileSync(reportPath, 'utf-8')) as LighthouseResult;
 
       const result: PerformanceResult = {
@@ -235,14 +237,11 @@ export class PerformanceTester {
         result.failures.push(`Performance score: ${(report.categories.performance.score * 100).toFixed(0)}% (expected >= 90%)`);
       }
 
-      // Clean up
-      if (fs.existsSync(reportPath)) {
-        fs.unlinkSync(reportPath);
-      }
-
       return result;
     } catch (error) {
       throw new Error(`Lighthouse audit failed: ${error}`);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
     }
   }
 
@@ -304,7 +303,7 @@ export class PerformanceTester {
   /**
    * Generate k6 test script
    */
-  private async generateK6Script(config: PerformanceConfig, testType: 'load' | 'stress' | 'spike'): Promise<string> {
+  private async generateK6Script(config: PerformanceConfig, testType: 'load' | 'stress' | 'spike', outputDir?: string): Promise<string> {
     const endpoint = config.endpoints?.[0] || { url: 'http://localhost:3000', method: 'GET' };
 
     let stages = '';
@@ -354,7 +353,7 @@ export default function () {
 }
 `;
 
-    const scriptPath = '/tmp/k6-test.js';
+    const scriptPath = path.join(outputDir || os.tmpdir(), 'k6-test.js');
     fs.writeFileSync(scriptPath, script);
 
     return scriptPath;
@@ -453,7 +452,7 @@ export default function () {
    */
   private isK6Available(): boolean {
     try {
-      execSync('k6 version', { stdio: 'ignore' });
+      execFileSync('k6', ['version'], { stdio: 'ignore' });
       return true;
     } catch {
       return false;
@@ -465,7 +464,7 @@ export default function () {
    */
   private isLighthouseAvailable(): boolean {
     try {
-      execSync('lighthouse --version', { stdio: 'ignore' });
+      execFileSync('lighthouse', ['--version'], { stdio: 'ignore' });
       return true;
     } catch {
       return false;

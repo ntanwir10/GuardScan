@@ -75,7 +75,7 @@ describe('ObservableProvider', () => {
   describe('span recording', () => {
     it('should record successful spans', async () => {
       const mock = new MockProvider();
-      const metrics = new MetricsCollector(repoId(), false);
+      const metrics = new MetricsCollector(repoId());
       const observable = new ObservableProvider(mock, metrics);
 
       await observable.chat([{ role: 'user', content: 'test' }]);
@@ -94,7 +94,7 @@ describe('ObservableProvider', () => {
       const mock = new MockProvider();
       mock.setShouldFail(true);
       
-      const metrics = new MetricsCollector(repoId(), false);
+      const metrics = new MetricsCollector(repoId());
       const observable = new ObservableProvider(mock, metrics);
 
       try {
@@ -106,13 +106,13 @@ describe('ObservableProvider', () => {
 
       const span = spans[0];
       expect(span.success).toBe(false);
-      expect(span.error).toBe('Test error');
+      expect(span.error).toBeUndefined();
       expect(span.errorType).toBeDefined();
     });
 
     it('should record latency', async () => {
       const mock = new MockProvider();
-      const metrics = new MetricsCollector(repoId(), false);
+      const metrics = new MetricsCollector(repoId());
       const observable = new ObservableProvider(mock, metrics);
 
       await observable.chat([{ role: 'user', content: 'test' }]);
@@ -132,7 +132,7 @@ describe('ObservableProvider', () => {
         usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
       });
 
-      const metrics = new MetricsCollector(repoId(), false);
+      const metrics = new MetricsCollector(repoId());
       const observable = new ObservableProvider(mock, metrics);
 
       await observable.chat([{ role: 'user', content: 'test' }]);
@@ -142,12 +142,23 @@ describe('ObservableProvider', () => {
 
       expect(span.cacheHit).toBe(true);
     });
+
+    it('returns a successful provider response when local metrics persistence fails', async () => {
+      const mock = new MockProvider();
+      const metrics = new MetricsCollector(repoId());
+      jest.spyOn(metrics, 'recordSpan').mockRejectedValue(new Error('disk full'));
+      const observable = new ObservableProvider(mock, metrics);
+
+      await expect(observable.chat([{ role: 'user', content: 'test' }])).resolves.toMatchObject({
+        content: 'Success',
+      });
+    });
   });
 
   describe('metrics aggregation', () => {
     it('should aggregate metrics correctly', async () => {
       const mock = new MockProvider();
-      const metrics = new MetricsCollector(repoId(), false);
+      const metrics = new MetricsCollector(repoId());
       const observable = new ObservableProvider(mock, metrics);
 
       // Make multiple successful calls
@@ -171,7 +182,7 @@ describe('ObservableProvider', () => {
   describe('configuration', () => {
     it('should bypass observability when disabled', async () => {
       const mock = new MockProvider();
-      const metrics = new MetricsCollector(repoId(), false);
+      const metrics = new MetricsCollector(repoId());
       const observable = new ObservableProvider(mock, metrics, {
         enabled: false,
       });

@@ -8,6 +8,7 @@
 
 import axios, { AxiosInstance } from 'axios';
 import { BaseEmbeddingProvider } from '../core/embeddings';
+import { ProviderFactory } from './factory';
 
 export interface OllamaEmbeddingResponse {
   embedding: number[];
@@ -17,13 +18,19 @@ export class OllamaEmbeddingProvider extends BaseEmbeddingProvider {
   private client: AxiosInstance;
   private endpoint: string;
 
-  constructor(endpoint: string = 'http://localhost:11434') {
+  constructor(endpoint?: string, offline = false, allowRemoteSelfHosted = false) {
     super('ollama', 'nomic-embed-text', 768);
 
-    this.endpoint = endpoint;
+    this.endpoint = ProviderFactory.normalizeEndpoint(
+      'ollama',
+      endpoint,
+      offline,
+      allowRemoteSelfHosted
+    )!;
     this.client = axios.create({
-      baseURL: endpoint,
+      baseURL: this.endpoint,
       timeout: 30000, // 30 seconds per request
+      maxRedirects: 0,
     });
   }
 
@@ -149,7 +156,7 @@ export class OllamaEmbeddingProvider extends BaseEmbeddingProvider {
   } {
     return {
       speed: 'Fast (~100-500 embeddings/sec on consumer hardware)',
-      privacy: '100% local - no data leaves your machine',
+      privacy: 'Requests go only to the configured endpoint; trust non-loopback endpoints',
       cost: 'Free',
       quality: 'Good (768 dimensions, suitable for most use cases)',
     };

@@ -1,0 +1,410 @@
+{
+  "src/commands/budget.ts": {
+    "errors": 29,
+    "warnings": 38
+  },
+  "src/commands/cache.ts": {
+    "errors": 11,
+    "warnings": 32
+  },
+  "src/commands/chat.ts": {
+    "errors": 5,
+    "warnings": 95
+  },
+  "src/commands/commit.ts": {
+    "errors": 0,
+    "warnings": 12
+  },
+  "src/commands/config.ts": {
+    "errors": 49,
+    "warnings": 67
+  },
+  "src/commands/docs.ts": {
+    "errors": 3,
+    "warnings": 26
+  },
+  "src/commands/explain.ts": {
+    "errors": 1,
+    "warnings": 12
+  },
+  "src/commands/init.ts": {
+    "errors": 44,
+    "warnings": 46
+  },
+  "src/commands/metrics.ts": {
+    "errors": 0,
+    "warnings": 26
+  },
+  "src/commands/migrate.ts": {
+    "errors": 4,
+    "warnings": 59
+  },
+  "src/commands/models.ts": {
+    "errors": 26,
+    "warnings": 43
+  },
+  "src/commands/mutation.ts": {
+    "errors": 38,
+    "warnings": 49
+  },
+  "src/commands/perf.ts": {
+    "errors": 34,
+    "warnings": 63
+  },
+  "src/commands/refactor.ts": {
+    "errors": 23,
+    "warnings": 85
+  },
+  "src/commands/reset.ts": {
+    "errors": 2,
+    "warnings": 6
+  },
+  "src/commands/review.ts": {
+    "errors": 80,
+    "warnings": 35
+  },
+  "src/commands/routing.ts": {
+    "errors": 40,
+    "warnings": 29
+  },
+  "src/commands/rules.ts": {
+    "errors": 62,
+    "warnings": 40
+  },
+  "src/commands/run.ts": {
+    "errors": 0,
+    "warnings": 11
+  },
+  "src/commands/sbom.ts": {
+    "errors": 0,
+    "warnings": 24
+  },
+  "src/commands/scan.ts": {
+    "errors": 14,
+    "warnings": 10
+  },
+  "src/commands/security.ts": {
+    "errors": 1,
+    "warnings": 13
+  },
+  "src/commands/status.ts": {
+    "errors": 0,
+    "warnings": 18
+  },
+  "src/commands/telemetry.ts": {
+    "errors": 2,
+    "warnings": 11
+  },
+  "src/commands/test-gen.ts": {
+    "errors": 1,
+    "warnings": 29
+  },
+  "src/commands/test.ts": {
+    "errors": 215,
+    "warnings": 42
+  },
+  "src/commands/threat-model.ts": {
+    "errors": 114,
+    "warnings": 31
+  },
+  "src/commands/vuln.ts": {
+    "errors": 9,
+    "warnings": 6
+  },
+  "src/core/ai-cache.ts": {
+    "errors": 20,
+    "warnings": 0
+  },
+  "src/core/api-scanner.ts": {
+    "errors": 4,
+    "warnings": 0
+  },
+  "src/core/ast-parser.ts": {
+    "errors": 23,
+    "warnings": 0
+  },
+  "src/core/bounded-response.ts": {
+    "errors": 4,
+    "warnings": 0
+  },
+  "src/core/chatbot-engine.ts": {
+    "errors": 2,
+    "warnings": 0
+  },
+  "src/core/code-metrics.ts": {
+    "errors": 3,
+    "warnings": 0
+  },
+  "src/core/code-smells.ts": {
+    "errors": 11,
+    "warnings": 0
+  },
+  "src/core/codebase-indexer.ts": {
+    "errors": 40,
+    "warnings": 0
+  },
+  "src/core/compliance-checker.ts": {
+    "errors": 5,
+    "warnings": 0
+  },
+  "src/core/context-builder.ts": {
+    "errors": 11,
+    "warnings": 0
+  },
+  "src/core/cost-guard.ts": {
+    "errors": 1,
+    "warnings": 1
+  },
+  "src/core/dependency-scanner.ts": {
+    "errors": 6,
+    "warnings": 0
+  },
+  "src/core/dockerfile-scanner.ts": {
+    "errors": 2,
+    "warnings": 0
+  },
+  "src/core/embedding-chunker.ts": {
+    "errors": 7,
+    "warnings": 4
+  },
+  "src/core/embedding-indexer.ts": {
+    "errors": 38,
+    "warnings": 21
+  },
+  "src/core/embedding-store.ts": {
+    "errors": 15,
+    "warnings": 2
+  },
+  "src/core/iac-scanner.ts": {
+    "errors": 52,
+    "warnings": 0
+  },
+  "src/core/license-scanner.ts": {
+    "errors": 53,
+    "warnings": 0
+  },
+  "src/core/linter-integration.ts": {
+    "errors": 67,
+    "warnings": 0
+  },
+  "src/core/loc-counter.ts": {
+    "errors": 1,
+    "warnings": 0
+  },
+  "src/core/mutation-tester.ts": {
+    "errors": 43,
+    "warnings": 0
+  },
+  "src/core/osv-client.ts": {
+    "errors": 6,
+    "warnings": 0
+  },
+  "src/core/owasp-scanner.ts": {
+    "errors": 11,
+    "warnings": 0
+  },
+  "src/core/package-inventory.ts": {
+    "errors": 45,
+    "warnings": 0
+  },
+  "src/core/performance-tester.ts": {
+    "errors": 9,
+    "warnings": 0
+  },
+  "src/core/rag-context.ts": {
+    "errors": 3,
+    "warnings": 0
+  },
+  "src/core/repository.ts": {
+    "errors": 1,
+    "warnings": 0
+  },
+  "src/core/rule-engine.ts": {
+    "errors": 37,
+    "warnings": 0
+  },
+  "src/core/scan-engine.ts": {
+    "errors": 8,
+    "warnings": 0
+  },
+  "src/core/secrets-detector.ts": {
+    "errors": 3,
+    "warnings": 0
+  },
+  "src/core/test-runner.ts": {
+    "errors": 22,
+    "warnings": 0
+  },
+  "src/core/usage-tracker.ts": {
+    "errors": 11,
+    "warnings": 0
+  },
+  "src/features/code-explainer.ts": {
+    "errors": 43,
+    "warnings": 0
+  },
+  "src/features/code-review.ts": {
+    "errors": 36,
+    "warnings": 0
+  },
+  "src/features/commit-generator.ts": {
+    "errors": 26,
+    "warnings": 0
+  },
+  "src/features/docs-generator.ts": {
+    "errors": 95,
+    "warnings": 9
+  },
+  "src/features/fix-suggestions.ts": {
+    "errors": 19,
+    "warnings": 0
+  },
+  "src/features/migration-assistant.ts": {
+    "errors": 21,
+    "warnings": 1
+  },
+  "src/features/refactoring-suggestions.ts": {
+    "errors": 30,
+    "warnings": 0
+  },
+  "src/features/test-generator.ts": {
+    "errors": 18,
+    "warnings": 0
+  },
+  "src/features/threat-modeling.ts": {
+    "errors": 58,
+    "warnings": 6
+  },
+  "src/index.ts": {
+    "errors": 1,
+    "warnings": 0
+  },
+  "src/parsers/csharp-parser.ts": {
+    "errors": 4,
+    "warnings": 0
+  },
+  "src/parsers/go-parser.ts": {
+    "errors": 5,
+    "warnings": 0
+  },
+  "src/parsers/java-parser.ts": {
+    "errors": 5,
+    "warnings": 0
+  },
+  "src/parsers/php-parser.ts": {
+    "errors": 3,
+    "warnings": 0
+  },
+  "src/parsers/python-parser.ts": {
+    "errors": 64,
+    "warnings": 0
+  },
+  "src/parsers/ruby-parser.ts": {
+    "errors": 3,
+    "warnings": 0
+  },
+  "src/parsers/rust-parser.ts": {
+    "errors": 4,
+    "warnings": 0
+  },
+  "src/providers/base.ts": {
+    "errors": 7,
+    "warnings": 0
+  },
+  "src/providers/claude.ts": {
+    "errors": 25,
+    "warnings": 0
+  },
+  "src/providers/decorators/cached-provider.ts": {
+    "errors": 2,
+    "warnings": 0
+  },
+  "src/providers/decorators/circuit-breaker-provider.ts": {
+    "errors": 27,
+    "warnings": 4
+  },
+  "src/providers/decorators/observable-provider.ts": {
+    "errors": 0,
+    "warnings": 1
+  },
+  "src/providers/decorators/rate-limited-provider.ts": {
+    "errors": 2,
+    "warnings": 2
+  },
+  "src/providers/decorators/retry-provider.ts": {
+    "errors": 39,
+    "warnings": 0
+  },
+  "src/providers/embedding-claude.ts": {
+    "errors": 9,
+    "warnings": 0
+  },
+  "src/providers/embedding-factory.ts": {
+    "errors": 3,
+    "warnings": 0
+  },
+  "src/providers/embedding-gemini.ts": {
+    "errors": 7,
+    "warnings": 0
+  },
+  "src/providers/embedding-lmstudio.ts": {
+    "errors": 10,
+    "warnings": 0
+  },
+  "src/providers/embedding-ollama.ts": {
+    "errors": 10,
+    "warnings": 0
+  },
+  "src/providers/embedding-openai.ts": {
+    "errors": 5,
+    "warnings": 0
+  },
+  "src/providers/gemini.ts": {
+    "errors": 66,
+    "warnings": 0
+  },
+  "src/providers/model-router.ts": {
+    "errors": 9,
+    "warnings": 0
+  },
+  "src/providers/ollama.ts": {
+    "errors": 21,
+    "warnings": 0
+  },
+  "src/providers/token-counter.ts": {
+    "errors": 28,
+    "warnings": 0
+  },
+  "src/utils/ascii-art.ts": {
+    "errors": 0,
+    "warnings": 9
+  },
+  "src/utils/debug-logger.ts": {
+    "errors": 4,
+    "warnings": 3
+  },
+  "src/utils/error-handler.ts": {
+    "errors": 6,
+    "warnings": 0
+  },
+  "src/utils/performance-tracker.ts": {
+    "errors": 5,
+    "warnings": 5
+  },
+  "src/utils/process-runner.ts": {
+    "errors": 1,
+    "warnings": 0
+  },
+  "src/utils/progress.ts": {
+    "errors": 0,
+    "warnings": 1
+  },
+  "src/utils/report-templates.ts": {
+    "errors": 15,
+    "warnings": 0
+  },
+  "src/utils/version.ts": {
+    "errors": 14,
+    "warnings": 8
+  }
+}

@@ -7,7 +7,7 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import * as os from 'os';
+import { getGuardScanCacheDir } from '../utils/path-helper';
 import {
   CodeEmbedding,
   EmbeddingIndex,
@@ -36,8 +36,10 @@ export class FileBasedEmbeddingStore implements EmbeddingStore {
     private basePath?: string
   ) {
     // Default to ~/.guardscan/cache/<repo-id>/embeddings
-    const base =
-      basePath || path.join(os.homedir(), '.guardscan', 'cache', repoId);
+    if (!/^[a-zA-Z0-9._-]+$/.test(repoId)) {
+      throw new Error('Invalid repository embedding identifier');
+    }
+    const base = basePath || path.join(getGuardScanCacheDir(), repoId);
     this.storageDir = path.join(base, 'embeddings');
     this.indexPath = path.join(this.storageDir, 'index.json');
   }

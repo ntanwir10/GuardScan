@@ -1,6 +1,6 @@
 import * as fs from 'fs';
 import * as crypto from 'crypto';
-import { execSync } from 'child_process';
+import { execFileSync } from 'child_process';
 import { SECURITY_CONSTANTS } from '../constants/security-constants';
 
 export interface SecretFinding {
@@ -41,7 +41,7 @@ export class SecretsDetector {
 
     try {
       // Get all commits
-      const commits = execSync('git log --all --format=%H', {
+      const commits = execFileSync('git', ['log', '--all', '--format=%H'], {
         cwd: repoPath,
         encoding: 'utf-8',
       }).split('\n').filter(Boolean).slice(0, SECURITY_CONSTANTS.GIT_HISTORY_COMMIT_LIMIT);
@@ -49,7 +49,7 @@ export class SecretsDetector {
       for (const commit of commits) {
         try {
           // Get diff for commit
-          const diff = execSync(`git show ${commit}`, {
+          const diff = execFileSync('git', ['show', '--end-of-options', commit], {
             cwd: repoPath,
             encoding: 'utf-8',
           });

@@ -1,32 +1,30 @@
 import chalk from 'chalk';
-import ora from 'ora';
-import { execSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
-import { repositoryManager } from '../core/repository';
-import { secretsDetector } from '../core/secrets-detector';
-import { dependencyScanner } from '../core/dependency-scanner';
-import { dockerfileScanner } from '../core/dockerfile-scanner';
-import { iacScanner } from '../core/iac-scanner';
-import { owaspScanner } from '../core/owasp-scanner';
-import { apiScanner } from '../core/api-scanner';
-import { complianceChecker } from '../core/compliance-checker';
-import { licenseScanner } from '../core/license-scanner';
-import { testRunner } from '../core/test-runner';
+import { ConfigManager } from '../core/config';
 import { codeMetricsAnalyzer } from '../core/code-metrics';
 import { codeSmellDetector } from '../core/code-smells';
+import { licenseScanner, LicenseReport } from '../core/license-scanner';
 import { linterIntegration } from '../core/linter-integration';
 import { locCounter } from '../core/loc-counter';
-import { reporter, ReviewResult } from '../utils/reporter';
-import { telemetryManager } from '../core/telemetry';
-import { ConfigManager } from '../core/config';
-import { createProgressBar } from '../utils/progress';
-import { createDebugLogger } from '../utils/debug-logger';
-import { createPerformanceTracker } from '../utils/performance-tracker';
+import { collectPackageInventory, PackageInventory } from '../core/package-inventory';
+import { repositoryManager } from '../core/repository';
+import {
+  evaluateScanPolicy,
+  ScanEngineResult,
+  ScanExecutionError,
+  ScanExecutionStatus,
+  ScanOutputFormat,
+  ScanPolicy,
+  ScanPolicyResult,
+  scanEngine,
+  writeScanResult,
+} from '../core/scan-engine';
+import { createTelemetryManager } from '../core/telemetry';
+import { testRunner } from '../core/test-runner';
 import { handleCommandError } from '../utils/error-handler';
-
-const logger = createDebugLogger('scan');
-const perfTracker = createPerformanceTracker('guardscan scan');
+import { reporter, ReviewResult } from '../utils/reporter';
+import { EffectiveExecutionPolicy, resolveExecutionPolicy } from '../utils/execution-policy';
 
 interface ScanOptions {
   skipTests?: boolean;
@@ -35,650 +33,544 @@ interface ScanOptions {
   skipAi?: boolean;
   coverage?: boolean;
   licenses?: boolean;
-  noCloud?: boolean;
+  cve?: boolean;
+  allowPartial?: boolean;
+  runProjectCode?: boolean;
+  isolateProjectNetwork?: boolean;
+  concurrency?: string;
+  scope?: string;
+  cloud?: boolean;
+  cache?: boolean;
+  ci?: boolean;
+  offline?: boolean;
+  format?: 'markdown' | ScanOutputFormat;
+  output?: string;
+  failOn?: 'critical' | 'high' | 'medium' | 'low' | 'info';
+  maxFindings?: string;
 }
 
-interface ScanResults {
-  security: any;
-  quality: any;
-  sbom: any;
-  aiReview?: any;
-  timestamp: string;
-  duration: number;
+type CheckStatus = 'succeeded' | 'failed' | 'skipped';
+
+export interface CheckResult {
+  status: CheckStatus;
+  durationMs: number;
+  data?: unknown;
+  error?: { code: string; message: string; retryable: boolean };
+  reason?: string;
+}
+
+export interface QualitySection {
+  status: 'complete' | 'partial' | 'failed' | 'skipped';
+  checks: {
+    tests: CheckResult;
+    metrics: CheckResult;
+    smells: CheckResult;
+    lint: CheckResult;
+    performance: CheckResult;
+    mutation: CheckResult;
+  };
+}
+
+export interface SbomSection {
+  status: 'succeeded' | 'partial' | 'failed';
+  format?: string;
+  document?: unknown;
+  error?: { code: string; message: string; retryable: boolean };
 }
 
 export async function scanCommand(options: ScanOptions): Promise<void> {
-  logger.debug('Scan command started', { options });
-  perfTracker.start('scan-total');
-  const startTime = Date.now();
-
+  const startedAt = Date.now();
   console.log(chalk.cyan.bold('\n🛡️  GuardScan - Comprehensive Security & Quality Analysis\n'));
 
-  perfTracker.start('detect-repository');
-  const repoInfo = repositoryManager.getRepoInfo();
-  perfTracker.end('detect-repository');
-  logger.debug('Repository detected', { name: repoInfo.name, repoId: repoInfo.repoId });
-  console.log(chalk.gray(`Repository: ${repoInfo.name}\n`));
-
-  const results: ScanResults = {
-    security: {},
-    quality: {},
-    sbom: null,
-    timestamp: new Date().toISOString(),
-    duration: 0,
-  };
-
   try {
-    // Calculate total tasks for progress tracking
-    const securityTasks = options.licenses ? 8 : 7;
-    const qualityTasks = options.skipTests ? 0 : 4;
-    const totalTasks = securityTasks + qualityTasks + 1; // +1 for SBOM
-
-    let completed = 0;
-    const overallProgress = createProgressBar(totalTasks, 'Overall Progress');
-
-    // Run all scans in parallel with progress tracking
-    logger.debug('Starting parallel scans', { totalTasks, securityTasks, qualityTasks });
-    perfTracker.start('security-scans');
-    const scanPromises: Promise<any>[] = [];
-
-    // 1. Security Scans (run in parallel)
-    const securityPromises = runSecurityScans(process.cwd(), options, () => {
-      completed++;
-      overallProgress.update(completed, { status: `${completed}/${totalTasks} checks complete` });
+    const repoInfo = repositoryManager.getRepoInfo();
+    const config = new ConfigManager().loadOrInit();
+    warnDeprecatedNoCloud(options.cloud);
+    const executionPolicy = resolveExecutionPolicy({
+      configOffline: config.offlineMode,
+      offline: options.offline,
+      cloud: options.cloud,
+      runProjectCode: options.runProjectCode,
+      isolateProjectNetwork: options.isolateProjectNetwork,
+      cve: options.cve === true && config.vulnerabilities?.enabled !== false,
+      allowPartial: options.allowPartial,
     });
-    scanPromises.push(...securityPromises);
+    const { offline } = executionPolicy;
+    const allowPartial = executionPolicy.allowPartial;
+    const concurrency = parseConcurrency(options.concurrency);
+    const vulnerabilityScope = parseScope(options.scope || config.vulnerabilities?.scope);
+    const useCache = options.cache !== false &&
+      process.env.GUARDSCAN_NO_CACHE !== 'true' &&
+      config.cache?.enabled !== false;
+    const includeVulnerabilities = executionPolicy.includeCve;
+    const inventory = collectPackageInventory(repoInfo.path);
+    const locResult = await locCounter.count();
 
-    // 2. Quality Analysis (run in parallel)
-    if (!options.skipTests) {
-      const qualityPromises = runQualityAnalysis(process.cwd(), options, () => {
-        completed++;
-        overallProgress.update(completed, { status: `${completed}/${totalTasks} checks complete` });
-      });
-      scanPromises.push(...qualityPromises);
+    const executionNotices = [chalk.gray(`Repository: ${repoInfo.name}`)];
+    if (!includeVulnerabilities) {
+      executionNotices.push(chalk.gray('Dependency vulnerability scanning: disabled'));
+    }
+    if (executionPolicy.runProjectCode) {
+      executionNotices.push(chalk.yellow.bold('\n⚠ Trust warning: repository-controlled code execution enabled.'));
+      executionNotices.push(chalk.yellow(
+        executionPolicy.isolateProjectNetwork
+          ? '  Tests and linters can read accessible files and modify the repository; network isolation was requested.'
+          : '  Tests and linters can read accessible files, modify the repository, and use the network.'
+      ));
+      executionNotices.push(chalk.yellow('  Run this only for repositories you trust.\n'));
+    }
+    console.log(executionNotices.join('\n'));
+
+    // One inventory and one license report feed CVE, license, and SBOM work.
+    const licenseReportPromise = licenseScanner.scan(repoInfo.path, 'proprietary', {
+      offline,
+      runProjectCode: executionPolicy.runProjectCode,
+      networkIsolation: executionPolicy.isolateProjectNetwork,
+      inventory,
+    });
+
+    const securityPromise = scanEngine.runSecurityScan({
+      repoPath: repoInfo.path,
+      files: locResult.fileBreakdown,
+      offline,
+      includeLicenses: options.licenses === true,
+      includeVulnerabilities,
+      allowPartial,
+      cache: useCache,
+      concurrency,
+      vulnerabilityScope,
+      vulnerabilityEndpoint: config.vulnerabilities?.endpoint,
+      vulnerabilitySnapshotMaxAgeDays: config.vulnerabilities?.snapshotMaxAgeDays,
+      vulnerabilityEnrichKnownExploited:
+        config.vulnerabilities?.enrichKnownExploited !== false,
+      vulnerabilityKevMaxCacheAgeDays: config.vulnerabilities?.snapshotMaxAgeDays,
+      packageInventory: inventory,
+      licenseReport: licenseReportPromise,
+    });
+    const qualityPromise = runQualityAnalysis(repoInfo.path, options, executionPolicy);
+    const sbomPromise = createSbomSection(licenseReportPromise, inventory);
+
+    const [securityResult, quality, sbom] = await Promise.all([
+      securityPromise,
+      qualityPromise,
+      sbomPromise,
+    ]);
+
+    const ai = aiState(options.skipAi === true, config.provider);
+    const policy: ScanPolicy = {
+      failOn: options.failOn,
+      maxFindings: parseMaxFindings(options.maxFindings),
+      allowPartial,
+    };
+    const { result: policyResult, executionStatus, errors } = evaluateComprehensivePolicy(
+      securityResult,
+      quality,
+      sbom,
+      policy
+    );
+
+    const outputFormat = resolveOutputFormat(options.format, options.ci);
+    let reportPath: string;
+    if (outputFormat === 'markdown') {
+      const review = comprehensiveReview(
+        securityResult,
+        quality,
+        sbom,
+        policyResult,
+        repoInfo,
+        locResult,
+        Date.now() - startedAt,
+        executionPolicy.runProjectCode
+      );
+      reportPath = await reporter.saveReport(review, 'markdown', options.output, 'comprehensive');
+    } else {
+      reportPath = writeScanResult(
+        securityResult,
+        outputFormat,
+        options.output || `guardscan-scan.${outputFormat === 'sarif' ? 'sarif' : 'json'}`,
+        repoInfo.path,
+        {
+          command: 'scan',
+          ci: options.ci,
+          allowPartial,
+          quality,
+          sbom,
+          ai,
+          policy,
+          policyResult,
+          executionStatus,
+          executionErrors: errors,
+          executionMode: executionPolicy.runProjectCode
+            ? 'project-code-executed'
+            : 'static-analysis',
+        }
+      );
     }
 
-    // 3. SBOM Generation
-    const sbomPromise = runSBOMGeneration(process.cwd()).then(result => {
-      completed++;
-      overallProgress.update(completed, { status: `${completed}/${totalTasks} checks complete` });
-      return result;
-    });
-    scanPromises.push(sbomPromise);
+    console.log(chalk.green(`\n✓ Report saved: ${reportPath}`));
+    displaySummary(securityResult, quality, sbom, policyResult, Date.now() - startedAt);
+    applyExitCode(policyResult.exitCode);
 
-    // Wait for all scans to complete
-    const allResults = await Promise.allSettled(scanPromises);
-    perfTracker.end('security-scans'); // Complete security-scans timing after all scans finish
-    overallProgress.stop();
-    logger.debug('All scans completed', { totalResults: allResults.length });
-
-    // Process results
-    processResults(allResults, results);
-
-    // 4. Optional: AI Code Review
-    if (!options.skipAi) {
-      perfTracker.start('ai-review');
-      await runAIReview(results, options);
-      perfTracker.end('ai-review');
-      logger.debug('AI review completed');
-    }
-
-    // Calculate total duration
-    results.duration = Date.now() - startTime;
-
-    // Generate comprehensive report
-    console.log(chalk.gray('\nGenerating comprehensive report...'));
-    perfTracker.start('report-generation');
-    const report = generateComprehensiveReport(results, repoInfo);
-    const reportPath = reporter.saveReport(report, 'markdown', undefined, 'comprehensive');
-    perfTracker.end('report-generation');
-    logger.debug('Report generated', { reportPath });
-    console.log(chalk.green(`✓ Report saved: ${reportPath}`));
-
-    // Display summary
-    displaySummary(results);
-
-    // Record telemetry
-    perfTracker.start('record-telemetry');
-    await telemetryManager.record({
+    await createTelemetryManager(config).record({
       action: 'scan',
-      loc: 0,
-      durationMs: results.duration,
+      loc: locResult.codeLines,
+      durationMs: Date.now() - startedAt,
       model: 'comprehensive-scan',
     });
-    perfTracker.end('record-telemetry');
-
-    perfTracker.end('scan-total');
-    logger.debug('Scan command completed successfully', { duration: results.duration });
-    perfTracker.displaySummary();
-
-    console.log(chalk.cyan('\n✨ Scan complete!\n'));
-
-  } catch (error: any) {
-    perfTracker.end('scan-total');
-    perfTracker.displaySummary();
-    handleCommandError(error, 'Scan');
-  }
-}
-
-/**
- * Run all security scans in parallel
- */
-function runSecurityScans(
-  repoPath: string,
-  options: ScanOptions,
-  onProgress?: () => void
-): Promise<any>[] {
-  const promises: Promise<any>[] = [];
-
-  // Get file list for scanners that need it
-  const getFilePaths = async (): Promise<string[]> => {
-    try {
-      const locResult = await locCounter.count();
-      return locResult.fileBreakdown.map((f: any) => f.path);
-    } catch {
-      return [];
-    }
-  };
-
-  // 1. Secrets detection
-  const secretsSpinner = ora('Scanning for secrets...').start();
-  promises.push(
-    (async () => {
-      perfTracker.start('scanner-secrets');
-      try {
-        const filePaths = await getFilePaths();
-        const results = await secretsDetector.detectInFiles(filePaths);
-        const gitResults = await secretsDetector.scanGitHistory(repoPath);
-        const allResults = [...results, ...gitResults];
-        const duration = perfTracker.end('scanner-secrets');
-        logger.performance('scanner-secrets', duration, { findings: allResults.length });
-        secretsSpinner.succeed(`Secrets scan complete (${allResults.length} findings)`);
-        if (onProgress) {onProgress();}
-        return { type: 'secrets', results: allResults };
-      } catch (error: any) {
-        perfTracker.end('scanner-secrets');
-        logger.error('Secrets scan failed', error);
-        secretsSpinner.fail('Secrets scan failed');
-        if (onProgress) {onProgress();}
-        return { type: 'secrets', results: [], error };
-      }
-    })()
-  );
-
-  // 2. Dependency vulnerabilities
-  const depsSpinner = ora('Scanning dependencies...').start();
-  promises.push(
-    (async () => {
-      perfTracker.start('scanner-dependencies');
-      try {
-        const results = await dependencyScanner.scan(repoPath);
-        const duration = perfTracker.end('scanner-dependencies');
-        logger.performance('scanner-dependencies', duration, { findings: results.length });
-        depsSpinner.succeed(`Dependency scan complete (${results.length} findings)`);
-        if (onProgress) {onProgress();}
-        return { type: 'dependencies', results };
-      } catch (error: any) {
-        perfTracker.end('scanner-dependencies');
-        logger.error('Dependency scan failed', error);
-        depsSpinner.fail('Dependency scan failed');
-        if (onProgress) {onProgress();}
-        return { type: 'dependencies', results: [], error };
-      }
-    })()
-  );
-
-  // 3. Dockerfile security
-  const dockerSpinner = ora('Scanning Dockerfiles...').start();
-  promises.push(
-    (async () => {
-      perfTracker.start('scanner-dockerfile');
-      try {
-        const results = await dockerfileScanner.scan(repoPath);
-        const duration = perfTracker.end('scanner-dockerfile');
-        logger.performance('scanner-dockerfile', duration, { findings: results.length });
-        dockerSpinner.succeed(`Dockerfile scan complete (${results.length} findings)`);
-        if (onProgress) {onProgress();}
-        return { type: 'dockerfile', results };
-      } catch (error: any) {
-        perfTracker.end('scanner-dockerfile');
-        logger.error('Dockerfile scan failed', error);
-        dockerSpinner.fail('Dockerfile scan failed');
-        if (onProgress) {onProgress();}
-        return { type: 'dockerfile', results: [], error };
-      }
-    })()
-  );
-
-  // 4. Infrastructure as Code
-  const iacSpinner = ora('Scanning IaC files...').start();
-  promises.push(
-    (async () => {
-      perfTracker.start('scanner-iac');
-      try {
-        const results = await iacScanner.scan(repoPath);
-        const duration = perfTracker.end('scanner-iac');
-        logger.performance('scanner-iac', duration, { findings: results.length });
-        iacSpinner.succeed(`IaC scan complete (${results.length} findings)`);
-        if (onProgress) {onProgress();}
-        return { type: 'iac', results };
-      } catch (error: any) {
-        perfTracker.end('scanner-iac');
-        logger.error('IaC scan failed', error);
-        iacSpinner.fail('IaC scan failed');
-        if (onProgress) {onProgress();}
-        return { type: 'iac', results: [], error };
-      }
-    })()
-  );
-
-  // 5. OWASP Top 10
-  const owaspSpinner = ora('Checking OWASP Top 10...').start();
-  promises.push(
-    (async () => {
-      perfTracker.start('scanner-owasp');
-      try {
-        const results = await owaspScanner.scan(repoPath);
-        const duration = perfTracker.end('scanner-owasp');
-        logger.performance('scanner-owasp', duration, { findings: results.length });
-        owaspSpinner.succeed(`OWASP scan complete (${results.length} findings)`);
-        if (onProgress) {onProgress();}
-        return { type: 'owasp', results };
-      } catch (error: any) {
-        perfTracker.end('scanner-owasp');
-        logger.error('OWASP scan failed', error);
-        owaspSpinner.fail('OWASP scan failed');
-        if (onProgress) {onProgress();}
-        return { type: 'owasp', results: [], error };
-      }
-    })()
-  );
-
-  // 6. API Security
-  const apiSpinner = ora('Scanning API endpoints...').start();
-  promises.push(
-    (async () => {
-      perfTracker.start('scanner-api');
-      try {
-        const results = await apiScanner.scan(repoPath);
-        const duration = perfTracker.end('scanner-api');
-        logger.performance('scanner-api', duration, { findings: results.length });
-        apiSpinner.succeed(`API scan complete (${results.length} findings)`);
-        if (onProgress) {onProgress();}
-        return { type: 'api', results };
-      } catch (error: any) {
-        perfTracker.end('scanner-api');
-        logger.error('API scan failed', error);
-        apiSpinner.fail('API scan failed');
-        if (onProgress) {onProgress();}
-        return { type: 'api', results: [], error };
-      }
-    })()
-  );
-
-  // 7. License scanning (if requested)
-  if (options.licenses) {
-    const licenseSpinner = ora('Scanning licenses...').start();
-    promises.push(
-      (async () => {
-        perfTracker.start('scanner-licenses');
-        try {
-          const results = await licenseScanner.scan(repoPath, 'proprietary');
-          const duration = perfTracker.end('scanner-licenses');
-          logger.performance('scanner-licenses', duration, { packages: results.totalDependencies });
-          licenseSpinner.succeed(`License scan complete (${results.totalDependencies} packages)`);
-          if (onProgress) {onProgress();}
-          return { type: 'licenses', results };
-        } catch (error: any) {
-          perfTracker.end('scanner-licenses');
-          logger.error('License scan failed', error);
-          licenseSpinner.fail('License scan failed');
-          if (onProgress) {onProgress();}
-          return { type: 'licenses', results: null, error };
-        }
-      })()
-    );
-  }
-
-  // 8. Compliance checking
-  const complianceSpinner = ora('Checking compliance...').start();
-  promises.push(
-    (async () => {
-      perfTracker.start('scanner-compliance');
-      try {
-        const results = await complianceChecker.check(repoPath);
-        const duration = perfTracker.end('scanner-compliance');
-        logger.performance('scanner-compliance', duration, { reports: results.length });
-        complianceSpinner.succeed(`Compliance check complete`);
-        if (onProgress) {onProgress();}
-        return { type: 'compliance', results };
-      } catch (error: any) {
-        perfTracker.end('scanner-compliance');
-        logger.error('Compliance check failed', error);
-        complianceSpinner.fail('Compliance check failed');
-        if (onProgress) {onProgress();}
-        return { type: 'compliance', results: [], error };
-      }
-    })()
-  );
-
-  return promises;
-}
-
-/**
- * Run quality analysis in parallel
- */
-function runQualityAnalysis(
-  repoPath: string,
-  options: ScanOptions,
-  onProgress?: () => void
-): Promise<any>[] {
-  const promises: Promise<any>[] = [];
-
-  // 1. Test execution
-  const testSpinner = ora('Running tests...').start();
-  promises.push(
-    (async () => {
-      perfTracker.start('scanner-tests');
-      try {
-        const results = await testRunner.runTests(repoPath, options.coverage || false);
-        const duration = perfTracker.end('scanner-tests');
-        logger.performance('scanner-tests', duration, { frameworks: results.length });
-        if (results.length > 0) {
-          testSpinner.succeed(`Tests complete (${results.length} framework(s))`);
-        } else {
-          testSpinner.info('No test frameworks detected');
-        }
-        if (onProgress) {onProgress();}
-        return { type: 'tests', results };
-      } catch (error: any) {
-        perfTracker.end('scanner-tests');
-        logger.error('Test execution failed', error);
-        testSpinner.fail('Test execution failed');
-        if (onProgress) {onProgress();}
-        return { type: 'tests', results: [], error };
-      }
-    })()
-  );
-
-  // 2. Code metrics
-  const metricsSpinner = ora('Analyzing code metrics...').start();
-  promises.push(
-    (async () => {
-      perfTracker.start('scanner-metrics');
-      try {
-        const results = await codeMetricsAnalyzer.analyze(repoPath);
-        const duration = perfTracker.end('scanner-metrics');
-        logger.performance('scanner-metrics', duration, { files: results.length });
-        metricsSpinner.succeed(`Metrics analyzed (${results.length} files)`);
-        if (onProgress) {onProgress();}
-        return { type: 'metrics', results };
-      } catch (error: any) {
-        perfTracker.end('scanner-metrics');
-        logger.error('Metrics analysis failed', error);
-        metricsSpinner.fail('Metrics analysis failed');
-        if (onProgress) {onProgress();}
-        return { type: 'metrics', results: [], error };
-      }
-    })()
-  );
-
-  // 3. Code smells
-  const smellSpinner = ora('Detecting code smells...').start();
-  promises.push(
-    (async () => {
-      perfTracker.start('scanner-smells');
-      try {
-        const results = await codeSmellDetector.detect(repoPath);
-        const duration = perfTracker.end('scanner-smells');
-        logger.performance('scanner-smells', duration, { issues: results.length });
-        smellSpinner.succeed(`Code smells detected (${results.length} issues)`);
-        if (onProgress) {onProgress();}
-        return { type: 'smells', results };
-      } catch (error: any) {
-        perfTracker.end('scanner-smells');
-        logger.error('Code smell detection failed', error);
-        smellSpinner.fail('Code smell detection failed');
-        if (onProgress) {onProgress();}
-        return { type: 'smells', results: [], error };
-      }
-    })()
-  );
-
-  // 4. Linting
-  const lintSpinner = ora('Running linters...').start();
-  promises.push(
-    (async () => {
-      perfTracker.start('scanner-linting');
-      try {
-        const results = await linterIntegration.runAll(repoPath);
-        const duration = perfTracker.end('scanner-linting');
-        logger.performance('scanner-linting', duration, { linters: results.length });
-        if (results.length > 0) {
-          lintSpinner.succeed(`Linting complete (${results.length} linter(s))`);
-        } else {
-          lintSpinner.info('No linters detected');
-        }
-        if (onProgress) {onProgress();}
-        return { type: 'linting', results };
-      } catch (error: any) {
-        perfTracker.end('scanner-linting');
-        logger.error('Linting failed', error);
-        lintSpinner.fail('Linting failed');
-        if (onProgress) {onProgress();}
-        return { type: 'linting', results: [], error };
-      }
-    })()
-  );
-
-  return promises;
-}
-
-/**
- * Generate SBOM
- */
-async function runSBOMGeneration(repoPath: string): Promise<any> {
-  perfTracker.start('sbom-generation');
-  const sbomSpinner = ora('Generating SBOM...').start();
-
-  try {
-    const licenseReport = await licenseScanner.scan(repoPath, 'proprietary');
-    const sbom = licenseScanner.generateSBOM(licenseReport.findings, 'spdx', 'repository');
-    const duration = perfTracker.end('sbom-generation');
-    logger.performance('sbom-generation', duration);
-    sbomSpinner.succeed('SBOM generated');
-    return { type: 'sbom', results: sbom };
-  } catch (error: any) {
-    perfTracker.end('sbom-generation');
-    logger.error('SBOM generation failed', error);
-    sbomSpinner.fail('SBOM generation failed');
-    return { type: 'sbom', results: null, error };
-  }
-}
-
-/**
- * Optional AI code review
- */
-async function runAIReview(results: ScanResults, options: ScanOptions): Promise<void> {
-  try {
-    const configManager = new ConfigManager();
-    const config = configManager.loadOrInit();
-
-    if (config.provider === 'none') {
-      console.log(chalk.gray('\n💡 AI code review skipped (no AI provider configured)'));
-      console.log(chalk.gray('   Run `guardscan config` to set up AI-enhanced reviews\n'));
-      return;
-    }
-
-    console.log(chalk.white.bold('\n📋 AI Code Review\n'));
-    const aiSpinner = ora('Running AI code review...').start();
-
-    // Import and run AI review
-    const { runCommand } = await import('./run');
-
-    // This is a simplified approach - in a real implementation,
-    // we'd want to integrate the AI review more directly
-    aiSpinner.info('AI review available via `guardscan run` command');
-
   } catch (error) {
-    console.log(chalk.gray('\n💡 AI code review skipped (not configured)\n'));
+    handleCommandError(error, 'Scan', 2);
   }
 }
 
-/**
- * Process all scan results
- */
-function processResults(allResults: PromiseSettledResult<any>[], results: ScanResults): void {
-  for (const result of allResults) {
-    if (result.status === 'fulfilled' && result.value) {
-      const { type, results: data } = result.value;
-
-      if (type === 'sbom') {
-        results.sbom = data;
-      } else if (['tests', 'metrics', 'smells', 'linting'].includes(type)) {
-        results.quality[type] = data;
-      } else {
-        results.security[type] = data;
-      }
-    }
-  }
-}
-
-/**
- * Generate comprehensive report
- */
-function generateComprehensiveReport(results: ScanResults, repoInfo: any): ReviewResult {
-  const findings: any[] = [];
-  const summary: string[] = [];
-
-  // Security findings
-  summary.push('# Comprehensive Security & Quality Report\n');
-  summary.push(`**Repository:** ${repoInfo.name}`);
-  summary.push(`**Scanned:** ${new Date(results.timestamp).toLocaleString()}`);
-  summary.push(`**Duration:** ${(results.duration / 1000).toFixed(1)}s\n`);
-
-  summary.push('## Security Analysis\n');
-
-  Object.entries(results.security).forEach(([type, data]: [string, any]) => {
-    if (Array.isArray(data)) {
-      summary.push(`- **${type}**: ${data.length} findings`);
-
-      data.forEach((finding: any) => {
-        findings.push({
-          severity: finding.severity || 'medium',
-          category: type,
-          file: finding.file || 'unknown',
-          line: finding.line,
-          description: finding.message || finding.description || 'Issue detected',
-          suggestion: finding.recommendation || finding.fix || 'Review and fix',
-        });
-      });
-    }
-  });
-
-  summary.push('\n## Quality Analysis\n');
-
-  Object.entries(results.quality).forEach(([type, data]: [string, any]) => {
-    if (Array.isArray(data)) {
-      summary.push(`- **${type}**: ${data.length} items analyzed`);
-    }
-  });
-
-  summary.push('\n## SBOM\n');
-  if (results.sbom) {
-    const packages = results.sbom.packages?.length || 0;
-    summary.push(`- **Total packages:** ${packages}`);
-  }
-
+export async function runQualityAnalysis(
+  repoPath: string,
+  options: ScanOptions,
+  executionPolicy: EffectiveExecutionPolicy = resolveExecutionPolicy()
+): Promise<QualitySection> {
+  const skippedTests: CheckResult = {
+    status: 'skipped',
+    durationMs: 0,
+    reason: executionPolicy.runProjectCode ? 'disabled-by---skip-tests' : 'project-code-execution-not-enabled',
+  };
+  const [rawTests, metrics, smells, rawLint] = await Promise.all([
+    options.skipTests || !executionPolicy.runProjectCode
+      ? Promise.resolve(skippedTests)
+      : runCheck('tests', () => testRunner.runTests(repoPath, options.coverage === true, executionPolicy)),
+    runCheck('metrics', () => codeMetricsAnalyzer.analyze(repoPath)),
+    runCheck('smells', () => codeSmellDetector.detect(repoPath)),
+    executionPolicy.runProjectCode
+      ? runCheck('lint', () => linterIntegration.runAll(repoPath, executionPolicy))
+      : Promise.resolve(skippedTests),
+  ]);
+  const tests = requireConfiguredToolOutput(
+    'tests',
+    rawTests,
+    hasConfiguredNodeTool(repoPath, ['jest', 'vitest', 'mocha'])
+  );
+  const lint = requireConfiguredToolOutput(
+    'lint',
+    rawLint,
+    hasConfiguredNodeTool(repoPath, ['eslint'])
+  );
+  const checks = {
+    tests,
+    metrics,
+    smells,
+    lint,
+    performance: {
+      status: 'skipped' as const,
+      durationMs: 0,
+      reason: options.skipPerf ? 'disabled-by---skip-perf' : 'not-part-of-default-scan',
+    },
+    mutation: {
+      status: 'skipped' as const,
+      durationMs: 0,
+      reason: options.skipMutation ? 'disabled-by---skip-mutation' : 'not-part-of-default-scan',
+    },
+  };
+  const attempted = [tests, metrics, smells, lint].filter(check => check.status !== 'skipped');
+  const failures = attempted.filter(check => check.status === 'failed').length;
   return {
-    summary: summary.join('\n'),
-    findings,
-    recommendations: generateRecommendations(results),
-    metadata: {
-      timestamp: results.timestamp,
-      repoInfo,
-      locStats: {
-        totalLines: 0,
-        codeLines: 0,
-        commentLines: 0,
-        blankLines: 0,
-        fileCount: 0,
-        fileBreakdown: [],
+    status: attempted.length === 0
+      ? 'skipped'
+      : failures === 0
+        ? 'complete'
+        : failures === attempted.length
+          ? 'failed'
+          : 'partial',
+    checks,
+  };
+}
+
+function hasConfiguredNodeTool(repoPath: string, tools: string[]): boolean {
+  const packagePath = path.join(repoPath, 'package.json');
+  if (!fs.existsSync(packagePath)) {
+    return false;
+  }
+  try {
+    const manifest = JSON.parse(fs.readFileSync(packagePath, 'utf-8')) as {
+      dependencies?: Record<string, string>;
+      devDependencies?: Record<string, string>;
+    };
+    return tools.some(tool => Boolean(
+      manifest.dependencies?.[tool] || manifest.devDependencies?.[tool]
+    ));
+  } catch {
+    // Inventory scanning reports malformed package manifests separately.
+    return false;
+  }
+}
+
+function requireConfiguredToolOutput(
+  name: string,
+  check: CheckResult,
+  configured: boolean
+): CheckResult {
+  if (configured && check.status === 'succeeded' && Array.isArray(check.data) && check.data.length === 0) {
+    return {
+      status: 'failed',
+      durationMs: check.durationMs,
+      error: {
+        code: 'TOOL_OUTPUT_UNAVAILABLE',
+        message: `${name} tool was configured but produced no parseable result`,
+        retryable: false,
       },
+    };
+  }
+  return check;
+}
+
+async function runCheck(name: string, operation: () => Promise<unknown>): Promise<CheckResult> {
+  const startedAt = Date.now();
+  try {
+    const data = await operation();
+    return {
+      status: 'succeeded',
+      durationMs: Date.now() - startedAt,
+      data,
+    };
+  } catch (error) {
+    return {
+      status: 'failed',
+      durationMs: Date.now() - startedAt,
+      error: safeOperationalError(name, error),
+    };
+  }
+}
+
+async function createSbomSection(
+  report: Promise<LicenseReport>,
+  inventory: PackageInventory
+): Promise<SbomSection> {
+  try {
+    const resolved = await report;
+    const incomplete = inventory.errors.length > 0;
+    return {
+      status: incomplete ? 'partial' : 'succeeded',
+      format: 'spdx',
+      document: licenseScanner.generateSBOM(resolved.findings, 'spdx', 'repository'),
+      error: incomplete
+        ? {
+          code: 'INVENTORY_INCOMPLETE',
+          message: `SBOM inventory is incomplete (${inventory.errors.length} package metadata error(s))`,
+          retryable: false,
+        }
+        : undefined,
+    };
+  } catch (error) {
+    return { status: 'failed', error: safeOperationalError('sbom', error) };
+  }
+}
+
+export function evaluateComprehensivePolicy(
+  security: ScanEngineResult,
+  quality: QualitySection,
+  sbom: SbomSection,
+  policy: ScanPolicy
+): { result: ScanPolicyResult; executionStatus: ScanExecutionStatus; errors: ScanExecutionError[] } {
+  const findingPolicy = evaluateScanPolicy(security.findings, {
+    failOn: policy.failOn,
+    maxFindings: policy.maxFindings,
+  });
+  const coveragePolicy = evaluateScanPolicy(security, {
+    allowPartial: false,
+  });
+  const securityOperationalReasons = coveragePolicy.operationalFailure ? coveragePolicy.reasons : [];
+  const nonCveSecurityFailure = security.scannerResults.some(scanner =>
+    scanner.required && scanner.status === 'failed' && scanner.scanner !== 'dependencies'
+  );
+  const operationalReasons = policy.allowPartial && !nonCveSecurityFailure
+    ? []
+    : [...securityOperationalReasons];
+  const policyReasons = [...findingPolicy.reasons];
+  const errors: ScanExecutionError[] = [...security.errors];
+
+  for (const [name, check] of Object.entries(quality.checks)) {
+    if (check.status === 'failed' && check.error) {
+      if (!policy.allowPartial || quality.status === 'failed') {
+        operationalReasons.push(`Quality check failed to execute: ${name}`);
+      }
+      errors.push({ scanner: `quality.${name}`, ...check.error });
+    }
+  }
+  if (sbom.status !== 'succeeded' && sbom.error) {
+    if (!policy.allowPartial || sbom.status === 'failed') {
+      operationalReasons.push(
+        sbom.status === 'failed' ? 'SBOM generation failed' : 'SBOM inventory is incomplete'
+      );
+    }
+    errors.push({ scanner: 'sbom', ...sbom.error });
+  }
+
+  const tests = successfulArray(quality.checks.tests);
+  const failedTests = tests.reduce((total, result: any) => total + finiteCount(result?.failed), 0);
+  if (failedTests > 0) {
+    policyReasons.push(`${failedTests} test(s) failed`);
+  }
+  const lintReports = successfulArray(quality.checks.lint);
+  const lintErrors = lintReports.reduce((total, report: any) => total + finiteCount(report?.errors), 0);
+  if (lintErrors > 0) {
+    policyReasons.push(`${lintErrors} lint error(s) found`);
+  }
+
+  const reasons = [...operationalReasons, ...policyReasons];
+  const operationalFailure = operationalReasons.length > 0;
+  const outcome = operationalFailure
+    ? 'operational-failed' as const
+    : policyReasons.length > 0
+      ? 'policy-failed' as const
+      : 'passed' as const;
+  const result: ScanPolicyResult = {
+    failed: outcome !== 'passed',
+    operationalFailure,
+    outcome,
+    exitCode: outcome === 'operational-failed' ? 2 : outcome === 'policy-failed' ? 1 : 0,
+    reasons,
+  };
+  const anyOperationalFailure = operationalReasons.length > 0
+    || security.status !== 'complete'
+    || quality.status !== 'complete'
+    || sbom.status !== 'succeeded';
+  const everyMajorSectionFailed = security.status === 'failed' && quality.status === 'failed' && sbom.status === 'failed';
+  return {
+    result,
+    executionStatus: everyMajorSectionFailed ? 'failed' : anyOperationalFailure ? 'partial' : 'complete',
+    errors,
+  };
+}
+
+function successfulArray(check: CheckResult): any[] {
+  return check.status === 'succeeded' && Array.isArray(check.data) ? check.data : [];
+}
+
+function finiteCount(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 0;
+}
+
+function safeOperationalError(name: string, error: unknown): CheckResult['error'] {
+  const candidate = error as { code?: unknown } | undefined;
+  const code = typeof candidate?.code === 'string'
+    ? candidate.code.toUpperCase().replace(/[^A-Z0-9_.-]/g, '').slice(0, 64)
+    : 'CHECK_FAILED';
+  return {
+    code: code || 'CHECK_FAILED',
+    message: `${name} check failed`,
+    retryable: ['ETIMEDOUT', 'ECONNRESET', 'EAI_AGAIN'].includes(code),
+  };
+}
+
+function comprehensiveReview(
+  security: ScanEngineResult,
+  quality: QualitySection,
+  sbom: SbomSection,
+  policy: ScanPolicyResult,
+  repoInfo: ReturnType<typeof repositoryManager.getRepoInfo>,
+  locStats: Awaited<ReturnType<typeof locCounter.count>>,
+  durationMs: number,
+  ranProjectCode: boolean
+): ReviewResult {
+  const tests = successfulArray(quality.checks.tests);
+  const failedTests = tests.reduce((sum, result: any) => sum + finiteCount(result?.failed), 0);
+  const summary = [
+    `Security findings: ${security.findings.length}`,
+    `Security coverage: ${security.status}`,
+    `Quality coverage: ${quality.status}`,
+    `Failing tests: ${failedTests}`,
+    `SBOM: ${sbom.status}`,
+    `Policy: ${policy.outcome}`,
+  ].join('\n');
+  return {
+    summary,
+    findings: security.findings,
+    recommendations: policy.reasons.length > 0
+      ? policy.reasons.map(reason => `Resolve: ${reason}`)
+      : ['Continue scanning on every pull request.'],
+    metadata: {
+      timestamp: new Date().toISOString(),
+      repoInfo,
+      locStats,
       provider: 'comprehensive-scan',
       model: 'multi-tool',
-      durationMs: results.duration,
+      durationMs,
+      executionMode: ranProjectCode ? 'project-code-executed' : 'static-analysis',
     },
   };
 }
 
-/**
- * Generate recommendations
- */
-function generateRecommendations(results: ScanResults): string[] {
-  const recommendations: string[] = [];
-
-  // Security recommendations
-  const totalSecurityIssues = Object.values(results.security)
-    .reduce((sum: number, data: any) => sum + (Array.isArray(data) ? data.length : 0), 0);
-
-  if (totalSecurityIssues > 0) {
-    recommendations.push(`Address ${totalSecurityIssues} security finding(s) identified in the scan`);
+function displaySummary(
+  security: ScanEngineResult,
+  quality: QualitySection,
+  sbom: SbomSection,
+  policy: ScanPolicyResult,
+  durationMs: number
+): void {
+  console.log(chalk.white.bold('\n📊 Scan Summary'));
+  console.log(`  Security: ${security.findings.length} finding(s), coverage ${security.status}`);
+  console.log(`  Quality: ${quality.status}`);
+  console.log(`  SBOM: ${sbom.status}`);
+  console.log(`  Policy: ${policy.outcome}`);
+  for (const reason of policy.reasons) {
+    console.log(chalk.red(`    - ${reason}`));
   }
-
-  // Quality recommendations
-  if (results.quality.tests) {
-    const failedTests = results.quality.tests.reduce((sum: number, t: any) => sum + (t.failed || 0), 0);
-    if (failedTests > 0) {
-      recommendations.push(`Fix ${failedTests} failing test(s)`);
-    }
-  }
-
-  if (results.quality.smells && results.quality.smells.length > 10) {
-    recommendations.push(`Refactor code to address ${results.quality.smells.length} code smell(s)`);
-  }
-
-  recommendations.push('Set up CI/CD integration for continuous security and quality monitoring');
-  recommendations.push('Run `guardscan scan` regularly to catch issues early');
-
-  return recommendations;
+  console.log(chalk.gray(`  Duration: ${(durationMs / 1000).toFixed(1)}s`));
 }
 
-/**
- * Display summary
- */
-function displaySummary(results: ScanResults): void {
-  console.log(chalk.white.bold('\n📊 Scan Summary\n'));
-
-  // Security summary
-  const totalSecurityIssues = Object.values(results.security)
-    .reduce((sum: number, data: any) => sum + (Array.isArray(data) ? data.length : 0), 0);
-
-  console.log(chalk.cyan('Security:'));
-  if (totalSecurityIssues > 0) {
-    console.log(chalk.yellow(`  ⚠️  ${totalSecurityIssues} security finding(s)`));
-  } else {
-    console.log(chalk.green('  ✓ No security issues detected'));
+function aiState(skipAi: boolean, provider: string): Record<string, unknown> {
+  if (skipAi) {
+    return { status: 'skipped', reason: 'disabled-by---skip-ai' };
   }
-
-  // Quality summary
-  console.log(chalk.cyan('\nQuality:'));
-  if (results.quality.tests && results.quality.tests.length > 0) {
-    const totalTests = results.quality.tests.reduce((sum: number, t: any) => sum + (t.totalTests || 0), 0);
-    const passedTests = results.quality.tests.reduce((sum: number, t: any) => sum + (t.passed || 0), 0);
-    console.log(chalk.gray(`  Tests: ${passedTests}/${totalTests} passing`));
+  if (!provider || provider === 'none') {
+    return { status: 'skipped', reason: 'provider-not-configured' };
   }
+  return {
+    status: 'not-run',
+    reason: 'AI review is a separate workflow; use guardscan run',
+    provider,
+  };
+}
 
-  if (results.quality.smells) {
-    console.log(chalk.gray(`  Code smells: ${results.quality.smells.length}`));
+function warnDeprecatedNoCloud(cloud?: boolean): void {
+  if (cloud === false || process.argv.slice(2).includes('--no-cloud')) {
+    console.warn('Warning: --no-cloud is deprecated; use --offline instead.');
   }
+}
 
-  // SBOM summary
-  if (results.sbom) {
-    const packages = results.sbom.packages?.length || 0;
-    console.log(chalk.cyan('\nSBOM:'));
-    console.log(chalk.gray(`  ${packages} package(s) documented`));
+function resolveOutputFormat(format: ScanOptions['format'], ci?: boolean): 'markdown' | ScanOutputFormat {
+  const resolved = format || (ci ? 'json' : 'markdown');
+  if (resolved !== 'markdown' && resolved !== 'json' && resolved !== 'sarif') {
+    throw new Error(`Invalid report format: ${resolved}. Use markdown, json, or sarif.`);
   }
+  return resolved;
+}
 
-  console.log(chalk.gray(`\nTotal duration: ${(results.duration / 1000).toFixed(1)}s`));
+function parseConcurrency(value?: string): number {
+  const parsed = value === undefined ? 4 : Number(value);
+  if (!Number.isInteger(parsed) || parsed < 1 || parsed > 16) {
+    throw new Error('Invalid --concurrency value. Use an integer from 1 to 16.');
+  }
+  return parsed;
+}
+
+function parseScope(value?: string): 'all' | 'runtime' {
+  const scope = value || 'all';
+  if (scope !== 'all' && scope !== 'runtime') {
+    throw new Error('Invalid --scope value. Use all or runtime.');
+  }
+  return scope;
+}
+
+function parseMaxFindings(value?: string): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 0) {
+    throw new Error('Invalid --max-findings value. Use a non-negative integer.');
+  }
+  return parsed;
+}
+
+function applyExitCode(exitCode: 0 | 1 | 2): void {
+  const current = Number(process.exitCode || 0);
+  process.exitCode = Math.max(Number.isFinite(current) ? current : 0, exitCode);
 }

@@ -9,15 +9,87 @@ import {
   CostEstimate
 } from './base';
 
+export interface OpenAICompatibleProfile {
+  providerName: string;
+  defaultModel?: string;
+  defaultEmbeddingModel?: string;
+  capabilities: ProviderCapabilities;
+  pricing?: {
+    chat: {
+      input: number;
+      output: number;
+    };
+    embeddings?: {
+      input: number;
+    };
+  };
+  modelPricing?: Record<string, { input: number; output: number }>;
+}
+
+const OPENAI_PROFILE: OpenAICompatibleProfile = {
+  providerName: 'OpenAI',
+  defaultModel: 'gpt-4o',
+  defaultEmbeddingModel: 'text-embedding-3-small',
+  capabilities: {
+    supportsChat: true,
+    supportsEmbeddings: true,
+    supportsStreaming: true,
+    maxContextTokens: 128000,
+    embeddingDimensions: 1536,
+  },
+  pricing: {
+    chat: {
+      input: 0.0025,
+      output: 0.01,
+    },
+    embeddings: {
+      input: 0.00002,
+    },
+  },
+  modelPricing: {
+    'gpt-5.1': { input: 0.005, output: 0.02 },
+    'gpt-4o': { input: 0.0025, output: 0.01 },
+    'gpt-4.1-mini': { input: 0.00015, output: 0.0006 },
+    'gpt-3.5-turbo': { input: 0.0005, output: 0.0015 },
+  },
+};
+
 export class OpenAIProvider extends AIProvider {
   private client: OpenAI;
   private defaultModel = 'gpt-4o';
   private defaultEmbeddingModel = 'text-embedding-3-small';
+  private profile: OpenAICompatibleProfile;
 
-  constructor(apiKey?: string, model?: string) {
-    super(apiKey);
+  constructor(
+    apiKey?: string,
+    model?: string,
+    apiEndpoint?: string,
+    providerName: string = 'OpenAI',
+    profile?: Partial<OpenAICompatibleProfile>
+  ) {
+    super(apiKey, apiEndpoint);
+    const hasCustomPricing = Object.prototype.hasOwnProperty.call(
+      profile || {},
+      'pricing'
+    );
+    this.profile = {
+      ...OPENAI_PROFILE,
+      ...profile,
+      providerName: profile?.providerName || providerName,
+      capabilities: {
+        ...OPENAI_PROFILE.capabilities,
+        ...profile?.capabilities,
+      },
+      pricing: hasCustomPricing ? profile?.pricing : OPENAI_PROFILE.pricing,
+      modelPricing: profile?.modelPricing || OPENAI_PROFILE.modelPricing,
+    };
+    this.defaultModel = this.profile.defaultModel || this.defaultModel;
+    this.defaultEmbeddingModel =
+      this.profile.defaultEmbeddingModel || this.defaultEmbeddingModel;
     this.client = new OpenAI({
       apiKey: apiKey || process.env.OPENAI_API_KEY,
+      baseURL: apiEndpoint,
+      fetch: (url, init) => globalThis.fetch(url, {...init, redirect: 'error'}),
     });
     if (model) {
       this.defaultModel = model;
@@ -84,7 +156,7 @@ export class OpenAIProvider extends AIProvider {
   }
 
   getName(): string {
-    return 'OpenAI';
+    return this.profile.providerName;
   }
 
   async testConnection(): Promise<boolean> {
@@ -97,19 +169,17 @@ export class OpenAIProvider extends AIProvider {
   }
 
   getCapabilities(): ProviderCapabilities {
-    return {
-      supportsChat: true,
-      supportsEmbeddings: true,
-      supportsStreaming: true,
-      maxContextTokens: 128000, // gpt-4o/gpt-5.1 context window
-      embeddingDimensions: 1536, // text-embedding-3-small
-    };
+    return this.profile.capabilities;
   }
 
   /**
    * Generate embedding using OpenAI's API
    */
   async generateEmbedding(text: string, model?: string): Promise<number[]> {
+    if (!this.profile.capabilities.supportsEmbeddings) {
+      throw new Error(`${this.getName()} embedding support is model-dependent. Configure an explicit embedding provider.`);
+    }
+
     const embeddingModel = model || this.defaultEmbeddingModel;
 
     const response = await this.client.embeddings.create({
@@ -124,6 +194,10 @@ export class OpenAIProvider extends AIProvider {
    * Generate embeddings in batch (more efficient)
    */
   async generateBulkEmbeddings(texts: string[], model?: string): Promise<number[][]> {
+    if (!this.profile.capabilities.supportsEmbeddings) {
+      throw new Error(`${this.getName()} embedding support is model-dependent. Configure an explicit embedding provider.`);
+    }
+
     const embeddingModel = model || this.defaultEmbeddingModel;
 
     const response = await this.client.embeddings.create({
@@ -185,13 +259,10 @@ export class OpenAIProvider extends AIProvider {
    * Get pricing for current default models
    */
   getPricing() {
-    return {
+    return this.profile.pricing || {
       chat: {
-        input: 0.0025,   // $2.50 per 1M tokens for gpt-4o input
-        output: 0.01,    // $10 per 1M tokens for gpt-4o output
-      },
-      embeddings: {
-        input: 0.00002,  // $0.02 per 1M tokens for text-embedding-3-small
+        input: 0,
+        output: 0,
       },
     };
   }
@@ -200,13 +271,6 @@ export class OpenAIProvider extends AIProvider {
    * Get pricing for specific model
    */
   private getModelPricing(model: string): { input: number; output: number } {
-    const pricing: Record<string, { input: number; output: number }> = {
-      'gpt-5.1': { input: 0.005, output: 0.02 }, // Newest, coding and agentic tasks (estimated)
-      'gpt-4o': { input: 0.0025, output: 0.01 }, // Multimodal, low-latency
-      'gpt-4.1-mini': { input: 0.00015, output: 0.0006 }, // Fast, efficient, improvement over gpt-4o-mini
-      'gpt-3.5-turbo': { input: 0.0005, output: 0.0015 }, // Faster, lighter, basic tasks
-    };
-
-    return pricing[model] || pricing['gpt-4o'];
+    return this.profile.modelPricing?.[model] || this.getPricing().chat;
   }
 }

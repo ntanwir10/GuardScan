@@ -62,6 +62,14 @@ act.env
 ci-gitconfig
 ci-netrc
 cli/scripts/*
+!cli/scripts/eslint-ratchet-lib.js
+!cli/scripts/eslint-ratchet.js
+!cli/scripts/eslint-baseline.json
+!cli/scripts/clean-dist.js
+!cli/scripts/package-smoke.js
+!cli/scripts/package-manager-smoke.js
+!cli/scripts/release/
+!cli/scripts/release/**
 cli/scripts/update-act-cache.sh
 cli/scripts/ACT_USAGE.md
 
@@ -69,3 +77,7 @@ cli/scripts/ACT_USAGE.md
 .guardscan/
 *.plan.md
 cli/test_results.txt
+.env
+.claude/
+.cursor/
+.agents/

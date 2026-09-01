@@ -189,7 +189,7 @@ export function createModelsCommand(): Command {
       const config = configManager.loadOrInit();
       
       if (config.provider === 'none') {
-        console.error(chalk.red('❌ No provider configured. Run: guardscan config set provider <provider>'));
+        console.error(chalk.red('❌ No provider configured. Run: guardscan config --provider <provider>'));
         process.exit(1);
       }
 
@@ -211,7 +211,8 @@ export function createModelsCommand(): Command {
       console.log(`${chalk.bold('Cost:')} $${(recommended.inputPricing + recommended.outputPricing).toFixed(4)}/1M tokens`);
       console.log(`${chalk.bold('Context:')} ${recommended.contextWindow.toLocaleString()} tokens`);
       console.log(`${chalk.bold('Tags:')} ${recommended.tags.join(', ')}`);
-      console.log('\n' + chalk.dim(`Set as default: guardscan config set model ${recommended.name}`));
+      // eslint-disable-next-line no-console
+      console.log('\n' + chalk.dim(`Set as default by editing model in ~/.guardscan/config.yml: ${recommended.name}`));
       console.log('\n');
     });
 
