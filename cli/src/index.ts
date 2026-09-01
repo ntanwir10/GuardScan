@@ -1,23 +1,10 @@
 #!/usr/bin/env node
 
 import { Command } from "commander";
+import { applyEarlyEnvironmentFlags } from "./utils/execution-policy";
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const packageJson = require("../package.json") as { version: string };
-
-function applyEarlyEnvironmentFlags(args: string[]): void {
-  if (args.includes("--no-telemetry")) {
-    process.env.GUARDSCAN_NO_TELEMETRY = "true";
-  }
-
-  if (args.includes("--no-cache")) {
-    process.env.GUARDSCAN_NO_CACHE = "true";
-  }
-
-  if (args.includes("--offline") || args.includes("--no-cloud")) {
-    process.env.GUARDSCAN_OFFLINE = "true";
-  }
-}
 
 async function main(): Promise<void> {
   const args = process.argv.slice(2);

@@ -71,7 +71,7 @@ export class ObservableProvider extends AIProviderDecorator {
       span.cacheHit = response.model?.includes('cached') || false;
       span.model = response.model || span.model;
 
-      await this.metrics.recordSpan(span);
+      await this.recordSpan(span);
 
       if (this.config.logSpans) {
         this.logSpan(span);
@@ -84,7 +84,7 @@ export class ObservableProvider extends AIProviderDecorator {
       span.success = false;
       span.errorType = this.categorizeError(error);
 
-      await this.metrics.recordSpan(span);
+      await this.recordSpan(span);
 
       if (this.config.logSpans) {
         this.logSpan(span);
@@ -135,7 +135,7 @@ export class ObservableProvider extends AIProviderDecorator {
         total: estimatedPromptTokens,
       };
 
-      await this.metrics.recordSpan(span);
+      await this.recordSpan(span);
 
       if (this.config.logSpans) {
         this.logSpan(span);
@@ -146,7 +146,7 @@ export class ObservableProvider extends AIProviderDecorator {
       span.success = false;
       span.errorType = this.categorizeError(error);
 
-      await this.metrics.recordSpan(span);
+      await this.recordSpan(span);
 
       if (this.config.logSpans) {
         this.logSpan(span);
@@ -190,7 +190,7 @@ export class ObservableProvider extends AIProviderDecorator {
         total: estimatedTokens,
       };
 
-      await this.metrics.recordSpan(span);
+      await this.recordSpan(span);
 
       if (this.config.logSpans) {
         this.logSpan(span);
@@ -203,7 +203,7 @@ export class ObservableProvider extends AIProviderDecorator {
       span.success = false;
       span.errorType = this.categorizeError(error);
 
-      await this.metrics.recordSpan(span);
+      await this.recordSpan(span);
 
       if (this.config.logSpans) {
         this.logSpan(span);
@@ -253,7 +253,7 @@ export class ObservableProvider extends AIProviderDecorator {
         total: estimatedTokens,
       };
 
-      await this.metrics.recordSpan(span);
+      await this.recordSpan(span);
 
       if (this.config.logSpans) {
         this.logSpan(span);
@@ -266,7 +266,7 @@ export class ObservableProvider extends AIProviderDecorator {
       span.success = false;
       span.errorType = this.categorizeError(error);
 
-      await this.metrics.recordSpan(span);
+      await this.recordSpan(span);
 
       if (this.config.logSpans) {
         this.logSpan(span);
@@ -279,6 +279,19 @@ export class ObservableProvider extends AIProviderDecorator {
   /**
    * Calculate actual cost from response
    */
+  private async recordSpan(span: AISpan): Promise<void> {
+    try {
+      await this.metrics.recordSpan(span);
+    } catch (error: unknown) {
+      if (process.env.GUARDSCAN_DEBUG === 'true') {
+        console.warn(
+          'Unable to persist local observability metrics; continuing without this span:',
+          error instanceof Error ? error.message : String(error)
+        );
+      }
+    }
+  }
+
   private calculateCost(
     messages: AIMessage[],
     response: AIResponse,

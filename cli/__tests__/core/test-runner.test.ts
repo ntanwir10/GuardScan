@@ -2,11 +2,16 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { TestRunner } from '../../src/core/test-runner';
-import { ProcessResult, runProcess } from '../../src/utils/process-runner';
+import {
+  NetworkIsolationError,
+  ProcessResult,
+  runProcess,
+} from '../../src/utils/process-runner';
 
-jest.mock('../../src/utils/process-runner', () => ({
-  runProcess: jest.fn(),
-}));
+jest.mock('../../src/utils/process-runner', () => {
+  const actual = jest.requireActual('../../src/utils/process-runner');
+  return { ...actual, runProcess: jest.fn() };
+});
 
 const mockedRunProcess = jest.mocked(runProcess);
 
@@ -80,5 +85,50 @@ describe('TestRunner discovery and empty-suite behavior', () => {
     await expect(new TestRunner().runTests(repository)).rejects.toThrow(
       /without producing a JSON report/i
     );
+  });
+
+  it('preserves later framework reports when partial execution is allowed', async () => {
+    fs.writeFileSync(path.join(repository, 'package.json'), JSON.stringify({
+      scripts: { test: 'jest' },
+      devDependencies: { jest: '^29.0.0' },
+    }));
+    fs.writeFileSync(path.join(repository, 'pytest.ini'), '[pytest]\n');
+    mockedRunProcess.mockImplementation((command, args) => {
+      if (command === 'npm') {return processResult(1, '', 'Jest failed before reporting');}
+      const reportArgument = args.find(argument => argument.startsWith('--json-report-file='));
+      fs.writeFileSync(reportArgument!.slice('--json-report-file='.length), JSON.stringify({
+        summary: { total: 1, passed: 1, failed: 0, skipped: 0 },
+        tests: [{ outcome: 'passed', nodeid: 'test_fixture.py::test_fixture' }],
+      }));
+      return processResult(0);
+    });
+
+    await expect(new TestRunner().runTests(repository, false, {
+      offline: false,
+      runProjectCode: true,
+      isolateProjectNetwork: false,
+      allowPartial: true,
+      includeCve: false,
+    })).resolves.toEqual([
+      expect.objectContaining({ framework: 'pytest', totalTests: 1, passed: 1 }),
+    ]);
+  });
+
+  it('does not suppress isolation setup failure in partial mode', async () => {
+    fs.writeFileSync(path.join(repository, 'package.json'), JSON.stringify({
+      scripts: { test: 'jest' },
+      devDependencies: { jest: '^29.0.0' },
+    }));
+    mockedRunProcess.mockImplementation(() => {
+      throw new NetworkIsolationError('Network isolation could not be established');
+    });
+
+    await expect(new TestRunner().runTests(repository, false, {
+      offline: false,
+      runProjectCode: true,
+      isolateProjectNetwork: true,
+      allowPartial: true,
+      includeCve: false,
+    })).rejects.toThrow(/network isolation could not be established/i);
   });
 });

@@ -195,6 +195,12 @@ export class MetricsCollector {
         try {await fs.promises.unlink(path.join(this.eventsDir, entry.name));}
         catch { /* concurrent delete */ }
       }
+      unlinkIfPresent(this.legacyMetricsPath);
+      unlinkIfPresent(`${this.legacyMetricsPath}.migrated`);
+      unlinkIfPresent(this.migrationJournalFile);
+      forEachDirectoryEntry(this.quarantineDir, entry => {
+        if (entry.dirent.isFile() || entry.dirent.isSymbolicLink()) {unlinkIfPresent(entry.path);}
+      });
     } finally {
       lease.release();
     }

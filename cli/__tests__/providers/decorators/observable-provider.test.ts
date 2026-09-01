@@ -142,6 +142,17 @@ describe('ObservableProvider', () => {
 
       expect(span.cacheHit).toBe(true);
     });
+
+    it('returns a successful provider response when local metrics persistence fails', async () => {
+      const mock = new MockProvider();
+      const metrics = new MetricsCollector(repoId());
+      jest.spyOn(metrics, 'recordSpan').mockRejectedValue(new Error('disk full'));
+      const observable = new ObservableProvider(mock, metrics);
+
+      await expect(observable.chat([{ role: 'user', content: 'test' }])).resolves.toMatchObject({
+        content: 'Success',
+      });
+    });
   });
 
   describe('metrics aggregation', () => {

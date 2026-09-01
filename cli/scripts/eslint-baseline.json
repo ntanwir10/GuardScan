@@ -100,7 +100,7 @@
     "warnings": 29
   },
   "src/commands/test.ts": {
-    "errors": 217,
+    "errors": 215,
     "warnings": 42
   },
   "src/commands/threat-model.ts": {
@@ -204,7 +204,7 @@
     "warnings": 0
   },
   "src/core/package-inventory.ts": {
-    "errors": 48,
+    "errors": 45,
     "warnings": 0
   },
   "src/core/performance-tester.ts": {

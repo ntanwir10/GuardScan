@@ -12,6 +12,8 @@ import { createProgressBar } from '../utils/progress';
 import { createDebugLogger } from '../utils/debug-logger';
 import { createPerformanceTracker } from '../utils/performance-tracker';
 import { handleCommandError } from '../utils/error-handler';
+import { resolveExecutionPolicy } from '../utils/execution-policy';
+import { isNetworkIsolationError } from '../utils/process-runner';
 
 const logger = createDebugLogger('test');
 const perfTracker = createPerformanceTracker('guardscan test');
@@ -32,6 +34,7 @@ export async function testCommand(options: TestOptions): Promise<void> {
   console.log(chalk.cyan.bold('\n🧪 Test & Quality Analysis\n'));
 
   try {
+    const executionPolicy = resolveExecutionPolicy({ runProjectCode: true });
     perfTracker.start('detect-repository');
     const repoInfo = repositoryManager.getRepoInfo();
     perfTracker.end('detect-repository');
@@ -64,7 +67,11 @@ export async function testCommand(options: TestOptions): Promise<void> {
     if (options.all || !options.metrics && !options.smells && !options.lint) {
       progressBar.update(completedSteps, { status: 'Running tests...' });
       try {
-        results.tests = await testRunner.runTests(process.cwd(), options.coverage || false);
+        results.tests = await testRunner.runTests(
+          process.cwd(),
+          options.coverage || false,
+          executionPolicy
+        );
         completedSteps++;
         if (results.tests.length > 0) {
           progressBar.update(completedSteps, { status: `Tests: ${results.tests.length} framework(s)` });
@@ -73,6 +80,7 @@ export async function testCommand(options: TestOptions): Promise<void> {
           progressBar.update(completedSteps, { status: 'No test frameworks detected' });
         }
       } catch (error) {
+        if (isNetworkIsolationError(error)) {throw error;}
         completedSteps++;
         progressBar.update(completedSteps, { status: 'Test execution failed' });
       }
@@ -110,7 +118,7 @@ export async function testCommand(options: TestOptions): Promise<void> {
     if (options.all || options.lint) {
       progressBar.update(completedSteps, { status: 'Running linters...' });
       try {
-        results.linting = await linterIntegration.runAll(process.cwd());
+        results.linting = await linterIntegration.runAll(process.cwd(), executionPolicy);
         completedSteps++;
         if (results.linting.length > 0) {
           progressBar.update(completedSteps, { status: `Linting: ${results.linting.length} linter(s)` });
@@ -119,6 +127,7 @@ export async function testCommand(options: TestOptions): Promise<void> {
           progressBar.update(completedSteps, { status: 'No linters detected' });
         }
       } catch (error) {
+        if (isNetworkIsolationError(error)) {throw error;}
         completedSteps++;
         progressBar.update(completedSteps, { status: 'Linting failed' });
       }

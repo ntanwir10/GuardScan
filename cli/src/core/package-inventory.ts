@@ -119,18 +119,70 @@ function readJson(file: string): any {
 }
 
 function npmDirectDependencies(directory: string): Map<string, DependencyScope> {
-  const result = new Map<string, DependencyScope>();
+  return new Map(
+    [...npmDirectDependencyRequirements(directory)].map(([name, dependency]) => [name, dependency.scope])
+  );
+}
+
+function npmDirectDependencyRequirements(
+  directory: string
+): Map<string, {scope: DependencyScope; requested: string}> {
+  const result = new Map<string, {scope: DependencyScope; requested: string}>();
   const manifest = path.join(directory, 'package.json');
   if (!fs.existsSync(manifest)) {return result;}
   try {
     const data = readJson(manifest);
-    for (const name of Object.keys(data.dependencies || {})) {result.set(name, 'runtime');}
-    for (const name of Object.keys(data.devDependencies || {})) {result.set(name, 'development');}
-    for (const name of Object.keys(data.optionalDependencies || {})) {result.set(name, 'optional');}
+    const groups: Array<[Record<string, unknown>, DependencyScope]> = [
+      [asRecord(data.dependencies) || {}, 'runtime'],
+      [asRecord(data.devDependencies) || {}, 'development'],
+      [asRecord(data.optionalDependencies) || {}, 'optional'],
+    ];
+    for (const [dependencies, scope] of groups) {
+      for (const [name, requested] of Object.entries(dependencies)) {
+        if (typeof requested === 'string') {result.set(name, {scope, requested});}
+      }
+    }
   } catch {
     // The lockfile parser reports the actionable error when it is malformed.
   }
   return result;
+}
+
+function yarnDescriptorMatchesRequest(
+  descriptor: string,
+  packageName: string,
+  requested: string
+): boolean {
+  if (!descriptor.startsWith(`${packageName}@`)) {return false;}
+  const selector = descriptor.slice(packageName.length + 1);
+  return selector === requested || selector === `npm:${requested}`;
+}
+
+function splitYarnDescriptors(header: string): string[] {
+  const descriptors: string[] = [];
+  let start = 0;
+  let quote: '"' | "'" | undefined;
+  let escaped = false;
+  for (let index = 0; index <= header.length; index++) {
+    const character = header[index];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (character === '\\' && quote) {
+      escaped = true;
+      continue;
+    }
+    if (character === '"' || character === "'") {
+      quote = quote === character ? undefined : quote || character;
+      continue;
+    }
+    if ((character === ',' && !quote) || index === header.length) {
+      descriptors.push(header.slice(start, index).trim().replace(/^['"]|['"]$/g, ''));
+      start = index + 1;
+    }
+  }
+  return descriptors.filter(Boolean);
 }
 
 function packageNameFromNodeModulesPath(packagePath: string): string | undefined {
@@ -321,8 +373,10 @@ function parsePnpmLock(root: string, file: string, coordinates: DependencyCoordi
 function parseYarnLock(root: string, file: string, coordinates: DependencyCoordinate[], errors: PackageInventoryError[]): void {
   const rel = relative(root, file);
   try {
+    const directDependencies = npmDirectDependencyRequirements(path.dirname(file));
     const lines = fs.readFileSync(file, 'utf8').split(/\r?\n/);
     let descriptor: string | undefined;
+    let descriptors: string[] = [];
     let packageName: string | undefined;
     let resolved = false;
     const finishRecord = (): void => {
@@ -334,22 +388,30 @@ function parseYarnLock(root: string, file: string, coordinates: DependencyCoordi
         });
       }
       descriptor = undefined;
+      descriptors = [];
       packageName = undefined;
       resolved = false;
     };
     for (const line of lines) {
       if (line && !/^\s/.test(line) && line.endsWith(':')) {
         finishRecord();
-        descriptor = line.slice(0, -1).split(',')[0].trim().replace(/^['"]|['"]$/g, '');
+        descriptors = splitYarnDescriptors(line.slice(0, -1));
+        descriptor = descriptors[0];
+        if (!descriptor) {continue;}
         const scoped = descriptor.match(/^(@[^/]+\/[^@]+)@/);
         const plain = descriptor.match(/^([^@]+)@/);
         packageName = scoped?.[1] || plain?.[1];
       } else if (packageName) {
         const versionMatch = line.match(/^\s+version(?::\s*|\s+)["']?([^"'\s]+)["']?/);
         if (versionMatch && semver.valid(versionMatch[1], { loose: true })) {
+          const direct = directDependencies.get(packageName);
+          const isDirect = direct !== undefined && descriptors.some(candidate =>
+            yarnDescriptorMatchesRequest(candidate, packageName!, direct.requested)
+          );
           addCoordinate(coordinates, {
             ecosystem: 'npm', osvEcosystem: 'npm', name: packageName, exactVersion: versionMatch[1],
-            scope: 'unknown', direct: false, manifestPath: relative(root, path.join(path.dirname(file), 'package.json')),
+            scope: isDirect ? direct.scope : 'unknown', direct: isDirect,
+            manifestPath: relative(root, path.join(path.dirname(file), 'package.json')),
             lockfilePath: rel, dependencyPaths: [packageName],
           });
           resolved = true;

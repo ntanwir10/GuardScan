@@ -7,6 +7,8 @@ import {
 } from '../utils/process-runner';
 import { EffectiveExecutionPolicy } from '../utils/execution-policy';
 
+const LINTER_TIMEOUT_MS = 5 * 60 * 1000;
+
 export interface LintResult {
   file: string;
   line: number;
@@ -41,40 +43,49 @@ export class LinterIntegration {
 
     // Detect and run JavaScript/TypeScript linters
     if (this.hasESLint(repoPath)) {
-      const eslintReport = await this.runESLint(repoPath, policy);
-      if (eslintReport) {reports.push(eslintReport);}
+      await this.appendReport(reports, policy, () => this.runESLint(repoPath, policy));
     }
 
     // Detect and run Python linters
     if (this.hasFlake8(repoPath)) {
-      const flake8Report = await this.runFlake8(repoPath, policy);
-      if (flake8Report) {reports.push(flake8Report);}
+      await this.appendReport(reports, policy, () => this.runFlake8(repoPath, policy));
     }
 
     if (this.hasPylint(repoPath)) {
-      const pylintReport = await this.runPylint(repoPath, policy);
-      if (pylintReport) {reports.push(pylintReport);}
+      await this.appendReport(reports, policy, () => this.runPylint(repoPath, policy));
     }
 
     // Detect and run Go linters
     if (this.hasGoLint(repoPath)) {
-      const golintReport = await this.runGoLint(repoPath, policy);
-      if (golintReport) {reports.push(golintReport);}
+      await this.appendReport(reports, policy, () => this.runGoLint(repoPath, policy));
     }
 
     // Detect and run Ruby linters
     if (this.hasRubocop(repoPath)) {
-      const rubocopReport = await this.runRubocop(repoPath, policy);
-      if (rubocopReport) {reports.push(rubocopReport);}
+      await this.appendReport(reports, policy, () => this.runRubocop(repoPath, policy));
     }
 
     // Detect and run PHP linters
     if (this.hasPhpCS(repoPath)) {
-      const phpcsReport = await this.runPhpCS(repoPath, policy);
-      if (phpcsReport) {reports.push(phpcsReport);}
+      await this.appendReport(reports, policy, () => this.runPhpCS(repoPath, policy));
     }
 
     return reports;
+  }
+
+  private async appendReport(
+    reports: LinterReport[],
+    policy: EffectiveExecutionPolicy | undefined,
+    run: () => Promise<LinterReport | null>
+  ): Promise<void> {
+    try {
+      const report = await run();
+      if (report) {reports.push(report);}
+    } catch (error) {
+      if (isNetworkIsolationError(error)) {throw error;}
+      if (policy?.allowPartial) {return;}
+      throw error;
+    }
   }
 
   /**
@@ -103,6 +114,7 @@ export class LinterIntegration {
       try {
         if (runProcess('npx', ['--no-install', 'eslint', '--version'], {
           cwd: repoPath,
+          timeoutMs: LINTER_TIMEOUT_MS,
           networkIsolation: policy?.isolateProjectNetwork === true,
         }).status !== 0) {return null;}
       } catch (error) {
@@ -113,10 +125,10 @@ export class LinterIntegration {
       const execution = runProcess('npx', ['--no-install', 'eslint', '.', '--format', 'json'], {
         cwd: repoPath,
         maxBuffer: 10 * 1024 * 1024,
-        timeoutMs: 5 * 60 * 1000,
+        timeoutMs: LINTER_TIMEOUT_MS,
         networkIsolation: policy?.isolateProjectNetwork === true,
       });
-      const output = combinedOutput(execution);
+      const output = execution.stdout;
 
       // Parse ESLint JSON output
       const jsonMatch = output.match(/\[[\s\S]*\]/);
@@ -175,6 +187,7 @@ export class LinterIntegration {
       try {
         if (runProcess('flake8', ['--version'], {
           cwd: repoPath,
+          timeoutMs: LINTER_TIMEOUT_MS,
           networkIsolation: policy?.isolateProjectNetwork === true,
         }).status !== 0) {return null;}
       } catch (error) {
@@ -188,6 +201,7 @@ export class LinterIntegration {
       ], {
         cwd: repoPath,
         maxBuffer: 10 * 1024 * 1024,
+        timeoutMs: LINTER_TIMEOUT_MS,
         networkIsolation: policy?.isolateProjectNetwork === true,
       });
       const output = combinedOutput(execution);
@@ -223,6 +237,7 @@ export class LinterIntegration {
         info: 0,
       };
     } catch (error) {
+      if (isNetworkIsolationError(error)) {throw error;}
       throw new Error(`Flake8 execution failed: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
@@ -246,6 +261,7 @@ export class LinterIntegration {
       try {
         if (runProcess('pylint', ['--version'], {
           cwd: repoPath,
+          timeoutMs: LINTER_TIMEOUT_MS,
           networkIsolation: policy?.isolateProjectNetwork === true,
         }).status !== 0) {return null;}
       } catch (error) {
@@ -256,9 +272,10 @@ export class LinterIntegration {
       const execution = runProcess('pylint', ['.', '--output-format=json'], {
         cwd: repoPath,
         maxBuffer: 10 * 1024 * 1024,
+        timeoutMs: LINTER_TIMEOUT_MS,
         networkIsolation: policy?.isolateProjectNetwork === true,
       });
-      const output = combinedOutput(execution);
+      const output = execution.stdout;
 
       // Parse Pylint JSON output
       const jsonMatch = output.match(/\[[\s\S]*\]/);
@@ -291,6 +308,7 @@ export class LinterIntegration {
         info: results.filter(r => r.severity === 'info').length,
       };
     } catch (error) {
+      if (isNetworkIsolationError(error)) {throw error;}
       throw new Error(`Pylint execution failed: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
@@ -313,24 +331,35 @@ export class LinterIntegration {
       let output = '';
       let linter = 'Go Vet';
       let execution: ProcessResult;
+      const runGoVet = (): ProcessResult => runProcess('go', ['vet', './...'], {
+        cwd: repoPath,
+        maxBuffer: 10 * 1024 * 1024,
+        timeoutMs: LINTER_TIMEOUT_MS,
+        networkIsolation: policy?.isolateProjectNetwork === true,
+      });
 
       // Try golangci-lint first
       try {
-        execution = runProcess('golangci-lint', ['run', '--out-format=line-number'], {
+        const candidate = runProcess('golangci-lint', ['run', '--out-format=line-number'], {
           cwd: repoPath,
           maxBuffer: 10 * 1024 * 1024,
+          timeoutMs: LINTER_TIMEOUT_MS,
           networkIsolation: policy?.isolateProjectNetwork === true,
         });
-        output = combinedOutput(execution);
-        linter = 'golangci-lint';
+        const candidateOutput = combinedOutput(candidate);
+        const hasFindings = /(?:^|\n).+?\.go:\d+:\d+:\s*.+/.test(candidateOutput);
+        if (candidate.status === 0 || (candidate.status === 1 && hasFindings)) {
+          execution = candidate;
+          output = candidateOutput;
+          linter = 'golangci-lint';
+        } else {
+          execution = runGoVet();
+          output = combinedOutput(execution);
+        }
       } catch (error) {
         if (isNetworkIsolationError(error)) {throw error;}
         // Fall back to go vet
-        execution = runProcess('go', ['vet', './...'], {
-          cwd: repoPath,
-          maxBuffer: 10 * 1024 * 1024,
-          networkIsolation: policy?.isolateProjectNetwork === true,
-        });
+        execution = runGoVet();
         output = combinedOutput(execution);
       }
 
@@ -364,6 +393,7 @@ export class LinterIntegration {
         info: 0,
       };
     } catch (error) {
+      if (isNetworkIsolationError(error)) {throw error;}
       throw new Error(`Go lint execution failed: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
@@ -388,6 +418,7 @@ export class LinterIntegration {
       try {
         if (runProcess('rubocop', ['--version'], {
           cwd: repoPath,
+          timeoutMs: LINTER_TIMEOUT_MS,
           networkIsolation: policy?.isolateProjectNetwork === true,
         }).status !== 0) {return null;}
       } catch (error) {
@@ -398,9 +429,10 @@ export class LinterIntegration {
       const execution = runProcess('rubocop', ['--format', 'json'], {
         cwd: repoPath,
         maxBuffer: 10 * 1024 * 1024,
+        timeoutMs: LINTER_TIMEOUT_MS,
         networkIsolation: policy?.isolateProjectNetwork === true,
       });
-      const output = combinedOutput(execution);
+      const output = execution.stdout;
 
       const jsonMatch = output.match(/\{[\s\S]*\}/);
       if (!jsonMatch) {throw reportError('Rubocop', execution);}
@@ -431,6 +463,7 @@ export class LinterIntegration {
         info: 0,
       };
     } catch (error) {
+      if (isNetworkIsolationError(error)) {throw error;}
       throw new Error(`Rubocop execution failed: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
@@ -454,6 +487,7 @@ export class LinterIntegration {
       try {
         if (runProcess('phpcs', ['--version'], {
           cwd: repoPath,
+          timeoutMs: LINTER_TIMEOUT_MS,
           networkIsolation: policy?.isolateProjectNetwork === true,
         }).status !== 0) {return null;}
       } catch (error) {
@@ -464,9 +498,10 @@ export class LinterIntegration {
       const execution = runProcess('phpcs', ['--report=json', '.'], {
         cwd: repoPath,
         maxBuffer: 10 * 1024 * 1024,
+        timeoutMs: LINTER_TIMEOUT_MS,
         networkIsolation: policy?.isolateProjectNetwork === true,
       });
-      const output = combinedOutput(execution);
+      const output = execution.stdout;
 
       const jsonMatch = output.match(/\{[\s\S]*\}/);
       if (!jsonMatch) {throw reportError('PHP_CodeSniffer', execution);}
@@ -498,6 +533,7 @@ export class LinterIntegration {
         info: 0,
       };
     } catch (error) {
+      if (isNetworkIsolationError(error)) {throw error;}
       throw new Error(`PHP_CodeSniffer execution failed: ${error instanceof Error ? error.message : String(error)}`);
     }
   }

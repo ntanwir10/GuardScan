@@ -216,9 +216,7 @@ function severityFromEntries(entries: OsvSeverity[] | undefined, source: string)
     if (/^CVSS:/i.test(entry.score)) {
       try {
         const vector = entry.score.toUpperCase();
-        const calculator = vector.startsWith('CVSS:3.0/') || vector.startsWith('CVSS:3.1/')
-          ? fromVector(vector)
-          : undefined;
+        const calculator = fromVector(vector);
         if (calculator) {
           const score = calculator.calculateScores().base;
           if (typeof score !== 'number' || !Number.isFinite(score)) {throw new Error('CVSS base score is unavailable');}

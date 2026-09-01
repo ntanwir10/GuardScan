@@ -16,6 +16,15 @@ export interface EffectiveExecutionPolicy {
   allowPartial: boolean;
 }
 
+export function applyEarlyEnvironmentFlags(args: string[]): void {
+  if (args.includes('--no-telemetry')) {process.env.GUARDSCAN_NO_TELEMETRY = 'true';}
+  if (args.includes('--no-cache')) {process.env.GUARDSCAN_NO_CACHE = 'true';}
+  if (args.includes('--offline') || args.includes('--no-cloud')) {
+    process.env.GUARDSCAN_OFFLINE = 'true';
+  }
+  if (args.includes('--debug')) {process.env.GUARDSCAN_DEBUG = 'true';}
+}
+
 export function environmentRequestsOffline(): boolean {
   return ['true', '1'].includes(
     process.env.GUARDSCAN_OFFLINE?.trim().toLowerCase() || ''

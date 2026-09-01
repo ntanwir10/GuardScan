@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { runProcess } from '../utils/process-runner';
+import { isNetworkIsolationError, runProcess } from '../utils/process-runner';
 import { EffectiveExecutionPolicy } from '../utils/execution-policy';
 
 export interface TestResult {
@@ -88,29 +88,40 @@ export class TestRunner {
 
     // Detect and run Jest (JavaScript/TypeScript)
     if (this.hasJest(repoPath)) {
-      const jestResult = await this.runJest(repoPath, withCoverage, policy);
-      if (jestResult) {results.push(jestResult);}
+      await this.appendResult(results, policy, () => this.runJest(repoPath, withCoverage, policy));
     }
 
     // Detect and run pytest (Python)
     if (this.hasPytest(repoPath)) {
-      const pytestResult = await this.runPytest(repoPath, withCoverage, policy);
-      if (pytestResult) {results.push(pytestResult);}
+      await this.appendResult(results, policy, () => this.runPytest(repoPath, withCoverage, policy));
     }
 
     // Detect and run go test (Go)
     if (this.hasGoTest(repoPath)) {
-      const goResult = await this.runGoTest(repoPath, withCoverage, policy);
-      if (goResult) {results.push(goResult);}
+      await this.appendResult(results, policy, () => this.runGoTest(repoPath, withCoverage, policy));
     }
 
     // Detect and run cargo test (Rust)
     if (this.hasCargoTest(repoPath)) {
-      const cargoResult = await this.runCargoTest(repoPath, policy);
-      if (cargoResult) {results.push(cargoResult);}
+      await this.appendResult(results, policy, () => this.runCargoTest(repoPath, policy));
     }
 
     return results;
+  }
+
+  private async appendResult(
+    results: TestResult[],
+    policy: EffectiveExecutionPolicy | undefined,
+    run: () => Promise<TestResult | null>
+  ): Promise<void> {
+    try {
+      const result = await run();
+      if (result) {results.push(result);}
+    } catch (error) {
+      if (isNetworkIsolationError(error)) {throw error;}
+      if (policy?.allowPartial) {return;}
+      throw error;
+    }
   }
 
   /**
@@ -226,6 +237,7 @@ export class TestRunner {
         failures,
       };
     } catch (error) {
+      if (isNetworkIsolationError(error)) {throw error;}
       throw new Error(`Jest execution failed: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
       fs.rmSync(reportDirectory, { recursive: true, force: true });
@@ -348,6 +360,7 @@ export class TestRunner {
         failures,
       };
     } catch (error) {
+      if (isNetworkIsolationError(error)) {throw error;}
       throw new Error(`pytest execution failed: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
       fs.rmSync(reportDirectory, { recursive: true, force: true });
@@ -496,6 +509,7 @@ export class TestRunner {
         failures,
       };
     } catch (error) {
+      if (isNetworkIsolationError(error)) {throw error;}
       throw new Error(`go test execution failed: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
@@ -577,6 +591,7 @@ export class TestRunner {
         failures: [],
       };
     } catch (error) {
+      if (isNetworkIsolationError(error)) {throw error;}
       throw new Error(`cargo test execution failed: ${error instanceof Error ? error.message : String(error)}`);
     }
   }

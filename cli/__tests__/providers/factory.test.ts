@@ -444,6 +444,19 @@ describe("ProviderFactory", () => {
       }
     );
 
+    it.each(['openai', 'openrouter', 'claude', 'gemini'] as const)(
+      'rejects cleartext credentialed %s endpoints',
+      provider => {
+        expect(() => ProviderFactory.normalizeEndpoint(
+          provider,
+          'http://api.example.test/v1'
+        )).toThrow(expect.objectContaining({
+          code: 'INVALID_ENDPOINT',
+          message: expect.stringMatching(/HTTPS/i),
+        }));
+      }
+    );
+
     it.each(['ollama', 'lmstudio', 'claude'] as const)(
       'enforces remote TLS through %s embedding construction',
       provider => {

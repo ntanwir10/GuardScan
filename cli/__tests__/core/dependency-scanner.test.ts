@@ -286,6 +286,33 @@ describe('DependencyScanner OSV integration', () => {
     ]));
   });
 
+  it('derives Yarn directness and scope from the adjacent manifest', () => {
+    fs.rmSync(path.join(repository, 'package-lock.json'));
+    fs.writeFileSync(path.join(repository, 'package.json'), JSON.stringify({
+      dependencies: { direct: '^1.0.0' },
+      devDependencies: { tooling: '^2.0.0' },
+    }));
+    fs.writeFileSync(path.join(repository, 'yarn.lock'), [
+      '"direct@~1.2.0", "direct@^1.0.0":',
+      '  version "1.2.3"',
+      'direct@^4.0.0:',
+      '  version "4.1.0"',
+      'tooling@^2.0.0:',
+      '  version "2.1.0"',
+      'transitive@^3.0.0:',
+      '  version "3.0.0"',
+    ].join('\n'));
+
+    const inventory = collectPackageInventory(repository);
+
+    expect(inventory.coordinates).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: 'direct', exactVersion: '1.2.3', direct: true, scope: 'runtime' }),
+      expect.objectContaining({ name: 'direct', exactVersion: '4.1.0', direct: false, scope: 'unknown' }),
+      expect.objectContaining({ name: 'tooling', exactVersion: '2.1.0', direct: true, scope: 'development' }),
+      expect.objectContaining({ name: 'transitive', exactVersion: '3.0.0', direct: false, scope: 'unknown' }),
+    ]));
+  });
+
   it('applies remote Go module replacements and rejects local replacements', () => {
     fs.writeFileSync(path.join(repository, 'go.mod'), [
       'module example.test/fixture',
@@ -887,6 +914,34 @@ describe('DependencyScanner OSV integration', () => {
     });
   });
 
+  it('scores CVSS 4.0 vectors without downgrading critical policy severity', async () => {
+    const vector = 'CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:H/VA:H/SC:H/SI:H/SA:H';
+    const fetchImpl = jest.fn(async (input: string | URL | Request) => {
+      if (String(input).endsWith('/v1/querybatch')) {
+        return jsonResponse({ results: [{ vulns: [{ id: 'GHSA-cvss4', modified: '2026-01-01T00:00:00Z' }] }] });
+      }
+      return jsonResponse({
+        id: 'GHSA-cvss4',
+        modified: '2026-01-01T00:00:00Z',
+        summary: 'CVSS 4 only',
+        severity: [{ type: 'CVSS_V4', score: vector }],
+      });
+    }) as typeof fetch;
+
+    const results = await new DependencyScanner().scan(repository, {
+      client: new OsvClient({ fetchImpl, retries: 0 }),
+      snapshotStore: new VulnerabilitySnapshotStore(cache),
+      enrichKnownExploited: false,
+    });
+
+    expect(results[0].vulnerabilities[0]).toMatchObject({
+      advisorySeverity: 'critical',
+      policySeverity: 'critical',
+      severity: 'critical',
+      cvss: { version: '4.0', vector, score: 10, source: 'GHSA-cvss4' },
+    });
+  });
+
   it('continues past malformed and unsupported CVSS vectors to a later supported vector', async () => {
     const fetchImpl = jest.fn(async (input: string | URL | Request) => {
       if (String(input).endsWith('/v1/querybatch')) {
@@ -899,7 +954,7 @@ describe('DependencyScanner OSV integration', () => {
         severity: [
           { type: 'CVSS_V3', score: '   ' },
           { type: 'CVSS_V3', score: 'CVSS:3.1/not-a-valid-vector' },
-          { type: 'CVSS_V4', score: 'CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:L/VI:L/VA:N/SC:N/SI:N/SA:N' },
+          { type: 'CVSS_V4', score: 'CVSS:4.0/not-a-valid-vector' },
           { type: 'CVSS_V3', score: 'CVSS:3.0/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:L/A:N' },
         ],
       });

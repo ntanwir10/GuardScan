@@ -161,6 +161,13 @@ export class ProviderFactory {
       );
     }
 
+    if (CLOUD_PROVIDERS.has(provider) && parsed.protocol !== 'https:') {
+      throw new ProviderConfigurationError(
+        'INVALID_ENDPOINT',
+        `Credentialed ${provider} endpoints must use HTTPS.`
+      );
+    }
+
     if (LOCAL_PROVIDERS.has(provider) && !this.isLoopbackHostname(parsed.hostname)) {
       const effectiveOffline = offline ||
         ['true', '1'].includes(process.env.GUARDSCAN_OFFLINE?.trim().toLowerCase() || '');
