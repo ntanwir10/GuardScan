@@ -978,6 +978,35 @@ describe('DependencyScanner OSV integration', () => {
     });
   });
 
+  it('selects the highest severity across every valid severity entry', async () => {
+    const record = {
+      ...advisory('GHSA-multiple-severities', []),
+      database_specific: undefined,
+      severity: [
+        { type: 'CVSS_V3', score: '5.0' },
+        { type: 'CVSS_V4', score: '9.8' },
+      ],
+    };
+    const fetchImpl = jest.fn(async (input: string | URL | Request) =>
+      String(input).endsWith('/v1/querybatch')
+        ? jsonResponse({ results: [{ vulns: [{ id: record.id, modified: record.modified }] }] })
+        : jsonResponse(record)
+    ) as typeof fetch;
+
+    const results = await new DependencyScanner().scan(repository, {
+      client: new OsvClient({ fetchImpl, retries: 0 }),
+      snapshotStore: new VulnerabilitySnapshotStore(cache),
+      enrichKnownExploited: false,
+    });
+
+    expect(results[0].vulnerabilities[0]).toMatchObject({
+      advisorySeverity: 'critical',
+      policySeverity: 'critical',
+      severity: 'critical',
+      cvss: { score: 9.8, source: 'GHSA-multiple-severities' },
+    });
+  });
+
   it('does not fail when an npm coordinate has an invalid exact version', async () => {
     const inventory = collectPackageInventory(repository);
     inventory.coordinates[0].exactVersion = 'not-a-semver';
@@ -1075,6 +1104,45 @@ describe('DependencyScanner OSV integration', () => {
       /review published fixed versions.*ecosystem tooling/i
     );
     expect(results[0].vulnerabilities[0].recommendation).not.toMatch(/or later/i);
+  });
+
+  it('recommends only a non-npm fix applicable to the installed version', async () => {
+    fs.rmSync(path.join(repository, 'package.json'));
+    fs.rmSync(path.join(repository, 'package-lock.json'));
+    fs.writeFileSync(path.join(repository, 'requirements.txt'), 'demo==2.0.0\n');
+    const record = {
+      schema_version: '1.6.0',
+      id: 'PYSEC-2026-applicable-fix',
+      modified: '2026-01-02T00:00:00Z',
+      summary: 'Fixture advisory',
+      affected: [{
+        package: { ecosystem: 'PyPI', name: 'demo' },
+        ranges: [{
+          type: 'ECOSYSTEM',
+          events: [
+            { introduced: '0' },
+            { fixed: '1.5.0' },
+            { introduced: '2.0.0' },
+            { fixed: '2.1.0' },
+          ],
+        }],
+      }],
+    };
+    const fetchImpl = jest.fn(async (input: string | URL | Request) =>
+      String(input).endsWith('/v1/querybatch')
+        ? jsonResponse({ results: [{ vulns: [{ id: record.id, modified: record.modified }] }] })
+        : jsonResponse(record)
+    ) as typeof fetch;
+
+    const results = await new DependencyScanner().scan(repository, {
+      client: new OsvClient({ fetchImpl, retries: 0 }),
+      snapshotStore: new VulnerabilitySnapshotStore(cache),
+      enrichKnownExploited: false,
+    });
+
+    expect(results[0].vulnerabilities[0].fixedVersions).toEqual(['1.5.0', '2.1.0']);
+    expect(results[0].vulnerabilities[0].recommendation).toContain('2.1.0');
+    expect(results[0].vulnerabilities[0].recommendation).not.toContain('1.5.0');
   });
 
   it('keeps valid live advisories cacheable when another advisory is malformed', async () => {

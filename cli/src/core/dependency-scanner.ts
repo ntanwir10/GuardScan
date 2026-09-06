@@ -203,15 +203,15 @@ function severityFromEntries(entries: OsvSeverity[] | undefined, source: string)
   cvss?: DependencyVulnerability['cvss'];
 } {
   let rawCvss: DependencyVulnerability['cvss'] | undefined;
+  let selected: { severity: AdvisorySeverity; cvss: DependencyVulnerability['cvss']; score: number } | undefined;
   for (const entry of entries || []) {
     if (typeof entry.score !== 'string') {continue;}
     if (!entry.score.trim()) {continue;}
     const numeric = Number(entry.score);
     if (Number.isFinite(numeric) && numeric >= 0 && numeric <= 10) {
-      return {
-        severity: cvssScoreSeverity(numeric),
-        cvss: { version: entry.type, score: numeric, source },
-      };
+      const candidate = { severity: cvssScoreSeverity(numeric), cvss: { version: entry.type, score: numeric, source }, score: numeric };
+      if (!selected || candidate.score > selected.score) {selected = candidate;}
+      continue;
     }
     if (/^CVSS:/i.test(entry.score)) {
       try {
@@ -220,10 +220,13 @@ function severityFromEntries(entries: OsvSeverity[] | undefined, source: string)
         if (calculator) {
           const score = calculator.calculateScores().base;
           if (typeof score !== 'number' || !Number.isFinite(score)) {throw new Error('CVSS base score is unavailable');}
-          return {
+          const candidate = {
             severity: cvssScoreSeverity(score),
             cvss: { version: vector.slice(5, 8), vector: entry.score, score, source },
+            score,
           };
+          if (!selected || candidate.score > selected.score) {selected = candidate;}
+          continue;
         }
       } catch {
         // Preserve malformed or unsupported upstream vectors without trusting them for policy severity.
@@ -231,7 +234,7 @@ function severityFromEntries(entries: OsvSeverity[] | undefined, source: string)
       rawCvss ||= { version: entry.type, vector: entry.score, source };
     }
   }
-  return { severity: 'unknown', cvss: rawCvss };
+  return selected ? { severity: selected.severity, cvss: selected.cvss } : { severity: 'unknown', cvss: rawCvss };
 }
 
 function selectSeverity(records: OsvVulnerability[], coordinate: DependencyCoordinate): {
@@ -312,6 +315,29 @@ function fixedVersions(records: OsvVulnerability[], coordinate: DependencyCoordi
   return values.sort();
 }
 
+function applicableFixedVersions(records: OsvVulnerability[], coordinate: DependencyCoordinate): string[] {
+  const current = semver.valid(coordinate.exactVersion, { loose: true });
+  if (!current || coordinate.ecosystem === 'npm') {return [];} // npm is handled by fixedVersions.
+  const applicable = new Set<string>();
+  for (const record of records) {
+    for (const affected of record.affected || []) {
+      if (affected.package?.ecosystem !== coordinate.osvEcosystem || affected.package?.name !== coordinate.name) {continue;}
+      for (const range of affected.ranges || []) {
+        let introduced: string | undefined;
+        for (const event of range.events || []) {
+          if (event.introduced) {introduced = semver.valid(event.introduced, { loose: true }) || undefined;}
+          if (!event.fixed) {continue;}
+          const fixed = semver.valid(event.fixed, { loose: true });
+          if (fixed && (!introduced || semver.gte(current, introduced, { loose: true })) && semver.lt(current, fixed, { loose: true })) {
+            applicable.add(fixed);
+          }
+        }
+      }
+    }
+  }
+  return [...applicable].sort(semver.compare);
+}
+
 function remediationRecommendation(
   coordinate: DependencyCoordinate,
   fixed: string[]
@@ -371,6 +397,11 @@ function toVulnerability(
   const severityResult = selectSeverity(group.records, coordinate);
   const policySeverity: DependencySeverity = severityResult.severity === 'unknown' ? 'medium' : severityResult.severity;
   const fixed = fixedVersions(group.records, coordinate);
+  const recommendationFixed = coordinate.ecosystem === 'npm'
+    ? fixed
+    : semver.valid(coordinate.exactVersion, { loose: true })
+      ? applicableFixedVersions(group.records, coordinate)
+      : fixed;
   const first = [...group.records].sort((a, b) => a.id.localeCompare(b.id))[0];
   const cveIds = [...group.ids].filter(id => /^CVE-/i.test(id)).sort();
   const aliases = [...group.ids].filter(id => id !== canonical).sort();
@@ -389,7 +420,7 @@ function toVulnerability(
     aliases,
     advisoryIds: [canonical, ...aliases],
     cveIds,
-    recommendation: remediationRecommendation(coordinate, fixed),
+    recommendation: remediationRecommendation(coordinate, recommendationFixed),
     fixedVersions: fixed,
     ecosystem: coordinate.ecosystem,
     osvEcosystem: coordinate.osvEcosystem,

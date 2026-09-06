@@ -190,6 +190,10 @@ function packageNameFromNodeModulesPath(packagePath: string): string | undefined
   return match?.[1];
 }
 
+function isRootNpmInstallPath(packagePath: string, name: string): boolean {
+  return packagePath.replace(/\\/g, '/') === `node_modules/${name}`;
+}
+
 function parseNpmLock(
   root: string,
   file: string,
@@ -204,10 +208,11 @@ function parseNpmLock(
     if (data.packages && typeof data.packages === 'object') {
       for (const [packagePath, value] of Object.entries<any>(data.packages)) {
         if (!packagePath) {continue;}
-        const name = value?.name || packageNameFromNodeModulesPath(packagePath);
+        const rawName: unknown = value?.name;
+        const name = typeof rawName === 'string' ? rawName : packageNameFromNodeModulesPath(packagePath);
         const version = typeof value?.version === 'string' ? value.version : '';
         if (!name || !semver.valid(version, { loose: true })) {continue;}
-        const directScope = direct.get(name);
+        const directScope = isRootNpmInstallPath(packagePath, name) ? direct.get(name) : undefined;
         addCoordinate(coordinates, {
           ecosystem: 'npm', osvEcosystem: 'npm', name, exactVersion: version,
           scope: value.optional ? 'optional' : value.dev ? 'development' : directScope || 'runtime',
@@ -254,10 +259,8 @@ function parseExactPackageJson(
   const directory = path.dirname(file);
   let lockDirectory = directory;
   while (isWithinRoot(root, lockDirectory)) {
-    if (fs.existsSync(path.join(lockDirectory, 'package-lock.json')) ||
-        fs.existsSync(path.join(lockDirectory, 'npm-shrinkwrap.json')) ||
-        fs.existsSync(path.join(lockDirectory, 'pnpm-lock.yaml')) ||
-        fs.existsSync(path.join(lockDirectory, 'yarn.lock'))) {return;}
+    const lockNames = ['package-lock.json', 'npm-shrinkwrap.json', 'pnpm-lock.yaml', 'yarn.lock'];
+    if (lockNames.some(name => isManifestCoveredByLock(directory, lockDirectory, name))) {return;}
     if (lockDirectory === root) {break;}
     lockDirectory = path.dirname(lockDirectory);
   }
@@ -284,6 +287,30 @@ function parseExactPackageJson(
     }
   } catch (error: unknown) {
     errors.push({ file: rel, code: 'INVALID_MANIFEST', message: `Unable to parse package.json: ${errorMessage(error)}` });
+  }
+}
+
+function isManifestCoveredByLock(
+  manifestDirectory: string,
+  lockDirectory: string,
+  lockName: string
+): boolean {
+  const lockPath = path.join(lockDirectory, lockName);
+  if (!fs.existsSync(lockPath)) {return false;}
+  if (manifestDirectory === lockDirectory) {return true;}
+  const relativeDirectory = relative(lockDirectory, manifestDirectory);
+  if (!relativeDirectory || relativeDirectory.startsWith('..')) {return false;}
+  if (lockName === 'yarn.lock') {return false;}
+  try {
+    const data: Record<string, unknown> | undefined = lockName === 'pnpm-lock.yaml'
+      ? asRecord(yaml.load(fs.readFileSync(lockPath, 'utf8')))
+      : asRecord(readJson(lockPath));
+    const importers = asRecord(data?.importers);
+    if (importers && Object.prototype.hasOwnProperty.call(importers, relativeDirectory)) {return true;}
+    const packages = asRecord(data?.packages);
+    return packages !== undefined && Object.prototype.hasOwnProperty.call(packages, relativeDirectory);
+  } catch {
+    return false;
   }
 }
 
@@ -424,13 +451,61 @@ function parseYarnLock(root: string, file: string, coordinates: DependencyCoordi
   }
 }
 
-function parseRequirements(root: string, file: string, coordinates: DependencyCoordinate[], errors: PackageInventoryError[]): void {
+function parseRequirements(
+  root: string,
+  file: string,
+  coordinates: DependencyCoordinate[],
+  errors: PackageInventoryError[],
+  visited: Set<string> = new Set()
+): void {
   const rel = relative(root, file);
+  let canonicalFile: string;
+  try {
+    canonicalFile = fs.realpathSync(file);
+  } catch (error: unknown) {
+    errors.push({
+      file: rel,
+      code: 'INVALID_MANIFEST',
+      message: `Unable to resolve requirements file: ${errorMessage(error)}`,
+    });
+    return;
+  }
+  if (!isWithinRoot(root, canonicalFile)) {
+    errors.push({
+      file: rel,
+      code: 'UNSUPPORTED_FORMAT',
+      message: 'Python requirement include resolves outside the repository',
+    });
+    return;
+  }
+  if (visited.has(canonicalFile)) {return;}
+  visited.add(canonicalFile);
   try {
     for (const raw of fs.readFileSync(file, 'utf8').split(/\r?\n/)) {
       const line = raw.trim();
       if (!line || line.startsWith('#')) {continue;}
-      if (/^(?:-r(?:\s|$)|--requirement(?:=|\s)|-e(?:\s|$)|--editable(?:=|\s))/.test(line)) {
+      const include = line.match(/^(?:-r|--requirement)(?:=|\s+)(.+)$/);
+      if (include) {
+        const requested = include[1].trim();
+        const included = path.resolve(path.dirname(canonicalFile), requested);
+        let resolved: string | undefined;
+        try {
+          resolved = fs.realpathSync(included);
+        } catch {
+          // Report the same incomplete-coverage error as an out-of-root include.
+        }
+        if (!resolved || !isWithinRoot(root, resolved)) {
+          errors.push({
+            file: rel,
+            code: 'UNSUPPORTED_FORMAT',
+            message: `Python requirement include cannot be resolved within the repository: ${requested}`,
+          });
+        } else {
+          parseRequirements(root, resolved, coordinates, errors, visited);
+        }
+        continue;
+      }
+      if (/^(?:-e(?:\s|$)|--editable(?:=|\s))/.test(line)) {
         errors.push({
           file: rel,
           code: 'UNSUPPORTED_FORMAT',
@@ -634,7 +709,21 @@ function parseGemfileLock(
 function parsePom(root: string, file: string, coordinates: DependencyCoordinate[], errors: PackageInventoryError[]): void {
   const rel = relative(root, file);
   try {
-    const xml = fs.readFileSync(file, 'utf8');
+    let xml = fs.readFileSync(file, 'utf8').replace(/<!--[\s\S]*?-->/g, '');
+    // Dependency declarations in comments, build plugins, and inactive profiles
+    // are not application dependencies of the effective project model.
+    const profileSections = xml.match(/<profiles(?:\s[^>]*)?>[\s\S]*?<\/profiles>/gi) || [];
+    if (profileSections.some(section => /<dependency(?:\s[^>]*)?>/i.test(section))) {
+      errors.push({
+        file: rel,
+        code: 'UNSUPPORTED_FORMAT',
+        message: 'Maven profile dependencies require effective-model resolution',
+      });
+    }
+    xml = xml
+      .replace(/<build(?:\s[^>]*)?>[\s\S]*?<\/build>/gi, '')
+      .replace(/<profiles(?:\s[^>]*)?>[\s\S]*?<\/profiles>/gi, '')
+      .replace(/<reporting(?:\s[^>]*)?>[\s\S]*?<\/reporting>/gi, '');
     const properties = new Map<string, string>();
     const propertiesBlock = xml.match(/<properties(?:\s[^>]*)?>([\s\S]*?)<\/properties>/)?.[1] || '';
     const propertyPattern = /<([A-Za-z_][A-Za-z0-9_.-]*)>\s*([^<]+?)\s*<\/\1>/g;

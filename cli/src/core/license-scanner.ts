@@ -1,4 +1,4 @@
-import { createHash } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import packageManifest from '../../package.json';
@@ -798,7 +798,7 @@ export class LicenseScanner {
         $schema: 'https://cyclonedx.org/schema/bom-1.7.schema.json',
         bomFormat: 'CycloneDX',
         specVersion: '1.7',
-        serialNumber: `urn:uuid:${stableUuid(`${projectName}\0${components.map(value => value['bom-ref']).join('\0')}`)}`,
+        serialNumber: `urn:uuid:${randomUUID()}`,
         version: 1,
         metadata: {
           timestamp: created,
@@ -966,13 +966,6 @@ function cycloneDxDependencies(
 
 function stableIdentifier(value: string): string {
   return createHash('sha256').update(value).digest('hex').slice(0, 32);
-}
-
-function stableUuid(value: string): string {
-  const digest = createHash('sha256').update(value).digest('hex').slice(0, 32).split('');
-  digest[12] = '5';
-  digest[16] = ((Number.parseInt(digest[16], 16) & 0x3) | 0x8).toString(16);
-  return `${digest.slice(0, 8).join('')}-${digest.slice(8, 12).join('')}-${digest.slice(12, 16).join('')}-${digest.slice(16, 20).join('')}-${digest.slice(20).join('')}`;
 }
 
 function isSimpleSpdxIdentifier(value: string): boolean {

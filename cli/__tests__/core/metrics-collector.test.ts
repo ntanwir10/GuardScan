@@ -44,4 +44,51 @@ describe('MetricsCollector local history erasure', () => {
     expect(fs.existsSync(migratedFile)).toBe(false);
     expect(collector.getSpans()).toEqual([]);
   });
+
+  it('does not publish a span while history erasure holds the storage lease', async () => {
+    const repoId = `metrics-clear-race-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), 'guardscan-metrics-clear-race-'));
+    jest.spyOn(configManager, 'getCacheDir').mockReturnValue(cacheDir);
+    roots.push(cacheDir);
+    const collector = new MetricsCollector(repoId);
+    const first: AISpan = {
+      traceId: 'trace-before-clear',
+      spanId: 'span-before-clear',
+      provider: 'fixture',
+      model: 'fixture',
+      operation: 'chat',
+      startTime: 1,
+      endTime: 2,
+      latency: 1,
+      success: true,
+    };
+    const racing: AISpan = {
+      ...first,
+      traceId: 'trace-during-clear',
+      spanId: 'span-during-clear',
+      startTime: 3,
+      endTime: 4,
+    };
+    await collector.recordSpan(first);
+
+    const unlink = fs.promises.unlink.bind(fs.promises);
+    let releaseUnlink!: () => void;
+    const unlinkReleased = new Promise<void>(resolve => {releaseUnlink = resolve;});
+    let markUnlinkStarted!: () => void;
+    const unlinkStarted = new Promise<void>(resolve => {markUnlinkStarted = resolve;});
+    jest.spyOn(fs.promises, 'unlink').mockImplementationOnce(async file => {
+      markUnlinkStarted();
+      await unlinkReleased;
+      return unlink(file);
+    });
+
+    const clearing = collector.clear();
+    await unlinkStarted;
+    await expect(collector.recordSpan(racing)).rejects.toThrow(/already in progress/i);
+    releaseUnlink();
+    await clearing;
+
+    await collector.recordSpan(racing);
+    expect(collector.getSpans()).toEqual([racing]);
+  });
 });

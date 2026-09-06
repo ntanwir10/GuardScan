@@ -168,6 +168,10 @@ export class ProviderFactory {
       );
     }
 
+    if (LOCAL_PROVIDERS.has(provider) && parsed.hostname.toLowerCase() === 'localhost') {
+      parsed.hostname = '127.0.0.1';
+    }
+
     if (LOCAL_PROVIDERS.has(provider) && !this.isLoopbackHostname(parsed.hostname)) {
       const effectiveOffline = offline ||
         ['true', '1'].includes(process.env.GUARDSCAN_OFFLINE?.trim().toLowerCase() || '');

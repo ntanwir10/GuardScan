@@ -129,6 +129,16 @@ describe('LicenseScanner inventory and SBOM contracts', () => {
     expect(document.components[0]['bom-ref']).toBe(document.components[0].purl);
   });
 
+  it('generates a unique CycloneDX serial number for each BOM document', () => {
+    const scanner = new LicenseScanner();
+    const findings = [finding({ package: 'serial-fixture' })];
+
+    const first = scanner.generateSBOM(findings, 'cyclonedx', 'fixture');
+    const second = scanner.generateSBOM(findings, 'cyclonedx', 'fixture');
+
+    expect(first.serialNumber).not.toBe(second.serialNumber);
+  });
+
   it.each([
     '(MIT OR Apache-2.0)',
     'GPL-2.0-only WITH Classpath-exception-2.0',

@@ -408,10 +408,21 @@ describe("ProviderFactory", () => {
       )).not.toThrow();
     });
 
-    it('rejects hostname-based loopback claims offline', () => {
+    it.each(['localhost', 'LOCALHOST'])(
+      'canonicalizes the legacy %s loopback alias offline',
+      hostname => {
+        expect(ProviderFactory.normalizeEndpoint(
+          'ollama',
+          `http://${hostname}:11434`,
+          true
+        )).toBe('http://127.0.0.1:11434');
+      }
+    );
+
+    it('rejects arbitrary hostname-based loopback claims offline', () => {
       expect(() => ProviderFactory.normalizeEndpoint(
         'ollama',
-        'http://localhost:11434',
+        'http://local.guardscan.test:11434',
         true
       )).toThrow(expect.objectContaining({code: 'INVALID_ENDPOINT'}));
     });

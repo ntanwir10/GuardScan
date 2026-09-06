@@ -56,7 +56,7 @@ export async function securityCommand(options: SecurityOptions): Promise<void> {
     const config = configManager.loadOrInit();
     warnDeprecatedNoCloud(options.cloud);
     const repoInfo = repositoryManager.getRepoInfo();
-    const includeVulnerabilities = options.cve !== false && config.vulnerabilities?.enabled !== false;
+    const includeVulnerabilities = options.cve === true && config.vulnerabilities?.enabled !== false;
     const executionPolicy = resolveExecutionPolicy({
       configOffline: config.offlineMode,
       offline: options.offline,

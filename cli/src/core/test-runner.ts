@@ -13,6 +13,8 @@ export interface TestResult {
   duration: number;
   coverage?: CoverageResult;
   failures: TestFailure[];
+  /** Operational failure that prevented assertion results from being produced. */
+  executionError?: string;
 }
 
 export interface TestFailure {
@@ -88,22 +90,22 @@ export class TestRunner {
 
     // Detect and run Jest (JavaScript/TypeScript)
     if (this.hasJest(repoPath)) {
-      await this.appendResult(results, policy, () => this.runJest(repoPath, withCoverage, policy));
+      await this.appendResult(results, policy, 'Jest', () => this.runJest(repoPath, withCoverage, policy));
     }
 
     // Detect and run pytest (Python)
     if (this.hasPytest(repoPath)) {
-      await this.appendResult(results, policy, () => this.runPytest(repoPath, withCoverage, policy));
+      await this.appendResult(results, policy, 'pytest', () => this.runPytest(repoPath, withCoverage, policy));
     }
 
     // Detect and run go test (Go)
     if (this.hasGoTest(repoPath)) {
-      await this.appendResult(results, policy, () => this.runGoTest(repoPath, withCoverage, policy));
+      await this.appendResult(results, policy, 'go test', () => this.runGoTest(repoPath, withCoverage, policy));
     }
 
     // Detect and run cargo test (Rust)
     if (this.hasCargoTest(repoPath)) {
-      await this.appendResult(results, policy, () => this.runCargoTest(repoPath, policy));
+      await this.appendResult(results, policy, 'cargo test', () => this.runCargoTest(repoPath, policy));
     }
 
     return results;
@@ -112,6 +114,7 @@ export class TestRunner {
   private async appendResult(
     results: TestResult[],
     policy: EffectiveExecutionPolicy | undefined,
+    framework: string,
     run: () => Promise<TestResult | null>
   ): Promise<void> {
     try {
@@ -119,7 +122,19 @@ export class TestRunner {
       if (result) {results.push(result);}
     } catch (error) {
       if (isNetworkIsolationError(error)) {throw error;}
-      if (policy?.allowPartial) {return;}
+      if (policy?.allowPartial) {
+        results.push({
+          framework,
+          totalTests: 0,
+          passed: 0,
+          failed: 0,
+          skipped: 0,
+          duration: 0,
+          failures: [],
+          executionError: error instanceof Error ? error.message : String(error),
+        });
+        return;
+      }
       throw error;
     }
   }

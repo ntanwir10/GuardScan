@@ -160,6 +160,33 @@ describe('CLI end-to-end contracts', () => {
     expect(report.errors).toEqual([]);
   }, 90_000);
 
+  it('keeps the default offline security command local when no CVE snapshot exists', () => {
+    const output = path.join(project, 'security-default-offline.json');
+    const result = runCli([
+      '--no-telemetry',
+      'security',
+      '--offline',
+      '--ci',
+      '--format',
+      'json',
+      '--output',
+      output,
+      '--max-findings',
+      '1000',
+    ]);
+
+    expect(result.status).toBe(0);
+    const report = JSON.parse(fs.readFileSync(output, 'utf8'));
+    expect(report.security.scanners).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        scanner: 'dependencies',
+        status: 'skipped',
+        skipReason: 'disabled',
+      }),
+    ]));
+    expect(report.policy).toMatchObject({ status: 'passed', exitCode: 0 });
+  }, 90_000);
+
   it('uses exit code 1 for a finding-policy failure and records it in JSON', () => {
     const output = path.join(project, 'policy-failure.json');
     const result = runCli([

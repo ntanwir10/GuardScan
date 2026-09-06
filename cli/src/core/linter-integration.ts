@@ -26,6 +26,8 @@ export interface LinterReport {
   errors: number;
   warnings: number;
   info: number;
+  /** Operational failure that prevented lint findings from being produced. */
+  executionError?: string;
 }
 
 export class LinterIntegration {
@@ -43,31 +45,31 @@ export class LinterIntegration {
 
     // Detect and run JavaScript/TypeScript linters
     if (this.hasESLint(repoPath)) {
-      await this.appendReport(reports, policy, () => this.runESLint(repoPath, policy));
+      await this.appendReport(reports, policy, 'ESLint', () => this.runESLint(repoPath, policy));
     }
 
     // Detect and run Python linters
     if (this.hasFlake8(repoPath)) {
-      await this.appendReport(reports, policy, () => this.runFlake8(repoPath, policy));
+      await this.appendReport(reports, policy, 'Flake8', () => this.runFlake8(repoPath, policy));
     }
 
     if (this.hasPylint(repoPath)) {
-      await this.appendReport(reports, policy, () => this.runPylint(repoPath, policy));
+      await this.appendReport(reports, policy, 'Pylint', () => this.runPylint(repoPath, policy));
     }
 
     // Detect and run Go linters
     if (this.hasGoLint(repoPath)) {
-      await this.appendReport(reports, policy, () => this.runGoLint(repoPath, policy));
+      await this.appendReport(reports, policy, 'Go lint', () => this.runGoLint(repoPath, policy));
     }
 
     // Detect and run Ruby linters
     if (this.hasRubocop(repoPath)) {
-      await this.appendReport(reports, policy, () => this.runRubocop(repoPath, policy));
+      await this.appendReport(reports, policy, 'Rubocop', () => this.runRubocop(repoPath, policy));
     }
 
     // Detect and run PHP linters
     if (this.hasPhpCS(repoPath)) {
-      await this.appendReport(reports, policy, () => this.runPhpCS(repoPath, policy));
+      await this.appendReport(reports, policy, 'PHP_CodeSniffer', () => this.runPhpCS(repoPath, policy));
     }
 
     return reports;
@@ -76,6 +78,7 @@ export class LinterIntegration {
   private async appendReport(
     reports: LinterReport[],
     policy: EffectiveExecutionPolicy | undefined,
+    linter: string,
     run: () => Promise<LinterReport | null>
   ): Promise<void> {
     try {
@@ -83,7 +86,18 @@ export class LinterIntegration {
       if (report) {reports.push(report);}
     } catch (error) {
       if (isNetworkIsolationError(error)) {throw error;}
-      if (policy?.allowPartial) {return;}
+      if (policy?.allowPartial) {
+        reports.push({
+          linter,
+          results: [],
+          totalIssues: 0,
+          errors: 0,
+          warnings: 0,
+          info: 0,
+          executionError: error instanceof Error ? error.message : String(error),
+        });
+        return;
+      }
       throw error;
     }
   }

@@ -244,12 +244,12 @@ export async function runQualityAnalysis(
   ]);
   const tests = requireConfiguredToolOutput(
     'tests',
-    rawTests,
+    markRetainedExecutionErrors('tests', rawTests),
     hasConfiguredNodeTool(repoPath, ['jest', 'vitest', 'mocha'])
   );
   const lint = requireConfiguredToolOutput(
     'lint',
-    rawLint,
+    markRetainedExecutionErrors('lint', rawLint),
     hasConfiguredNodeTool(repoPath, ['eslint'])
   );
   const checks = {
@@ -279,6 +279,25 @@ export async function runQualityAnalysis(
           ? 'failed'
           : 'partial',
     checks,
+  };
+}
+
+function markRetainedExecutionErrors(name: string, check: CheckResult): CheckResult {
+  if (check.status !== 'succeeded' || !Array.isArray(check.data)) {return check;}
+  const messages = check.data.flatMap(value => {
+    if (!value || typeof value !== 'object' || !('executionError' in value)) {return [];}
+    const message = (value as { executionError?: unknown }).executionError;
+    return typeof message === 'string' && message.trim() ? [message.trim()] : [];
+  });
+  if (messages.length === 0) {return check;}
+  return {
+    ...check,
+    status: 'failed',
+    error: {
+      code: 'TOOL_EXECUTION_PARTIAL',
+      message: `${name} execution was incomplete: ${messages.join('; ')}`,
+      retryable: true,
+    },
   };
 }
 
@@ -402,12 +421,12 @@ export function evaluateComprehensivePolicy(
     errors.push({ scanner: 'sbom', ...sbom.error });
   }
 
-  const tests = successfulArray(quality.checks.tests);
+  const tests = checkDataArray(quality.checks.tests);
   const failedTests = tests.reduce((total, result: any) => total + finiteCount(result?.failed), 0);
   if (failedTests > 0) {
     policyReasons.push(`${failedTests} test(s) failed`);
   }
-  const lintReports = successfulArray(quality.checks.lint);
+  const lintReports = checkDataArray(quality.checks.lint);
   const lintErrors = lintReports.reduce((total, report: any) => total + finiteCount(report?.errors), 0);
   if (lintErrors > 0) {
     policyReasons.push(`${lintErrors} lint error(s) found`);
@@ -439,8 +458,8 @@ export function evaluateComprehensivePolicy(
   };
 }
 
-function successfulArray(check: CheckResult): any[] {
-  return check.status === 'succeeded' && Array.isArray(check.data) ? check.data : [];
+function checkDataArray(check: CheckResult): any[] {
+  return Array.isArray(check.data) ? check.data : [];
 }
 
 function finiteCount(value: unknown): number {
@@ -469,7 +488,7 @@ function comprehensiveReview(
   durationMs: number,
   ranProjectCode: boolean
 ): ReviewResult {
-  const tests = successfulArray(quality.checks.tests);
+  const tests = checkDataArray(quality.checks.tests);
   const failedTests = tests.reduce((sum, result: any) => sum + finiteCount(result?.failed), 0);
   const summary = [
     `Security findings: ${security.findings.length}`,

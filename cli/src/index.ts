@@ -138,7 +138,7 @@ async function main(): Promise<void> {
     .description("Run local heuristic security checks")
     .option("-f, --files <patterns...>", "Specific files or patterns to scan")
     .option("--licenses", "Include license compliance scanning")
-    .option("--cve", "Include exact-version dependency vulnerability scanning", true)
+    .option("--cve", "Include exact-version dependency vulnerability scanning")
     .option("--no-cve", "Skip dependency vulnerability scanning")
     .option("--scope <scope>", "Dependency scope for CVE scanning (all or runtime)")
     .option("--allow-partial", "Allow incomplete scanner coverage without an operational failure")

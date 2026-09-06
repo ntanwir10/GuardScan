@@ -201,6 +201,11 @@ describe('LinterIntegration isolation failures', () => {
       allowPartial: true,
       includeCve: false,
     })).resolves.toEqual([
+      expect.objectContaining({
+        linter: 'ESLint',
+        totalIssues: 0,
+        executionError: expect.stringMatching(/ESLint execution failed/i),
+      }),
       expect.objectContaining({ linter: 'Flake8', totalIssues: 1 }),
     ]);
   });

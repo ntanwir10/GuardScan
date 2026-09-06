@@ -109,27 +109,32 @@ export class MetricsCollector {
    */
   async recordSpan(span: AISpan): Promise<void> {
     const safeSpan = parseSpan(span);
-    const created = this.persistSpan(safeSpan);
-    if (!created) {return;}
-    this.spans.push(safeSpan);
-    const shouldPrune = this.spans.length > this.maxSpans;
-    let evicted: AISpan | undefined;
+    const lease = acquireMetricsLease(this.migrationLeaseFile);
+    try {
+      const created = this.persistSpan(safeSpan);
+      if (!created) {return;}
+      this.spans.push(safeSpan);
+      const shouldPrune = this.spans.length > this.maxSpans;
+      let evicted: AISpan | undefined;
 
-    // Trim old spans if exceeding max
-    if (this.spans.length > this.maxSpans) {
-      evicted = this.spans.shift();
-      if (evicted) {
-        try {fs.unlinkSync(path.join(this.eventsDir, `${this.storageId(evicted)}.json`));}
-        catch { /* concurrent delete */ }
+      // Trim old spans if exceeding max
+      if (this.spans.length > this.maxSpans) {
+        evicted = this.spans.shift();
+        if (evicted) {
+          try {fs.unlinkSync(path.join(this.eventsDir, `${this.storageId(evicted)}.json`));}
+          catch { /* concurrent delete */ }
+        }
       }
-    }
 
-    if (shouldPrune) {
-      this.recordsSincePrune += 1;
-      if (this.recordsSincePrune >= 32) {
-        this.pruneDiskEvents();
-        this.recordsSincePrune = 0;
+      if (shouldPrune) {
+        this.recordsSincePrune += 1;
+        if (this.recordsSincePrune >= 32) {
+          this.pruneDiskEvents();
+          this.recordsSincePrune = 0;
+        }
       }
+    } finally {
+      lease.release();
     }
     await Promise.resolve();
   }

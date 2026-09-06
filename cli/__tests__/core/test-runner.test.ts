@@ -110,6 +110,12 @@ describe('TestRunner discovery and empty-suite behavior', () => {
       allowPartial: true,
       includeCve: false,
     })).resolves.toEqual([
+      expect.objectContaining({
+        framework: 'Jest',
+        totalTests: 0,
+        failed: 0,
+        executionError: expect.stringMatching(/without producing a JSON report/i),
+      }),
       expect.objectContaining({ framework: 'pytest', totalTests: 1, passed: 1 }),
     ]);
   });
