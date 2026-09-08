@@ -88,6 +88,30 @@ describe('LicenseScanner inventory and SBOM contracts', () => {
     expect(report.findings[0]).toMatchObject({ scope: 'runtime', direct: true });
   });
 
+  it('uses only exact installed npm metadata and resolves nested lockfile-v1 packages', async () => {
+    fs.mkdirSync(path.join(repository, 'node_modules', 'child'), { recursive: true });
+    fs.mkdirSync(path.join(repository, 'node_modules', 'parent', 'node_modules', 'child'), { recursive: true });
+    fs.writeFileSync(path.join(repository, 'node_modules', 'child', 'package.json'), JSON.stringify({
+      name: 'child', version: '2.0.0', license: 'GPL-3.0',
+    }));
+    fs.writeFileSync(path.join(repository, 'node_modules', 'parent', 'node_modules', 'child', 'package.json'), JSON.stringify({
+      name: 'child', version: '2.0.0', license: 'Apache-2.0',
+    }));
+
+    const report = await new LicenseScanner().scan(repository, 'proprietary', {
+      offline: true,
+      inventory: inventory(repository, [
+        coordinate({ name: 'child', exactVersion: '2.0.0', dependencyPaths: ['parent > child'] }),
+        coordinate({ name: 'child', exactVersion: '1.0.0', dependencyPaths: ['node_modules/child'] }),
+      ]),
+    });
+
+    expect(report.findings).toEqual(expect.arrayContaining([
+      expect.objectContaining({ package: 'child', version: '2.0.0', license: 'Apache-2.0' }),
+      expect.objectContaining({ package: 'child', version: '1.0.0', license: 'Unknown' }),
+    ]));
+  });
+
   it('emits known npm parent-child edges without promoting transitives to root dependencies', async () => {
     const scanner = new LicenseScanner();
     const report = await scanner.scan(repository, 'proprietary', {

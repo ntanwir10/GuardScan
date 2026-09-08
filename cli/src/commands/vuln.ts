@@ -9,7 +9,7 @@ import {
   DependencyVulnerability,
 } from '../core/dependency-scanner';
 import { configManager } from '../core/config';
-import { PackageEcosystem } from '../core/package-inventory';
+import { filterPackageInventory, PackageEcosystem } from '../core/package-inventory';
 import { resolveExecutionPolicy } from '../utils/execution-policy';
 
 type VulnerabilityFormat = 'table' | 'json' | 'sarif';
@@ -131,16 +131,37 @@ export function createVulnerabilityCommand(scanner: DependencyScanner = dependen
         if (resolveExecutionPolicy({ configOffline: config.offlineMode }).offline) {
           throw new Error('Disable offline mode before updating the vulnerability database');
         }
+        const repository = path.resolve(repoPath);
+        const scope = config.vulnerabilities?.scope === 'runtime' ? 'runtime' : 'all';
+        const maxAgeDays = parseSnapshotMaxAge(config.vulnerabilities?.snapshotMaxAgeDays);
         const concurrency = parseInteger(options.concurrency || '4', '--concurrency', 1, 16);
-        const results = await scanner.updateSnapshot(path.resolve(repoPath), {
+        const results = await scanner.updateSnapshot(repository, {
           concurrency,
           endpoint: config.vulnerabilities?.endpoint,
-          scope: config.vulnerabilities?.scope,
+          scope,
           enrichKnownExploited: config.vulnerabilities?.enrichKnownExploited !== false,
-          kevMaxCacheAgeDays: parseSnapshotMaxAge(config.vulnerabilities?.snapshotMaxAgeDays),
+          kevMaxCacheAgeDays: maxAgeDays,
         });
+        const updateErrors = results.flatMap(result => result.errors);
+        if (results.some(result => result.status !== 'complete') || updateErrors.length > 0) {
+          const details = updateErrors.map(error => `${error.code}: ${error.message}`).join('; ') || 'coverage is incomplete';
+          throw new Error(`Vulnerability snapshot was not fully updated: ${details}`);
+        }
         const packages = results.reduce((sum, result) => sum + result.queriedPackages, 0);
         const advisories = results.reduce((sum, result) => sum + result.totalVulnerabilities, 0);
+        if (packages > 0) {
+          const { inventory: rawInventory, status } = scanner.snapshotStatus(
+            repository,
+            maxAgeDays,
+            undefined,
+            config.vulnerabilities?.endpoint
+          );
+          const inventory = filterPackageInventory(rawInventory, { scope });
+          const inventoryMatches = status.snapshot?.inventoryDigest === inventory.digest;
+          if (!status.exists || !status.fresh || !status.snapshot || !inventoryMatches || status.sourceMatches === false) {
+            throw new Error('Vulnerability snapshot was not saved with usable coverage for the current inventory and source');
+          }
+        }
         console.log(chalk.green(`Vulnerability snapshot updated: ${packages} packages, ${advisories} affected package/advisory pairs`));
       } catch (error: any) {
         console.error(chalk.red(`Vulnerability database update failed: ${error?.message || error}`));
@@ -154,18 +175,21 @@ export function createVulnerabilityCommand(scanner: DependencyScanner = dependen
       try {
         const config = configManager.loadOrInit({ touchLastUsed: false });
         const maxAgeDays = parseSnapshotMaxAge(config.vulnerabilities?.snapshotMaxAgeDays);
-        const { inventory, status } = scanner.snapshotStatus(
+        const scope = config.vulnerabilities?.scope === 'runtime' ? 'runtime' : 'all';
+        const { inventory: rawInventory, status } = scanner.snapshotStatus(
           path.resolve(repoPath),
           maxAgeDays,
           undefined,
           config.vulnerabilities?.endpoint
         );
+        const inventory = filterPackageInventory(rawInventory, { scope });
+        const inventoryMatches = status.snapshot?.inventoryDigest === inventory.digest;
         const kevStatus = scanner.knownExploitedStatus(maxAgeDays);
         console.log(JSON.stringify({
           schemaVersion: 'guardscan.vulnerability-snapshot-status.v1',
           exists: status.exists,
           fresh: status.fresh,
-          inventoryMatches: status.inventoryMatches,
+          inventoryMatches,
           sourceMatches: status.sourceMatches,
           ageDays: status.ageDays,
           packages: inventory.coordinates.length,

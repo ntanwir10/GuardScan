@@ -75,6 +75,68 @@ describe('collectPackageInventory', () => {
     ]));
   });
 
+  it('marks npm workspace dependencies direct whether hoisted or workspace-nested', () => {
+    fs.writeFileSync(path.join(repository, 'package.json'), JSON.stringify({name: 'root'}));
+    fs.mkdirSync(path.join(repository, 'packages/app'), {recursive: true});
+    fs.writeFileSync(path.join(repository, 'packages/app/package.json'), JSON.stringify({
+      name: 'app', dependencies: {foo: '^1.0.0', hoisted: '^3.0.0'}, devDependencies: {devtool: '^2.0.0'},
+    }));
+    fs.writeFileSync(path.join(repository, 'package-lock.json'), JSON.stringify({
+      name: 'root', lockfileVersion: 3,
+      packages: {
+        '': {name: 'root', workspaces: ['packages/app']},
+        'packages/app': {name: 'app', version: '1.0.0', dependencies: {foo: '^1.0.0', hoisted: '^3.0.0'}, devDependencies: {devtool: '^2.0.0'}},
+        'node_modules/foo': {name: 'foo', version: '2.0.0'},
+        'node_modules/hoisted': {name: 'hoisted', version: '3.0.0'},
+        'packages/app/node_modules/foo': {name: 'foo', version: '1.0.0'},
+        'packages/app/node_modules/devtool': {name: 'devtool', version: '2.0.0', dev: true},
+      },
+    }));
+
+    const inventory = collectPackageInventory(repository);
+
+    expect(inventory.coordinates).toEqual(expect.arrayContaining([
+      expect.objectContaining({name: 'foo', exactVersion: '1.0.0', direct: true, scope: 'runtime', manifestPath: 'packages/app/package.json'}),
+      expect.objectContaining({name: 'foo', exactVersion: '2.0.0', direct: false}),
+      expect.objectContaining({name: 'hoisted', exactVersion: '3.0.0', direct: true, scope: 'runtime', manifestPath: 'packages/app/package.json'}),
+      expect.objectContaining({name: 'devtool', exactVersion: '2.0.0', direct: true, scope: 'development', manifestPath: 'packages/app/package.json'}),
+    ]));
+    expect(inventory.coordinates).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({name: 'app'}),
+    ]));
+    expect(inventory.errors).toEqual([]);
+  });
+
+  it('keeps only GEM specs and reports GIT and PATH coverage as incomplete', () => {
+    fs.writeFileSync(path.join(repository, 'Gemfile.lock'), `
+GIT
+  remote: https://example.test/gitgem.git
+  revision: abc
+  specs:
+    gitgem (1.0.0)
+
+PATH
+  remote: gems/localgem
+  specs:
+    localgem (2.0.0)
+
+GEM
+  remote: https://rubygems.org/
+  specs:
+    registrygem (3.0.0)
+`);
+
+    const inventory = collectPackageInventory(repository);
+
+    expect(inventory.coordinates).toEqual([
+      expect.objectContaining({ecosystem: 'ruby', name: 'registrygem', exactVersion: '3.0.0'}),
+    ]);
+    expect(inventory.errors).toEqual([
+      expect.objectContaining({code: 'UNSUPPORTED_FORMAT', message: expect.stringMatching(/GIT/i)}),
+      expect.objectContaining({code: 'UNSUPPORTED_FORMAT', message: expect.stringMatching(/PATH/i)}),
+    ]);
+  });
+
   it('ignores Maven build plugins, profiles, and comments', () => {
     fs.writeFileSync(path.join(repository, 'pom.xml'), `
       <project>
@@ -101,6 +163,29 @@ describe('collectPackageInventory', () => {
         code: 'UNSUPPORTED_FORMAT',
         message: expect.stringMatching(/effective-model resolution/i),
       }),
+      expect.objectContaining({
+        file: 'pom.xml',
+        ecosystem: 'maven',
+        code: 'UNSUPPORTED_FORMAT',
+        message: expect.stringMatching(/direct-POM-only/i),
+      }),
+    ]);
+  });
+
+  it('marks direct-only Maven inventory as transitively incomplete', () => {
+    fs.writeFileSync(path.join(repository, 'pom.xml'), `
+      <project><dependencies>
+        <dependency><groupId>org.example</groupId><artifactId>runtime</artifactId><version>1.0.0</version></dependency>
+      </dependencies></project>
+    `);
+
+    const inventory = collectPackageInventory(repository);
+
+    expect(inventory.coordinates).toEqual([
+      expect.objectContaining({name: 'org.example:runtime', exactVersion: '1.0.0'}),
+    ]);
+    expect(inventory.errors).toEqual([
+      expect.objectContaining({code: 'UNSUPPORTED_FORMAT', message: expect.stringMatching(/direct-POM-only/i)}),
     ]);
   });
 

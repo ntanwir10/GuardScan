@@ -158,7 +158,7 @@ export async function scanCommand(options: ScanOptions): Promise<void> {
 
     const ai = aiState(options.skipAi === true, config.provider);
     const policy: ScanPolicy = {
-      failOn: options.failOn,
+      failOn: options.failOn || (options.ci ? 'high' : undefined),
       maxFindings: parseMaxFindings(options.maxFindings),
       allowPartial,
     };

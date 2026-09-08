@@ -237,23 +237,46 @@ export class LicenseScanner {
   }
 
   private readInstalledNpmLicense(repoPath: string, coordinate: DependencyCoordinate): string {
-    const candidates = coordinate.dependencyPaths
-      .filter(value => /(?:^|\/)node_modules\//.test(value.replace(/\\/g, '/')))
-      .map(value => path.resolve(repoPath, value, 'package.json'));
+    let resolvedRepoPath: string;
+    try {
+      resolvedRepoPath = fs.realpathSync(repoPath);
+    } catch {
+      return 'Unknown';
+    }
+    const candidates: string[] = [];
+    for (const dependencyPath of coordinate.dependencyPaths) {
+      const normalized = dependencyPath.replace(/\\/g, '/');
+      if (/(?:^|\/)node_modules\//.test(normalized)) {
+        candidates.push(path.resolve(repoPath, normalized, 'package.json'));
+        continue;
+      }
+      if (normalized.includes(' > ')) {
+        const names = normalized.split(' > ').map(value => value.trim()).filter(Boolean);
+        const packagePath = names.reduce(
+          (current, name) => path.join(current, 'node_modules', name),
+          repoPath
+        );
+        candidates.push(path.join(packagePath, 'package.json'));
+      }
+    }
 
     // Lockfile v1 dependency paths do not necessarily name a filesystem path.
     candidates.push(path.resolve(repoPath, 'node_modules', coordinate.name, 'package.json'));
 
-    for (const candidate of candidates) {
-      const relative = path.relative(repoPath, candidate);
-      if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
-        continue;
-      }
+    for (const candidate of [...new Set(candidates)]) {
       try {
-        const manifest = JSON.parse(fs.readFileSync(candidate, 'utf8')) as {
+        const resolvedCandidate = fs.realpathSync(candidate);
+        const relative = path.relative(resolvedRepoPath, resolvedCandidate);
+        if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+          continue;
+        }
+        const manifest = JSON.parse(fs.readFileSync(resolvedCandidate, 'utf8')) as {
+          name?: string;
+          version?: string;
           license?: string | { type?: string };
           licenses?: Array<string | { type?: string }>;
         };
+        if (manifest.name !== coordinate.name || manifest.version !== coordinate.exactVersion) {continue;}
         if (typeof manifest.license === 'string') {return manifest.license;}
         if (manifest.license && typeof manifest.license.type === 'string') {return manifest.license.type;}
         if (Array.isArray(manifest.licenses)) {

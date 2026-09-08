@@ -120,6 +120,39 @@ describe('TestRunner discovery and empty-suite behavior', () => {
     ]);
   });
 
+  it('runs Cargo tests with the stable human-readable harness format', async () => {
+    fs.writeFileSync(path.join(repository, 'Cargo.toml'), '[package]\nname = "fixture"\nversion = "0.1.0"\n');
+    mockedRunProcess.mockReturnValue(processResult(
+      101,
+      [
+        'running 1 test',
+        'test tests::fixture ... ok',
+        '',
+        'test result: ok. 1 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s',
+        '',
+        'running 1 test',
+        'test tests::second ... FAILED',
+        '',
+        'test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s',
+      ].join('\n')
+    ));
+
+    await expect(new TestRunner().runTests(repository)).resolves.toEqual([
+      expect.objectContaining({
+        framework: 'cargo test',
+        totalTests: 3,
+        passed: 1,
+        failed: 1,
+        skipped: 1,
+      }),
+    ]);
+    expect(mockedRunProcess).toHaveBeenCalledWith(
+      'cargo',
+      ['test'],
+      expect.objectContaining({ cwd: repository })
+    );
+  });
+
   it('does not suppress isolation setup failure in partial mode', async () => {
     fs.writeFileSync(path.join(repository, 'package.json'), JSON.stringify({
       scripts: { test: 'jest' },

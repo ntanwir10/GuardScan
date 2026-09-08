@@ -576,7 +576,7 @@ export class TestRunner {
     policy?: EffectiveExecutionPolicy
   ): Promise<TestResult | null> {
     try {
-      const processResult = runProcess('cargo', ['test', '--', '--format=json'], {
+      const processResult = runProcess('cargo', ['test'], {
         cwd: repoPath,
         maxBuffer: 10 * 1024 * 1024,
         timeoutMs: 10 * 60 * 1000,
@@ -585,23 +585,25 @@ export class TestRunner {
       if (processResult.timedOut) {throw new Error('cargo test timed out');}
       const output = `${processResult.stdout}\n${processResult.stderr}`;
 
-      // Parse cargo test output (basic parsing)
-      const passedMatch = output.match(/test result:.*?(\d+) passed/);
-      const failedMatch = output.match(/(\d+) failed/);
-
-      if (!passedMatch) {
+      const summaries = [...output.matchAll(
+        /test result:\s+[^.]+\.\s+(\d+) passed;\s+(\d+) failed;\s+(\d+) ignored;/g
+      )];
+      if (summaries.length === 0) {
         throw new Error(`cargo test exited ${processResult.status} without a parseable report`);
       }
-
-      const passed = parseInt(passedMatch[1]);
-      const failed = failedMatch ? parseInt(failedMatch[1]) : 0;
+      const passed = summaries.reduce((total, match) => total + Number.parseInt(match[1], 10), 0);
+      const failed = summaries.reduce((total, match) => total + Number.parseInt(match[2], 10), 0);
+      const skipped = summaries.reduce((total, match) => total + Number.parseInt(match[3], 10), 0);
+      if (processResult.status !== 0 && failed === 0) {
+        throw new Error(`cargo test exited ${processResult.status} without reporting a test failure`);
+      }
 
       return {
         framework: 'cargo test',
-        totalTests: passed + failed,
+        totalTests: passed + failed + skipped,
         passed,
         failed,
-        skipped: 0,
+        skipped,
         duration: 0,
         failures: [],
       };

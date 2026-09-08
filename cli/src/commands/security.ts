@@ -113,7 +113,7 @@ export async function securityCommand(options: SecurityOptions): Promise<void> {
     }
 
     const policy: ScanPolicy = {
-      failOn: options.failOn,
+      failOn: options.failOn || (options.ci ? 'high' : undefined),
       maxFindings: parseMaxFindings(options.maxFindings),
       allowPartial,
     };

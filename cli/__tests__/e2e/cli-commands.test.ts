@@ -66,8 +66,6 @@ describe('CLI end-to-end contracts', () => {
         'export function add(left, right) {',
         '  return left + right;',
         '}',
-        '// Deterministic scanner fixture:',
-        'const apiKey = "AKIAIOSFODNN7EXAMPLE";',
       ].join('\n')
     );
     fs.writeFileSync(
@@ -129,6 +127,8 @@ describe('CLI end-to-end contracts', () => {
       '--no-cve',
       '--allow-partial',
       '--ci',
+      '--fail-on',
+      'critical',
       '--format',
       'json',
       '--output',
@@ -167,6 +167,8 @@ describe('CLI end-to-end contracts', () => {
       'security',
       '--offline',
       '--ci',
+      '--fail-on',
+      'critical',
       '--format',
       'json',
       '--output',
@@ -187,31 +189,78 @@ describe('CLI end-to-end contracts', () => {
     expect(report.policy).toMatchObject({ status: 'passed', exitCode: 0 });
   }, 90_000);
 
+  it.each(['security', 'scan'] as const)(
+    'defaults %s CI runs to failing on high-severity findings',
+    command => {
+      const criticalFixture = path.join(project, 'critical-fixture.js');
+      const output = path.join(project, `${command}-default-ci-threshold.json`);
+      fs.writeFileSync(criticalFixture, 'const apiKey = "AKIAIOSFODNN7EXAMPLE";\n');
+      try {
+        const commandOptions = command === 'scan'
+          ? ['--skip-tests', '--skip-ai']
+          : [];
+        const result = runCli([
+          '--no-telemetry',
+          command,
+          '--offline',
+          '--no-cve',
+          '--allow-partial',
+          ...commandOptions,
+          '--ci',
+          '--format',
+          'json',
+          '--output',
+          output,
+          '--max-findings',
+          '1000',
+        ], command === 'scan' ? 120_000 : 60_000);
+
+        expect(result.status).toBe(1);
+        const report = JSON.parse(fs.readFileSync(output, 'utf8'));
+        expect(report.policy).toMatchObject({ status: 'policy-failed', exitCode: 1 });
+        expect(report.policy.reasons).toEqual(expect.arrayContaining([
+          expect.stringMatching(/at or above high severity/i),
+        ]));
+      } finally {
+        fs.rmSync(criticalFixture, { force: true });
+        fs.rmSync(output, { force: true });
+      }
+    },
+    150_000
+  );
+
   it('uses exit code 1 for a finding-policy failure and records it in JSON', () => {
     const output = path.join(project, 'policy-failure.json');
-    const result = runCli([
-      '--no-telemetry',
-      'security',
-      '--offline',
-      '--no-cve',
-      '--allow-partial',
-      '--ci',
-      '--format',
-      'json',
-      '--output',
-      output,
-      '--max-findings',
-      '0',
-    ]);
+    const findingFixture = path.join(project, 'policy-fixture.js');
+    fs.writeFileSync(findingFixture, 'const apiKey = "AKIAIOSFODNN7EXAMPLE";\n');
+    try {
+      const result = runCli([
+        '--no-telemetry',
+        'security',
+        '--offline',
+        '--no-cve',
+        '--allow-partial',
+        '--ci',
+        '--format',
+        'json',
+        '--output',
+        output,
+        '--max-findings',
+        '0',
+      ]);
 
-    expect(result.status).toBe(1);
-    const report = JSON.parse(fs.readFileSync(output, 'utf8'));
-    expect(report.summary.total).toBeGreaterThan(0);
-    expect(report.policy.status).toBe('policy-failed');
-    expect(report.policy.exitCode).toBe(1);
-    expect(report.policy.reasons).toEqual(expect.arrayContaining([
-      expect.stringMatching(/exceeds maximum 0/),
-    ]));
+      expect(result.status).toBe(1);
+      const report = JSON.parse(fs.readFileSync(output, 'utf8'));
+      expect(report.summary.total).toBeGreaterThan(0);
+      expect(report.policy.status).toBe('policy-failed');
+      expect(report.policy.exitCode).toBe(1);
+      expect(report.policy.reasons).toEqual(expect.arrayContaining([
+        expect.stringMatching(/exceeds maximum 0/),
+      ]));
+    } finally {
+      fs.rmSync(findingFixture, { force: true });
+      fs.rmSync(output, { force: true });
+    }
   }, 90_000);
 
   it('keeps every comprehensive-scan section in machine-readable JSON', () => {
@@ -225,6 +274,8 @@ describe('CLI end-to-end contracts', () => {
       '--skip-tests',
       '--skip-ai',
       '--ci',
+      '--fail-on',
+      'critical',
       '--format',
       'json',
       '--output',

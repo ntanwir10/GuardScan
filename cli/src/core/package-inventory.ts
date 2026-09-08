@@ -114,14 +114,8 @@ function addCoordinate(target: DependencyCoordinate[], coordinate: DependencyCoo
   });
 }
 
-function readJson(file: string): any {
-  return JSON.parse(fs.readFileSync(file, 'utf8'));
-}
-
-function npmDirectDependencies(directory: string): Map<string, DependencyScope> {
-  return new Map(
-    [...npmDirectDependencyRequirements(directory)].map(([name, dependency]) => [name, dependency.scope])
-  );
+function readJson(file: string): unknown {
+  return JSON.parse(fs.readFileSync(file, 'utf8')) as unknown;
 }
 
 function npmDirectDependencyRequirements(
@@ -131,7 +125,8 @@ function npmDirectDependencyRequirements(
   const manifest = path.join(directory, 'package.json');
   if (!fs.existsSync(manifest)) {return result;}
   try {
-    const data = readJson(manifest);
+    const data = asRecord(readJson(manifest));
+    if (!data) {return result;}
     const groups: Array<[Record<string, unknown>, DependencyScope]> = [
       [asRecord(data.dependencies) || {}, 'runtime'],
       [asRecord(data.devDependencies) || {}, 'development'],
@@ -146,6 +141,12 @@ function npmDirectDependencyRequirements(
     // The lockfile parser reports the actionable error when it is malformed.
   }
   return result;
+}
+
+function npmRequestMatchesVersion(requested: string, exactVersion: string): boolean {
+  const aliasRange = requested.match(/^npm:(?:@[^/]+\/[^@]+|[^@]+)@(.+)$/)?.[1];
+  const range = semver.validRange(aliasRange || requested, { loose: true });
+  return range === null || semver.satisfies(exactVersion, range, { includePrerelease: true, loose: true });
 }
 
 function yarnDescriptorMatchesRequest(
@@ -203,48 +204,112 @@ function parseNpmLock(
   const rel = relative(root, file);
   const manifest = relative(root, path.join(path.dirname(file), 'package.json'));
   try {
-    const data = readJson(file);
-    const direct = npmDirectDependencies(path.dirname(file));
-    if (data.packages && typeof data.packages === 'object') {
-      for (const [packagePath, value] of Object.entries<any>(data.packages)) {
+    const data = asRecord(readJson(file));
+    if (!data) {throw new Error('npm lockfile root must be a JSON object');}
+    const direct = npmDirectDependencyRequirements(path.dirname(file));
+    const rootManifest = relative(root, path.join(path.dirname(file), 'package.json'));
+    type DirectDependency = {scope: DependencyScope; manifestPath: string; requested: string};
+    const directByWorkspace = new Map<string, Map<string, DirectDependency>>();
+    const workspaceDirect: Array<DirectDependency & {name: string}> = [];
+    const scopeGroups: Array<[string, DependencyScope]> = [
+      ['dependencies', 'runtime'],
+      ['devDependencies', 'development'],
+      ['optionalDependencies', 'optional'],
+    ];
+    const lockPackages = asRecord(data.packages);
+    for (const [packagePath, packageValue] of Object.entries(lockPackages || {})) {
+      if (!packagePath || packagePath.startsWith('node_modules/') || packagePath.includes('/node_modules/')) {continue;}
+      const packageRecord = asRecord(packageValue);
+      if (!packageRecord) {continue;}
+      const manifestPath = relative(root, path.join(path.dirname(file), packagePath, 'package.json'));
+      const workspace = new Map<string, DirectDependency>();
+      for (const [group, scope] of scopeGroups) {
+        const dependencies = asRecord(packageRecord[group]);
+        for (const [name, requested] of Object.entries(dependencies || {})) {
+          if (typeof requested !== 'string') {continue;}
+          const value = {scope, manifestPath, requested};
+          workspace.set(name, value);
+          workspaceDirect.push({name, ...value});
+        }
+      }
+      if (workspace.size > 0) {directByWorkspace.set(packagePath, workspace);}
+    }
+    const scopeRank: Record<DependencyScope, number> = {unknown: 0, development: 1, optional: 2, runtime: 3};
+    const workspaceDirectFor = (packagePath: string, name: string, version: string): DirectDependency | undefined => {
+      const normalizedPath = packagePath.replace(/\\/g, '/');
+      const candidates = [...directByWorkspace.entries()]
+        .filter(([workspacePath]) => normalizedPath === `${workspacePath}/node_modules/${name}`)
+        .map(([, values]) => values.get(name))
+        .filter((value): value is DirectDependency =>
+          value !== undefined && npmRequestMatchesVersion(value.requested, version)
+        );
+      return candidates.sort((left, right) =>
+        scopeRank[right.scope] - scopeRank[left.scope] || left.manifestPath.localeCompare(right.manifestPath)
+      )[0];
+    };
+    const rootDirectFor = (name: string, version: string): DirectDependency | undefined => {
+      const rootDependency = direct.get(name);
+      const candidates = workspaceDirect.filter(value =>
+        value.name === name && npmRequestMatchesVersion(value.requested, version)
+      );
+      if (rootDependency && npmRequestMatchesVersion(rootDependency.requested, version)) {
+        candidates.push({name, ...rootDependency, manifestPath: rootManifest});
+      }
+      return candidates.sort((left, right) =>
+        scopeRank[right.scope] - scopeRank[left.scope] || left.manifestPath.localeCompare(right.manifestPath)
+      )[0];
+    };
+    if (lockPackages) {
+      for (const [packagePath, packageValue] of Object.entries(lockPackages)) {
         if (!packagePath) {continue;}
-        const rawName: unknown = value?.name;
+        const normalizedPackagePath = packagePath.replace(/\\/g, '/');
+        if (!/(?:^|\/)node_modules\//.test(normalizedPackagePath)) {continue;}
+        const value = asRecord(packageValue);
+        if (!value) {continue;}
+        const rawName = value.name;
         const name = typeof rawName === 'string' ? rawName : packageNameFromNodeModulesPath(packagePath);
-        const version = typeof value?.version === 'string' ? value.version : '';
+        const version = typeof value.version === 'string' ? value.version : '';
         if (!name || !semver.valid(version, { loose: true })) {continue;}
-        const directScope = isRootNpmInstallPath(packagePath, name) ? direct.get(name) : undefined;
+        const directInfo = isRootNpmInstallPath(packagePath, name)
+          ? rootDirectFor(name, version)
+          : workspaceDirectFor(packagePath, name, version);
         addCoordinate(coordinates, {
           ecosystem: 'npm', osvEcosystem: 'npm', name, exactVersion: version,
-          scope: value.optional ? 'optional' : value.dev ? 'development' : directScope || 'runtime',
-          direct: directScope !== undefined,
-          manifestPath: manifest, lockfilePath: rel, dependencyPaths: [packagePath.replace(/\\/g, '/')],
+          scope: directInfo?.scope || (value.optional === true ? 'optional' : value.dev === true ? 'development' : 'runtime'),
+          direct: directInfo !== undefined,
+          manifestPath: directInfo?.manifestPath || manifest, lockfilePath: rel, dependencyPaths: [normalizedPackagePath],
         });
       }
       return;
     }
 
-    if (!data.dependencies || typeof data.dependencies !== 'object') {
+    const rootDependencies = asRecord(data.dependencies);
+    if (!rootDependencies) {
       errors.push({ file: rel, code: 'UNSUPPORTED_FORMAT', message: 'npm lockfile does not contain packages or dependencies' });
       return;
     }
-    const walk = (dependencies: Record<string, any>, chain: string[]): void => {
-      for (const [name, value] of Object.entries<any>(dependencies)) {
-        const version = typeof value?.version === 'string' ? value.version : '';
-        const directScope = chain.length === 0 ? direct.get(name) : undefined;
+    const walk = (dependencies: Record<string, unknown>, chain: string[]): void => {
+      for (const [name, dependencyValue] of Object.entries(dependencies)) {
+        const value = asRecord(dependencyValue);
+        if (!value) {continue;}
+        const version = typeof value.version === 'string' ? value.version : '';
+        const directDependency = chain.length === 0 ? direct.get(name) : undefined;
+        const directScope = directDependency && npmRequestMatchesVersion(directDependency.requested, version)
+          ? directDependency.scope
+          : undefined;
         if (semver.valid(version, { loose: true })) {
           addCoordinate(coordinates, {
             ecosystem: 'npm', osvEcosystem: 'npm', name, exactVersion: version,
-            scope: value.optional ? 'optional' : value.dev ? 'development' : directScope || 'runtime',
+            scope: value.optional === true ? 'optional' : value.dev === true ? 'development' : directScope || 'runtime',
             direct: directScope !== undefined,
             manifestPath: manifest, lockfilePath: rel, dependencyPaths: [[...chain, name].join(' > ')],
           });
         }
-        if (value?.dependencies && typeof value.dependencies === 'object') {
-          walk(value.dependencies, [...chain, name]);
-        }
+        const nestedDependencies = asRecord(value.dependencies);
+        if (nestedDependencies) {walk(nestedDependencies, [...chain, name]);}
       }
     };
-    walk(data.dependencies, []);
+    walk(rootDependencies, []);
   } catch (error: unknown) {
     errors.push({ file: rel, code: 'INVALID_MANIFEST', message: `Unable to parse npm lockfile: ${errorMessage(error)}` });
   }
@@ -266,11 +331,12 @@ function parseExactPackageJson(
   }
   const rel = relative(root, file);
   try {
-    const data = readJson(file);
-    const groups: Array<[Record<string, string>, DependencyScope]> = [
-      [data.dependencies || {}, 'runtime'],
-      [data.devDependencies || {}, 'development'],
-      [data.optionalDependencies || {}, 'optional'],
+    const data = asRecord(readJson(file));
+    if (!data) {throw new Error('package.json root must be a JSON object');}
+    const groups: Array<[Record<string, unknown>, DependencyScope]> = [
+      [asRecord(data.dependencies) || {}, 'runtime'],
+      [asRecord(data.devDependencies) || {}, 'development'],
+      [asRecord(data.optionalDependencies) || {}, 'optional'],
     ];
     for (const [dependencies, scope] of groups) {
       for (const [name, requested] of Object.entries(dependencies)) {
@@ -685,10 +751,27 @@ function parseGemfileLock(
   const rel = relative(root, file);
   try {
     let inSpecs = false;
+    let source: 'GEM' | 'GIT' | 'PATH' | undefined;
+    const reportedUnsupported = new Set<'GIT' | 'PATH'>();
     for (const line of fs.readFileSync(file, 'utf8').split(/\r?\n/)) {
-      if (/^\s{2}specs:$/.test(line)) {inSpecs = true; continue;}
+      const section = line.match(/^(GEM|GIT|PATH)\s*$/)?.[1] as 'GEM' | 'GIT' | 'PATH' | undefined;
+      if (section) {source = section; inSpecs = false; continue;}
+      if (/^\s{2}specs:$/.test(line)) {
+        inSpecs = true;
+        if (source === 'GIT' || source === 'PATH') {
+          if (!reportedUnsupported.has(source)) {
+            errors.push({
+              file: rel,
+              code: 'UNSUPPORTED_FORMAT',
+              message: `Gemfile.lock ${source} dependency source is not a RubyGems registry coordinate`,
+            });
+            reportedUnsupported.add(source);
+          }
+        }
+        continue;
+      }
       if (inSpecs && line && !/^\s/.test(line)) {inSpecs = false;}
-      if (!inSpecs) {continue;}
+      if (!inSpecs || source !== 'GEM') {continue;}
       const match = line.match(/^\s{4}([A-Za-z0-9_.-]+) \(([^ )]+)\)/);
       if (!match) {continue;}
       addCoordinate(coordinates, {
@@ -713,7 +796,8 @@ function parsePom(root: string, file: string, coordinates: DependencyCoordinate[
     // Dependency declarations in comments, build plugins, and inactive profiles
     // are not application dependencies of the effective project model.
     const profileSections = xml.match(/<profiles(?:\s[^>]*)?>[\s\S]*?<\/profiles>/gi) || [];
-    if (profileSections.some(section => /<dependency(?:\s[^>]*)?>/i.test(section))) {
+    const hasProfileDependencies = profileSections.some(section => /<dependency(?:\s[^>]*)?>/i.test(section));
+    if (hasProfileDependencies) {
       errors.push({
         file: rel,
         code: 'UNSUPPORTED_FORMAT',
@@ -764,7 +848,8 @@ function parsePom(root: string, file: string, coordinates: DependencyCoordinate[
       }
     }
     const dependencies = xml.replace(dependencyManagementPattern, '');
-    for (const block of dependencies.match(/<dependency(?:\s[^>]*)?>[\s\S]*?<\/dependency>/g) || []) {
+    const dependencyBlocks = dependencies.match(/<dependency(?:\s[^>]*)?>[\s\S]*?<\/dependency>/g) || [];
+    for (const block of dependencyBlocks) {
       const { group, artifact, name } = dependencyName(block);
       const declaredVersion = block.match(/<version>\s*([^<]+?)\s*<\/version>/)?.[1];
       const version = declaredVersion ? resolveVersion(declaredVersion) : name ? managedVersions.get(name) : undefined;
@@ -781,6 +866,13 @@ function parsePom(root: string, file: string, coordinates: DependencyCoordinate[
         ecosystem: 'maven', osvEcosystem: 'Maven', name, exactVersion: version,
         scope: /<scope>\s*test\s*<\/scope>/.test(block) ? 'development' : 'runtime', direct: true,
         manifestPath: rel, lockfilePath: rel, dependencyPaths: [name],
+      });
+    }
+    if (dependencyBlocks.length > 0) {
+      errors.push({
+        file: rel,
+        code: 'UNSUPPORTED_FORMAT',
+        message: 'Maven dependency inventory is direct-POM-only; transitive coverage requires effective-model resolution',
       });
     }
   } catch (error: any) {
