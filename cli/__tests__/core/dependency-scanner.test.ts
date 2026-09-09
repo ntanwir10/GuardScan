@@ -875,14 +875,21 @@ describe('DependencyScanner OSV integration', () => {
         ecosystem: 'inventory',
         status: 'partial',
         queriedPackages: 0,
-        unresolvedPackages: 1,
+        unresolvedPackages: 2,
         dataFreshness: 'unavailable',
         knownExploitedEnrichment: expect.objectContaining({ status: 'disabled' }),
-        errors: [expect.objectContaining({
-          code: 'UNRESOLVED_VERSION',
-          file: 'package.json',
-          message: expect.stringContaining('lodash'),
-        })],
+        errors: expect.arrayContaining([
+          expect.objectContaining({
+            code: 'UNRESOLVED_VERSION',
+            file: 'package.json',
+            message: expect.stringContaining('lodash'),
+          }),
+          expect.objectContaining({
+            code: 'UNSUPPORTED_FORMAT',
+            file: 'package.json',
+            message: expect.stringMatching(/transitive|lock/i),
+          }),
+        ]),
       }),
     ]);
   });

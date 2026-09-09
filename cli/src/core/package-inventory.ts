@@ -195,6 +195,22 @@ function isRootNpmInstallPath(packagePath: string, name: string): boolean {
   return packagePath.replace(/\\/g, '/') === `node_modules/${name}`;
 }
 
+function unsupportedNpmSource(value: Record<string, unknown>): string | undefined {
+  if (value.link === true) {return 'link';}
+  if (typeof value.resolved !== 'string' || !value.resolved.trim()) {return undefined;}
+  const resolved = value.resolved.trim();
+  if (/^npm:/i.test(resolved)) {return undefined;}
+  if (/^https?:\/\//i.test(resolved)) {
+    try {
+      const url = new URL(resolved);
+      if (/\/-\/[^/]+\.tgz$/i.test(url.pathname)) {return undefined;}
+    } catch {
+      // The unsupported source is reported below.
+    }
+  }
+  return resolved;
+}
+
 function parseNpmLock(
   root: string,
   file: string,
@@ -266,6 +282,15 @@ function parseNpmLock(
         if (!/(?:^|\/)node_modules\//.test(normalizedPackagePath)) {continue;}
         const value = asRecord(packageValue);
         if (!value) {continue;}
+        const unsupportedSource = unsupportedNpmSource(value);
+        if (unsupportedSource) {
+          errors.push({
+            file: rel,
+            code: 'UNSUPPORTED_FORMAT',
+            message: `npm package ${packagePath} uses unsupported source: ${unsupportedSource.slice(0, 120)}`,
+          });
+          continue;
+        }
         const rawName = value.name;
         const name = typeof rawName === 'string' ? rawName : packageNameFromNodeModulesPath(packagePath);
         const version = typeof value.version === 'string' ? value.version : '';
@@ -292,12 +317,20 @@ function parseNpmLock(
       for (const [name, dependencyValue] of Object.entries(dependencies)) {
         const value = asRecord(dependencyValue);
         if (!value) {continue;}
+        const unsupportedSource = unsupportedNpmSource(value);
+        if (unsupportedSource) {
+          errors.push({
+            file: rel,
+            code: 'UNSUPPORTED_FORMAT',
+            message: `npm package ${[...chain, name].join(' > ')} uses unsupported source: ${unsupportedSource.slice(0, 120)}`,
+          });
+        }
         const version = typeof value.version === 'string' ? value.version : '';
         const directDependency = chain.length === 0 ? direct.get(name) : undefined;
         const directScope = directDependency && npmRequestMatchesVersion(directDependency.requested, version)
           ? directDependency.scope
           : undefined;
-        if (semver.valid(version, { loose: true })) {
+        if (!unsupportedSource && semver.valid(version, { loose: true })) {
           addCoordinate(coordinates, {
             ecosystem: 'npm', osvEcosystem: 'npm', name, exactVersion: version,
             scope: value.optional === true ? 'optional' : value.dev === true ? 'development' : directScope || 'runtime',
@@ -338,8 +371,10 @@ function parseExactPackageJson(
       [asRecord(data.devDependencies) || {}, 'development'],
       [asRecord(data.optionalDependencies) || {}, 'optional'],
     ];
+    let hasDependencies = false;
     for (const [dependencies, scope] of groups) {
       for (const [name, requested] of Object.entries(dependencies)) {
+        hasDependencies = true;
         const version = semver.valid(String(requested).replace(/^=/, ''), { loose: true });
         if (!version) {
           errors.push({ file: rel, code: 'UNRESOLVED_VERSION', message: `${name} is not pinned to an exact npm version` });
@@ -350,6 +385,13 @@ function parseExactPackageJson(
           scope, direct: true, manifestPath: rel, lockfilePath: rel, dependencyPaths: [name],
         });
       }
+    }
+    if (hasDependencies) {
+      errors.push({
+        file: rel,
+        code: 'UNSUPPORTED_FORMAT',
+        message: 'npm dependency inventory is lockless; transitive coverage is incomplete',
+      });
     }
   } catch (error: unknown) {
     errors.push({ file: rel, code: 'INVALID_MANIFEST', message: `Unable to parse package.json: ${errorMessage(error)}` });

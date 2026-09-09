@@ -119,7 +119,10 @@ export interface CycloneDx17Component {
   version: string;
   purl: string;
   scope?: 'required' | 'optional' | 'excluded';
-  licenses: Array<{ license: { id?: string; name?: string } }>;
+  licenses: Array<
+    | { license: { id?: string; name?: string } }
+    | { expression: string }
+  >;
 }
 
 const PACKAGE_VERSION = packageManifest.version;
@@ -243,25 +246,26 @@ export class LicenseScanner {
     } catch {
       return 'Unknown';
     }
+    const lockfileDirectory = path.dirname(path.resolve(resolvedRepoPath, coordinate.lockfilePath));
     const candidates: string[] = [];
     for (const dependencyPath of coordinate.dependencyPaths) {
       const normalized = dependencyPath.replace(/\\/g, '/');
       if (/(?:^|\/)node_modules\//.test(normalized)) {
-        candidates.push(path.resolve(repoPath, normalized, 'package.json'));
+        candidates.push(path.resolve(lockfileDirectory, normalized, 'package.json'));
         continue;
       }
       if (normalized.includes(' > ')) {
         const names = normalized.split(' > ').map(value => value.trim()).filter(Boolean);
         const packagePath = names.reduce(
           (current, name) => path.join(current, 'node_modules', name),
-          repoPath
+          lockfileDirectory
         );
         candidates.push(path.join(packagePath, 'package.json'));
       }
     }
 
     // Lockfile v1 dependency paths do not necessarily name a filesystem path.
-    candidates.push(path.resolve(repoPath, 'node_modules', coordinate.name, 'package.json'));
+    candidates.push(path.resolve(lockfileDirectory, 'node_modules', coordinate.name, 'package.json'));
 
     for (const candidate of [...new Set(candidates)]) {
       try {
@@ -810,11 +814,7 @@ export class LicenseScanner {
           version: finding.version,
           purl,
           scope: cycloneDxScope(finding.scope),
-          licenses: [{
-            license: isSimpleSpdxIdentifier(finding.license)
-              ? { id: finding.license }
-              : { name: finding.license || 'Unknown' },
-          }],
+          licenses: [cycloneDxLicense(finding.license)],
         };
       });
       return {
@@ -873,7 +873,13 @@ export class LicenseScanner {
    * Generate Package URL (PURL)
    */
   private generatePURL(finding: LicenseFinding): string {
-    const type = finding.source === 'rubygems' ? 'gem' : finding.source;
+    const type = finding.source === 'rubygems'
+      ? 'gem'
+      : finding.source === 'pip'
+        ? 'pypi'
+        : finding.source === 'go'
+          ? 'golang'
+          : finding.source;
     const version = encodeURIComponent(finding.version);
 
     if (type === 'maven') {
@@ -993,6 +999,12 @@ function stableIdentifier(value: string): string {
 
 function isSimpleSpdxIdentifier(value: string): boolean {
   return value !== 'Unknown' && /^[A-Za-z0-9][A-Za-z0-9.+-]*$/.test(value);
+}
+
+function cycloneDxLicense(value: string): { license: { id?: string; name?: string } } | { expression: string } {
+  if (isSimpleSpdxIdentifier(value)) {return { license: { id: value } };}
+  if (isSpdxExpression(value)) {return { expression: value };}
+  return { license: { name: value || 'Unknown' } };
 }
 
 function isSpdxExpression(value: string): boolean {

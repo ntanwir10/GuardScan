@@ -75,6 +75,64 @@ describe('collectPackageInventory', () => {
     ]));
   });
 
+  it('rejects non-registry npm lock sources while retaining registry tarballs', () => {
+    fs.writeFileSync(path.join(repository, 'package.json'), JSON.stringify({
+      dependencies: {registry: '1.0.0', tarball: '1.0.0', gitdep: '1.0.0'},
+    }));
+    fs.writeFileSync(path.join(repository, 'package-lock.json'), JSON.stringify({
+      name: 'fixture', lockfileVersion: 3,
+      packages: {
+        '': {dependencies: {registry: '1.0.0', tarball: '1.0.0', gitdep: '1.0.0'}},
+        'node_modules/registry': {name: 'registry', version: '1.0.0', resolved: 'https://registry.npmjs.org/registry/-/registry-1.0.0.tgz'},
+        'node_modules/tarball': {name: 'tarball', version: '1.0.0', resolved: 'https://downloads.example.test/tarball-1.0.0.tgz'},
+        'node_modules/gitdep': {name: 'gitdep', version: '1.0.0', resolved: 'git+https://github.com/example/gitdep.git#abc'},
+        'node_modules/filedep': {name: 'filedep', version: '1.0.0', resolved: 'file:../filedep'},
+      },
+    }));
+
+    const inventory = collectPackageInventory(repository);
+
+    expect(inventory.coordinates.map(coordinate => coordinate.name)).toEqual(['registry']);
+    expect(inventory.errors).toEqual(expect.arrayContaining([
+      expect.objectContaining({file: 'package-lock.json', code: 'UNSUPPORTED_FORMAT', message: expect.stringMatching(/tarball|non-registry|unsupported source/i)}),
+      expect.objectContaining({file: 'package-lock.json', code: 'UNSUPPORTED_FORMAT', message: expect.stringMatching(/gitdep|non-registry/i)}),
+      expect.objectContaining({file: 'package-lock.json', code: 'UNSUPPORTED_FORMAT', message: expect.stringMatching(/filedep|non-registry/i)}),
+    ]));
+  });
+
+  it('rejects non-registry sources in npm lockfile v1 dependencies', () => {
+    fs.writeFileSync(path.join(repository, 'package.json'), JSON.stringify({dependencies: {gitdep: '1.0.0'}}));
+    fs.writeFileSync(path.join(repository, 'package-lock.json'), JSON.stringify({
+      name: 'fixture', lockfileVersion: 1,
+      dependencies: {
+        gitdep: {version: '1.0.0', resolved: 'git+https://github.com/example/gitdep.git#abc'},
+      },
+    }));
+
+    const inventory = collectPackageInventory(repository);
+
+    expect(inventory.coordinates).toEqual([]);
+    expect(inventory.errors).toEqual([
+      expect.objectContaining({code: 'UNSUPPORTED_FORMAT', message: expect.stringMatching(/gitdep|non-registry/i)}),
+    ]);
+  });
+
+  it('retains exact lockless package coordinates but marks transitive coverage incomplete', () => {
+    fs.writeFileSync(path.join(repository, 'package.json'), JSON.stringify({
+      dependencies: {exact: '1.2.3'}, devDependencies: {devexact: '=2.3.4'},
+    }));
+
+    const inventory = collectPackageInventory(repository);
+
+    expect(inventory.coordinates).toEqual(expect.arrayContaining([
+      expect.objectContaining({name: 'exact', exactVersion: '1.2.3', direct: true, scope: 'runtime'}),
+      expect.objectContaining({name: 'devexact', exactVersion: '2.3.4', direct: true, scope: 'development'}),
+    ]));
+    expect(inventory.errors).toEqual([
+      expect.objectContaining({file: 'package.json', code: 'UNSUPPORTED_FORMAT', message: expect.stringMatching(/transitive|lock/i)}),
+    ]);
+  });
+
   it('marks npm workspace dependencies direct whether hoisted or workspace-nested', () => {
     fs.writeFileSync(path.join(repository, 'package.json'), JSON.stringify({name: 'root'}));
     fs.mkdirSync(path.join(repository, 'packages/app'), {recursive: true});
@@ -203,6 +261,8 @@ GEM
     expect(inventory.coordinates).toEqual([
       expect.objectContaining({name: 'nested', exactVersion: '1.2.3', manifestPath: 'examples/tool/package.json'}),
     ]);
-    expect(inventory.errors).toEqual([]);
+    expect(inventory.errors).toEqual([
+      expect.objectContaining({code: 'UNSUPPORTED_FORMAT', message: expect.stringMatching(/transitive|lock/i)}),
+    ]);
   });
 });

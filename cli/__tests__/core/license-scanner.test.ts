@@ -112,6 +112,28 @@ describe('LicenseScanner inventory and SBOM contracts', () => {
     ]));
   });
 
+  it('resolves installed npm metadata relative to an independent project lockfile', async () => {
+    fs.mkdirSync(path.join(repository, 'node_modules', 'fixture'), { recursive: true });
+    fs.mkdirSync(path.join(repository, 'packages', 'app', 'node_modules', 'fixture'), { recursive: true });
+    fs.writeFileSync(path.join(repository, 'node_modules', 'fixture', 'package.json'), JSON.stringify({
+      name: 'fixture', version: '1.0.0', license: 'GPL-3.0',
+    }));
+    fs.writeFileSync(path.join(repository, 'packages', 'app', 'node_modules', 'fixture', 'package.json'), JSON.stringify({
+      name: 'fixture', version: '1.0.0', license: 'Apache-2.0',
+    }));
+
+    const report = await new LicenseScanner().scan(repository, 'proprietary', {
+      offline: true,
+      inventory: inventory(repository, [coordinate({
+        lockfilePath: 'packages/app/package-lock.json',
+        manifestPath: 'packages/app/package.json',
+        dependencyPaths: ['node_modules/fixture'],
+      })]),
+    });
+
+    expect(report.findings[0]).toMatchObject({ license: 'Apache-2.0' });
+  });
+
   it('emits known npm parent-child edges without promoting transitives to root dependencies', async () => {
     const scanner = new LicenseScanner();
     const report = await scanner.scan(repository, 'proprietary', {
@@ -151,6 +173,39 @@ describe('LicenseScanner inventory and SBOM contracts', () => {
 
     expect(document.components[0].purl).toBe('pkg:maven/org.example/fixture-lib@1.0.0');
     expect(document.components[0]['bom-ref']).toBe(document.components[0].purl);
+  });
+
+  it('uses registered PURL types for pip and Go components', () => {
+    const findings = [
+      finding({ source: 'pip', package: 'requests' }),
+      finding({ source: 'go', package: 'example.com/module' }),
+    ];
+    const document = new LicenseScanner().generateSBOM(findings, 'cyclonedx', 'fixture');
+    const spdx = new LicenseScanner().generateSBOM(findings, 'spdx', 'fixture');
+
+    expect(document.components.map(component => component.purl)).toEqual([
+      'pkg:golang/example.com/module@1.0.0',
+      'pkg:pypi/requests@1.0.0',
+    ]);
+    expect(spdx.packages.map(pkg => pkg.externalRefs[0].referenceLocator)).toEqual([
+      'pkg:golang/example.com/module@1.0.0',
+      'pkg:pypi/requests@1.0.0',
+    ]);
+  });
+
+  it('represents compound SPDX expressions as CycloneDX expressions', () => {
+    const document = new LicenseScanner().generateSBOM([
+      finding({ package: 'compound', license: '(MIT OR Apache-2.0)' }),
+      finding({ package: 'custom', license: 'Custom License' }),
+      finding({ package: 'simple', license: 'MIT' }),
+    ], 'cyclonedx', 'fixture');
+
+    const compound = document.components.find(component => component.name === 'compound')!;
+    const custom = document.components.find(component => component.name === 'custom')!;
+    const simple = document.components.find(component => component.name === 'simple')!;
+    expect(compound.licenses).toEqual([{ expression: '(MIT OR Apache-2.0)' }]);
+    expect(custom.licenses).toEqual([{ license: { name: 'Custom License' } }]);
+    expect(simple.licenses).toEqual([{ license: { id: 'MIT' } }]);
   });
 
   it('generates a unique CycloneDX serial number for each BOM document', () => {

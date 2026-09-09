@@ -145,59 +145,89 @@ export async function runCommand(options: RunOptions): Promise<void> {
 
     if (useAI && provider && !reviewResult.metadata.operationalFailure) {
       progressBar.update(1, { status: 'Running AI-enhanced review...' });
+      let aiCallStarted = false;
+      try {
+        perfTracker.start('prepare-context');
+        const context = prepareReviewContext(repoInfo, locResult);
+        perfTracker.end('prepare-context');
+        logger.debug('Review context prepared', { contextLength: context.length });
 
-      perfTracker.start('prepare-context');
-      const context = prepareReviewContext(repoInfo, locResult);
-      perfTracker.end('prepare-context');
-      logger.debug('Review context prepared', { contextLength: context.length });
+        perfTracker.start('ai-api-call');
+        aiCallStarted = true;
+        logger.debug('Sending AI request', {
+          model: provider.getName(),
+          contextLength: context.length,
+          provider: config.provider,
+        });
 
-      perfTracker.start('ai-api-call');
-      logger.debug('Sending AI request', { 
-        model: provider.getName(), 
-        contextLength: context.length,
-        provider: config.provider 
-      });
-      
-      const aiResponse = await provider.chat([
-        {
-          role: 'system',
-          content: `You are an expert code reviewer. Analyze the provided code and identify:
+        const aiResponse = await provider.chat([
+          {
+            role: 'system',
+            content: `You are an expert code reviewer. Analyze the provided code and identify:
 - Code quality issues
 - Potential bugs
 - Security vulnerabilities
 - Performance problems
 - Best practice violations
 - Maintainability concerns
-
 Provide constructive feedback with specific suggestions for improvement.`,
-        },
-        {
-          role: 'user',
-          content: context,
-        },
-      ]);
+          },
+          {
+            role: 'user',
+            content: context,
+          },
+        ]);
 
-      const aiCallDuration = perfTracker.end('ai-api-call');
-      logger.performance('ai-api-call', aiCallDuration, { 
-        model: aiResponse.model, 
-        tokensUsed: aiResponse.usage?.totalTokens,
-        provider: config.provider
-      });
-      logger.debug('AI response received', { 
-        model: aiResponse.model,
-        responseLength: aiResponse.content.length,
-        tokensUsed: aiResponse.usage?.totalTokens
-      });
+        const aiCallDuration = perfTracker.end('ai-api-call');
+        aiCallStarted = false;
+        logger.performance('ai-api-call', aiCallDuration, {
+          model: aiResponse.model,
+          tokensUsed: aiResponse.usage?.totalTokens,
+          provider: config.provider,
+        });
+        logger.debug('AI response received', {
+          model: aiResponse.model,
+          responseLength: aiResponse.content.length,
+          tokensUsed: aiResponse.usage?.totalTokens,
+        });
 
-      const aiReview = parseAIResponse(
-        aiResponse.content,
-        repoInfo,
-        locResult,
-        config.provider,
-        aiResponse.model,
-        Date.now() - startTime
-      );
-      reviewResult = mergeReviewResults(reviewResult, aiReview);
+        const aiReview = parseAIResponse(
+          aiResponse.content,
+          repoInfo,
+          locResult,
+          config.provider,
+          aiResponse.model,
+          Date.now() - startTime
+        );
+        reviewResult = mergeReviewResults(reviewResult, aiReview);
+      } catch (error) {
+        if (aiCallStarted) {perfTracker.end('ai-api-call');}
+        const message = error instanceof Error ? error.message : String(error);
+        const coverage = reviewResult.metadata.scannerCoverage || {
+          status: 'complete' as const,
+          scanners: [],
+          errors: [],
+        };
+        if (coverage.status === 'complete') {coverage.status = 'partial';}
+        coverage.scanners.push({
+          name: 'ai-enhancement',
+          status: 'failed',
+          required: false,
+          detail: message,
+        });
+        coverage.errors.push({
+          scanner: 'ai-enhancement',
+          code: 'AI_ENHANCEMENT_FAILED',
+          message,
+        });
+        reviewResult.metadata.scannerCoverage = coverage;
+        reviewResult.recommendations = [...new Set([
+          ...reviewResult.recommendations,
+          `AI enhancement failed (${message}); the report contains local static-analysis results only`,
+        ])];
+        logger.warn('AI enhancement failed; preserving local static-analysis results', { error: message });
+        console.warn(chalk.yellow(`AI enhancement failed: ${message}. Saved local static-analysis results instead.`));
+      }
     }
 
     progressBar.update(2, { status: 'Analysis complete' });
