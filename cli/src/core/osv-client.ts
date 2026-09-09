@@ -106,8 +106,94 @@ function normalizeEndpoint(value: string): string {
   return url.toString().replace(/\/+$/, '');
 }
 
-function isRecord(value: unknown): value is Record<string, any> {
+function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function invalidVulnerability(expectedId: string, field: string): never {
+  throw new OsvClientError(
+    'INVALID_RESPONSE',
+    `OSV vulnerability record ${expectedId} has invalid ${field}`
+  );
+}
+
+function validateOptionalStrings(
+  value: Record<string, unknown>,
+  fields: string[],
+  expectedId: string,
+  path = ''
+): void {
+  for (const field of fields) {
+    if (value[field] !== undefined && typeof value[field] !== 'string') {
+      invalidVulnerability(expectedId, `${path}${field}`);
+    }
+  }
+}
+
+function validateStringArray(value: unknown, expectedId: string, field: string): void {
+  if (!Array.isArray(value) || value.some(member => typeof member !== 'string')) {
+    invalidVulnerability(expectedId, field);
+  }
+}
+
+function validateSeverityArray(value: unknown, expectedId: string, field: string): void {
+  if (!Array.isArray(value)) {invalidVulnerability(expectedId, field);}
+  value.forEach((severity, index) => {
+    if (!isRecord(severity)) {invalidVulnerability(expectedId, `${field}[${index}]`);}
+    validateOptionalStrings(severity, ['type', 'score'], expectedId, `${field}[${index}].`);
+  });
+}
+
+function validateAffectedArray(value: unknown, expectedId: string): void {
+  if (!Array.isArray(value)) {invalidVulnerability(expectedId, 'affected');}
+  value.forEach((affected, affectedIndex) => {
+    const path = `affected[${affectedIndex}]`;
+    if (!isRecord(affected)) {invalidVulnerability(expectedId, path);}
+    if (affected.package !== undefined) {
+      if (!isRecord(affected.package)) {invalidVulnerability(expectedId, `${path}.package`);}
+      validateOptionalStrings(affected.package, ['ecosystem', 'name', 'purl'], expectedId, `${path}.package.`);
+    }
+    if (affected.severity !== undefined) {
+      validateSeverityArray(affected.severity, expectedId, `${path}.severity`);
+    }
+    if (affected.ranges !== undefined) {
+      if (!Array.isArray(affected.ranges)) {invalidVulnerability(expectedId, `${path}.ranges`);}
+      affected.ranges.forEach((range: unknown, rangeIndex: number) => {
+        const rangePath = `${path}.ranges[${rangeIndex}]`;
+        if (!isRecord(range)) {invalidVulnerability(expectedId, rangePath);}
+        validateOptionalStrings(range, ['type', 'repo'], expectedId, `${rangePath}.`);
+        if (range.events !== undefined) {
+          if (!Array.isArray(range.events)) {invalidVulnerability(expectedId, `${rangePath}.events`);}
+          range.events.forEach((event: unknown, eventIndex: number) => {
+            const eventPath = `${rangePath}.events[${eventIndex}]`;
+            if (!isRecord(event)) {invalidVulnerability(expectedId, eventPath);}
+            validateOptionalStrings(
+              event,
+              ['introduced', 'fixed', 'last_affected', 'limit'],
+              expectedId,
+              `${eventPath}.`
+            );
+          });
+        }
+      });
+    }
+    if (affected.versions !== undefined) {
+      validateStringArray(affected.versions, expectedId, `${path}.versions`);
+    }
+    for (const field of ['database_specific', 'ecosystem_specific']) {
+      if (affected[field] !== undefined && !isRecord(affected[field])) {
+        invalidVulnerability(expectedId, `${path}.${field}`);
+      }
+    }
+  });
+}
+
+function validateReferenceArray(value: unknown, expectedId: string): void {
+  if (!Array.isArray(value)) {invalidVulnerability(expectedId, 'references');}
+  value.forEach((reference, index) => {
+    if (!isRecord(reference)) {invalidVulnerability(expectedId, `references[${index}]`);}
+    validateOptionalStrings(reference, ['type', 'url'], expectedId, `references[${index}].`);
+  });
 }
 
 function validateBatchResponse(value: unknown, expected: number): BatchResult[] {
@@ -131,12 +217,21 @@ function validateVulnerability(value: unknown, expectedId: string): OsvVulnerabi
   if (!isRecord(value) || value.id !== expectedId || typeof value.modified !== 'string') {
     throw new OsvClientError('INVALID_RESPONSE', `OSV vulnerability record ${expectedId} is invalid`);
   }
-  for (const field of ['aliases', 'related', 'severity', 'affected', 'references']) {
-    if (value[field] !== undefined && !Array.isArray(value[field])) {
-      throw new OsvClientError('INVALID_RESPONSE', `OSV vulnerability record ${expectedId} has invalid ${field}`);
-    }
+  validateOptionalStrings(
+    value,
+    ['schema_version', 'published', 'withdrawn', 'summary', 'details'],
+    expectedId
+  );
+  for (const field of ['aliases', 'related']) {
+    if (value[field] !== undefined) {validateStringArray(value[field], expectedId, field);}
   }
-  return value as OsvVulnerability;
+  if (value.severity !== undefined) {validateSeverityArray(value.severity, expectedId, 'severity');}
+  if (value.affected !== undefined) {validateAffectedArray(value.affected, expectedId);}
+  if (value.references !== undefined) {validateReferenceArray(value.references, expectedId);}
+  if (value.database_specific !== undefined && !isRecord(value.database_specific)) {
+    invalidVulnerability(expectedId, 'database_specific');
+  }
+  return value as unknown as OsvVulnerability;
 }
 
 export class OsvClient {
@@ -254,13 +349,14 @@ export class OsvClient {
         } catch {
           throw new OsvClientError('INVALID_RESPONSE', 'OSV returned invalid JSON');
         }
-      } catch (error: any) {
+      } catch (error: unknown) {
         lastError = error;
         if (error instanceof OsvClientError) {throw error;}
-        if (error?.name === 'AbortError') {
+        if (error instanceof Error && error.name === 'AbortError') {
           if (attempt >= this.retries) {throw new OsvClientError('TIMEOUT', 'OSV request timed out');}
         } else if (attempt >= this.retries) {
-          throw new OsvClientError('NETWORK_ERROR', `OSV request failed: ${error?.message || error}`);
+          const message = error instanceof Error ? error.message : String(error);
+          throw new OsvClientError('NETWORK_ERROR', `OSV request failed: ${message}`);
         }
         await delay(Math.min(250 * 2 ** attempt, 2_000));
       } finally {

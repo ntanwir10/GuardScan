@@ -100,6 +100,41 @@ describe('DependencyScanner OSV integration', () => {
     expect(() => new OsvClient({ endpoint, retries: 0 })).toThrow(/OSV endpoint/);
   });
 
+  it.each([
+    ['severity member', { severity: [null] }],
+    ['affected member', { affected: [null] }],
+    ['reference member', { references: [null] }],
+    ['range member', { affected: [{ package: { ecosystem: 'npm', name: 'lodash' }, ranges: [null] }] }],
+    ['event member', { affected: [{
+      package: { ecosystem: 'npm', name: 'lodash' },
+      ranges: [{ type: 'SEMVER', events: [null] }],
+    }] }],
+  ])('fails malformed OSV detail validation safely for a null %s', async (_label, override) => {
+    const record = { ...advisory('GHSA-malformed-detail', []), ...override };
+    const fetchImpl = jest.fn(async (input: string | URL | Request) =>
+      String(input).endsWith('/v1/querybatch')
+        ? jsonResponse({ results: [{ vulns: [{ id: record.id, modified: record.modified }] }] })
+        : jsonResponse(record)
+    ) as typeof fetch;
+    const scanner = new DependencyScanner();
+
+    await expect(new OsvClient({ fetchImpl, retries: 0 }).query(
+      collectPackageInventory(repository).coordinates
+    )).rejects.toMatchObject({ code: 'INVALID_RESPONSE' });
+
+    await expect(scanner.scan(repository, {
+      client: new OsvClient({ fetchImpl, retries: 0 }),
+      allowPartial: true,
+      enrichKnownExploited: false,
+    })).resolves.toEqual([
+      expect.objectContaining({
+        status: 'partial',
+        dataFreshness: 'unavailable',
+        errors: expect.arrayContaining([expect.objectContaining({ code: 'INVALID_RESPONSE' })]),
+      }),
+    ]);
+  });
+
   it('continues inventory collection when a directory cannot be read', () => {
     const blocked = path.join(repository, 'blocked');
     fs.mkdirSync(blocked);
@@ -1152,33 +1187,23 @@ describe('DependencyScanner OSV integration', () => {
     expect(results[0].vulnerabilities[0].recommendation).not.toContain('1.5.0');
   });
 
-  it('keeps valid live advisories cacheable when another advisory is malformed', async () => {
+  it('keeps valid snapshot advisories when a caller also supplies malformed data', async () => {
     const malformed = {
       ...advisory('GHSA-malformed-advisory', []),
       severity: [{ type: 'CVSS_V3', score: 9 }],
     };
     const valid = advisory('GHSA-valid-advisory', []);
-    const fetchImpl = jest.fn(async (input: string | URL | Request) => {
-      if (String(input).endsWith('/v1/querybatch')) {
-        return jsonResponse({ results: [{ vulns: [
-          { id: malformed.id, modified: malformed.modified },
-          { id: valid.id, modified: valid.modified },
-        ] }] });
-      }
-      return jsonResponse(String(input).endsWith(malformed.id) ? malformed : valid);
-    }) as typeof fetch;
-    const client = new OsvClient({ fetchImpl, retries: 0 });
+    const client = new OsvClient({ fetchImpl: jest.fn() as typeof fetch, retries: 0 });
     const store = new VulnerabilitySnapshotStore(cache);
     const scanner = new DependencyScanner();
-
-    const live = await scanner.scan(repository, {
-      client,
-      snapshotStore: store,
-      enrichKnownExploited: false,
-    });
-    expect(live[0]).toMatchObject({ status: 'complete', dataFreshness: 'live', totalVulnerabilities: 2 });
-
     const inventory = collectPackageInventory(repository);
+    const coordinate = inventory.coordinates.find(item => item.name === 'lodash')!;
+
+    store.save(inventory, [
+      { coordinate, vulnerability: malformed as unknown as OsvMatch['vulnerability'] },
+      { coordinate, vulnerability: valid },
+    ], client.endpoint);
+
     expect(store.status(inventory, 7, client.endpoint).snapshot?.droppedMatches).toBe(1);
 
     await expect(scanner.scan(repository, {

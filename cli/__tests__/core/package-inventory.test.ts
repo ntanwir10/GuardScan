@@ -165,6 +165,80 @@ describe('collectPackageInventory', () => {
     expect(inventory.errors).toEqual([]);
   });
 
+  it('uses the root Yarn lock for child workspaces without lockless errors or duplicate coordinates', () => {
+    fs.writeFileSync(path.join(repository, 'package.json'), JSON.stringify({
+      name: 'root', workspaces: ['packages/*'], dependencies: {rootdep: '^1.0.0'},
+    }));
+    fs.mkdirSync(path.join(repository, 'packages/app'), {recursive: true});
+    fs.writeFileSync(path.join(repository, 'packages/app/package.json'), JSON.stringify({
+      name: 'app', dependencies: {workspaceDep: '^2.0.0'}, devDependencies: {workspaceTool: '^3.0.0'},
+    }));
+    fs.writeFileSync(path.join(repository, 'yarn.lock'), [
+      'rootdep@^1.0.0:',
+      '  version "1.2.0"',
+      '  resolved "https://registry.yarnpkg.com/rootdep/-/rootdep-1.2.0.tgz#abc"',
+      'workspaceDep@^2.0.0:',
+      '  version "2.1.0"',
+      '  resolved "https://registry.yarnpkg.com/workspaceDep/-/workspaceDep-2.1.0.tgz#def"',
+      'workspaceTool@^3.0.0:',
+      '  version "3.1.0"',
+      '  resolved "https://registry.yarnpkg.com/workspaceTool/-/workspaceTool-3.1.0.tgz#ghi"',
+      '"app@workspace:packages/app":',
+      '  version: 0.0.0-use.local',
+      '  resolution: "app@workspace:packages/app"',
+    ].join('\n'));
+
+    const inventory = collectPackageInventory(repository);
+
+    expect(inventory.coordinates).toEqual(expect.arrayContaining([
+      expect.objectContaining({name: 'rootdep', exactVersion: '1.2.0', direct: true, scope: 'runtime', manifestPath: 'package.json'}),
+      expect.objectContaining({name: 'workspaceDep', exactVersion: '2.1.0', direct: true, scope: 'runtime', manifestPath: 'packages/app/package.json'}),
+      expect.objectContaining({name: 'workspaceTool', exactVersion: '3.1.0', direct: true, scope: 'development', manifestPath: 'packages/app/package.json'}),
+    ]));
+    expect(inventory.coordinates.some(coordinate => coordinate.name === 'app')).toBe(false);
+    expect(inventory.coordinates.filter(coordinate => coordinate.name === 'workspaceDep')).toHaveLength(1);
+    expect(inventory.errors).toEqual([]);
+  });
+
+  it('reports unsupported Yarn sources without emitting registry coordinates', () => {
+    fs.writeFileSync(path.join(repository, 'package.json'), JSON.stringify({
+      dependencies: {
+        registry: '^1.0.0',
+        gitdep: '^1.0.0',
+        filedep: '^1.0.0',
+        archivedep: '^1.0.0',
+        berrygit: 'git+https://github.com/example/berrygit.git',
+      },
+    }));
+    fs.writeFileSync(path.join(repository, 'yarn.lock'), [
+      'registry@^1.0.0:',
+      '  version "1.2.0"',
+      '  resolved "https://registry.yarnpkg.com/registry/-/registry-1.2.0.tgz#abc"',
+      'gitdep@^1.0.0:',
+      '  version "1.2.0"',
+      '  resolved "git+https://github.com/example/gitdep.git#abc"',
+      'filedep@^1.0.0:',
+      '  version "1.2.0"',
+      '  resolved "file:../filedep"',
+      'archivedep@^1.0.0:',
+      '  version "1.2.0"',
+      '  resolved "https://downloads.example.test/archivedep-1.2.0.tgz"',
+      '"berrygit@git+https://github.com/example/berrygit.git":',
+      '  version: 1.2.0',
+      '  resolution: "berrygit@git+https://github.com/example/berrygit.git#commit=abc"',
+    ].join('\n'));
+
+    const inventory = collectPackageInventory(repository);
+
+    expect(inventory.coordinates.map(coordinate => coordinate.name)).toEqual(['registry']);
+    expect(inventory.errors).toEqual(expect.arrayContaining([
+      expect.objectContaining({code: 'UNSUPPORTED_FORMAT', message: expect.stringMatching(/gitdep|unsupported source/i)}),
+      expect.objectContaining({code: 'UNSUPPORTED_FORMAT', message: expect.stringMatching(/filedep|unsupported source/i)}),
+      expect.objectContaining({code: 'UNSUPPORTED_FORMAT', message: expect.stringMatching(/archivedep|unsupported source/i)}),
+      expect.objectContaining({code: 'UNSUPPORTED_FORMAT', message: expect.stringMatching(/berrygit|unsupported source/i)}),
+    ]));
+  });
+
   it('keeps only GEM specs and reports GIT and PATH coverage as incomplete', () => {
     fs.writeFileSync(path.join(repository, 'Gemfile.lock'), `
 GIT

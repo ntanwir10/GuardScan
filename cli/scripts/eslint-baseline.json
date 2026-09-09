@@ -195,10 +195,6 @@
     "errors": 43,
     "warnings": 0
   },
-  "src/core/osv-client.ts": {
-    "errors": 6,
-    "warnings": 0
-  },
   "src/core/owasp-scanner.ts": {
     "errors": 11,
     "warnings": 0

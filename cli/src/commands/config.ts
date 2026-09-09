@@ -294,7 +294,14 @@ function directConfig(options: ConfigOptions): void {
   perfTracker.end("load-config");
 
   if (options.provider) {
+    const providerChanged = config.provider !== options.provider;
     config.provider = options.provider;
+    if (providerChanged) {
+      // Endpoints and remote approval are provider-specific; never carry them
+      // across a provider switch where they could target the wrong service.
+      config.apiEndpoint = undefined;
+      config.allowRemoteSelfHosted = false;
+    }
     logger.debug("Provider updated", { provider: options.provider });
     console.log(chalk.green(`✓ Provider set to: ${options.provider}`));
   }

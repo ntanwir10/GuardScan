@@ -159,6 +159,83 @@ function yarnDescriptorMatchesRequest(
   return selector === requested || selector === `npm:${requested}`;
 }
 
+function unsupportedYarnDescriptor(descriptors: string[], packageName: string): string | undefined {
+  const unsupportedProtocol = /^(?:git(?:\+[^:]+)?|github|gitlab|bitbucket|https?|file|link|portal|patch):/i;
+  for (const descriptor of descriptors) {
+    if (!descriptor.startsWith(`${packageName}@`)) {continue;}
+    const selector = descriptor.slice(packageName.length + 1);
+    if (unsupportedProtocol.test(selector)) {return selector;}
+  }
+  return undefined;
+}
+
+function isYarnWorkspaceDescriptor(descriptor: string, packageName: string): boolean {
+  return descriptor.startsWith(`${packageName}@`) &&
+    /^workspace:/i.test(descriptor.slice(packageName.length + 1));
+}
+
+function isYarnWorkspaceResolution(value: string): boolean {
+  return /^(?:@[^/\s]+\/[^@\s]+|[^@\s]+)@workspace:/i.test(value.trim());
+}
+
+function unsupportedYarnResolution(value: string): string | undefined {
+  const resolution = value.trim();
+  const registryLocator = /^(?:@[^/\s]+\/[^@\s]+|[^@\s]+)@(?:npm:|virtual:[^#\s]+#npm:)/i;
+  if (registryLocator.test(resolution) || /^npm:/i.test(resolution)) {return undefined;}
+  return unsupportedNpmSource({resolved: resolution});
+}
+
+function yarnWorkspacePatterns(data: Record<string, unknown>): string[] {
+  const workspaces = Array.isArray(data.workspaces)
+    ? data.workspaces
+    : asRecord(data.workspaces)?.packages;
+  return Array.isArray(workspaces) ? workspaces.filter((value): value is string => typeof value === 'string') : [];
+}
+
+function yarnWorkspacePatternMatches(pattern: string, directory: string): boolean {
+  const normalizedPattern = pattern.replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/$/, '');
+  const normalizedDirectory = directory.replace(/\\/g, '/').replace(/\/$/, '');
+  const expression = normalizedPattern
+    .split('**').map(part => part.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '[^/]*')).join('.*');
+  return new RegExp(`^${expression}$`).test(normalizedDirectory);
+}
+
+function yarnWorkspaceManifestDirectories(root: string, lockDirectory: string): Set<string> {
+  const manifest = path.join(lockDirectory, 'package.json');
+  if (!fs.existsSync(manifest)) {return new Set();}
+  try {
+    const data = asRecord(readJson(manifest));
+    if (!data) {return new Set();}
+    const patterns = yarnWorkspacePatterns(data);
+    const directories = new Set<string>();
+    for (const file of findInventoryFiles(root, []).filter(candidate => path.basename(candidate) === 'package.json')) {
+      const directory = path.relative(lockDirectory, path.dirname(file)).split(path.sep).join('/');
+      if (directory && !directory.startsWith('../') && patterns.some(pattern => yarnWorkspacePatternMatches(pattern, directory))) {
+        directories.add(directory);
+      }
+    }
+    return directories;
+  } catch {
+    return new Set();
+  }
+}
+
+function yarnWorkspaceDirectDependencies(
+  root: string,
+  lockDirectory: string
+): Array<{name: string; scope: DependencyScope; requested: string; manifestPath: string}> {
+  const workspaceDirectories = yarnWorkspaceManifestDirectories(root, lockDirectory);
+  const result: Array<{name: string; scope: DependencyScope; requested: string; manifestPath: string}> = [];
+  for (const directory of workspaceDirectories) {
+    const manifest = path.join(lockDirectory, directory, 'package.json');
+    const direct = npmDirectDependencyRequirements(path.dirname(manifest));
+    for (const [name, value] of direct) {
+      result.push({name, ...value, manifestPath: relative(root, manifest)});
+    }
+  }
+  return result;
+}
+
 function splitYarnDescriptors(header: string): string[] {
   const descriptors: string[] = [];
   let start = 0;
@@ -408,7 +485,9 @@ function isManifestCoveredByLock(
   if (manifestDirectory === lockDirectory) {return true;}
   const relativeDirectory = relative(lockDirectory, manifestDirectory);
   if (!relativeDirectory || relativeDirectory.startsWith('..')) {return false;}
-  if (lockName === 'yarn.lock') {return false;}
+  if (lockName === 'yarn.lock') {
+    return yarnWorkspaceManifestDirectories(lockDirectory, lockDirectory).has(relativeDirectory);
+  }
   try {
     const data: Record<string, unknown> | undefined = lockName === 'pnpm-lock.yaml'
       ? asRecord(yaml.load(fs.readFileSync(lockPath, 'utf8')))
@@ -509,13 +588,44 @@ function parseYarnLock(root: string, file: string, coordinates: DependencyCoordi
   const rel = relative(root, file);
   try {
     const directDependencies = npmDirectDependencyRequirements(path.dirname(file));
+    const workspaceDependencies = yarnWorkspaceDirectDependencies(root, path.dirname(file));
+    const scopeRank: Record<DependencyScope, number> = {unknown: 0, development: 1, optional: 2, runtime: 3};
     const lines = fs.readFileSync(file, 'utf8').split(/\r?\n/);
     let descriptor: string | undefined;
     let descriptors: string[] = [];
     let packageName: string | undefined;
     let resolved = false;
+    let unsupportedSource: string | undefined;
+    let exactVersion: string | undefined;
+    let localWorkspace = false;
     const finishRecord = (): void => {
-      if (descriptor && descriptor !== '__metadata' && !resolved) {
+      if (localWorkspace) {
+        // Workspace packages are first-party project code, not registry dependencies.
+      } else if (descriptor && descriptor !== '__metadata' && exactVersion && packageName) {
+        if (unsupportedSource) {
+          errors.push({file: rel, code: 'UNSUPPORTED_FORMAT', message: `Yarn package ${packageName} uses unsupported source: ${unsupportedSource.slice(0, 120)}`});
+        } else {
+          const direct = directDependencies.get(packageName);
+          const directCandidates = workspaceDependencies.filter(candidate =>
+            candidate.name === packageName && npmRequestMatchesVersion(candidate.requested, exactVersion!) && descriptors.some(candidateDescriptor =>
+              yarnDescriptorMatchesRequest(candidateDescriptor, packageName!, candidate.requested)
+            )
+          );
+          if (direct && npmRequestMatchesVersion(direct.requested, exactVersion) &&
+            descriptors.some(candidate => yarnDescriptorMatchesRequest(candidate, packageName!, direct.requested))) {
+            directCandidates.push({...direct, name: packageName, manifestPath: relative(root, path.join(path.dirname(file), 'package.json'))});
+          }
+          const selected = directCandidates.sort((left, right) =>
+            scopeRank[right.scope] - scopeRank[left.scope] || left.manifestPath.localeCompare(right.manifestPath)
+          )[0];
+          addCoordinate(coordinates, {
+            ecosystem: 'npm', osvEcosystem: 'npm', name: packageName, exactVersion,
+            scope: selected?.scope || 'unknown', direct: selected !== undefined,
+            manifestPath: selected?.manifestPath || relative(root, path.join(path.dirname(file), 'package.json')),
+            lockfilePath: rel, dependencyPaths: [packageName],
+          });
+        }
+      } else if (descriptor && descriptor !== '__metadata' && !resolved) {
         errors.push({
           file: rel,
           code: 'UNSUPPORTED_FORMAT',
@@ -526,6 +636,9 @@ function parseYarnLock(root: string, file: string, coordinates: DependencyCoordi
       descriptors = [];
       packageName = undefined;
       resolved = false;
+      unsupportedSource = undefined;
+      exactVersion = undefined;
+      localWorkspace = false;
     };
     for (const line of lines) {
       if (line && !/^\s/.test(line) && line.endsWith(':')) {
@@ -536,19 +649,24 @@ function parseYarnLock(root: string, file: string, coordinates: DependencyCoordi
         const scoped = descriptor.match(/^(@[^/]+\/[^@]+)@/);
         const plain = descriptor.match(/^([^@]+)@/);
         packageName = scoped?.[1] || plain?.[1];
+        if (packageName) {
+          localWorkspace = descriptors.some(candidate => isYarnWorkspaceDescriptor(candidate, packageName!));
+          unsupportedSource = unsupportedYarnDescriptor(descriptors, packageName);
+        }
       } else if (packageName) {
+        const resolutionMatch = line.match(/^\s+(?:resolved|resolution)(?::\s*|\s+)["']?([^"'\s]+)["']?/);
+        if (resolutionMatch) {
+          if (isYarnWorkspaceResolution(resolutionMatch[1])) {
+            localWorkspace = true;
+            unsupportedSource = undefined;
+          } else {
+            const source = unsupportedYarnResolution(resolutionMatch[1]);
+            if (source) {unsupportedSource = source;}
+          }
+        }
         const versionMatch = line.match(/^\s+version(?::\s*|\s+)["']?([^"'\s]+)["']?/);
         if (versionMatch && semver.valid(versionMatch[1], { loose: true })) {
-          const direct = directDependencies.get(packageName);
-          const isDirect = direct !== undefined && descriptors.some(candidate =>
-            yarnDescriptorMatchesRequest(candidate, packageName!, direct.requested)
-          );
-          addCoordinate(coordinates, {
-            ecosystem: 'npm', osvEcosystem: 'npm', name: packageName, exactVersion: versionMatch[1],
-            scope: isDirect ? direct.scope : 'unknown', direct: isDirect,
-            manifestPath: relative(root, path.join(path.dirname(file), 'package.json')),
-            lockfilePath: rel, dependencyPaths: [packageName],
-          });
+          exactVersion = versionMatch[1];
           resolved = true;
         }
       }

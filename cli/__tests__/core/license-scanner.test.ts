@@ -208,6 +208,28 @@ describe('LicenseScanner inventory and SBOM contracts', () => {
     expect(simple.licenses).toEqual([{ license: { id: 'MIT' } }]);
   });
 
+  it('uses a named CycloneDX license for non-SPDX simple identifiers', () => {
+    const document = new LicenseScanner().generateSBOM([
+      finding({ package: 'npm-pseudo-license', license: 'UNLICENSED' }),
+      finding({ package: 'invalid-expression', license: 'UNLICENSED OR MIT' }),
+    ], 'cyclonedx', 'fixture');
+
+    expect(document.components.find(component => component.name === 'npm-pseudo-license')?.licenses)
+      .toEqual([{ license: { name: 'UNLICENSED' } }]);
+    expect(document.components.find(component => component.name === 'invalid-expression')?.licenses)
+      .toEqual([{ license: { name: 'UNLICENSED OR MIT' } }]);
+  });
+
+  it('generates a unique SPDX document namespace for each document', () => {
+    const scanner = new LicenseScanner();
+    const findings = [finding({ package: 'namespace-fixture' })];
+
+    const first = scanner.generateSBOM(findings, 'spdx', 'fixture');
+    const second = scanner.generateSBOM(findings, 'spdx', 'fixture');
+
+    expect(first.documentNamespace).not.toBe(second.documentNamespace);
+  });
+
   it('generates a unique CycloneDX serial number for each BOM document', () => {
     const scanner = new LicenseScanner();
     const findings = [finding({ package: 'serial-fixture' })];
@@ -235,6 +257,7 @@ describe('LicenseScanner inventory and SBOM contracts', () => {
     '(MIT OR Apache-2.0',
     'MIT WITH',
     'MIT / Apache-2.0',
+    'UNLICENSED OR MIT',
   ])('rejects malformed SPDX expression %s', expression => {
     const document = new LicenseScanner().generateSBOM([
       finding({ license: expression }),

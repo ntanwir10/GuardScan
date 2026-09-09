@@ -117,6 +117,36 @@ describe("config command", () => {
     consoleLogSpy.mockRestore();
   });
 
+  it("clears provider-specific endpoint and remote approval when switching provider families", async () => {
+    if (!configManager.exists()) {
+      configManager.init();
+    }
+
+    const consoleLogSpy = jest.spyOn(console, "log").mockImplementation(() => {});
+    const initial = configManager.load();
+    initial.provider = "ollama";
+    initial.apiEndpoint = "https://models.example.test";
+    initial.allowRemoteSelfHosted = true;
+    configManager.save(initial);
+
+    await configCommand({ provider: "openai", key: "test-key" });
+    let updated = configManager.load();
+    expect(updated.provider).toBe("openai");
+    expect(updated.apiEndpoint).toBeUndefined();
+    expect(updated.allowRemoteSelfHosted).toBe(false);
+
+    updated.apiEndpoint = "https://api.example.test/v1";
+    updated.allowRemoteSelfHosted = true;
+    configManager.save(updated);
+    await configCommand({ provider: "ollama" });
+    updated = configManager.load();
+    expect(updated.provider).toBe("ollama");
+    expect(updated.apiEndpoint).toBeUndefined();
+    expect(updated.allowRemoteSelfHosted).toBe(false);
+
+    consoleLogSpy.mockRestore();
+  });
+
   it("should handle debug logging", async () => {
     process.env.GUARDSCAN_DEBUG = "true";
     if (!configManager.exists()) {

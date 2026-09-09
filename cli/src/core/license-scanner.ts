@@ -126,6 +126,7 @@ export interface CycloneDx17Component {
 }
 
 const PACKAGE_VERSION = packageManifest.version;
+const SPDX_IDENTIFIERS = loadSpdxIdentifiers();
 
 export class LicenseScanner {
   // License compatibility matrix
@@ -852,13 +853,12 @@ export class LicenseScanner {
         }],
       };
     });
-    const digest = stableIdentifier(`${projectName}\0${packages.map(value => value.SPDXID).join('\0')}`);
     return {
       spdxVersion: 'SPDX-2.3',
       dataLicense: 'CC0-1.0',
       SPDXID: 'SPDXRef-DOCUMENT',
       name: projectName,
-      documentNamespace: `https://guardscancli.com/spdx/${encodeURIComponent(projectName)}/${digest}`,
+      documentNamespace: `https://guardscancli.com/spdx/${encodeURIComponent(projectName)}/${randomUUID()}`,
       creationInfo: { created, creators: [`Tool: GuardScan-${PACKAGE_VERSION}`] },
       packages,
       relationships: packages.map(value => ({
@@ -998,13 +998,31 @@ function stableIdentifier(value: string): string {
 }
 
 function isSimpleSpdxIdentifier(value: string): boolean {
-  return value !== 'Unknown' && /^[A-Za-z0-9][A-Za-z0-9.+-]*$/.test(value);
+  return SPDX_IDENTIFIERS.has(value);
+}
+
+function loadSpdxIdentifiers(): ReadonlySet<string> {
+  try {
+    const schema = JSON.parse(fs.readFileSync(path.resolve(__dirname, '../../schemas/spdx.schema.json'), 'utf8')) as {
+      enum?: unknown;
+    };
+    if (Array.isArray(schema.enum)) {
+      return new Set(schema.enum.filter((value): value is string => typeof value === 'string'));
+    }
+  } catch {
+    // Fall back to common identifiers if an installation omits the bundled schema.
+  }
+  return new Set(['Apache-2.0', 'BSD-2-Clause', 'BSD-3-Clause', 'ISC', 'MIT', 'MPL-2.0']);
 }
 
 function cycloneDxLicense(value: string): { license: { id?: string; name?: string } } | { expression: string } {
   if (isSimpleSpdxIdentifier(value)) {return { license: { id: value } };}
-  if (isSpdxExpression(value)) {return { expression: value };}
+  if (isCompoundSpdxExpression(value)) {return { expression: value };}
   return { license: { name: value || 'Unknown' } };
+}
+
+function isCompoundSpdxExpression(value: string): boolean {
+  return isSpdxExpression(value) && (/[()]/.test(value) || /(?:^|\s)(?:AND|OR|WITH)(?:\s|$)/.test(value));
 }
 
 function isSpdxExpression(value: string): boolean {
@@ -1033,7 +1051,10 @@ function isSpdxExpression(value: string): boolean {
 
   let index = 0;
   const isIdentifier = (token: string | undefined): boolean =>
-    token !== undefined && !['(', ')', 'AND', 'OR', 'WITH'].includes(token);
+    token !== undefined && (
+      SPDX_IDENTIFIERS.has(token) ||
+      /^(?:DocumentRef-[A-Za-z0-9.-]+:)?LicenseRef-[A-Za-z0-9.-]+$/.test(token)
+    );
   const parseLicense = (): boolean => {
     if (!isIdentifier(tokens[index])) {return false;}
     index += 1;
