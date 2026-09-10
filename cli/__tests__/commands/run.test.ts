@@ -1,5 +1,5 @@
 import { Config } from '../../src/core/config';
-import { vulnerabilitySettingsForRun } from '../../src/commands/run';
+import { vulnerabilityScanRequestedForRun, vulnerabilitySettingsForRun } from '../../src/commands/run';
 
 describe('guardscan run vulnerability settings', () => {
   const originalNoCache = process.env.GUARDSCAN_NO_CACHE;
@@ -60,5 +60,11 @@ describe('guardscan run vulnerability settings', () => {
         ttlSeconds: 3600,
       },
     }).cache).toBe(false);
+  });
+
+  it('does not enable vulnerability scanning from --cve when config disables it', () => {
+    expect(vulnerabilityScanRequestedForRun({ vulnerabilities: { enabled: false } }, true)).toBe(false);
+    expect(vulnerabilityScanRequestedForRun({ vulnerabilities: { enabled: true } }, true)).toBe(true);
+    expect(vulnerabilityScanRequestedForRun({ vulnerabilities: { enabled: false } }, false)).toBe(false);
   });
 });

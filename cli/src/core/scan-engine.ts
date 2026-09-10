@@ -57,6 +57,23 @@ export interface ScannerTaskOutput {
   error?: ScannerError;
 }
 
+function coverageAwareOutput(
+  findings: Finding[],
+  skippedInputs: number,
+  code: string,
+  label: string
+): Finding[] | ScannerTaskOutput {
+  if (skippedInputs === 0) {return findings;}
+  return {
+    findings,
+    error: {
+      code,
+      message: `${label} coverage skipped ${skippedInputs} unreadable or malformed input(s).`,
+      retryable: true,
+    },
+  };
+}
+
 export interface ScanEngineOptions {
   repoPath?: string;
   files?: ScanFile[];
@@ -340,13 +357,15 @@ export class ScanEngine {
         scanner: 'secrets',
         required: true,
         run: async () => {
+          let skippedInputs = 0;
+          const onSkippedInput = (): void => {skippedInputs += 1;};
           const filePaths = files.map(file => file.path);
-          const fileSecrets = await secretsDetector.detectInFiles(filePaths);
+          const fileSecrets = await secretsDetector.detectInFiles(filePaths, onSkippedInput);
           const gitSecrets = options.includeGitHistory === false
             ? []
-            : await secretsDetector.scanGitHistory(repoPath);
+            : await secretsDetector.scanGitHistory(repoPath, onSkippedInput);
 
-          return [...fileSecrets, ...gitSecrets].map(secret => {
+          const findings = [...fileSecrets, ...gitSecrets].map(secret => {
             const normalizedFile = normalizeArtifactPath(secret.file, repoPath) || '<unknown>';
             const secretDigest = createHash('sha256').update(secret.secret).digest('hex');
             const fingerprint = createHash('sha256').update([
@@ -369,29 +388,43 @@ export class ScanEngine {
               scanners: ['secrets'],
             };
           });
+          return coverageAwareOutput(findings, skippedInputs, 'SECRET_SCAN_PARTIAL', 'Secret');
         },
       },
       {
         scanner: 'dockerfile',
         required: true,
-        run: () => dockerfileScanner.scan(repoPath),
+        run: async () => {
+          let skippedInputs = 0;
+          const findings = await dockerfileScanner.scan(repoPath, () => {skippedInputs += 1;});
+          return coverageAwareOutput(findings, skippedInputs, 'DOCKERFILE_SCAN_PARTIAL', 'Dockerfile');
+        },
       },
       {
         scanner: 'iac',
         required: true,
-        run: () => iacScanner.scan(repoPath),
+        run: async () => {
+          let skippedInputs = 0;
+          const findings = await iacScanner.scan(repoPath, () => {skippedInputs += 1;});
+          return coverageAwareOutput(findings, skippedInputs, 'IAC_SCAN_PARTIAL', 'IaC');
+        },
       },
       {
         scanner: 'owasp',
         required: true,
-        run: () => owaspScanner.scan(repoPath),
+        run: async () => {
+          let skippedInputs = 0;
+          const findings = await owaspScanner.scan(repoPath, () => {skippedInputs += 1;});
+          return coverageAwareOutput(findings, skippedInputs, 'OWASP_SCAN_PARTIAL', 'OWASP');
+        },
       },
       {
         scanner: 'api',
         required: true,
         run: async () => {
-          const apiFindings = await apiScanner.scan(repoPath);
-          return apiFindings.map(finding => ({
+          let skippedInputs = 0;
+          const apiFindings = await apiScanner.scan(repoPath, () => {skippedInputs += 1;});
+          const findings = apiFindings.map(finding => ({
             severity: normalizeSeverity(finding.severity),
             category: `${finding.category} API: ${finding.type}`,
             file: finding.file,
@@ -399,13 +432,15 @@ export class ScanEngine {
             description: finding.description,
             suggestion: finding.recommendation,
           }));
+          return coverageAwareOutput(findings, skippedInputs, 'API_SCAN_PARTIAL', 'API');
         },
       },
       {
         scanner: 'compliance',
         required: true,
         run: async () => {
-          const complianceReports = await complianceChecker.check(repoPath);
+          let skippedInputs = 0;
+          const complianceReports = await complianceChecker.check(repoPath, () => {skippedInputs += 1;});
           const complianceFindings: Finding[] = [];
           for (const report of complianceReports) {
             for (const violation of report.violations) {
@@ -419,7 +454,12 @@ export class ScanEngine {
               });
             }
           }
-          return complianceFindings;
+          return coverageAwareOutput(
+            complianceFindings,
+            skippedInputs,
+            'COMPLIANCE_SCAN_PARTIAL',
+            'Compliance'
+          );
         },
       },
     ];

@@ -259,14 +259,19 @@ export class EmbeddingChunker {
     const docPaths = await fastGlob(docPatterns, {
       cwd: this.repoRoot,
       onlyFiles: true,
+      followSymbolicLinks: false,
       unique: true,
     });
+    const realRepoRoot = await fs.promises.realpath(this.repoRoot);
 
     for (const docPath of docPaths) {
       try {
-        const fullPath = path.join(this.repoRoot, docPath);
+        const candidatePath = path.resolve(this.repoRoot, docPath);
+        if ((await fs.promises.lstat(candidatePath)).isSymbolicLink()) {continue;}
+        const fullPath = await fs.promises.realpath(candidatePath);
+        if (!isWithinRoot(realRepoRoot, fullPath)) {continue;}
 
-        if (fs.existsSync(fullPath) && fs.statSync(fullPath).isFile()) {
+        if ((await fs.promises.stat(fullPath)).isFile()) {
           const content = await fs.promises.readFile(fullPath, 'utf-8');
           const formattedContent = this.formatDocumentationForEmbedding(
             docPath,
@@ -281,7 +286,7 @@ export class EmbeddingChunker {
               dependencies: [],
               exports: [],
               tags: ['documentation', this.inferDocType(docPath)],
-              lastModified: await this.getFileModificationTime(docPath),
+              lastModified: await this.getFileModificationTime(fullPath),
             },
             source: docPath,
           });
@@ -518,7 +523,7 @@ export class EmbeddingChunker {
    */
   private async getFileModificationTime(filePath: string): Promise<Date> {
     try {
-      const fullPath = path.join(this.repoRoot, filePath);
+      const fullPath = path.isAbsolute(filePath) ? filePath : path.join(this.repoRoot, filePath);
       const stats = await fs.promises.stat(fullPath);
       return stats.mtime;
     } catch (error) {
@@ -539,4 +544,9 @@ export class EmbeddingChunker {
       minComplexity: options.minComplexity || 0,
     };
   }
+}
+
+function isWithinRoot(root: string, candidate: string): boolean {
+  const relative = path.relative(root, candidate);
+  return relative === '' || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative));
 }

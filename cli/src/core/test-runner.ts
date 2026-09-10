@@ -316,12 +316,27 @@ export class TestRunner {
     try {
       const args = ['--json-report', `--json-report-file=${reportPath}`];
       if (withCoverage) {args.push('--cov', '--cov-report=json');}
-      const processResult = runProcess('pytest', args, {
+      let processResult = runProcess('pytest', args, {
         cwd: repoPath,
         maxBuffer: 10 * 1024 * 1024,
         timeoutMs: 10 * 60 * 1000,
         networkIsolation: policy?.isolateProjectNetwork === true,
       });
+      // pytest-json-report is optional. If pytest rejects only its report
+      // options, retry the same suite with the standard human-readable output.
+      if (
+        processResult.status !== 0 &&
+        /unrecognized arguments:[\s\S]*--json-report/i.test(
+          `${processResult.stdout}\n${processResult.stderr}`
+        )
+      ) {
+        processResult = runProcess('pytest', withCoverage ? ['--cov', '--cov-report=json'] : [], {
+          cwd: repoPath,
+          maxBuffer: 10 * 1024 * 1024,
+          timeoutMs: 10 * 60 * 1000,
+          networkIsolation: policy?.isolateProjectNetwork === true,
+        });
+      }
       if (processResult.timedOut) {throw new Error('pytest timed out');}
       if (processResult.status === 5) {return null;}
       const output = `${processResult.stdout}\n${processResult.stderr}`;

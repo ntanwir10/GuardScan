@@ -2,6 +2,14 @@ import { SecretsDetector } from '../../src/core/secrets-detector';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import {execFileSync} from 'child_process';
+
+jest.mock('child_process', () => ({
+  ...jest.requireActual<typeof import('child_process')>('child_process'),
+  execFileSync: jest.fn(),
+}));
+
+const mockedExecFileSync = execFileSync as jest.MockedFunction<typeof execFileSync>;
 
 describe('SecretsDetector', () => {
   let detector: SecretsDetector;
@@ -94,6 +102,22 @@ describe('SecretsDetector', () => {
       const findings = await detector.detectInFiles([testFile]);
 
       expect(findings).toEqual([]);
+    });
+  });
+
+  describe('scanGitHistory', () => {
+    it('reports a skipped commit when git show fails', async () => {
+      const commit = 'a'.repeat(40);
+      mockedExecFileSync.mockImplementation(((_command: string, args: readonly string[]) => {
+        if (args[0] === 'log') {return `${commit}\n`;}
+        throw new Error('git object unavailable');
+      }) as typeof execFileSync);
+      const onSkippedInput = jest.fn();
+
+      await expect(detector.scanGitHistory(testDir, onSkippedInput)).resolves.toEqual([]);
+
+      expect(onSkippedInput).toHaveBeenCalledTimes(1);
+      mockedExecFileSync.mockReset();
     });
   });
 

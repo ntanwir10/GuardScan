@@ -55,6 +55,13 @@ export function vulnerabilitySettingsForRun(
   };
 }
 
+export function vulnerabilityScanRequestedForRun(
+  config: {vulnerabilities?: {enabled: boolean}},
+  cveFlag: boolean | undefined
+): boolean {
+  return cveFlag === true && config.vulnerabilities?.enabled !== false;
+}
+
 export async function runCommand(options: RunOptions): Promise<void> {
   logger.debug('Run command started', { options });
   perfTracker.start('run-total');
@@ -74,7 +81,7 @@ export async function runCommand(options: RunOptions): Promise<void> {
       configOffline: config.offlineMode,
       offline: options.offline,
       cloud: options.cloud,
-      cve: options.cve,
+      cve: vulnerabilityScanRequestedForRun(config, options.cve),
       allowPartial: options.allowPartial,
     });
     if (noCloud) {

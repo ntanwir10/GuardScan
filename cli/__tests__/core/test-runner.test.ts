@@ -75,6 +75,19 @@ describe('TestRunner discovery and empty-suite behavior', () => {
     await expect(new TestRunner().runTests(repository)).resolves.toEqual([]);
   });
 
+  it('runs ordinary pytest projects without requiring pytest-json-report', async () => {
+    fs.writeFileSync(path.join(repository, 'pytest.ini'), '[pytest]\n');
+    mockedRunProcess
+      .mockReturnValueOnce(processResult(4, '', 'ERROR: unrecognized arguments: --json-report'))
+      .mockReturnValueOnce(processResult(0, '2 passed in 0.01s'));
+
+    await expect(new TestRunner().runTests(repository)).resolves.toEqual([
+      expect.objectContaining({ framework: 'pytest', totalTests: 2, passed: 2, failed: 0 }),
+    ]);
+    expect(mockedRunProcess).toHaveBeenCalledTimes(2);
+    expect(mockedRunProcess.mock.calls[1][1]).not.toContain('--json-report');
+  });
+
   it('preserves failures from a configured npm test script', async () => {
     fs.writeFileSync(path.join(repository, 'package.json'), JSON.stringify({
       scripts: { test: 'jest' },

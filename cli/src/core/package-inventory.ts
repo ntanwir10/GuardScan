@@ -48,6 +48,8 @@ const TARGET_FILES = new Set([
   'requirements.txt',
   'go.mod',
   'Cargo.lock',
+  'Cargo.toml',
+  'Gemfile',
   'Gemfile.lock',
   'pom.xml',
 ]);
@@ -145,8 +147,9 @@ function npmDirectDependencyRequirements(
 
 function npmRequestMatchesVersion(requested: string, exactVersion: string): boolean {
   const aliasRange = requested.match(/^npm:(?:@[^/]+\/[^@]+|[^@]+)@(.+)$/)?.[1];
-  const range = semver.validRange(aliasRange || requested, { loose: true });
-  return range === null || semver.satisfies(exactVersion, range, { includePrerelease: true, loose: true });
+  const registryRange = aliasRange || requested.replace(/^npm:/, '');
+  const range = semver.validRange(registryRange, { loose: true });
+  return range !== null && semver.satisfies(exactVersion, range, { includePrerelease: true, loose: true });
 }
 
 function yarnDescriptorMatchesRequest(
@@ -538,7 +541,12 @@ function parsePnpmLock(root: string, file: string, coordinates: DependencyCoordi
               : '';
           const exactVersion = rawVersion.replace(/^\//, '').split('(')[0];
           const version = semver.valid(exactVersion, { loose: true });
-          if (!version) {continue;}
+          if (!version) {
+            if (rawVersion) {
+              errors.push({file: rel, code: 'UNSUPPORTED_FORMAT', message: `pnpm direct dependency ${name} uses unsupported resolution: ${rawVersion.slice(0, 120)}`});
+            }
+            continue;
+          }
           const key = `${name}\0${version}`;
           const existing = directDependencies.get(key);
           const dependencyPath = rawImporterPath === '.' ? name : `${rawImporterPath}:${name}`;
@@ -561,22 +569,68 @@ function parsePnpmLock(root: string, file: string, coordinates: DependencyCoordi
       ...(asRecord(data?.packages) || {}),
       ...(asRecord(data?.snapshots) || {}),
     };
-    for (const rawKey of Object.keys(records)) {
+    type PnpmNode = {name: string; version: string; rawKey: string; dependencies: Array<{name: string; version: string}>};
+    const nodes = new Map<string, PnpmNode>();
+    const parseDependencyVersion = (value: unknown): string | undefined => {
+      const record = asRecord(value);
+      const raw = typeof value === 'string' ? value : typeof record?.version === 'string' ? record.version : undefined;
+      if (!raw) {return undefined;}
+      const normalized = raw.replace(/^\//, '').split('(')[0];
+      return semver.valid(normalized, {loose: true}) || undefined;
+    };
+    const parseNodeKey = (rawKey: string): {name: string; version: string} | undefined => {
       const key = rawKey.replace(/^\//, '').split('(')[0];
-      let match = key.match(/^(@[^/]+\/[^@/]+)@([^/]+)$/) || key.match(/^(@[^/]+\/[^/]+)\/([^/]+)$/);
-      if (!match) {match = key.match(/^([^@/][^@]*?)@([^/]+)$/) || key.match(/^([^@/][^/]*)\/([^/]+)$/);}
-      if (!match) {continue;}
-      const version = semver.valid(match[2], { loose: true });
-      if (!version) {continue;}
-      const direct = directDependencies.get(`${match[1]}\0${version}`);
+      const match = key.match(/^(@[^/]+\/[^@/]+)@([^/]+)$/) || key.match(/^(@[^/]+\/[^/]+)\/([^/]+)$/)
+        || key.match(/^([^@/][^@]*?)@([^/]+)$/) || key.match(/^([^@/][^/]*)\/([^/]+)$/);
+      if (!match || !semver.valid(match[2], {loose: true})) {return undefined;}
+      return {name: match[1], version: semver.valid(match[2], {loose: true})!};
+    };
+    for (const [rawKey, rawValue] of Object.entries(records)) {
+      const parsed = parseNodeKey(rawKey);
+      const record = asRecord(rawValue);
+      if (!parsed || !record) {continue;}
+      const dependencies: Array<{name: string; version: string}> = [];
+      for (const group of ['dependencies', 'optionalDependencies']) {
+        for (const [name, value] of Object.entries(asRecord(record[group]) || {})) {
+          const version = parseDependencyVersion(value);
+          if (version) {dependencies.push({name, version});}
+        }
+      }
+      nodes.set(`${parsed.name}\0${parsed.version}`, { ...parsed, rawKey, dependencies });
+    }
+    const pathsByNode = new Map<string, Set<string>>();
+    const visit = (nodeKey: string, currentPath: string, stack: Set<string>): void => {
+      const paths = pathsByNode.get(nodeKey) || new Set<string>();
+      if (paths.has(currentPath)) {return;}
+      paths.add(currentPath);
+      pathsByNode.set(nodeKey, paths);
+      if (stack.has(nodeKey)) {return;}
+      const node = nodes.get(nodeKey);
+      if (!node) {return;}
+      const nextStack = new Set(stack).add(nodeKey);
+      for (const dependency of [...node.dependencies].sort((left, right) =>
+        `${left.name}\0${left.version}`.localeCompare(`${right.name}\0${right.version}`)
+      )) {
+        const childKey = `${dependency.name}\0${dependency.version}`;
+        visit(childKey, `${currentPath} > ${dependency.name}`, nextStack);
+      }
+    };
+    for (const [nodeKey, direct] of directDependencies) {
+      const nodePaths = direct.dependencyPaths.length > 0 ? direct.dependencyPaths : [nodeKey.split('\0')[0]];
+      for (const nodePath of nodePaths) {visit(nodeKey, nodePath, new Set());}
+    }
+    for (const rawKey of Object.keys(records)) {
+      const parsed = parseNodeKey(rawKey);
+      if (!parsed) {continue;}
+      const nodeKey = `${parsed.name}\0${parsed.version}`;
+      const direct = directDependencies.get(nodeKey);
+      const dependencyPaths = pathsByNode.get(nodeKey);
       addCoordinate(coordinates, {
-        ecosystem: 'npm', osvEcosystem: 'npm', name: match[1], exactVersion: version,
+        ecosystem: 'npm', osvEcosystem: 'npm', name: parsed.name, exactVersion: parsed.version,
         scope: direct?.scope || 'unknown', direct: direct !== undefined,
         manifestPath: direct?.manifestPath || relative(root, path.join(path.dirname(file), 'package.json')),
         lockfilePath: rel,
-        dependencyPaths: direct
-          ? [...new Set([rawKey, ...direct.dependencyPaths])]
-          : [rawKey],
+        dependencyPaths: dependencyPaths ? [...dependencyPaths].sort() : direct ? direct.dependencyPaths : [rawKey],
       });
     }
   } catch (error: unknown) {
@@ -598,6 +652,9 @@ function parseYarnLock(root: string, file: string, coordinates: DependencyCoordi
     let unsupportedSource: string | undefined;
     let exactVersion: string | undefined;
     let localWorkspace = false;
+    let inDependencies = false;
+    let dependencies: Array<{name: string; requested: string}> = [];
+    const records: Array<{name: string; version: string; descriptors: string[]; dependencies: Array<{name: string; requested: string}>}> = [];
     const finishRecord = (): void => {
       if (localWorkspace) {
         // Workspace packages are first-party project code, not registry dependencies.
@@ -605,25 +662,7 @@ function parseYarnLock(root: string, file: string, coordinates: DependencyCoordi
         if (unsupportedSource) {
           errors.push({file: rel, code: 'UNSUPPORTED_FORMAT', message: `Yarn package ${packageName} uses unsupported source: ${unsupportedSource.slice(0, 120)}`});
         } else {
-          const direct = directDependencies.get(packageName);
-          const directCandidates = workspaceDependencies.filter(candidate =>
-            candidate.name === packageName && npmRequestMatchesVersion(candidate.requested, exactVersion!) && descriptors.some(candidateDescriptor =>
-              yarnDescriptorMatchesRequest(candidateDescriptor, packageName!, candidate.requested)
-            )
-          );
-          if (direct && npmRequestMatchesVersion(direct.requested, exactVersion) &&
-            descriptors.some(candidate => yarnDescriptorMatchesRequest(candidate, packageName!, direct.requested))) {
-            directCandidates.push({...direct, name: packageName, manifestPath: relative(root, path.join(path.dirname(file), 'package.json'))});
-          }
-          const selected = directCandidates.sort((left, right) =>
-            scopeRank[right.scope] - scopeRank[left.scope] || left.manifestPath.localeCompare(right.manifestPath)
-          )[0];
-          addCoordinate(coordinates, {
-            ecosystem: 'npm', osvEcosystem: 'npm', name: packageName, exactVersion,
-            scope: selected?.scope || 'unknown', direct: selected !== undefined,
-            manifestPath: selected?.manifestPath || relative(root, path.join(path.dirname(file), 'package.json')),
-            lockfilePath: rel, dependencyPaths: [packageName],
-          });
+          records.push({name: packageName, version: exactVersion, descriptors: [...descriptors], dependencies: [...dependencies]});
         }
       } else if (descriptor && descriptor !== '__metadata' && !resolved) {
         errors.push({
@@ -639,6 +678,8 @@ function parseYarnLock(root: string, file: string, coordinates: DependencyCoordi
       unsupportedSource = undefined;
       exactVersion = undefined;
       localWorkspace = false;
+      inDependencies = false;
+      dependencies = [];
     };
     for (const line of lines) {
       if (line && !/^\s/.test(line) && line.endsWith(':')) {
@@ -654,6 +695,16 @@ function parseYarnLock(root: string, file: string, coordinates: DependencyCoordi
           unsupportedSource = unsupportedYarnDescriptor(descriptors, packageName);
         }
       } else if (packageName) {
+        if (/^\s{2}dependencies\s*:\s*$/.test(line)) {inDependencies = true; continue;}
+        if (inDependencies) {
+          const dependencyMatch = line.match(/^\s{4}(?:"([^"]+)"|'([^']+)'|([^:\s]+))(?::|\s+)\s*["']?([^"'\s]+)["']?/);
+          if (dependencyMatch) {
+            dependencies.push({
+              name: dependencyMatch[1] || dependencyMatch[2] || dependencyMatch[3],
+              requested: dependencyMatch[4],
+            });
+          }
+        }
         const resolutionMatch = line.match(/^\s+(?:resolved|resolution)(?::\s*|\s+)["']?([^"'\s]+)["']?/);
         if (resolutionMatch) {
           if (isYarnWorkspaceResolution(resolutionMatch[1])) {
@@ -672,6 +723,52 @@ function parseYarnLock(root: string, file: string, coordinates: DependencyCoordi
       }
     }
     finishRecord();
+    const directForRecord = (record: typeof records[number]): {scope: DependencyScope; manifestPath: string} | undefined => {
+      const candidates = workspaceDependencies.filter(candidate =>
+        candidate.name === record.name && npmRequestMatchesVersion(candidate.requested, record.version) && record.descriptors.some(candidateDescriptor =>
+          yarnDescriptorMatchesRequest(candidateDescriptor, record.name, candidate.requested)
+        )
+      );
+      const direct = directDependencies.get(record.name);
+      if (direct && npmRequestMatchesVersion(direct.requested, record.version) &&
+        record.descriptors.some(candidate => yarnDescriptorMatchesRequest(candidate, record.name, direct.requested))) {
+        candidates.push({...direct, name: record.name, manifestPath: relative(root, path.join(path.dirname(file), 'package.json'))});
+      }
+      return candidates.sort((left, right) =>
+        scopeRank[right.scope] - scopeRank[left.scope] || left.manifestPath.localeCompare(right.manifestPath)
+      )[0];
+    };
+    const pathsByRecord = new Map<typeof records[number], Set<string>>();
+    const visit = (record: typeof records[number], currentPath: string, stack: Set<typeof records[number]>): void => {
+      const paths = pathsByRecord.get(record) || new Set<string>();
+      if (paths.has(currentPath)) {return;}
+      paths.add(currentPath);
+      pathsByRecord.set(record, paths);
+      if (stack.has(record)) {return;}
+      const nextStack = new Set(stack).add(record);
+      for (const dependency of [...record.dependencies].sort((left, right) => `${left.name}\0${left.requested}`.localeCompare(`${right.name}\0${right.requested}`))) {
+        const child = records.find(candidate =>
+          candidate.name === dependency.name &&
+          npmRequestMatchesVersion(dependency.requested, candidate.version) &&
+          candidate.descriptors.some(descriptor => yarnDescriptorMatchesRequest(descriptor, dependency.name, dependency.requested))
+        );
+        if (child) {visit(child, `${currentPath} > ${child.name}`, nextStack);}
+      }
+    };
+    for (const record of records) {
+      const direct = directForRecord(record);
+      if (direct) {visit(record, record.name, new Set());}
+    }
+    for (const record of records) {
+      const direct = directForRecord(record);
+      addCoordinate(coordinates, {
+        ecosystem: 'npm', osvEcosystem: 'npm', name: record.name, exactVersion: record.version,
+        scope: direct?.scope || 'unknown', direct: direct !== undefined,
+        manifestPath: direct?.manifestPath || relative(root, path.join(path.dirname(file), 'package.json')),
+        lockfilePath: rel,
+        dependencyPaths: pathsByRecord.get(record) ? [...pathsByRecord.get(record)!].sort() : [record.name],
+      });
+    }
   } catch (error: unknown) {
     errors.push({ file: rel, code: 'INVALID_MANIFEST', message: `Unable to parse yarn lockfile: ${errorMessage(error)}` });
   }
@@ -685,6 +782,7 @@ function parseRequirements(
   visited: Set<string> = new Set()
 ): void {
   const rel = relative(root, file);
+  const rootRequirementsFile = visited.size === 0;
   let canonicalFile: string;
   try {
     canonicalFile = fs.realpathSync(file);
@@ -757,6 +855,13 @@ function parseRequirements(
       file: rel,
       code: 'INVALID_MANIFEST',
       message: `Unable to parse requirements.txt: ${errorMessage(error)}`,
+    });
+  }
+  if (rootRequirementsFile) {
+    errors.push({
+      file: rel,
+      code: 'UNSUPPORTED_FORMAT',
+      message: 'requirements.txt inventory is direct-only; transitive coverage is incomplete without a lock export',
     });
   }
 }
@@ -1091,14 +1196,26 @@ function ecosystemForInventoryFile(file: string): PackageEcosystem | undefined {
     case 'go.mod':
       return 'go';
     case 'Gemfile.lock':
+    case 'Gemfile':
       return 'ruby';
     case 'Cargo.lock':
+    case 'Cargo.toml':
       return 'cargo';
     case 'pom.xml':
       return 'maven';
     default:
       return undefined;
   }
+}
+
+function hasAncestorLock(root: string, manifest: string, lockName: string, inventoryFiles: ReadonlySet<string>): boolean {
+  let directory = path.dirname(manifest);
+  while (isWithinRoot(root, directory)) {
+    if (inventoryFiles.has(path.join(directory, lockName))) {return true;}
+    if (directory === root) {break;}
+    directory = path.dirname(directory);
+  }
+  return false;
 }
 
 export function filterPackageInventory(inventory: PackageInventory, filter: PackageInventoryFilter): PackageInventory {
@@ -1132,6 +1249,7 @@ export function collectPackageInventory(repoPath: string = process.cwd()): Packa
     }
   });
   const names = new Set(files.map(file => relative(root, file)));
+  const inventoryFiles = new Set(files);
 
   for (const file of files) {
     const name = path.basename(file);
@@ -1142,6 +1260,12 @@ export function collectPackageInventory(repoPath: string = process.cwd()): Packa
     else if (name === 'go.mod') {parseGoMod(root, file, coordinates, errors);}
     else if (name === 'Cargo.lock') {parseCargoLock(root, file, coordinates, errors);}
     else if (name === 'Gemfile.lock') {parseGemfileLock(root, file, coordinates, errors);}
+    else if (name === 'Cargo.toml' && !hasAncestorLock(root, file, 'Cargo.lock', inventoryFiles)) {
+      errors.push({file: relative(root, file), code: 'UNSUPPORTED_FORMAT', message: 'Cargo.toml has no adjacent or ancestor Cargo.lock; dependency coverage is incomplete'});
+    }
+    else if (name === 'Gemfile' && !hasAncestorLock(root, file, 'Gemfile.lock', inventoryFiles)) {
+      errors.push({file: relative(root, file), code: 'UNSUPPORTED_FORMAT', message: 'Gemfile has no adjacent or ancestor Gemfile.lock; dependency coverage is incomplete'});
+    }
     else if (name === 'pom.xml') {parsePom(root, file, coordinates, errors);}
   }
   for (const file of files.filter(file => path.basename(file) === 'package.json')) {

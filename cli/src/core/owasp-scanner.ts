@@ -10,9 +10,9 @@ export class OwaspScanner {
   /**
    * Scan repository for OWASP Top 10 vulnerabilities
    */
-  async scan(repoPath: string = process.cwd()): Promise<Finding[]> {
+  async scan(repoPath: string = process.cwd(), onSkippedInput: () => void = () => {}): Promise<Finding[]> {
     const findings: Finding[] = [];
-    const files = this.findCodeFiles(repoPath);
+    const files = this.findCodeFiles(repoPath, onSkippedInput);
 
     for (const file of files) {
       try {
@@ -20,7 +20,7 @@ export class OwaspScanner {
         const language = this.detectLanguage(file);
         findings.push(...this.scanFile(file, content, language));
       } catch {
-        // Skip files that can't be read
+        onSkippedInput();
       }
     }
 
@@ -30,7 +30,7 @@ export class OwaspScanner {
   /**
    * Find code files to scan
    */
-  private findCodeFiles(dir: string): string[] {
+  private findCodeFiles(dir: string, onSkippedInput: () => void): string[] {
     const files: string[] = [];
 
     const search = (currentDir: string, depth: number) => {
@@ -42,7 +42,9 @@ export class OwaspScanner {
           if (item === 'node_modules' || item === '.git' || item === 'vendor') {continue;}
 
           const fullPath = path.join(currentDir, item);
-          const stat = fs.statSync(fullPath);
+          const stat = fs.lstatSync(fullPath);
+
+          if (stat.isSymbolicLink()) {continue;}
 
           if (stat.isDirectory()) {
             search(fullPath, depth + 1);
@@ -51,7 +53,7 @@ export class OwaspScanner {
           }
         }
       } catch {
-        // Skip
+        onSkippedInput();
       }
     };
 

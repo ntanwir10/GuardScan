@@ -7,17 +7,17 @@ export class IaCScanner {
   /**
    * Scan Infrastructure as Code files
    */
-  async scan(repoPath: string = process.cwd()): Promise<Finding[]> {
+  async scan(repoPath: string = process.cwd(), onSkippedInput: () => void = () => {}): Promise<Finding[]> {
     const findings: Finding[] = [];
 
     // Scan Terraform files
-    findings.push(...await this.scanTerraform(repoPath));
+    findings.push(...await this.scanTerraform(repoPath, onSkippedInput));
 
     // Scan Kubernetes YAML files
-    findings.push(...await this.scanKubernetes(repoPath));
+    findings.push(...await this.scanKubernetes(repoPath, onSkippedInput));
 
     // Scan Docker Compose files
-    findings.push(...await this.scanDockerCompose(repoPath));
+    findings.push(...await this.scanDockerCompose(repoPath, onSkippedInput));
 
     return findings;
   }
@@ -25,9 +25,9 @@ export class IaCScanner {
   /**
    * Scan Terraform files for security issues
    */
-  private async scanTerraform(repoPath: string): Promise<Finding[]> {
+  private async scanTerraform(repoPath: string, onSkippedInput: () => void): Promise<Finding[]> {
     const findings: Finding[] = [];
-    const tfFiles = this.findFiles(repoPath, /\.tf$/);
+    const tfFiles = this.findFiles(repoPath, /\.tf$/, onSkippedInput);
 
     for (const file of tfFiles) {
       try {
@@ -112,7 +112,7 @@ export class IaCScanner {
           }
         }
       } catch {
-        // Skip files that can't be read
+        onSkippedInput();
       }
     }
 
@@ -122,9 +122,9 @@ export class IaCScanner {
   /**
    * Scan Kubernetes YAML files
    */
-  private async scanKubernetes(repoPath: string): Promise<Finding[]> {
+  private async scanKubernetes(repoPath: string, onSkippedInput: () => void): Promise<Finding[]> {
     const findings: Finding[] = [];
-    const k8sFiles = this.findFiles(repoPath, /\.ya?ml$/);
+    const k8sFiles = this.findFiles(repoPath, /\.ya?ml$/, onSkippedInput);
 
     for (const file of k8sFiles) {
       try {
@@ -140,7 +140,7 @@ export class IaCScanner {
           }
         }
       } catch {
-        // Skip files that can't be parsed
+        onSkippedInput();
       }
     }
 
@@ -264,9 +264,9 @@ export class IaCScanner {
   /**
    * Scan Docker Compose files
    */
-  private async scanDockerCompose(repoPath: string): Promise<Finding[]> {
+  private async scanDockerCompose(repoPath: string, onSkippedInput: () => void): Promise<Finding[]> {
     const findings: Finding[] = [];
-    const composeFiles = this.findFiles(repoPath, /docker-compose.*\.ya?ml$/);
+    const composeFiles = this.findFiles(repoPath, /docker-compose.*\.ya?ml$/, onSkippedInput);
 
     for (const file of composeFiles) {
       try {
@@ -332,7 +332,7 @@ export class IaCScanner {
           }
         }
       } catch {
-        // Skip files that can't be parsed
+        onSkippedInput();
       }
     }
 
@@ -342,7 +342,12 @@ export class IaCScanner {
   /**
    * Find files matching pattern recursively
    */
-  private findFiles(dir: string, pattern: RegExp, maxDepth: number = 5): string[] {
+  private findFiles(
+    dir: string,
+    pattern: RegExp,
+    onSkippedInput: () => void,
+    maxDepth: number = 5
+  ): string[] {
     const files: string[] = [];
 
     const search = (currentDir: string, depth: number) => {
@@ -356,7 +361,9 @@ export class IaCScanner {
           if (item === 'node_modules' || item === '.git' || item === 'vendor') {continue;}
 
           const fullPath = path.join(currentDir, item);
-          const stat = fs.statSync(fullPath);
+          const stat = fs.lstatSync(fullPath);
+
+          if (stat.isSymbolicLink()) {continue;}
 
           if (stat.isDirectory()) {
             search(fullPath, depth + 1);
@@ -365,7 +372,7 @@ export class IaCScanner {
           }
         }
       } catch {
-        // Skip directories that can't be read
+        onSkippedInput();
       }
     };
 

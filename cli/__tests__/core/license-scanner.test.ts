@@ -212,12 +212,15 @@ describe('LicenseScanner inventory and SBOM contracts', () => {
     const document = new LicenseScanner().generateSBOM([
       finding({ package: 'npm-pseudo-license', license: 'UNLICENSED' }),
       finding({ package: 'invalid-expression', license: 'UNLICENSED OR MIT' }),
+      finding({ package: 'invalid-exception', license: 'MIT WITH Apache-2.0' }),
     ], 'cyclonedx', 'fixture');
 
     expect(document.components.find(component => component.name === 'npm-pseudo-license')?.licenses)
       .toEqual([{ license: { name: 'UNLICENSED' } }]);
     expect(document.components.find(component => component.name === 'invalid-expression')?.licenses)
       .toEqual([{ license: { name: 'UNLICENSED OR MIT' } }]);
+    expect(document.components.find(component => component.name === 'invalid-exception')?.licenses)
+      .toEqual([{ license: { name: 'MIT WITH Apache-2.0' } }]);
   });
 
   it('generates a unique SPDX document namespace for each document', () => {
@@ -258,6 +261,7 @@ describe('LicenseScanner inventory and SBOM contracts', () => {
     'MIT WITH',
     'MIT / Apache-2.0',
     'UNLICENSED OR MIT',
+    'MIT WITH Apache-2.0',
   ])('rejects malformed SPDX expression %s', expression => {
     const document = new LicenseScanner().generateSBOM([
       finding({ license: expression }),

@@ -22,7 +22,9 @@ describe('collectPackageInventory', () => {
     expect(inventory.coordinates).toEqual([
       expect.objectContaining({ecosystem: 'pip', name: 'requests', exactVersion: '2.31.0'}),
     ]);
-    expect(inventory.errors).toEqual([]);
+    expect(inventory.errors).toEqual([
+      expect.objectContaining({code: 'UNSUPPORTED_FORMAT', message: expect.stringMatching(/transitive|direct-only/i)}),
+    ]);
   });
 
   it('handles cycles between Python requirement includes once', () => {
@@ -33,7 +35,9 @@ describe('collectPackageInventory', () => {
     const inventory = collectPackageInventory(repository);
 
     expect(inventory.coordinates.map(coordinate => coordinate.name)).toEqual(['base', 'root']);
-    expect(inventory.errors).toEqual([]);
+    expect(inventory.errors).toEqual([
+      expect.objectContaining({code: 'UNSUPPORTED_FORMAT', message: expect.stringMatching(/transitive|direct-only/i)}),
+    ]);
   });
 
   (process.platform === 'win32' ? it.skip : it)('rejects Python requirement symlinks that escape the repository', () => {
@@ -44,13 +48,14 @@ describe('collectPackageInventory', () => {
     const inventory = collectPackageInventory(repository);
 
     expect(inventory.coordinates).toEqual([]);
-    expect(inventory.errors).toEqual([
+    expect(inventory.errors).toEqual(expect.arrayContaining([
       expect.objectContaining({
         file: 'requirements.txt',
         code: 'UNSUPPORTED_FORMAT',
         message: expect.stringMatching(/cannot be resolved within the repository/i),
       }),
-    ]);
+      expect.objectContaining({message: expect.stringMatching(/direct-only|transitive/i)}),
+    ]));
   });
 
   it('does not mark nested npm lock entries as direct', () => {
@@ -236,6 +241,149 @@ describe('collectPackageInventory', () => {
       expect.objectContaining({code: 'UNSUPPORTED_FORMAT', message: expect.stringMatching(/filedep|unsupported source/i)}),
       expect.objectContaining({code: 'UNSUPPORTED_FORMAT', message: expect.stringMatching(/archivedep|unsupported source/i)}),
       expect.objectContaining({code: 'UNSUPPORTED_FORMAT', message: expect.stringMatching(/berrygit|unsupported source/i)}),
+    ]));
+  });
+
+  it('reports unsupported direct pnpm importer resolutions', () => {
+    fs.writeFileSync(path.join(repository, 'package.json'), JSON.stringify({name: 'root'}));
+    fs.writeFileSync(path.join(repository, 'pnpm-lock.yaml'), [
+      'lockfileVersion: 9.0',
+      'importers:',
+      '  .:',
+      '    dependencies:',
+      '      registry:',
+      '        specifier: ^1.0.0',
+      '        version: 1.2.0',
+      '      gitdep:',
+      '        specifier: git+https://github.com/example/gitdep.git',
+      '        version: git+https://github.com/example/gitdep.git#abc',
+      '      filedep:',
+      '        specifier: file:../filedep',
+      '        version: file:../filedep',
+      '      urldep:',
+      '        specifier: https://example.test/urldep.tgz',
+      '        version: https://example.test/urldep.tgz',
+      'packages:',
+      '  registry@1.2.0: {}',
+    ].join('\n'));
+
+    const inventory = collectPackageInventory(repository);
+
+    expect(inventory.coordinates).toEqual(expect.arrayContaining([
+      expect.objectContaining({name: 'registry', exactVersion: '1.2.0', direct: true}),
+    ]));
+    expect(inventory.errors).toEqual(expect.arrayContaining([
+      expect.objectContaining({code: 'UNSUPPORTED_FORMAT', message: expect.stringMatching(/gitdep|unsupported/i)}),
+      expect.objectContaining({code: 'UNSUPPORTED_FORMAT', message: expect.stringMatching(/filedep|unsupported/i)}),
+      expect.objectContaining({code: 'UNSUPPORTED_FORMAT', message: expect.stringMatching(/urldep|unsupported/i)}),
+    ]));
+  });
+
+  it('preserves deterministic transitive dependency paths for pnpm and Yarn cycles', () => {
+    fs.writeFileSync(path.join(repository, 'package.json'), JSON.stringify({dependencies: {parent: '^1.0.0'}}));
+    fs.writeFileSync(path.join(repository, 'pnpm-lock.yaml'), [
+      'lockfileVersion: 9.0',
+      'importers:',
+      '  .:',
+      '    dependencies:',
+      '      parent:',
+      '        specifier: ^1.0.0',
+      '        version: 1.0.0',
+      'packages:',
+      '  parent@1.0.0:',
+      '    dependencies:',
+      '      child: 2.0.0',
+      '  child@2.0.0:',
+      '    dependencies:',
+      '      parent: 1.0.0',
+      'snapshots:',
+      '  parent@1.0.0:',
+      '    dependencies:',
+      '      child: 2.0.0',
+      '  child@2.0.0:',
+      '    dependencies:',
+      '      parent: 1.0.0',
+    ].join('\n'));
+
+    const inventory = collectPackageInventory(repository);
+
+    expect(inventory.coordinates).toEqual(expect.arrayContaining([
+      expect.objectContaining({name: 'parent', dependencyPaths: expect.arrayContaining(['parent', 'parent > child > parent'])}),
+      expect.objectContaining({name: 'child', dependencyPaths: expect.arrayContaining(['parent > child'])}),
+    ]));
+    expect(inventory.coordinates.find(coordinate => coordinate.name === 'parent')?.dependencyPaths).toEqual([
+      'parent', 'parent > child > parent',
+    ]);
+  });
+
+  it('preserves Yarn classic dependency paths through transitive records', () => {
+    fs.writeFileSync(path.join(repository, 'package.json'), JSON.stringify({dependencies: {parent: '^1.0.0'}}));
+    fs.writeFileSync(path.join(repository, 'yarn.lock'), [
+      'parent@^1.0.0:',
+      '  version "1.0.0"',
+      '  resolved "https://registry.yarnpkg.com/parent/-/parent-1.0.0.tgz"',
+      '  dependencies:',
+      '    child "^2.0.0"',
+      'child@^2.0.0:',
+      '  version "2.0.0"',
+      '  resolved "https://registry.yarnpkg.com/child/-/child-2.0.0.tgz"',
+    ].join('\n'));
+
+    const inventory = collectPackageInventory(repository);
+
+    expect(inventory.coordinates).toEqual(expect.arrayContaining([
+      expect.objectContaining({name: 'parent', dependencyPaths: ['parent']}),
+      expect.objectContaining({name: 'child', dependencyPaths: ['parent > child']}),
+    ]));
+  });
+
+  it('matches quoted scoped Yarn Berry dependencies to the requested version', () => {
+    fs.writeFileSync(path.join(repository, 'package.json'), JSON.stringify({dependencies: {parent: '^1.0.0'}}));
+    fs.writeFileSync(path.join(repository, 'yarn.lock'), [
+      '__metadata:',
+      '  version: 8',
+      '"parent@npm:^1.0.0":',
+      '  version: 1.0.0',
+      '  resolution: "parent@npm:1.0.0"',
+      '  dependencies:',
+      '    "@scope/child": "npm:^2.0.0"',
+      '"@scope/child@npm:^1.0.0":',
+      '  version: 1.5.0',
+      '  resolution: "@scope/child@npm:1.5.0"',
+      '"@scope/child@npm:^2.0.0":',
+      '  version: 2.5.0',
+      '  resolution: "@scope/child@npm:2.5.0"',
+    ].join('\n'));
+
+    const inventory = collectPackageInventory(repository);
+
+    expect(inventory.coordinates.find(coordinate => coordinate.name === '@scope/child' && coordinate.exactVersion === '1.5.0')?.dependencyPaths)
+      .toEqual(['@scope/child']);
+    expect(inventory.coordinates.find(coordinate => coordinate.name === '@scope/child' && coordinate.exactVersion === '2.5.0')?.dependencyPaths)
+      .toEqual(['parent > @scope/child']);
+  });
+
+  it('marks plain pinned requirements as direct-only inventory', () => {
+    fs.writeFileSync(path.join(repository, 'requirements.txt'), 'requests==2.31.0\n');
+
+    const inventory = collectPackageInventory(repository);
+
+    expect(inventory.coordinates).toEqual([expect.objectContaining({name: 'requests', direct: true})]);
+    expect(inventory.errors).toEqual([
+      expect.objectContaining({file: 'requirements.txt', code: 'UNSUPPORTED_FORMAT', message: expect.stringMatching(/transitive|direct-only/i)}),
+    ]);
+  });
+
+  it('reports Cargo and Gemfile manifests without adjacent or ancestor locks', () => {
+    fs.writeFileSync(path.join(repository, 'Cargo.toml'), '[package]\nname = "fixture"\nversion = "1.0.0"\n');
+    fs.writeFileSync(path.join(repository, 'Gemfile'), "source 'https://rubygems.org'\ngem 'rack'\n");
+
+    const inventory = collectPackageInventory(repository);
+
+    expect(inventory.coordinates).toEqual([]);
+    expect(inventory.errors).toEqual(expect.arrayContaining([
+      expect.objectContaining({file: 'Cargo.toml', code: 'UNSUPPORTED_FORMAT', message: expect.stringMatching(/lock/i)}),
+      expect.objectContaining({file: 'Gemfile', code: 'UNSUPPORTED_FORMAT', message: expect.stringMatching(/lock/i)}),
     ]));
   });
 

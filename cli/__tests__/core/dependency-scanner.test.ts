@@ -244,9 +244,13 @@ describe('DependencyScanner OSV integration', () => {
         direct: true,
       }),
     ]));
-    expect(inventory.errors).not.toEqual(expect.arrayContaining([
-      expect.objectContaining({ file: 'requirements.txt' }),
-    ]));
+    expect(inventory.errors).toEqual([
+      expect.objectContaining({
+        file: 'requirements.txt',
+        code: 'UNSUPPORTED_FORMAT',
+        message: expect.stringMatching(/direct-only|transitive/i),
+      }),
+    ]);
   });
 
   it.each([
@@ -593,6 +597,60 @@ describe('DependencyScanner OSV integration', () => {
     });
     expect(refreshed[0].dataFreshness).toBe('live');
     expect(fetchImpl).toHaveBeenCalledTimes(4);
+  });
+
+  it('does not replace a broader snapshot during filtered online scans', async () => {
+    const scanner = new DependencyScanner();
+    const store = new VulnerabilitySnapshotStore(cache);
+    const coordinates = [
+      {ecosystem: 'npm' as const, osvEcosystem: 'npm' as const, name: 'lodash', exactVersion: '4.17.20', scope: 'runtime' as const, direct: true, manifestPath: 'package.json', lockfilePath: 'package-lock.json', dependencyPaths: ['lodash']},
+      {ecosystem: 'pip' as const, osvEcosystem: 'PyPI' as const, name: 'requests', exactVersion: '2.31.0', scope: 'runtime' as const, direct: true, manifestPath: 'requirements.txt', lockfilePath: 'requirements.txt', dependencyPaths: ['requests']},
+    ];
+    const inventory = {repository, coordinates, manifests: ['package-lock.json', 'requirements.txt'], errors: [], digest: 'full'};
+    const query = jest.fn(async (requested: typeof coordinates) => requested.map(coordinate => ({
+      coordinate,
+      vulnerability: advisory(`CVE-${coordinate.name}`, []),
+    })));
+    const client = {endpoint: 'https://api.osv.dev', query} as unknown as OsvClient;
+
+    await scanner.scan(repository, {inventory, client, snapshotStore: store, enrichKnownExploited: false});
+    await scanner.scan(repository, {inventory, ecosystems: ['npm'], client, snapshotStore: store, enrichKnownExploited: false});
+
+    const offline = await scanner.scan(repository, {inventory, offline: true, client, snapshotStore: store, enrichKnownExploited: false});
+
+    expect(query).toHaveBeenCalledTimes(2);
+    expect(offline[0]).toMatchObject({dataFreshness: 'fresh-cache', status: 'complete'});
+    const snapshotDirectory = fs.readdirSync(cache).find(value => fs.statSync(path.join(cache, value)).isDirectory());
+    const snapshot = JSON.parse(fs.readFileSync(path.join(cache, snapshotDirectory!, 'snapshot.json'), 'utf8'));
+    expect(snapshot.coordinates).toHaveLength(2);
+  });
+
+  it('caches a filtered scan when no broader snapshot exists', async () => {
+    const scanner = new DependencyScanner();
+    const store = new VulnerabilitySnapshotStore(cache);
+    const coordinates = [
+      {ecosystem: 'npm' as const, osvEcosystem: 'npm' as const, name: 'lodash', exactVersion: '4.17.20', scope: 'runtime' as const, direct: true, manifestPath: 'package.json', lockfilePath: 'package-lock.json', dependencyPaths: ['lodash']},
+      {ecosystem: 'pip' as const, osvEcosystem: 'PyPI' as const, name: 'requests', exactVersion: '2.31.0', scope: 'runtime' as const, direct: true, manifestPath: 'requirements.txt', lockfilePath: 'requirements.txt', dependencyPaths: ['requests']},
+    ];
+    const inventory = {repository, coordinates, manifests: ['package-lock.json', 'requirements.txt'], errors: [], digest: 'full'};
+    const query = jest.fn(async (requested: typeof coordinates) => requested.map(coordinate => ({
+      coordinate,
+      vulnerability: advisory(`CVE-${coordinate.name}`, []),
+    })));
+    const client = {endpoint: 'https://api.osv.dev', query} as unknown as OsvClient;
+
+    await scanner.scan(repository, {inventory, ecosystems: ['npm'], client, snapshotStore: store, enrichKnownExploited: false});
+    const offline = await scanner.scan(repository, {
+      inventory,
+      ecosystems: ['npm'],
+      offline: true,
+      client,
+      snapshotStore: store,
+      enrichKnownExploited: false,
+    });
+
+    expect(query).toHaveBeenCalledTimes(1);
+    expect(offline[0]).toMatchObject({dataFreshness: 'fresh-cache', status: 'complete'});
   });
 
   it('fails closed when offline coverage is missing or mismatches the inventory', async () => {

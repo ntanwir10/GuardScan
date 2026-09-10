@@ -301,6 +301,8 @@ function directConfig(options: ConfigOptions): void {
       // across a provider switch where they could target the wrong service.
       config.apiEndpoint = undefined;
       config.allowRemoteSelfHosted = false;
+      config.apiKey = undefined;
+      config.model = undefined;
     }
     logger.debug("Provider updated", { provider: options.provider });
     console.log(chalk.green(`✓ Provider set to: ${options.provider}`));
@@ -353,8 +355,18 @@ function directConfig(options: ConfigOptions): void {
       )
     );
     if (!telemetryEnabled) {
-      const cleared = createTelemetryManager(config).clear();
-      console.log(chalk.green(`✓ Cleared ${cleared} queued telemetry event(s)`));
+      // Persist consent withdrawal before maintenance cleanup so a lock or
+      // filesystem failure cannot leave telemetry enabled.
+      configManager.save(config);
+      try {
+        const cleared = createTelemetryManager(config).clear();
+        console.log(chalk.green(`✓ Cleared ${cleared} queued telemetry event(s)`));
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.error(chalk.yellow(
+          `⚠ Telemetry was disabled, but queued events could not be cleared (${message}). Retry with "guardscan config --telemetry false".`
+        ));
+      }
     }
   }
 
@@ -450,12 +462,20 @@ async function interactiveConfig(): Promise<void> {
     await configureModeSettings(config, currentMode);
   }
 
-  if (telemetryWasEnabled && !config.telemetryEnabled) {
-    const cleared = createTelemetryManager(config).clear();
-    // eslint-disable-next-line no-console
-    console.log(chalk.green(`\n✓ Cleared ${cleared} queued telemetry event(s)`));
-  }
   configManager.save(config);
+  if (telemetryWasEnabled && !config.telemetryEnabled) {
+    try {
+      const cleared = createTelemetryManager(config).clear();
+      // eslint-disable-next-line no-console
+      console.log(chalk.green(`\n✓ Cleared ${cleared} queued telemetry event(s)`));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      // eslint-disable-next-line no-console
+      console.error(chalk.yellow(
+        `\n⚠ Telemetry was disabled, but queued events could not be cleared (${message}). Retry with "guardscan config --telemetry false".`
+      ));
+    }
+  }
   console.log(chalk.green("\n✓ Configuration saved\n"));
 }
 

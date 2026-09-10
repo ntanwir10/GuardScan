@@ -91,7 +91,7 @@ export function createVulnerabilityCommand(scanner: DependencyScanner = dependen
           enrichKnownExploited: config.vulnerabilities?.enrichKnownExploited !== false,
           kevMaxCacheAgeDays: snapshotMaxAgeDays,
         });
-        const document = vulnerabilityDocument(absoluteRepository, results, offline, allowPartial);
+        const document = vulnerabilityDocument('.', results, offline, allowPartial);
         const rendered = parsed.format === 'json'
           ? JSON.stringify(document, null, 2)
           : parsed.format === 'sarif'

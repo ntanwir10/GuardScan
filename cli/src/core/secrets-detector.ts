@@ -17,7 +17,7 @@ export class SecretsDetector {
   /**
    * Detect secrets in files
    */
-  async detectInFiles(files: string[]): Promise<SecretFinding[]> {
+  async detectInFiles(files: string[], onSkippedInput: () => void = () => {}): Promise<SecretFinding[]> {
     const findings: SecretFinding[] = [];
 
     for (const file of files) {
@@ -26,7 +26,7 @@ export class SecretsDetector {
         const fileFindings = this.scanContent(file, content);
         findings.push(...fileFindings);
       } catch {
-        // Skip files that can't be read
+        onSkippedInput();
       }
     }
 
@@ -36,7 +36,10 @@ export class SecretsDetector {
   /**
    * Scan git history for secrets
    */
-  async scanGitHistory(repoPath: string = process.cwd()): Promise<SecretFinding[]> {
+  async scanGitHistory(
+    repoPath: string = process.cwd(),
+    onSkippedInput: () => void = () => {}
+  ): Promise<SecretFinding[]> {
     const findings: SecretFinding[] = [];
 
     try {
@@ -57,7 +60,7 @@ export class SecretsDetector {
           const commitFindings = this.scanContent(`commit:${commit.substring(0, 8)}`, diff);
           findings.push(...commitFindings);
         } catch {
-          // Skip commits that error
+          onSkippedInput();
         }
       }
     } catch {

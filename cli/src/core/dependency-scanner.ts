@@ -610,7 +610,11 @@ export class DependencyScanner {
     if (!Number.isFinite(maxSnapshotAgeDays) || maxSnapshotAgeDays < 0) {
       throw new DependencyScanError('INVALID_OPTIONS', 'Vulnerability snapshot age must be a non-negative number of days');
     }
-    const inventory = filterPackageInventory(options.inventory || collectPackageInventory(repoPath), {
+    const unfilteredInventory = filterPackageInventory(
+      options.inventory || collectPackageInventory(repoPath),
+      {}
+    );
+    const inventory = filterPackageInventory(unfilteredInventory, {
       ecosystems: options.ecosystems,
       scope: options.scope,
     });
@@ -690,7 +694,15 @@ export class DependencyScanner {
             freshness = 'unavailable';
           }
         }
-        if (freshness === 'live' && options.cache !== false) {
+        const filteredIdentity = options.ecosystems !== undefined ||
+          (options.scope !== undefined && options.scope !== 'all');
+        const broaderSnapshot = filteredIdentity && unfilteredInventory.digest !== inventory.digest
+          ? store.status(unfilteredInventory, maxSnapshotAgeDays, client.endpoint)
+          : undefined;
+        const preserveBroaderSnapshot = broaderSnapshot?.exists === true &&
+          broaderSnapshot.inventoryMatches &&
+          broaderSnapshot.sourceMatches !== false;
+        if (freshness === 'live' && options.cache !== false && !preserveBroaderSnapshot) {
           try {
             store.save(inventory, matches, client.endpoint);
           } catch (error: unknown) {

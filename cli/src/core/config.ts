@@ -604,10 +604,15 @@ function normalizeCircuitBreaker(value: unknown): NonNullable<Config['circuitBre
 function normalizeRateLimit(value: unknown): NonNullable<Config['rateLimit']> {
   const section = sectionRecord(value, 'rateLimit', ['enabled', 'maxTokens', 'refillRate']);
   const defaults = requireDefaults(DEFAULT_ENHANCED_CONFIG.rateLimit, 'rateLimit');
+  const enabled = optionalValue(section, 'enabled', isBoolean, defaults.enabled, 'configuration.rateLimit');
+  const refillRate = optionalValue(section, 'refillRate', isNonNegativeInteger, defaults.refillRate, 'configuration.rateLimit');
+  if (enabled && refillRate === 0) {
+    throw new Error('configuration.rateLimit.refillRate must be greater than zero when rate limiting is enabled');
+  }
   return {
-    enabled: optionalValue(section, 'enabled', isBoolean, defaults.enabled, 'configuration.rateLimit'),
+    enabled,
     maxTokens: optionalValue(section, 'maxTokens', isNonNegativeInteger, defaults.maxTokens, 'configuration.rateLimit'),
-    refillRate: optionalValue(section, 'refillRate', isNonNegativeInteger, defaults.refillRate, 'configuration.rateLimit'),
+    refillRate,
   };
 }
 

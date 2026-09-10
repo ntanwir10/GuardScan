@@ -126,7 +126,7 @@ export interface CycloneDx17Component {
 }
 
 const PACKAGE_VERSION = packageManifest.version;
-const SPDX_IDENTIFIERS = loadSpdxIdentifiers();
+const SPDX_IDENTIFIERS = loadSpdxIdentifierRegistry();
 
 export class LicenseScanner {
   // License compatibility matrix
@@ -998,21 +998,36 @@ function stableIdentifier(value: string): string {
 }
 
 function isSimpleSpdxIdentifier(value: string): boolean {
-  return SPDX_IDENTIFIERS.has(value);
+  return SPDX_IDENTIFIERS.licenses.has(value);
 }
 
-function loadSpdxIdentifiers(): ReadonlySet<string> {
+function loadSpdxIdentifierRegistry(): {
+  licenses: ReadonlySet<string>;
+  exceptions: ReadonlySet<string>;
+} {
   try {
     const schema = JSON.parse(fs.readFileSync(path.resolve(__dirname, '../../schemas/spdx.schema.json'), 'utf8')) as {
       enum?: unknown;
     };
     if (Array.isArray(schema.enum)) {
-      return new Set(schema.enum.filter((value): value is string => typeof value === 'string'));
+      const identifiers = schema.enum.filter((value): value is string => typeof value === 'string');
+      // CycloneDX appends the alphabetized SPDX exception registry after the
+      // alphabetized license registry in this bundled schema.
+      const firstException = identifiers.indexOf('389-exception');
+      if (firstException > 0) {
+        return {
+          licenses: new Set(identifiers.slice(0, firstException)),
+          exceptions: new Set(identifiers.slice(firstException)),
+        };
+      }
     }
   } catch {
     // Fall back to common identifiers if an installation omits the bundled schema.
   }
-  return new Set(['Apache-2.0', 'BSD-2-Clause', 'BSD-3-Clause', 'ISC', 'MIT', 'MPL-2.0']);
+  return {
+    licenses: new Set(['Apache-2.0', 'BSD-2-Clause', 'BSD-3-Clause', 'ISC', 'MIT', 'MPL-2.0']),
+    exceptions: new Set(['Classpath-exception-2.0', 'LLVM-exception']),
+  };
 }
 
 function cycloneDxLicense(value: string): { license: { id?: string; name?: string } } | { expression: string } {
@@ -1050,17 +1065,19 @@ function isSpdxExpression(value: string): boolean {
   if (tokens.length === 0) {return false;}
 
   let index = 0;
-  const isIdentifier = (token: string | undefined): boolean =>
+  const isLicenseIdentifier = (token: string | undefined): boolean =>
     token !== undefined && (
-      SPDX_IDENTIFIERS.has(token) ||
+      SPDX_IDENTIFIERS.licenses.has(token) ||
       /^(?:DocumentRef-[A-Za-z0-9.-]+:)?LicenseRef-[A-Za-z0-9.-]+$/.test(token)
     );
+  const isExceptionIdentifier = (token: string | undefined): boolean =>
+    token !== undefined && SPDX_IDENTIFIERS.exceptions.has(token);
   const parseLicense = (): boolean => {
-    if (!isIdentifier(tokens[index])) {return false;}
+    if (!isLicenseIdentifier(tokens[index])) {return false;}
     index += 1;
     if (tokens[index] === 'WITH') {
       index += 1;
-      if (!isIdentifier(tokens[index])) {return false;}
+      if (!isExceptionIdentifier(tokens[index])) {return false;}
       index += 1;
     }
     return true;

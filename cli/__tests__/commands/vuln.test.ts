@@ -125,4 +125,17 @@ describe('vuln database commands', () => {
     expect(output.packages).toBe(1);
     expect(output.inventoryDigest).toBe(runtimeInventory.digest);
   });
+
+  it('uses a sanitized repository identifier in JSON output', async () => {
+    const scanner = {
+      scan: jest.fn<DependencyScanner['scan']>().mockResolvedValue([scanResult()]),
+    } as unknown as DependencyScanner;
+    const command = createVulnerabilityCommand(scanner);
+
+    await command.parseAsync(['/private/user-sensitive/repository', '--format', 'json'], { from: 'user' });
+
+    const output = JSON.parse(getOutput(logSpy));
+    expect(output.run.repository).toBe('.');
+    expect(JSON.stringify(output)).not.toContain('/private/user-sensitive/repository');
+  });
 });

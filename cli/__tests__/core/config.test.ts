@@ -437,6 +437,20 @@ describe('parseConfig', () => {
       .toMatchObject({ warningThreshold: 1 });
   });
 
+  it('rejects enabled rate limits with zero refill rate', () => {
+    expect(() => parseConfig({
+      provider: 'none',
+      rateLimit: { enabled: true, refillRate: 0 },
+    })).toThrow('configuration.rateLimit.refillRate');
+  });
+
+  it('allows zero refill rate when rate limiting is disabled', () => {
+    expect(parseConfig({
+      provider: 'none',
+      rateLimit: { enabled: false, refillRate: 0 },
+    }).rateLimit).toMatchObject({ enabled: false, refillRate: 0 });
+  });
+
   it.each([
     [{ vulnerabilities: { snapshotMaxAgeDays: 1.5 } }, 'snapshotMaxAgeDays'],
     [{ retry: { maxRetries: 1.5 } }, 'maxRetries'],
