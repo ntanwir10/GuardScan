@@ -100,6 +100,29 @@ describe('TestRunner discovery and empty-suite behavior', () => {
     );
   });
 
+  it('preserves a nonzero Jest exit when its JSON contains only passing assertions', async () => {
+    fs.writeFileSync(path.join(repository, 'package.json'), JSON.stringify({
+      scripts: { test: 'jest' },
+      devDependencies: { jest: '^29.0.0' },
+    }));
+    mockedRunProcess.mockImplementation((_command, args) => {
+      const reportIndex = args.indexOf('--outputFile');
+      fs.writeFileSync(args[reportIndex + 1], JSON.stringify({
+        success: false,
+        testResults: [{
+          name: 'fixture.test.js',
+          status: 'passed',
+          assertionResults: [{status: 'passed', title: 'fixture'}],
+        }],
+      }));
+      return processResult(1, '', 'Jest: coverage threshold not met');
+    });
+
+    await expect(new TestRunner().runTests(repository)).rejects.toThrow(
+      /exited 1|coverage threshold|unsuccessful/i
+    );
+  });
+
   it('preserves later framework reports when partial execution is allowed', async () => {
     fs.writeFileSync(path.join(repository, 'package.json'), JSON.stringify({
       scripts: { test: 'jest' },

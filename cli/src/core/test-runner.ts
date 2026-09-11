@@ -46,6 +46,7 @@ interface JestSuiteReport {
 }
 
 interface JestJsonReport {
+  success?: boolean;
   startTime?: number;
   endTime?: number;
   testResults?: JestSuiteReport[];
@@ -239,6 +240,13 @@ export class TestRunner {
             file: testFile.name,
           });
         }
+      }
+
+      if ((processResult.status !== 0 || result.success === false) && failed === 0) {
+        const detail = `${processResult.stderr}\n${processResult.stdout}`.trim().replace(/\s+/g, ' ').slice(0, 300);
+        throw new Error(
+          `Jest exited ${processResult.status} despite reporting no failed assertions${detail ? `: ${detail}` : ''}`
+        );
       }
 
       return {

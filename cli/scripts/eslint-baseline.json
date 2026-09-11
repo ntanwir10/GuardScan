@@ -401,6 +401,6 @@
   },
   "src/utils/version.ts": {
     "errors": 14,
-    "warnings": 8
+    "warnings": 0
   }
 }

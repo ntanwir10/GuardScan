@@ -32,6 +32,44 @@ export interface LinterReport {
 
 export class LinterIntegration {
   /**
+   * Whether the repository explicitly opts into a linter that runAll attempts.
+   * This is separate from executable discovery so a missing tool cannot be
+   * mistaken for a successful, empty lint run.
+   */
+  hasConfiguredLinter(repoPath: string): boolean {
+    if (this.hasESLint(repoPath) || fs.existsSync(path.join(repoPath, 'go.mod'))) {return true;}
+    const exists = (...names: string[]): boolean => names.some(name => fs.existsSync(path.join(repoPath, name)));
+    if (exists('.flake8', '.pylintrc', 'pylintrc', '.golangci.yml', '.golangci.yaml',
+      '.golangci.toml', '.golangci.json', '.rubocop.yml', '.rubocop.yaml',
+      'phpcs.xml', 'phpcs.xml.dist', '.phpcs.xml', '.phpcs.xml.dist')) {return true;}
+    const contains = (name: string, pattern: RegExp): boolean => {
+      const file = path.join(repoPath, name);
+      if (!fs.existsSync(file)) {return false;}
+      try {return pattern.test(fs.readFileSync(file, 'utf8'));}
+      catch {return false;}
+    };
+    if (contains('setup.cfg', /^\s*\[(?:flake8|pylint)/mi) ||
+      contains('tox.ini', /^\s*\[flake8\]/mi) ||
+      contains('pyproject.toml', /^\s*\[tool\.(?:flake8|pylint)(?:\.|\])/mi) ||
+      contains('Gemfile', /\bgem\s+['"]rubocop(?:['"]|[-_])/i)) {return true;}
+    const composerPath = path.join(repoPath, 'composer.json');
+    if (fs.existsSync(composerPath)) {
+      try {
+        const composer = JSON.parse(fs.readFileSync(composerPath, 'utf8')) as {
+          require?: Record<string, unknown>;
+          'require-dev'?: Record<string, unknown>;
+        };
+        if (composer.require?.['squizlabs/php_codesniffer'] || composer['require-dev']?.['squizlabs/php_codesniffer']) {
+          return true;
+        }
+      } catch {
+        // Other validation surfaces report malformed composer manifests.
+      }
+    }
+    return false;
+  }
+
+  /**
    * Run all available linters
    */
   async runAll(

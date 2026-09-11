@@ -92,6 +92,35 @@ describe('runQualityAnalysis partial tool execution', () => {
     });
   });
 
+  it.each([
+    ['Flake8', '.flake8', '[flake8]\nmax-line-length = 100\n'],
+    ['Pylint', '.pylintrc', '[MAIN]\n'],
+    ['Go', 'go.mod', 'module example.test/fixture\ngo 1.22\n'],
+    ['golangci-lint', '.golangci.yml', 'linters:\n  enable:\n    - govet\n'],
+    ['Rubocop', '.rubocop.yml', 'AllCops:\n  NewCops: enable\n'],
+    ['PHP_CodeSniffer', 'phpcs.xml', '<ruleset name="fixture" />\n'],
+  ])('fails closed when configured %s produces no report', async (_tool, configFile, contents) => {
+    fs.writeFileSync(path.join(repository, 'package.json'), JSON.stringify({name: 'fixture'}));
+    fs.writeFileSync(path.join(repository, configFile), contents);
+    jest.spyOn(testRunner, 'runTests').mockResolvedValue([]);
+    jest.spyOn(linterIntegration, 'runAll').mockResolvedValue([]);
+    jest.spyOn(codeMetricsAnalyzer, 'analyze').mockResolvedValue([]);
+    jest.spyOn(codeSmellDetector, 'detect').mockResolvedValue([]);
+
+    const quality = await runQualityAnalysis(repository, {}, {
+      offline: false,
+      runProjectCode: true,
+      isolateProjectNetwork: false,
+      includeCve: false,
+      allowPartial: false,
+    });
+
+    expect(quality.checks.lint).toMatchObject({
+      status: 'failed',
+      error: {code: 'TOOL_OUTPUT_UNAVAILABLE'},
+    });
+  });
+
   it('honors partial mode for retained local scanner failures', () => {
     const security: ScanEngineResult = {
       runId: 'fixture',

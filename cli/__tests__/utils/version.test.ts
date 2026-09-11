@@ -17,6 +17,7 @@ describe("version update checks", () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    mockedAxios.get.mockReset();
     delete process.env.GUARDSCAN_NO_TELEMETRY;
     delete process.env.GUARDSCAN_OFFLINE;
     guardScanHome = fs.mkdtempSync(path.join(os.tmpdir(), "guardscan-version-"));
@@ -31,6 +32,7 @@ describe("version update checks", () => {
   });
 
   afterEach(() => {
+    jest.restoreAllMocks();
     fs.rmSync(guardScanHome, { recursive: true, force: true });
   });
 
@@ -66,5 +68,16 @@ describe("version update checks", () => {
     await checkForUpdates();
 
     expect(mockedAxios.get).not.toHaveBeenCalled();
+  });
+
+  it("writes update notifications to stderr so machine-readable stdout stays valid", async () => {
+    mockedAxios.get.mockResolvedValue({data: {version: "99.0.0"}});
+    const stdout = jest.spyOn(console, "log").mockImplementation(() => undefined);
+    const stderr = jest.spyOn(console, "error").mockImplementation(() => undefined);
+
+    await checkForUpdates();
+
+    expect(stdout).not.toHaveBeenCalled();
+    expect(stderr).toHaveBeenCalledWith(expect.stringContaining("Update Available"));
   });
 });

@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { collectPackageInventory } from '../../src/core/package-inventory';
+import { collectPackageInventory, filterPackageInventory } from '../../src/core/package-inventory';
 
 describe('collectPackageInventory', () => {
   let repository: string;
@@ -78,6 +78,50 @@ describe('collectPackageInventory', () => {
       expect.objectContaining({name: 'foo', exactVersion: '1.0.0', direct: true}),
       expect.objectContaining({name: 'foo', exactVersion: '2.0.0', direct: false, scope: 'runtime'}),
     ]));
+  });
+
+  it('resolves npm aliases by install name while retaining the registry identity', () => {
+    fs.writeFileSync(path.join(repository, 'package.json'), JSON.stringify({
+      dependencies: {foo: 'npm:lodash@^4.17.0'},
+    }));
+    fs.writeFileSync(path.join(repository, 'package-lock.json'), JSON.stringify({
+      name: 'fixture', lockfileVersion: 3,
+      packages: {
+        '': {dependencies: {foo: 'npm:lodash@^4.17.0'}},
+        'node_modules/foo': {name: 'lodash', version: '4.17.21'},
+      },
+    }));
+
+    const inventory = collectPackageInventory(repository);
+
+    expect(inventory.coordinates).toEqual([
+      expect.objectContaining({
+        name: 'lodash', exactVersion: '4.17.21', direct: true, scope: 'runtime',
+        dependencyPaths: ['lodash@4.17.21'],
+      }),
+    ]);
+    expect(inventory.errors).toEqual([]);
+  });
+
+  it('reconstructs hoisted npm dependency paths from package-lock dependency edges', () => {
+    fs.writeFileSync(path.join(repository, 'package.json'), JSON.stringify({dependencies: {parent: '1.0.0'}}));
+    fs.writeFileSync(path.join(repository, 'package-lock.json'), JSON.stringify({
+      name: 'fixture', lockfileVersion: 3,
+      packages: {
+        '': {dependencies: {parent: '1.0.0'}},
+        'node_modules/parent': {name: 'parent', version: '1.0.0', dependencies: {child: '^2.0.0'}},
+        'node_modules/child': {name: 'child', version: '2.1.0'},
+      },
+    }));
+
+    const inventory = collectPackageInventory(repository);
+
+    expect(inventory.coordinates.find(coordinate => coordinate.name === 'child')).toMatchObject({
+      direct: false,
+      scope: 'runtime',
+      dependencyPaths: ['parent@1.0.0 > child@2.1.0'],
+    });
+    expect(inventory.errors).toEqual([]);
   });
 
   it('rejects non-registry npm lock sources while retaining registry tarballs', () => {
@@ -245,6 +289,91 @@ describe('collectPackageInventory', () => {
     ]);
   });
 
+  it('reports stale direct requirements covered by npm, Yarn, and pnpm locks', () => {
+    const fixtures = ['npm', 'yarn', 'pnpm'];
+    for (const fixture of fixtures) {
+      const directory = path.join(repository, fixture);
+      fs.mkdirSync(directory);
+      fs.writeFileSync(path.join(directory, 'package.json'), JSON.stringify({dependencies: {stale: '^2.0.0'}}));
+    }
+    fs.writeFileSync(path.join(repository, 'npm/package-lock.json'), JSON.stringify({
+      lockfileVersion: 3,
+      packages: {'': {dependencies: {stale: '^1.0.0'}}, 'node_modules/stale': {version: '1.0.0'}},
+    }));
+    fs.writeFileSync(path.join(repository, 'yarn/yarn.lock'), [
+      'stale@^1.0.0:',
+      '  version "1.0.0"',
+    ].join('\n'));
+    fs.writeFileSync(path.join(repository, 'pnpm/pnpm-lock.yaml'), [
+      'lockfileVersion: 9.0',
+      'importers:',
+      '  .:',
+      '    dependencies:',
+      '      stale:',
+      '        specifier: ^1.0.0',
+      '        version: 1.0.0',
+      'packages:',
+      '  stale@1.0.0: {}',
+    ].join('\n'));
+
+    const inventory = collectPackageInventory(repository);
+
+    expect(inventory.errors).toEqual(expect.arrayContaining(fixtures.map(fixture =>
+      expect.objectContaining({
+        file: `${fixture}/package.json`,
+        code: 'UNRESOLVED_VERSION',
+        message: expect.stringMatching(/stale|lock/i),
+      })
+    )));
+  });
+
+  it('accepts shared hoisted resolutions referenced by multiple npm and pnpm workspaces', () => {
+    for (const manager of ['npm', 'pnpm']) {
+      const managerRoot = path.join(repository, manager);
+      fs.mkdirSync(path.join(managerRoot, 'packages/a'), {recursive: true});
+      fs.mkdirSync(path.join(managerRoot, 'packages/b'), {recursive: true});
+      fs.writeFileSync(path.join(managerRoot, 'package.json'), JSON.stringify({
+        name: `${manager}-root`, workspaces: ['packages/*'],
+      }));
+      for (const workspace of ['a', 'b']) {
+        fs.writeFileSync(path.join(managerRoot, `packages/${workspace}/package.json`), JSON.stringify({
+          name: `${manager}-${workspace}`, dependencies: {shared: '^1.0.0'},
+        }));
+      }
+    }
+    fs.writeFileSync(path.join(repository, 'npm/package-lock.json'), JSON.stringify({
+      lockfileVersion: 3,
+      packages: {
+        '': {workspaces: ['packages/*']},
+        'packages/a': {dependencies: {shared: '^1.0.0'}},
+        'packages/b': {dependencies: {shared: '^1.0.0'}},
+        'node_modules/shared': {version: '1.2.0'},
+      },
+    }));
+    fs.writeFileSync(path.join(repository, 'pnpm/pnpm-lock.yaml'), [
+      'lockfileVersion: 9.0',
+      'importers:',
+      '  .: {}',
+      '  packages/a:',
+      '    dependencies:',
+      '      shared:',
+      '        specifier: ^1.0.0',
+      '        version: 1.2.0',
+      '  packages/b:',
+      '    dependencies:',
+      '      shared:',
+      '        specifier: ^1.0.0',
+      '        version: 1.2.0',
+      'packages:',
+      '  shared@1.2.0: {}',
+    ].join('\n'));
+
+    const inventory = collectPackageInventory(repository);
+
+    expect(inventory.coordinates.filter(value => value.name === 'shared')).toHaveLength(2);
+    expect(inventory.errors).toEqual([]);
+  });
+
   it('uses the root Yarn lock for child workspaces without lockless errors or duplicate coordinates', () => {
     fs.writeFileSync(path.join(repository, 'package.json'), JSON.stringify({
       name: 'root', workspaces: ['packages/*'], dependencies: {rootdep: '^1.0.0'},
@@ -277,6 +406,55 @@ describe('collectPackageInventory', () => {
     ]));
     expect(inventory.coordinates.some(coordinate => coordinate.name === 'app')).toBe(false);
     expect(inventory.coordinates.filter(coordinate => coordinate.name === 'workspaceDep')).toHaveLength(1);
+    expect(inventory.errors).toEqual([]);
+  });
+
+  it('validates every workspace manifest sharing one Yarn resolution', () => {
+    fs.writeFileSync(path.join(repository, 'package.json'), JSON.stringify({
+      name: 'root', workspaces: ['packages/*'],
+    }));
+    for (const workspace of ['app', 'worker']) {
+      const directory = path.join(repository, 'packages', workspace);
+      fs.mkdirSync(directory, {recursive: true});
+      fs.writeFileSync(path.join(directory, 'package.json'), JSON.stringify({
+        name: workspace,
+        dependencies: {shared: '^1.0.0'},
+      }));
+    }
+    fs.writeFileSync(path.join(repository, 'yarn.lock'), [
+      'shared@^1.0.0:',
+      '  version "1.2.0"',
+    ].join('\n'));
+
+    const inventory = collectPackageInventory(repository);
+
+    expect(inventory.coordinates).toEqual([
+      expect.objectContaining({name: 'shared', exactVersion: '1.2.0', direct: true}),
+    ]);
+    expect(inventory.errors).toEqual([]);
+  });
+
+  it('does not require registry coordinates for first-party workspace dependencies', () => {
+    fs.writeFileSync(path.join(repository, 'package.json'), JSON.stringify({
+      name: 'root', workspaces: ['packages/*'],
+    }));
+    fs.mkdirSync(path.join(repository, 'packages/app'), {recursive: true});
+    fs.mkdirSync(path.join(repository, 'packages/library'), {recursive: true});
+    fs.writeFileSync(path.join(repository, 'packages/app/package.json'), JSON.stringify({
+      name: 'app', dependencies: {'@fixture/library': 'workspace:*'},
+    }));
+    fs.writeFileSync(path.join(repository, 'packages/library/package.json'), JSON.stringify({
+      name: '@fixture/library', version: '1.0.0',
+    }));
+    fs.writeFileSync(path.join(repository, 'yarn.lock'), [
+      '"@fixture/library@workspace:packages/library":',
+      '  version: 0.0.0-use.local',
+      '  resolution: "@fixture/library@workspace:packages/library"',
+    ].join('\n'));
+
+    const inventory = collectPackageInventory(repository);
+
+    expect(inventory.coordinates).toEqual([]);
     expect(inventory.errors).toEqual([]);
   });
 
@@ -599,6 +777,84 @@ describe('collectPackageInventory', () => {
         'runtimeRoot@1.0.0 > parent@1.0.0 > shared@4.0.0',
       ],
     });
+  });
+
+  it('rejects go.mod files without a Go directive because they default to the incomplete Go 1.16 graph', () => {
+    fs.writeFileSync(path.join(repository, 'go.mod'), [
+      'module example.test/fixture',
+      'require example.test/dependency v1.2.3',
+    ].join('\n'));
+
+    const inventory = collectPackageInventory(repository);
+
+    expect(inventory.errors).toEqual([
+      expect.objectContaining({
+        file: 'go.mod',
+        code: 'UNSUPPORTED_FORMAT',
+        message: expect.stringMatching(/Go directive|1\.16|1\.17/i),
+      }),
+    ]);
+  });
+
+  it('propagates Cargo runtime and development roots through the locked dependency graph', () => {
+    fs.writeFileSync(path.join(repository, 'Cargo.toml'), [
+      '[package]',
+      'name = "fixture"',
+      'version = "0.1.0"',
+      '[dependencies]',
+      'runtime-root = "1.0.0"',
+      '[dev-dependencies]',
+      'dev-root = "2.0.0"',
+    ].join('\n'));
+    fs.writeFileSync(path.join(repository, 'Cargo.lock'), [
+      'version = 3',
+      '[[package]]',
+      'name = "fixture"',
+      'version = "0.1.0"',
+      'dependencies = [',
+      ' "dev-root",',
+      ' "runtime-root",',
+      ']',
+      '[[package]]',
+      'name = "runtime-root"',
+      'version = "1.0.0"',
+      'source = "registry+https://github.com/rust-lang/crates.io-index"',
+      'dependencies = ["shared 3.0.0"]',
+      '[[package]]',
+      'name = "dev-root"',
+      'version = "2.0.0"',
+      'source = "registry+https://github.com/rust-lang/crates.io-index"',
+      'dependencies = ["dev-only 4.0.0", "shared 3.0.0"]',
+      '[[package]]',
+      'name = "shared"',
+      'version = "3.0.0"',
+      'source = "registry+https://github.com/rust-lang/crates.io-index"',
+      '[[package]]',
+      'name = "dev-only"',
+      'version = "4.0.0"',
+      'source = "registry+https://github.com/rust-lang/crates.io-index"',
+    ].join('\n'));
+
+    const inventory = collectPackageInventory(repository);
+    const coordinate = (name: string) => inventory.coordinates.find(candidate => candidate.name === name);
+
+    expect(coordinate('runtime-root')).toMatchObject({direct: true, scope: 'runtime'});
+    expect(coordinate('dev-root')).toMatchObject({direct: true, scope: 'development'});
+    expect(coordinate('dev-only')).toMatchObject({
+      direct: false,
+      scope: 'development',
+      dependencyPaths: ['dev-root@2.0.0 > dev-only@4.0.0'],
+    });
+    expect(coordinate('shared')).toMatchObject({
+      scope: 'runtime',
+      dependencyPaths: [
+        'dev-root@2.0.0 > shared@3.0.0',
+        'runtime-root@1.0.0 > shared@3.0.0',
+      ],
+    });
+    expect(filterPackageInventory(inventory, {scope: 'runtime'}).coordinates.map(value => value.name))
+      .toEqual(['runtime-root', 'shared']);
+    expect(inventory.errors).toEqual([]);
   });
 
   it('marks plain pinned requirements as direct-only inventory', () => {

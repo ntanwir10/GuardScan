@@ -100,6 +100,23 @@ describe('DependencyScanner OSV integration', () => {
     expect(() => new OsvClient({ endpoint, retries: 0 })).toThrow(/OSV endpoint/);
   });
 
+  it('reports known-exploited status as unknown when KEV enrichment is disabled', async () => {
+    const fetchImpl = jest.fn(async (input: string | URL | Request) =>
+      String(input).endsWith('/v1/querybatch')
+        ? jsonResponse({results: [{vulns: [{id: 'CVE-2026-1234', modified: '2026-01-02T00:00:00Z'}]}]})
+        : jsonResponse(advisory('CVE-2026-1234', []))
+    ) as typeof fetch;
+
+    const results = await new DependencyScanner().scan(repository, {
+      client: new OsvClient({fetchImpl, retries: 0}),
+      snapshotStore: new VulnerabilitySnapshotStore(cache),
+      enrichKnownExploited: false,
+    });
+
+    expect(results[0].vulnerabilities[0].knownExploited).toBe('unknown');
+    expect(results[0].knownExploitedEnrichment.status).toBe('disabled');
+  });
+
   it.each([
     ['severity member', { severity: [null] }],
     ['affected member', { affected: [null] }],

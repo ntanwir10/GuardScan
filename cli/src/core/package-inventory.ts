@@ -156,6 +156,10 @@ function npmRequestMatchesVersion(requested: string, exactVersion: string): bool
   return range !== null && semver.satisfies(exactVersion, range, { includePrerelease: true, loose: true });
 }
 
+function npmRequestedPackageName(installName: string, requested: string): string {
+  return npmAliasTarget(requested)?.name || installName;
+}
+
 function yarnDescriptorMatchesRequest(
   descriptor: string,
   packageName: string,
@@ -369,31 +373,51 @@ function parseNpmLock(
       if (workspace.size > 0) {directByWorkspace.set(packagePath, workspace);}
     }
     const scopeRank: Record<DependencyScope, number> = {unknown: 0, development: 1, optional: 2, runtime: 3};
-    const workspaceDirectFor = (packagePath: string, name: string, version: string): DirectDependency | undefined => {
+    const workspaceDirectFor = (
+      packagePath: string,
+      installName: string,
+      resolvedName: string,
+      version: string
+    ): DirectDependency[] => {
       const normalizedPath = packagePath.replace(/\\/g, '/');
       const candidates = [...directByWorkspace.entries()]
-        .filter(([workspacePath]) => normalizedPath === `${workspacePath}/node_modules/${name}`)
-        .map(([, values]) => values.get(name))
+        .filter(([workspacePath]) => normalizedPath === `${workspacePath}/node_modules/${installName}`)
+        .map(([, values]) => values.get(installName))
         .filter((value): value is DirectDependency =>
-          value !== undefined && npmRequestMatchesVersion(value.requested, version)
+          value !== undefined &&
+          npmRequestedPackageName(installName, value.requested) === resolvedName &&
+          npmRequestMatchesVersion(value.requested, version)
         );
       return candidates.sort((left, right) =>
         scopeRank[right.scope] - scopeRank[left.scope] || left.manifestPath.localeCompare(right.manifestPath)
-      )[0];
-    };
-    const rootDirectFor = (name: string, version: string): DirectDependency | undefined => {
-      const rootDependency = direct.get(name);
-      const candidates = workspaceDirect.filter(value =>
-        value.name === name && npmRequestMatchesVersion(value.requested, version)
       );
-      if (rootDependency && npmRequestMatchesVersion(rootDependency.requested, version)) {
-        candidates.push({name, ...rootDependency, manifestPath: rootManifest});
+    };
+    const rootDirectFor = (installName: string, resolvedName: string, version: string): DirectDependency[] => {
+      const rootDependency = direct.get(installName);
+      const candidates: DirectDependency[] = workspaceDirect.filter(value =>
+        value.name === installName &&
+        npmRequestedPackageName(installName, value.requested) === resolvedName &&
+        npmRequestMatchesVersion(value.requested, version)
+      );
+      if (rootDependency &&
+        npmRequestedPackageName(installName, rootDependency.requested) === resolvedName &&
+        npmRequestMatchesVersion(rootDependency.requested, version)) {
+        candidates.push({...rootDependency, manifestPath: rootManifest});
       }
       return candidates.sort((left, right) =>
         scopeRank[right.scope] - scopeRank[left.scope] || left.manifestPath.localeCompare(right.manifestPath)
-      )[0];
+      );
     };
     if (lockPackages) {
+      type NpmNode = {
+        packagePath: string;
+        installName: string;
+        name: string;
+        version: string;
+        value: Record<string, unknown>;
+        directInfos: DirectDependency[];
+      };
+      const nodes = new Map<string, NpmNode>();
       for (const [packagePath, packageValue] of Object.entries(lockPackages)) {
         if (!packagePath) {continue;}
         const normalizedPackagePath = packagePath.replace(/\\/g, '/');
@@ -410,10 +434,11 @@ function parseNpmLock(
           });
           continue;
         }
+        const installName = packageNameFromNodeModulesPath(packagePath);
         const rawName = value.name;
-        const name = typeof rawName === 'string' ? rawName : packageNameFromNodeModulesPath(packagePath);
+        const name = typeof rawName === 'string' ? rawName : installName;
         const version = typeof value.version === 'string' ? value.version : '';
-        if (!name) {
+        if (!name || !installName) {
           errors.push({
             file: rel,
             code: 'UNSUPPORTED_FORMAT',
@@ -429,15 +454,76 @@ function parseNpmLock(
           });
           continue;
         }
-        const directInfo = isRootNpmInstallPath(packagePath, name)
-          ? rootDirectFor(name, version)
-          : workspaceDirectFor(packagePath, name, version);
-        addCoordinate(coordinates, {
-          ecosystem: 'npm', osvEcosystem: 'npm', name, exactVersion: version,
-          scope: directInfo?.scope || (value.optional === true ? 'optional' : value.dev === true ? 'development' : 'runtime'),
-          direct: directInfo !== undefined,
-          manifestPath: directInfo?.manifestPath || manifest, lockfilePath: rel, dependencyPaths: [normalizedPackagePath],
+        const directInfos = isRootNpmInstallPath(packagePath, installName)
+          ? rootDirectFor(installName, name, version)
+          : workspaceDirectFor(packagePath, installName, name, version);
+        nodes.set(normalizedPackagePath, {
+          packagePath: normalizedPackagePath,
+          installName,
+          name,
+          version,
+          value,
+          directInfos,
         });
+      }
+
+      const resolveInstalledNode = (parentPath: string, installName: string): NpmNode | undefined => {
+        let directory: string | undefined = parentPath;
+        while (directory !== undefined) {
+          const candidate = directory
+            ? `${directory}/node_modules/${installName}`
+            : `node_modules/${installName}`;
+          const resolved = nodes.get(path.posix.normalize(candidate));
+          if (resolved) {return resolved;}
+          if (!directory) {return undefined;}
+          const parent = path.posix.dirname(directory);
+          directory = parent === '.' || parent === directory ? '' : parent;
+        }
+        return undefined;
+      };
+      const pathsByNode = new Map<string, Set<string>>();
+      const scopeByNode = new Map<string, DependencyScope>();
+      const identity = (node: NpmNode): string => `${node.name}@${node.version}`;
+      const visit = (node: NpmNode, currentPath: string, stack: Set<string>, rootScope: DependencyScope): void => {
+        const paths = pathsByNode.get(node.packagePath) || new Set<string>();
+        if (paths.has(currentPath)) {return;}
+        paths.add(currentPath);
+        pathsByNode.set(node.packagePath, paths);
+        const existingScope = scopeByNode.get(node.packagePath) || 'unknown';
+        if (scopeRank[rootScope] > scopeRank[existingScope]) {scopeByNode.set(node.packagePath, rootScope);}
+        if (stack.has(node.packagePath)) {return;}
+        const nextStack = new Set(stack).add(node.packagePath);
+        const dependencies = [
+          ...Object.keys(asRecord(node.value.dependencies) || {}),
+          ...Object.keys(asRecord(node.value.optionalDependencies) || {}),
+        ];
+        for (const dependencyName of [...new Set(dependencies)].sort()) {
+          const child = resolveInstalledNode(node.packagePath, dependencyName);
+          if (child) {visit(child, `${currentPath} > ${identity(child)}`, nextStack, rootScope);}
+        }
+      };
+      for (const node of nodes.values()) {
+        for (const direct of node.directInfos) {
+          visit(node, identity(node), new Set(), direct.scope);
+        }
+      }
+      for (const node of nodes.values()) {
+        const directInfos: Array<DirectDependency | undefined> = node.directInfos.length > 0
+          ? node.directInfos
+          : [undefined];
+        for (const directInfo of directInfos) {
+          addCoordinate(coordinates, {
+            ecosystem: 'npm', osvEcosystem: 'npm', name: node.name, exactVersion: node.version,
+            scope: directInfo?.scope || scopeByNode.get(node.packagePath) ||
+              (node.value.optional === true ? 'optional' : node.value.dev === true ? 'development' : 'runtime'),
+            direct: directInfo !== undefined,
+            manifestPath: directInfo?.manifestPath || manifest,
+            lockfilePath: rel,
+            dependencyPaths: pathsByNode.get(node.packagePath)
+              ? [...pathsByNode.get(node.packagePath)!].sort()
+              : [node.packagePath],
+          });
+        }
       }
       return;
     }
@@ -489,17 +575,67 @@ function parseNpmLock(
   }
 }
 
+function firstPartyWorkspacePackages(root: string, lockPath: string): Map<string, string | undefined> {
+  const lockDirectory = path.dirname(lockPath);
+  const lockName = path.basename(lockPath);
+  const manifestDirectories = new Set<string>();
+  try {
+    if (lockName === 'yarn.lock') {
+      for (const directory of yarnWorkspaceManifestDirectories(root, lockDirectory)) {
+        manifestDirectories.add(directory);
+      }
+    } else {
+      const data = lockName === 'pnpm-lock.yaml'
+        ? asRecord(yaml.load(fs.readFileSync(lockPath, 'utf8')))
+        : asRecord(readJson(lockPath));
+      if (lockName === 'pnpm-lock.yaml') {
+        for (const importer of Object.keys(asRecord(data?.importers) || {})) {
+          manifestDirectories.add(importer === '.' ? '' : importer);
+        }
+      } else {
+        for (const packagePath of Object.keys(asRecord(data?.packages) || {})) {
+          if (!packagePath.includes('node_modules')) {manifestDirectories.add(packagePath);}
+        }
+      }
+    }
+  } catch {
+    return new Map();
+  }
+  const packages = new Map<string, string | undefined>();
+  for (const directory of manifestDirectories) {
+    const manifest = path.resolve(lockDirectory, directory, 'package.json');
+    if (!isWithinRoot(root, manifest) || !fs.existsSync(manifest)) {continue;}
+    try {
+      const data = asRecord(readJson(manifest));
+      const name = data?.name;
+      const version = data?.version;
+      if (typeof name === 'string' && name) {
+        packages.set(name, typeof version === 'string' ? version : undefined);
+      }
+    } catch {
+      // The package manifest validation path reports malformed JSON.
+    }
+  }
+  return packages;
+}
+
 function parseExactPackageJson(
   root: string,
   file: string,
   coordinates: DependencyCoordinate[],
-  errors: PackageInventoryError[]
+  errors: PackageInventoryError[],
+  workspacePackagesByLock: Map<string, Map<string, string | undefined>>
 ): void {
   const directory = path.dirname(file);
   let lockDirectory = directory;
+  let coveringLock: string | undefined;
   while (isWithinRoot(root, lockDirectory)) {
     const lockNames = ['package-lock.json', 'npm-shrinkwrap.json', 'pnpm-lock.yaml', 'yarn.lock'];
-    if (lockNames.some(name => isManifestCoveredByLock(directory, lockDirectory, name))) {return;}
+    const lockName = lockNames.find(name => isManifestCoveredByLock(directory, lockDirectory, name));
+    if (lockName) {
+      coveringLock = path.join(lockDirectory, lockName);
+      break;
+    }
     if (lockDirectory === root) {break;}
     lockDirectory = path.dirname(lockDirectory);
   }
@@ -512,6 +648,46 @@ function parseExactPackageJson(
       [asRecord(data.devDependencies) || {}, 'development'],
       [asRecord(data.optionalDependencies) || {}, 'optional'],
     ];
+    if (coveringLock) {
+      const lockfilePath = relative(root, coveringLock);
+      let workspacePackages = workspacePackagesByLock.get(coveringLock);
+      if (!workspacePackages) {
+        workspacePackages = firstPartyWorkspacePackages(root, coveringLock);
+        workspacePackagesByLock.set(coveringLock, workspacePackages);
+      }
+      for (const [dependencies] of groups) {
+        for (const [installName, requestedValue] of Object.entries(dependencies)) {
+          const requested = typeof requestedValue === 'string' ? requestedValue : '';
+          const packageName = npmRequestedPackageName(installName, requested);
+          const workspaceVersion = workspacePackages.get(installName);
+          const firstPartyWorkspace = !npmAliasTarget(requested) && workspacePackages.has(installName) &&
+            (requested.startsWith('workspace:') ||
+              (workspaceVersion !== undefined && npmRequestMatchesVersion(requested, workspaceVersion)));
+          const covered = requested !== '' && (
+            firstPartyWorkspace ||
+            coordinates.some(coordinate =>
+              coordinate.ecosystem === 'npm' &&
+              coordinate.lockfilePath === lockfilePath &&
+              coordinate.manifestPath === rel &&
+              coordinate.direct &&
+              coordinate.name === packageName &&
+              npmRequestMatchesVersion(requested, coordinate.exactVersion)
+            )
+          );
+          const lockAlreadyReported = errors.some(error =>
+            error.file === lockfilePath && error.message.includes(installName)
+          );
+          if (!covered && !lockAlreadyReported) {
+            errors.push({
+              file: rel,
+              code: 'UNRESOLVED_VERSION',
+              message: `${installName} requirement ${requested || '<invalid>'} is not satisfied by ${path.basename(coveringLock)}`,
+            });
+          }
+        }
+      }
+      return;
+    }
     let hasDependencies = false;
     for (const [dependencies, scope] of groups) {
       for (const [name, requested] of Object.entries(dependencies)) {
@@ -576,11 +752,12 @@ function parsePnpmLock(root: string, file: string, coordinates: DependencyCoordi
       if (!match || !semver.valid(match[2], {loose: true})) {return undefined;}
       return {name: match[1], version: semver.valid(match[2], {loose: true})!};
     };
-    const directDependencies = new Map<string, {
+    type PnpmDirectDependency = {
       scope: DependencyScope;
       manifestPath: string;
       dependencyPaths: string[];
-    }>();
+    };
+    const directDependencies = new Map<string, PnpmDirectDependency[]>();
     const scopeRank: Record<DependencyScope, number> = {
       unknown: 0,
       development: 1,
@@ -624,19 +801,20 @@ function parsePnpmLock(root: string, file: string, coordinates: DependencyCoordi
             continue;
           }
           const key = `${dependencyName}\0${version}`;
-          const existing = directDependencies.get(key);
+          const values = directDependencies.get(key) || [];
+          const manifestPath = relative(root, manifest);
+          const existing = values.find(value => value.manifestPath === manifestPath);
           const dependencyPath = rawImporterPath === '.' ? dependencyName : `${rawImporterPath}:${dependencyName}`;
           if (!existing) {
-            directDependencies.set(key, {
+            values.push({
               scope,
-              manifestPath: relative(root, manifest),
+              manifestPath,
               dependencyPaths: [dependencyPath],
             });
+            directDependencies.set(key, values);
           } else {
             if (scopeRank[scope] > scopeRank[existing.scope]) {existing.scope = scope;}
             existing.dependencyPaths = [...new Set([...existing.dependencyPaths, dependencyPath])].sort();
-            const candidateManifest = relative(root, manifest);
-            if (candidateManifest < existing.manifestPath) {existing.manifestPath = candidateManifest;}
           }
         }
       }
@@ -700,26 +878,31 @@ function parsePnpmLock(root: string, file: string, coordinates: DependencyCoordi
         );
       }
     };
-    for (const [nodeKey, direct] of directDependencies) {
+    for (const [nodeKey, directValues] of directDependencies) {
       const node = nodes.get(nodeKey);
       if (!node) {continue;}
-      visit(nodeKey, versionedIdentity(node.name, node.version), new Set(), direct.scope);
+      for (const direct of directValues) {
+        visit(nodeKey, versionedIdentity(node.name, node.version), new Set(), direct.scope);
+      }
     }
     for (const rawKey of Object.keys(records)) {
       const parsed = parseNodeKey(rawKey);
       if (!parsed) {continue;}
       const nodeKey = `${parsed.name}\0${parsed.version}`;
-      const direct = directDependencies.get(nodeKey);
+      const directValues = directDependencies.get(nodeKey) || [];
       const dependencyPaths = pathsByNode.get(nodeKey);
-      addCoordinate(coordinates, {
-        ecosystem: 'npm', osvEcosystem: 'npm', name: parsed.name, exactVersion: parsed.version,
-        scope: direct?.scope || scopeByNode.get(nodeKey) || 'unknown', direct: direct !== undefined,
-        manifestPath: direct?.manifestPath || relative(root, path.join(path.dirname(file), 'package.json')),
-        lockfilePath: rel,
-        dependencyPaths: dependencyPaths
-          ? [...dependencyPaths].sort()
-          : [versionedIdentity(parsed.name, parsed.version)],
-      });
+      const outputs: Array<PnpmDirectDependency | undefined> = directValues.length > 0 ? directValues : [undefined];
+      for (const direct of outputs) {
+        addCoordinate(coordinates, {
+          ecosystem: 'npm', osvEcosystem: 'npm', name: parsed.name, exactVersion: parsed.version,
+          scope: direct?.scope || scopeByNode.get(nodeKey) || 'unknown', direct: direct !== undefined,
+          manifestPath: direct?.manifestPath || relative(root, path.join(path.dirname(file), 'package.json')),
+          lockfilePath: rel,
+          dependencyPaths: dependencyPaths
+            ? [...dependencyPaths].sort()
+            : [versionedIdentity(parsed.name, parsed.version)],
+        });
+      }
     }
   } catch (error: unknown) {
     errors.push({ file: rel, code: 'INVALID_MANIFEST', message: `Unable to parse pnpm lockfile: ${errorMessage(error)}` });
@@ -817,7 +1000,7 @@ function parseYarnLock(root: string, file: string, coordinates: DependencyCoordi
       }
     }
     finishRecord();
-    const directForRecord = (record: typeof records[number]): {scope: DependencyScope; manifestPath: string} | undefined => {
+    const directsForRecord = (record: typeof records[number]): Array<{scope: DependencyScope; manifestPath: string}> => {
       const candidates = workspaceDependencies.filter(candidate =>
         npmRequestMatchesVersion(candidate.requested, record.version) && record.descriptors.some(candidateDescriptor =>
           yarnDescriptorMatchesRequest(candidateDescriptor, candidate.name, candidate.requested)
@@ -831,7 +1014,7 @@ function parseYarnLock(root: string, file: string, coordinates: DependencyCoordi
       }
       return candidates.sort((left, right) =>
         scopeRank[right.scope] - scopeRank[left.scope] || left.manifestPath.localeCompare(right.manifestPath)
-      )[0];
+      );
     };
     const pathsByRecord = new Map<typeof records[number], Set<string>>();
     const scopeByRecord = new Map<typeof records[number], DependencyScope>();
@@ -859,18 +1042,24 @@ function parseYarnLock(root: string, file: string, coordinates: DependencyCoordi
       }
     };
     for (const record of records) {
-      const direct = directForRecord(record);
-      if (direct) {visit(record, versionedIdentity(record), new Set(), direct.scope);}
+      for (const direct of directsForRecord(record)) {
+        visit(record, versionedIdentity(record), new Set(), direct.scope);
+      }
     }
     for (const record of records) {
-      const direct = directForRecord(record);
-      addCoordinate(coordinates, {
-        ecosystem: 'npm', osvEcosystem: 'npm', name: record.name, exactVersion: record.version,
-        scope: direct?.scope || scopeByRecord.get(record) || 'unknown', direct: direct !== undefined,
-        manifestPath: direct?.manifestPath || relative(root, path.join(path.dirname(file), 'package.json')),
-        lockfilePath: rel,
-        dependencyPaths: pathsByRecord.get(record) ? [...pathsByRecord.get(record)!].sort() : [versionedIdentity(record)],
-      });
+      const directValues = directsForRecord(record);
+      const outputs: Array<{scope: DependencyScope; manifestPath: string} | undefined> = directValues.length > 0
+        ? directValues
+        : [undefined];
+      for (const direct of outputs) {
+        addCoordinate(coordinates, {
+          ecosystem: 'npm', osvEcosystem: 'npm', name: record.name, exactVersion: record.version,
+          scope: direct?.scope || scopeByRecord.get(record) || 'unknown', direct: direct !== undefined,
+          manifestPath: direct?.manifestPath || relative(root, path.join(path.dirname(file), 'package.json')),
+          lockfilePath: rel,
+          dependencyPaths: pathsByRecord.get(record) ? [...pathsByRecord.get(record)!].sort() : [versionedIdentity(record)],
+        });
+      }
     }
   } catch (error: unknown) {
     errors.push({ file: rel, code: 'INVALID_MANIFEST', message: `Unable to parse yarn lockfile: ${errorMessage(error)}` });
@@ -1078,7 +1267,13 @@ function parseGoMod(
         dependencyPaths: [replacement ? `${requirement.name} => ${name}` : name],
       });
     }
-    if (declaredGoVersion) {
+    if (!declaredGoVersion) {
+      errors.push({
+        file: rel,
+        code: 'UNSUPPORTED_FORMAT',
+        message: 'go.mod has no Go directive and therefore defaults to Go 1.16, which does not guarantee a complete transitive build list',
+      });
+    } else {
       const [major, minor] = declaredGoVersion.split('.').map(Number);
       if (major < 1 || (major === 1 && minor < 17)) {
         errors.push({
@@ -1099,26 +1294,219 @@ function parseGoMod(
 
 function parseCargoLock(root: string, file: string, coordinates: DependencyCoordinate[], errors: PackageInventoryError[]): void {
   const rel = relative(root, file);
+  const lockDirectory = path.dirname(file);
+  type CargoDependency = {name: string; version?: string; source?: string};
+  type CargoNode = {
+    key: string;
+    name: string;
+    version: string;
+    source?: string;
+    dependencies: CargoDependency[];
+  };
+  type CargoDirect = {scope: DependencyScope; manifestPath: string; requested?: string};
+  const registrySource = /^(?:registry\+https:\/\/(?:github\.com\/rust-lang\/crates\.io-index|index\.crates\.io\/?)|sparse\+https:\/\/index\.crates\.io\/?)$/;
+  const scopeRank: Record<DependencyScope, number> = {unknown: 0, development: 1, optional: 2, runtime: 3};
   try {
     const blocks = fs.readFileSync(file, 'utf8').split(/\[\[package\]\]/).slice(1);
+    const nodes: CargoNode[] = [];
     for (const block of blocks) {
       const name = block.match(/^\s*name\s*=\s*"([^"]+)"/m)?.[1];
       const version = block.match(/^\s*version\s*=\s*"([^"]+)"/m)?.[1];
       const source = block.match(/^\s*source\s*=\s*"([^"]+)"/m)?.[1];
       if (!name || !version) {continue;}
-      if (!source) {continue;}
-      if (!/^(?:registry\+https:\/\/(?:github\.com\/rust-lang\/crates\.io-index|index\.crates\.io\/?)|sparse\+https:\/\/index\.crates\.io\/?)$/.test(source)) {
+      const dependencies = [...(block.match(/^\s*dependencies\s*=\s*\[([\s\S]*?)\]/m)?.[1] || '')
+        .matchAll(/"([^"]+)"|'([^']+)'/g)]
+        .map(match => match[1] || match[2])
+        .map((value): CargoDependency | undefined => {
+          const parsed = value.match(/^(\S+?)(?:\s+(\S+?))?(?:\s+\((.+)\))?$/);
+          return parsed ? {name: parsed[1], version: parsed[2], source: parsed[3]} : undefined;
+        })
+        .filter((dependency): dependency is CargoDependency => dependency !== undefined);
+      nodes.push({key: `${name}\0${version}\0${source || ''}`, name, version, source, dependencies});
+    }
+
+    const rootManifest = path.join(lockDirectory, 'Cargo.toml');
+    const workspaceDefinitions = new Map<string, {name: string; requested?: string; local: boolean}>();
+    const parseDependencyValue = (installName: string, rawValue: string) => {
+      const packageName = rawValue.match(/\bpackage\s*=\s*["']([^"']+)["']/)?.[1] || installName;
+      const directVersion = rawValue.match(/^\s*["']([^"']+)["']\s*$/)?.[1];
+      const tableVersion = rawValue.match(/\bversion\s*=\s*["']([^"']+)["']/)?.[1];
+      const workspace = /\bworkspace\s*=\s*true\b/.test(rawValue);
+      const inherited = workspaceDefinitions.get(installName);
+      return {
+        name: workspace ? inherited?.name || packageName : packageName,
+        requested: workspace ? inherited?.requested : directVersion || tableVersion,
+        local: workspace ? inherited?.local === true : /\b(?:path|git)\s*=/.test(rawValue),
+      };
+    };
+    const manifestLines = (manifest: string): Array<{section: string; name: string; value: string}> => {
+      const records: Array<{section: string; name: string; value: string}> = [];
+      let section = '';
+      for (const rawLine of stripTomlComments(fs.readFileSync(manifest, 'utf8')).split(/\r?\n/)) {
+        const sectionMatch = rawLine.trim().match(/^\[([^\]]+)\]$/);
+        if (sectionMatch) {section = sectionMatch[1].trim(); continue;}
+        const dependency = rawLine.match(/^\s*(?:"([^"]+)"|'([^']+)'|([A-Za-z0-9_.-]+))\s*=\s*(.+)$/);
+        if (dependency) {
+          records.push({section, name: dependency[1] || dependency[2] || dependency[3], value: dependency[4].trim()});
+        }
+      }
+      return records;
+    };
+    const manifestDependencies = (manifest: string): Array<{section: string; name: string; value: string}> => {
+      const records = manifestLines(manifest);
+      const dependencies = records.filter(record =>
+        record.section === 'workspace.dependencies' ||
+        record.section === 'dependencies' ||
+        record.section === 'dev-dependencies' ||
+        record.section === 'build-dependencies' ||
+        record.section.endsWith('.dependencies') ||
+        record.section.endsWith('.dev-dependencies') ||
+        record.section.endsWith('.build-dependencies')
+      );
+      const tableValues = new Map<string, typeof records>();
+      for (const record of records) {
+        const match = record.section.match(/^(?:(.*)\.)?(dependencies|dev-dependencies|build-dependencies)\.([^.]+)$/);
+        if (!match) {continue;}
+        const values = tableValues.get(record.section) || [];
+        values.push(record);
+        tableValues.set(record.section, values);
+      }
+      for (const [section, values] of tableValues) {
+        const match = section.match(/^(?:(.*)\.)?(dependencies|dev-dependencies|build-dependencies)\.([^.]+)$/)!;
+        const prefix = match[1] ? `${match[1]}.` : '';
+        dependencies.push({
+          section: `${prefix}${match[2]}`,
+          name: match[3].replace(/^["']|["']$/g, ''),
+          value: `{ ${values.map(value => `${value.name} = ${value.value}`).join(', ')} }`,
+        });
+      }
+      return dependencies;
+    };
+    if (fs.existsSync(rootManifest)) {
+      for (const record of manifestDependencies(rootManifest).filter(record => record.section === 'workspace.dependencies')) {
+        workspaceDefinitions.set(record.name, parseDependencyValue(record.name, record.value));
+      }
+    }
+
+    const manifests = new Set<string>();
+    if (fs.existsSync(rootManifest)) {manifests.add(rootManifest);}
+    const members = fs.existsSync(rootManifest) ? cargoWorkspacePatterns(rootManifest, 'members') : [];
+    const excluded = fs.existsSync(rootManifest) ? cargoWorkspacePatterns(rootManifest, 'exclude') : [];
+    if (members.length > 0) {
+      const visitManifests = (directory: string): void => {
+        for (const entry of fs.readdirSync(directory, {withFileTypes: true})) {
+          if (!entry.isDirectory() || IGNORED_DIRS.has(entry.name) || entry.isSymbolicLink()) {continue;}
+          const child = path.join(directory, entry.name);
+          const candidate = path.join(child, 'Cargo.toml');
+          const relativeDirectory = relative(lockDirectory, child);
+          if (fs.existsSync(candidate) &&
+            members.some(pattern => yarnWorkspacePatternMatches(pattern, relativeDirectory)) &&
+            !excluded.some(pattern => yarnWorkspacePatternMatches(pattern, relativeDirectory))) {
+            manifests.add(candidate);
+          }
+          visitManifests(child);
+        }
+      };
+      visitManifests(lockDirectory);
+    }
+
+    const requirementMatches = (requested: string | undefined, version: string): boolean => {
+      if (!requested || requested === '*') {return true;}
+      const normalized = requested.replace(/,/g, ' ').trim();
+      const range = semver.valid(normalized, {loose: true})
+        ? `^${normalized}`
+        : normalized.startsWith('=')
+          ? normalized.slice(1)
+          : normalized;
+      return semver.satisfies(version, range, {includePrerelease: true, loose: true});
+    };
+    const directByNode = new Map<string, CargoDirect>();
+    for (const manifest of manifests) {
+      const records = manifestLines(manifest);
+      const packageName = records.find(record => record.section === 'package' && record.name === 'name')
+        ?.value.match(/^["']([^"']+)["']$/)?.[1];
+      const packageVersion = records.find(record => record.section === 'package' && record.name === 'version')
+        ?.value.match(/^["']([^"']+)["']$/)?.[1];
+      const manifestRoots = nodes.filter(node => !node.source && node.name === packageName &&
+        (!packageVersion || node.version === packageVersion));
+      for (const record of manifestDependencies(manifest)) {
+        const development = record.section === 'dev-dependencies' || record.section.endsWith('.dev-dependencies');
+        const runtime = record.section === 'dependencies' || record.section === 'build-dependencies' ||
+          record.section.endsWith('.dependencies') || record.section.endsWith('.build-dependencies');
+        if ((!development && !runtime) || record.section.startsWith('workspace.')) {continue;}
+        const parsed = parseDependencyValue(record.name, record.value);
+        if (parsed.local) {continue;}
+        const lockedRoots = manifestRoots.flatMap(node => node.dependencies)
+          .filter(dependency => dependency.name === parsed.name)
+          .map(lockedDependency => nodes.filter(node => node.name === lockedDependency.name &&
+            (!lockedDependency.version || node.version === lockedDependency.version) &&
+            (!lockedDependency.source || node.source === lockedDependency.source)))
+          .flat();
+        const pool = manifestRoots.length > 0 ? lockedRoots : nodes;
+        const candidates = pool.filter(node => node.source && registrySource.test(node.source) &&
+          node.name === parsed.name && requirementMatches(parsed.requested, node.version));
+        if (candidates.length === 0) {
+          errors.push({
+            file: relative(root, manifest),
+            code: 'UNRESOLVED_VERSION',
+            message: `Cargo dependency ${record.name}${parsed.requested ? ` ${parsed.requested}` : ''} is not satisfied by Cargo.lock`,
+          });
+          continue;
+        }
+        for (const candidate of candidates) {
+          const next = {scope: development ? 'development' as const : 'runtime' as const,
+            manifestPath: relative(root, manifest), requested: parsed.requested};
+          const existing = directByNode.get(candidate.key);
+          if (!existing || scopeRank[next.scope] > scopeRank[existing.scope]) {directByNode.set(candidate.key, next);}
+        }
+      }
+    }
+
+    const resolveDependency = (dependency: CargoDependency): CargoNode | undefined => {
+      const candidates = nodes.filter(node => node.name === dependency.name &&
+        (!dependency.version || node.version === dependency.version) &&
+        (!dependency.source || node.source === dependency.source));
+      return candidates.length === 1 ? candidates[0] : undefined;
+    };
+    const pathsByNode = new Map<string, Set<string>>();
+    const scopeByNode = new Map<string, DependencyScope>();
+    const identity = (node: CargoNode): string => `${node.name}@${node.version}`;
+    const visit = (node: CargoNode, currentPath: string, stack: Set<string>, rootScope: DependencyScope): void => {
+      const paths = pathsByNode.get(node.key) || new Set<string>();
+      if (paths.has(currentPath)) {return;}
+      paths.add(currentPath);
+      pathsByNode.set(node.key, paths);
+      const existingScope = scopeByNode.get(node.key) || 'unknown';
+      if (scopeRank[rootScope] > scopeRank[existingScope]) {scopeByNode.set(node.key, rootScope);}
+      if (stack.has(node.key)) {return;}
+      const nextStack = new Set(stack).add(node.key);
+      for (const dependency of [...node.dependencies].sort((left, right) =>
+        `${left.name}\0${left.version || ''}`.localeCompare(`${right.name}\0${right.version || ''}`))) {
+        const child = resolveDependency(dependency);
+        if (child) {visit(child, `${currentPath} > ${identity(child)}`, nextStack, rootScope);}
+      }
+    };
+    for (const node of nodes) {
+      const direct = directByNode.get(node.key);
+      if (direct) {visit(node, identity(node), new Set(), direct.scope);}
+    }
+
+    for (const node of nodes) {
+      if (!node.source) {continue;}
+      if (!registrySource.test(node.source)) {
         errors.push({
           file: rel,
           code: 'UNSUPPORTED_FORMAT',
-          message: `Cargo package ${name} uses a non-crates.io source: ${source.slice(0, 120)}`,
+          message: `Cargo package ${node.name} uses a non-crates.io source: ${node.source.slice(0, 120)}`,
         });
         continue;
       }
+      const direct = directByNode.get(node.key);
       addCoordinate(coordinates, {
-        ecosystem: 'cargo', osvEcosystem: 'crates.io', name, exactVersion: version,
-        scope: 'unknown', direct: false, manifestPath: relative(root, path.join(path.dirname(file), 'Cargo.toml')),
-        lockfilePath: rel, dependencyPaths: [name],
+        ecosystem: 'cargo', osvEcosystem: 'crates.io', name: node.name, exactVersion: node.version,
+        scope: direct?.scope || scopeByNode.get(node.key) || 'unknown', direct: direct !== undefined,
+        manifestPath: direct?.manifestPath || relative(root, rootManifest), lockfilePath: rel,
+        dependencyPaths: pathsByNode.get(node.key) ? [...pathsByNode.get(node.key)!].sort() : [identity(node)],
       });
     }
   } catch (error: unknown) {
@@ -1444,6 +1832,7 @@ export function collectPackageInventory(repoPath: string = process.cwd()): Packa
   });
   const names = new Set(files.map(file => relative(root, file)));
   const inventoryFiles = new Set(files);
+  const workspacePackagesByLock = new Map<string, Map<string, string | undefined>>();
 
   for (const file of files) {
     const name = path.basename(file);
@@ -1463,7 +1852,7 @@ export function collectPackageInventory(repoPath: string = process.cwd()): Packa
     else if (name === 'pom.xml') {parsePom(root, file, coordinates, errors);}
   }
   for (const file of files.filter(file => path.basename(file) === 'package.json')) {
-    parseExactPackageJson(root, file, coordinates, errors);
+    parseExactPackageJson(root, file, coordinates, errors, workspacePackagesByLock);
   }
 
   const normalized = mergeCoordinates(coordinates);

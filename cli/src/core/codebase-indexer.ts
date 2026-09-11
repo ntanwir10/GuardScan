@@ -728,6 +728,7 @@ export class CodebaseIndexer {
    * Save index to disk
    */
   private async saveIndex(index: CodebaseIndex): Promise<void> {
+    if (process.env.GUARDSCAN_NO_CACHE === 'true') {return;}
     const cacheDir = this.getCacheDir();
 
     // Ensure cache directory and all parent directories exist
@@ -782,6 +783,8 @@ export class CodebaseIndexer {
     if (this.cachedIndex) {
       return this.cachedIndex;
     }
+
+    if (process.env.GUARDSCAN_NO_CACHE === 'true') {return null;}
 
     const cacheDir = this.getCacheDir();
     const indexPath = path.join(cacheDir, "index.json");

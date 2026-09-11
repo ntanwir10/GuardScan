@@ -159,24 +159,24 @@ function displayUpdateMessage(latestVersion: string): void {
   ); // +10 for chalk color codes
   const emptyLine = " ".repeat(width);
 
-  console.log("");
-  console.log(chalk.yellow(`┌${border}┐`));
-  console.log(
+  console.error("");
+  console.error(chalk.yellow(`┌${border}┐`));
+  console.error(
     chalk.yellow("│") +
       "  " +
       chalk.bold(title) +
       titlePadding +
       chalk.yellow("│")
   );
-  console.log(
+  console.error(
     chalk.yellow("│") + "  " + versionLine + versionPadding + chalk.yellow("│")
   );
-  console.log(chalk.yellow("│") + emptyLine + chalk.yellow("│"));
-  console.log(
+  console.error(chalk.yellow("│") + emptyLine + chalk.yellow("│"));
+  console.error(
     chalk.yellow("│") + "  " + updateText + updatePadding + chalk.yellow("│")
   );
-  console.log(chalk.yellow(`└${border}┘`));
-  console.log("");
+  console.error(chalk.yellow(`└${border}┘`));
+  console.error("");
 }
 
 export function getCurrentVersion(): string {

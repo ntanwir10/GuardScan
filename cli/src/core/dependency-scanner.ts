@@ -528,11 +528,11 @@ function kevMetadata(
 }
 
 async function knownExploitedData(options: DependencyScanOptions): Promise<{
-  cves: ReadonlySet<string>;
+  cves: ReadonlySet<string> | 'unknown';
   metadata: KnownExploitedEnrichment;
 }> {
   if (options.enrichKnownExploited === false) {
-    return { cves: new Set<string>(), metadata: kevMetadata('disabled') };
+    return { cves: 'unknown', metadata: kevMetadata('disabled') };
   }
   const store = options.kevStore || new CisaKevCatalogStore();
   const maxAgeDays = options.kevMaxCacheAgeDays ?? 1;

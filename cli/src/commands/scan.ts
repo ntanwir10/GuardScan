@@ -250,7 +250,7 @@ export async function runQualityAnalysis(
   const lint = requireConfiguredToolOutput(
     'lint',
     markRetainedExecutionErrors('lint', rawLint),
-    hasConfiguredNodeTool(repoPath, ['eslint'])
+    linterIntegration.hasConfiguredLinter(repoPath)
   );
   const checks = {
     tests,
