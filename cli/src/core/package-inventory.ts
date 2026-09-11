@@ -295,6 +295,37 @@ function unsupportedNpmSource(value: Record<string, unknown>): string | undefine
   return resolved;
 }
 
+function npmWorkspacePackagePaths(
+  lockDirectory: string,
+  lockPackages: Record<string, unknown>
+): Set<string> {
+  let patterns = yarnWorkspacePatterns(asRecord(lockPackages['']) || {});
+  if (patterns.length === 0) {
+    try {
+      patterns = yarnWorkspacePatterns(asRecord(readJson(path.join(lockDirectory, 'package.json'))) || {});
+    } catch {
+      return new Set();
+    }
+  }
+  return new Set(Object.keys(lockPackages).filter(packagePath =>
+    packagePath !== '' &&
+    !packagePath.startsWith('node_modules/') &&
+    !packagePath.includes('/node_modules/') &&
+    patterns.some(pattern => yarnWorkspacePatternMatches(pattern, packagePath.replace(/\\/g, '/')))
+  ));
+}
+
+function isNpmWorkspaceLink(
+  value: Record<string, unknown>,
+  workspacePackagePaths: ReadonlySet<string>,
+  lockPackages: Record<string, unknown>
+): boolean {
+  if (value.link !== true || typeof value.resolved !== 'string') {return false;}
+  const target = path.posix.normalize(value.resolved.trim().replace(/\\/g, '/').replace(/^\.\//, ''));
+  return target !== '' && target !== '.' && !target.startsWith('../') && !path.posix.isAbsolute(target) &&
+    workspacePackagePaths.has(target) && asRecord(lockPackages[target]) !== undefined;
+}
+
 function parseNpmLock(
   root: string,
   file: string,
@@ -317,6 +348,9 @@ function parseNpmLock(
       ['optionalDependencies', 'optional'],
     ];
     const lockPackages = asRecord(data.packages);
+    const workspacePackagePaths = lockPackages
+      ? npmWorkspacePackagePaths(path.dirname(file), lockPackages)
+      : new Set<string>();
     for (const [packagePath, packageValue] of Object.entries(lockPackages || {})) {
       if (!packagePath || packagePath.startsWith('node_modules/') || packagePath.includes('/node_modules/')) {continue;}
       const packageRecord = asRecord(packageValue);
@@ -366,6 +400,7 @@ function parseNpmLock(
         if (!/(?:^|\/)node_modules\//.test(normalizedPackagePath)) {continue;}
         const value = asRecord(packageValue);
         if (!value) {continue;}
+        if (isNpmWorkspaceLink(value, workspacePackagePaths, lockPackages)) {continue;}
         const unsupportedSource = unsupportedNpmSource(value);
         if (unsupportedSource) {
           errors.push({
@@ -378,7 +413,22 @@ function parseNpmLock(
         const rawName = value.name;
         const name = typeof rawName === 'string' ? rawName : packageNameFromNodeModulesPath(packagePath);
         const version = typeof value.version === 'string' ? value.version : '';
-        if (!name || !semver.valid(version, { loose: true })) {continue;}
+        if (!name) {
+          errors.push({
+            file: rel,
+            code: 'UNSUPPORTED_FORMAT',
+            message: `npm package ${packagePath} has no resolvable package name`,
+          });
+          continue;
+        }
+        if (!semver.valid(version, { loose: true })) {
+          errors.push({
+            file: rel,
+            code: 'UNRESOLVED_VERSION',
+            message: `npm package ${packagePath} has no valid exact version${version ? `: ${version.slice(0, 120)}` : ''}`,
+          });
+          continue;
+        }
         const directInfo = isRootNpmInstallPath(packagePath, name)
           ? rootDirectFor(name, version)
           : workspaceDirectFor(packagePath, name, version);
@@ -414,6 +464,13 @@ function parseNpmLock(
         const directScope = directDependency && npmRequestMatchesVersion(directDependency.requested, version)
           ? directDependency.scope
           : undefined;
+        if (!unsupportedSource && !semver.valid(version, {loose: true})) {
+          errors.push({
+            file: rel,
+            code: 'UNRESOLVED_VERSION',
+            message: `npm package ${[...chain, name].join(' > ')} has no valid exact version${version ? `: ${version.slice(0, 120)}` : ''}`,
+          });
+        }
         if (!unsupportedSource && semver.valid(version, { loose: true })) {
           addCoordinate(coordinates, {
             ecosystem: 'npm', osvEcosystem: 'npm', name, exactVersion: version,
@@ -512,6 +569,13 @@ function parsePnpmLock(root: string, file: string, coordinates: DependencyCoordi
   const rel = relative(root, file);
   try {
     const data = asRecord(yaml.load(fs.readFileSync(file, 'utf8')));
+    const parseNodeKey = (rawKey: string): {name: string; version: string} | undefined => {
+      const key = rawKey.replace(/^\//, '').split('(')[0];
+      const match = key.match(/^(@[^/]+\/[^@/]+)@([^/]+)$/) || key.match(/^(@[^/]+\/[^/]+)\/([^/]+)$/)
+        || key.match(/^([^@/][^@]*?)@([^/]+)$/) || key.match(/^([^@/][^/]*)\/([^/]+)$/);
+      if (!match || !semver.valid(match[2], {loose: true})) {return undefined;}
+      return {name: match[1], version: semver.valid(match[2], {loose: true})!};
+    };
     const directDependencies = new Map<string, {
       scope: DependencyScope;
       manifestPath: string;
@@ -538,22 +602,30 @@ function parsePnpmLock(root: string, file: string, coordinates: DependencyCoordi
         if (!dependencies) {continue;}
         for (const [name, resolution] of Object.entries(dependencies)) {
           const resolutionRecord = asRecord(resolution);
+          const specifier = typeof resolutionRecord?.specifier === 'string' ? resolutionRecord.specifier : '';
+          const aliasTarget = npmAliasTarget(specifier);
           const rawVersion = typeof resolution === 'string'
             ? resolution
             : typeof resolutionRecord?.version === 'string'
               ? resolutionRecord.version
               : '';
-          const exactVersion = rawVersion.replace(/^\//, '').split('(')[0];
-          const version = semver.valid(exactVersion, { loose: true });
-          if (!version) {
+          const normalizedVersion = rawVersion.replace(/^\//, '').split('(')[0];
+          const parsedLocator = parseNodeKey(normalizedVersion);
+          const dependencyName = aliasTarget?.name || name;
+          const version = aliasTarget
+            ? parsedLocator?.name === dependencyName
+              ? parsedLocator.version
+              : semver.valid(normalizedVersion, {loose: true}) || undefined
+            : semver.valid(normalizedVersion, {loose: true}) || undefined;
+          if (!version || (aliasTarget && parsedLocator && parsedLocator.name !== dependencyName)) {
             if (rawVersion) {
               errors.push({file: rel, code: 'UNSUPPORTED_FORMAT', message: `pnpm direct dependency ${name} uses unsupported resolution: ${rawVersion.slice(0, 120)}`});
             }
             continue;
           }
-          const key = `${name}\0${version}`;
+          const key = `${dependencyName}\0${version}`;
           const existing = directDependencies.get(key);
-          const dependencyPath = rawImporterPath === '.' ? name : `${rawImporterPath}:${name}`;
+          const dependencyPath = rawImporterPath === '.' ? dependencyName : `${rawImporterPath}:${dependencyName}`;
           if (!existing) {
             directDependencies.set(key, {
               scope,
@@ -575,19 +647,14 @@ function parsePnpmLock(root: string, file: string, coordinates: DependencyCoordi
     };
     type PnpmNode = {name: string; version: string; rawKey: string; dependencies: Array<{name: string; version: string}>};
     const nodes = new Map<string, PnpmNode>();
-    const parseDependencyVersion = (value: unknown): string | undefined => {
+    const parseDependency = (name: string, value: unknown): {name: string; version: string} | undefined => {
       const record = asRecord(value);
       const raw = typeof value === 'string' ? value : typeof record?.version === 'string' ? record.version : undefined;
       if (!raw) {return undefined;}
       const normalized = raw.replace(/^\//, '').split('(')[0];
-      return semver.valid(normalized, {loose: true}) || undefined;
-    };
-    const parseNodeKey = (rawKey: string): {name: string; version: string} | undefined => {
-      const key = rawKey.replace(/^\//, '').split('(')[0];
-      const match = key.match(/^(@[^/]+\/[^@/]+)@([^/]+)$/) || key.match(/^(@[^/]+\/[^/]+)\/([^/]+)$/)
-        || key.match(/^([^@/][^@]*?)@([^/]+)$/) || key.match(/^([^@/][^/]*)\/([^/]+)$/);
-      if (!match || !semver.valid(match[2], {loose: true})) {return undefined;}
-      return {name: match[1], version: semver.valid(match[2], {loose: true})!};
+      const version = semver.valid(normalized, {loose: true});
+      if (version) {return {name, version};}
+      return parseNodeKey(normalized);
     };
     for (const [rawKey, rawValue] of Object.entries(records)) {
       const parsed = parseNodeKey(rawKey);
@@ -596,8 +663,8 @@ function parsePnpmLock(root: string, file: string, coordinates: DependencyCoordi
       const dependencies: Array<{name: string; version: string}> = [];
       for (const group of ['dependencies', 'optionalDependencies']) {
         for (const [name, value] of Object.entries(asRecord(record[group]) || {})) {
-          const version = parseDependencyVersion(value);
-          if (version) {dependencies.push({name, version});}
+          const dependency = parseDependency(name, value);
+          if (dependency) {dependencies.push(dependency);}
         }
       }
       nodes.set(`${parsed.name}\0${parsed.version}`, { ...parsed, rawKey, dependencies });
@@ -767,11 +834,20 @@ function parseYarnLock(root: string, file: string, coordinates: DependencyCoordi
       )[0];
     };
     const pathsByRecord = new Map<typeof records[number], Set<string>>();
-    const visit = (record: typeof records[number], currentPath: string, stack: Set<typeof records[number]>): void => {
+    const scopeByRecord = new Map<typeof records[number], DependencyScope>();
+    const versionedIdentity = (record: typeof records[number]): string => `${record.name}@${record.version}`;
+    const visit = (
+      record: typeof records[number],
+      currentPath: string,
+      stack: Set<typeof records[number]>,
+      rootScope: DependencyScope
+    ): void => {
       const paths = pathsByRecord.get(record) || new Set<string>();
       if (paths.has(currentPath)) {return;}
       paths.add(currentPath);
       pathsByRecord.set(record, paths);
+      const existingScope = scopeByRecord.get(record) || 'unknown';
+      if (scopeRank[rootScope] > scopeRank[existingScope]) {scopeByRecord.set(record, rootScope);}
       if (stack.has(record)) {return;}
       const nextStack = new Set(stack).add(record);
       for (const dependency of [...record.dependencies].sort((left, right) => `${left.name}\0${left.requested}`.localeCompare(`${right.name}\0${right.requested}`))) {
@@ -779,21 +855,21 @@ function parseYarnLock(root: string, file: string, coordinates: DependencyCoordi
           npmRequestMatchesVersion(dependency.requested, candidate.version) &&
           candidate.descriptors.some(descriptor => yarnDescriptorMatchesRequest(descriptor, dependency.name, dependency.requested))
         );
-        if (child) {visit(child, `${currentPath} > ${child.name}`, nextStack);}
+        if (child) {visit(child, `${currentPath} > ${versionedIdentity(child)}`, nextStack, rootScope);}
       }
     };
     for (const record of records) {
       const direct = directForRecord(record);
-      if (direct) {visit(record, record.name, new Set());}
+      if (direct) {visit(record, versionedIdentity(record), new Set(), direct.scope);}
     }
     for (const record of records) {
       const direct = directForRecord(record);
       addCoordinate(coordinates, {
         ecosystem: 'npm', osvEcosystem: 'npm', name: record.name, exactVersion: record.version,
-        scope: direct?.scope || 'unknown', direct: direct !== undefined,
+        scope: direct?.scope || scopeByRecord.get(record) || 'unknown', direct: direct !== undefined,
         manifestPath: direct?.manifestPath || relative(root, path.join(path.dirname(file), 'package.json')),
         lockfilePath: rel,
-        dependencyPaths: pathsByRecord.get(record) ? [...pathsByRecord.get(record)!].sort() : [record.name],
+        dependencyPaths: pathsByRecord.get(record) ? [...pathsByRecord.get(record)!].sort() : [versionedIdentity(record)],
       });
     }
   } catch (error: unknown) {
@@ -1263,9 +1339,49 @@ function ecosystemForInventoryFile(file: string): PackageEcosystem | undefined {
   }
 }
 
+function stripTomlComments(content: string): string {
+  let result = '';
+  let quote: '"' | "'" | undefined;
+  let multiline = false;
+  let escaped = false;
+  for (let index = 0; index < content.length; index++) {
+    const character = content[index];
+    if (quote) {
+      result += character;
+      if (escaped) {
+        escaped = false;
+      } else if (quote === '"' && character === '\\') {
+        escaped = true;
+      } else if (multiline && content.slice(index, index + 3) === quote.repeat(3)) {
+        result += content.slice(index + 1, index + 3);
+        index += 2;
+        quote = undefined;
+        multiline = false;
+      } else if (!multiline && character === quote) {
+        quote = undefined;
+      }
+      continue;
+    }
+    if (character === '"' || character === "'") {
+      quote = character;
+      multiline = content.slice(index, index + 3) === character.repeat(3);
+      result += multiline ? content.slice(index, index + 3) : character;
+      if (multiline) {index += 2;}
+      continue;
+    }
+    if (character === '#') {
+      while (index < content.length && content[index] !== '\n') {index++;}
+      if (index < content.length) {result += '\n';}
+      continue;
+    }
+    result += character;
+  }
+  return result;
+}
+
 function cargoWorkspacePatterns(manifest: string, key: 'members' | 'exclude'): string[] {
   try {
-    const content = fs.readFileSync(manifest, 'utf8');
+    const content = stripTomlComments(fs.readFileSync(manifest, 'utf8'));
     const section = content.match(/(?:^|\n)\s*\[workspace\]\s*\n([\s\S]*?)(?=\n\s*\[[^\]]+\]|$)/)?.[1];
     const array = section?.match(new RegExp(`(?:^|\\n)\\s*${key}\\s*=\\s*\\[([\\s\\S]*?)\\]`))?.[1];
     if (!array) {return [];}

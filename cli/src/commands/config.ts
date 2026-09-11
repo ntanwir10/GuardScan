@@ -18,6 +18,9 @@ interface ConfigOptions {
 
 const logger = createDebugLogger("config");
 const perfTracker = createPerformanceTracker("guardscan config");
+const VALID_AI_PROVIDERS = new Set<AIProvider>([
+  "openai", "claude", "gemini", "ollama", "lmstudio", "openrouter", "none",
+]);
 
 export async function configCommand(options: ConfigOptions): Promise<void> {
   logger.debug("Config command started", { options });
@@ -36,9 +39,9 @@ export async function configCommand(options: ConfigOptions): Promise<void> {
 
     // Direct config via flags
     if (
-      options.provider ||
-      options.key ||
-      options.embeddingFallback ||
+      options.provider !== undefined ||
+      options.key !== undefined ||
+      options.embeddingFallback !== undefined ||
       options.telemetry !== undefined ||
       options.offline !== undefined
     ) {
@@ -287,8 +290,33 @@ function getModeFromProvider(provider: string): "cloud" | "local" | "static" {
   return "cloud";
 }
 
+function parseDirectBoolean(value: string | undefined, label: string): boolean | undefined {
+  if (value === undefined) {return undefined;}
+  const normalized = String(value).toLowerCase();
+  if (normalized !== "true" && normalized !== "false") {
+    throw new Error(`Invalid ${label} value. Use true or false.`);
+  }
+  return normalized === "true";
+}
+
+function parseEmbeddingFallback(value: string | undefined): "none" | "ollama" | "lmstudio" | undefined {
+  if (value === undefined || value === "none" || value === "ollama" || value === "lmstudio") {
+    return value;
+  }
+  throw new Error(
+    `Invalid embedding fallback: ${value}. Must be 'ollama', 'lmstudio', or 'none'`
+  );
+}
+
 function directConfig(options: ConfigOptions): void {
   logger.debug("Direct config update", { options });
+  if (options.provider !== undefined && !VALID_AI_PROVIDERS.has(options.provider)) {
+    throw new Error(`Invalid provider: ${String(options.provider)}`);
+  }
+  const embeddingFallback = parseEmbeddingFallback(options.embeddingFallback);
+  const telemetryEnabled = parseDirectBoolean(options.telemetry, "telemetry");
+  const offlineMode = parseDirectBoolean(options.offline, "offline");
+
   perfTracker.start("load-config");
   const config = configManager.loadOrInit();
   perfTracker.end("load-config");
@@ -314,18 +342,11 @@ function directConfig(options: ConfigOptions): void {
     console.log(chalk.green("✓ API key updated"));
   }
 
-  if (options.embeddingFallback) {
-    if (options.embeddingFallback === "none") {
+  if (embeddingFallback !== undefined) {
+    if (embeddingFallback === "none") {
       config.embeddingFallback = undefined;
-    } else if (
-      options.embeddingFallback === "ollama" ||
-      options.embeddingFallback === "lmstudio"
-    ) {
-      config.embeddingFallback = options.embeddingFallback;
     } else {
-      throw new Error(
-        `Invalid embedding fallback: ${options.embeddingFallback}. Must be 'ollama', 'lmstudio', or 'none'`
-      );
+      config.embeddingFallback = embeddingFallback;
     }
     logger.debug("Embedding fallback updated", {
       embeddingFallback: config.embeddingFallback,
@@ -337,13 +358,7 @@ function directConfig(options: ConfigOptions): void {
     );
   }
 
-  if (options.telemetry !== undefined) {
-    const normalized = String(options.telemetry).toLowerCase();
-    if (normalized !== "true" && normalized !== "false") {
-      throw new Error("Invalid telemetry value. Use true or false.");
-    }
-
-    const telemetryEnabled = normalized === "true";
+  if (telemetryEnabled !== undefined) {
     config.telemetryEnabled = telemetryEnabled;
     logger.debug("Telemetry updated", {
       telemetryEnabled: config.telemetryEnabled,
@@ -370,13 +385,7 @@ function directConfig(options: ConfigOptions): void {
     }
   }
 
-  if (options.offline !== undefined) {
-    const normalized = String(options.offline).toLowerCase();
-    if (normalized !== "true" && normalized !== "false") {
-      throw new Error("Invalid offline value. Use true or false.");
-    }
-
-    const offlineMode = normalized === "true";
+  if (offlineMode !== undefined) {
     config.offlineMode = offlineMode;
     logger.debug("Offline mode updated", {
       telemetryEnabled: config.telemetryEnabled,

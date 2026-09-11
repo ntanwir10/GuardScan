@@ -9,6 +9,7 @@ import { codeMetricsAnalyzer } from '../../src/core/code-metrics';
 import { codeSmellDetector } from '../../src/core/code-smells';
 import { linterIntegration } from '../../src/core/linter-integration';
 import { testRunner } from '../../src/core/test-runner';
+import type { ScanEngineResult } from '../../src/core/scan-engine';
 
 describe('runQualityAnalysis partial tool execution', () => {
   let repository: string;
@@ -88,6 +89,84 @@ describe('runQualityAnalysis partial tool execution', () => {
       outcome: 'policy-failed',
       exitCode: 1,
       reasons: expect.arrayContaining(['1 test(s) failed', '1 lint error(s) found']),
+    });
+  });
+
+  it('honors partial mode for retained local scanner failures', () => {
+    const security: ScanEngineResult = {
+      runId: 'fixture',
+      startedAt: '2026-01-01T00:00:00.000Z',
+      completedAt: '2026-01-01T00:00:01.000Z',
+      status: 'partial',
+      findings: [],
+      scannerResults: [{
+        scanner: 'secrets', required: true, status: 'failed', findings: [],
+        rawCount: 0, findingCount: 0, deduplicatedCount: 0, durationMs: 1,
+        error: {code: 'SECRET_SCAN_PARTIAL', message: 'one unreadable source file', retryable: true},
+      }],
+      errors: [{scanner: 'secrets', code: 'SECRET_SCAN_PARTIAL', message: 'one unreadable source file', retryable: true}],
+      durationMs: 1_000,
+      offline: true,
+      repository,
+    };
+    const succeeded = {status: 'succeeded' as const, durationMs: 1, data: []};
+    const evaluation = evaluateComprehensivePolicy(security, {
+      status: 'complete',
+      checks: {
+        tests: succeeded,
+        metrics: succeeded,
+        smells: succeeded,
+        lint: succeeded,
+        performance: succeeded,
+        mutation: succeeded,
+      },
+    }, {status: 'succeeded', document: {}}, {allowPartial: true});
+
+    expect(evaluation.result).toMatchObject({
+      failed: false,
+      operationalFailure: false,
+      outcome: 'passed',
+      exitCode: 0,
+    });
+    expect(evaluation.executionStatus).toBe('partial');
+    expect(evaluation.errors).toEqual([
+      expect.objectContaining({scanner: 'secrets', code: 'SECRET_SCAN_PARTIAL'}),
+    ]);
+  });
+
+  it('keeps a complete security-section failure operational in partial mode', () => {
+    const security: ScanEngineResult = {
+      runId: 'fixture',
+      startedAt: '2026-01-01T00:00:00.000Z',
+      completedAt: '2026-01-01T00:00:01.000Z',
+      status: 'failed',
+      findings: [],
+      scannerResults: [{
+        scanner: 'secrets', required: true, status: 'failed', findings: [],
+        rawCount: 0, findingCount: 0, deduplicatedCount: 0, durationMs: 1,
+        error: {code: 'SCANNER_FAILED', message: 'scanner unavailable', retryable: true},
+      }],
+      errors: [{scanner: 'secrets', code: 'SCANNER_FAILED', message: 'scanner unavailable', retryable: true}],
+      durationMs: 1_000,
+      offline: true,
+      repository,
+    };
+    const succeeded = {status: 'succeeded' as const, durationMs: 1, data: []};
+
+    expect(evaluateComprehensivePolicy(security, {
+      status: 'complete',
+      checks: {
+        tests: succeeded,
+        metrics: succeeded,
+        smells: succeeded,
+        lint: succeeded,
+        performance: succeeded,
+        mutation: succeeded,
+      },
+    }, {status: 'succeeded', document: {}}, {allowPartial: true}).result).toMatchObject({
+      operationalFailure: true,
+      outcome: 'operational-failed',
+      exitCode: 2,
     });
   });
 });

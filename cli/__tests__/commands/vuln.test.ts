@@ -124,6 +124,7 @@ describe('vuln database commands', () => {
     expect(output.inventoryMatches).toBe(true);
     expect(output.packages).toBe(1);
     expect(output.inventoryDigest).toBe(runtimeInventory.digest);
+    expect(scanner.knownExploitedStatus).toHaveBeenCalledWith();
   });
 
   it('uses a sanitized repository identifier in JSON output', async () => {
@@ -137,5 +138,40 @@ describe('vuln database commands', () => {
     const output = JSON.parse(getOutput(logSpy));
     expect(output.run.repository).toBe('.');
     expect(JSON.stringify(output)).not.toContain('/private/user-sensitive/repository');
+  });
+
+  it('fails a partial vulnerability result unless partial coverage is allowed', async () => {
+    mockedConfigManager.loadOrInit.mockReturnValue({
+      clientId: 'test', provider: 'none', telemetryEnabled: false, offlineMode: false,
+      createdAt: '2026-01-01T00:00:00.000Z', lastUsed: '2026-01-01T00:00:00.000Z',
+      vulnerabilities: {enabled: true, source: 'osv', scope: 'runtime', snapshotMaxAgeDays: 30},
+    } as any);
+    const scanner = {
+      scan: jest.fn<DependencyScanner['scan']>().mockResolvedValue([scanResult({
+        status: 'partial',
+        errors: [{code: 'SNAPSHOT_PERSIST_FAILED', message: 'disk full'}],
+      })]),
+    } as unknown as DependencyScanner;
+
+    await createVulnerabilityCommand(scanner).parseAsync(['/tmp/repository', '--format', 'json'], {from: 'user'});
+
+    expect(process.exitCode).toBe(2);
+    expect((scanner.scan as jest.Mock).mock.calls[0][1]).not.toHaveProperty('kevMaxCacheAgeDays');
+  });
+
+  it('allows a partial vulnerability result when explicitly requested', async () => {
+    const scanner = {
+      scan: jest.fn<DependencyScanner['scan']>().mockResolvedValue([scanResult({
+        status: 'partial',
+        errors: [{code: 'SNAPSHOT_PERSIST_FAILED', message: 'disk full'}],
+      })]),
+    } as unknown as DependencyScanner;
+
+    await createVulnerabilityCommand(scanner).parseAsync([
+      '/tmp/repository', '--format', 'json', '--allow-partial',
+    ], {from: 'user'});
+
+    expect(process.exitCode).toBeUndefined();
+    expect(JSON.parse(getOutput(logSpy)).run).toMatchObject({status: 'partial', allowPartial: true});
   });
 });

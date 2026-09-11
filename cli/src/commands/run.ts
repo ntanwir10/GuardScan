@@ -39,7 +39,6 @@ type RunVulnerabilitySettings = Pick<
   | 'vulnerabilityEndpoint'
   | 'vulnerabilitySnapshotMaxAgeDays'
   | 'vulnerabilityEnrichKnownExploited'
-  | 'vulnerabilityKevMaxCacheAgeDays'
 >;
 
 export function vulnerabilitySettingsForRun(
@@ -51,7 +50,6 @@ export function vulnerabilitySettingsForRun(
     vulnerabilityEndpoint: config.vulnerabilities?.endpoint,
     vulnerabilitySnapshotMaxAgeDays: config.vulnerabilities?.snapshotMaxAgeDays,
     vulnerabilityEnrichKnownExploited: config.vulnerabilities?.enrichKnownExploited !== false,
-    vulnerabilityKevMaxCacheAgeDays: config.vulnerabilities?.snapshotMaxAgeDays,
   };
 }
 

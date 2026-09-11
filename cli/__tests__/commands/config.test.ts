@@ -176,6 +176,45 @@ describe("config command", () => {
     consoleLogSpy.mockRestore();
   });
 
+  it("validates every direct option before persisting telemetry withdrawal or provider changes", async () => {
+    if (!configManager.exists()) {configManager.init();}
+    const initial = configManager.load();
+    initial.provider = "openai";
+    initial.apiKey = "existing-key";
+    initial.model = "existing-model";
+    initial.telemetryEnabled = true;
+    initial.offlineMode = false;
+    configManager.save(initial);
+    const clearSpy = jest.spyOn(TelemetryManager.prototype, "clear");
+    const consoleErrorSpy = jest.spyOn(console, "error").mockImplementation(() => {});
+    const consoleLogSpy = jest.spyOn(console, "log").mockImplementation(() => {});
+    const exitSpy = jest.spyOn(process, "exit").mockImplementation(((code?: string | number | null) => {
+      throw new Error(`process.exit(${String(code)})`);
+    }) as typeof process.exit);
+
+    try {
+      await expect(configCommand({
+        provider: "claude",
+        telemetry: "false",
+        offline: "invalid",
+      })).rejects.toThrow("process.exit(1)");
+
+      expect(configManager.load()).toMatchObject({
+        provider: "openai",
+        apiKey: "existing-key",
+        model: "existing-model",
+        telemetryEnabled: true,
+        offlineMode: false,
+      });
+      expect(clearSpy).not.toHaveBeenCalled();
+    } finally {
+      exitSpy.mockRestore();
+      consoleErrorSpy.mockRestore();
+      consoleLogSpy.mockRestore();
+      clearSpy.mockRestore();
+    }
+  });
+
   it("preserves provider credentials and model for same-provider updates", async () => {
     if (!configManager.exists()) {configManager.init();}
     const config = configManager.load();

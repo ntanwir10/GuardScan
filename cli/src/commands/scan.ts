@@ -144,7 +144,6 @@ export async function scanCommand(options: ScanOptions): Promise<void> {
       vulnerabilitySnapshotMaxAgeDays: config.vulnerabilities?.snapshotMaxAgeDays,
       vulnerabilityEnrichKnownExploited:
         config.vulnerabilities?.enrichKnownExploited !== false,
-      vulnerabilityKevMaxCacheAgeDays: config.vulnerabilities?.snapshotMaxAgeDays,
       packageInventory: inventory,
       licenseReport: licenseReportPromise,
     });
@@ -396,10 +395,7 @@ export function evaluateComprehensivePolicy(
     allowPartial: false,
   });
   const securityOperationalReasons = coveragePolicy.operationalFailure ? coveragePolicy.reasons : [];
-  const nonCveSecurityFailure = security.scannerResults.some(scanner =>
-    scanner.required && scanner.status === 'failed' && scanner.scanner !== 'dependencies'
-  );
-  const operationalReasons = policy.allowPartial && !nonCveSecurityFailure
+  const operationalReasons = policy.allowPartial && security.status !== 'failed'
     ? []
     : [...securityOperationalReasons];
   const policyReasons = [...findingPolicy.reasons];

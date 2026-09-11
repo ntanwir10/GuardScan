@@ -170,6 +170,81 @@ describe('collectPackageInventory', () => {
     expect(inventory.errors).toEqual([]);
   });
 
+  it('skips first-party npm workspace links without accepting external links', () => {
+    fs.writeFileSync(path.join(repository, 'package.json'), JSON.stringify({
+      name: 'root', workspaces: ['packages/*'],
+    }));
+    fs.mkdirSync(path.join(repository, 'packages/app'), {recursive: true});
+    fs.writeFileSync(path.join(repository, 'packages/app/package.json'), JSON.stringify({
+      name: '@fixture/app', dependencies: {registry: '^1.0.0'},
+    }));
+    fs.writeFileSync(path.join(repository, 'package-lock.json'), JSON.stringify({
+      name: 'root', lockfileVersion: 3,
+      packages: {
+        '': {name: 'root', workspaces: ['packages/*']},
+        'packages/app': {name: '@fixture/app', version: '1.0.0', dependencies: {registry: '^1.0.0'}},
+        'node_modules/@fixture/app': {resolved: 'packages/app', link: true},
+        'node_modules/registry': {name: 'registry', version: '1.2.0'},
+        'node_modules/external': {resolved: '../external', link: true},
+      },
+    }));
+
+    const inventory = collectPackageInventory(repository);
+
+    expect(inventory.coordinates).toEqual([
+      expect.objectContaining({name: 'registry', exactVersion: '1.2.0', direct: true}),
+    ]);
+    expect(inventory.errors).toEqual([
+      expect.objectContaining({
+        file: 'package-lock.json',
+        code: 'UNSUPPORTED_FORMAT',
+        message: expect.stringMatching(/external|link/i),
+      }),
+    ]);
+  });
+
+  it('reports npm lock entries with missing or malformed versions', () => {
+    fs.writeFileSync(path.join(repository, 'package.json'), JSON.stringify({name: 'root'}));
+    fs.writeFileSync(path.join(repository, 'package-lock.json'), JSON.stringify({
+      name: 'root', lockfileVersion: 3,
+      packages: {
+        '': {name: 'root'},
+        'node_modules/missing': {name: 'missing'},
+        'node_modules/malformed': {name: 'malformed', version: 'not-semver'},
+      },
+    }));
+
+    const inventory = collectPackageInventory(repository);
+
+    expect(inventory.coordinates).toEqual([]);
+    expect(inventory.errors).toEqual(expect.arrayContaining([
+      expect.objectContaining({code: 'UNRESOLVED_VERSION', message: expect.stringMatching(/missing/)}),
+      expect.objectContaining({code: 'UNRESOLVED_VERSION', message: expect.stringMatching(/malformed/)}),
+    ]));
+  });
+
+  it('reports malformed versions in npm v1 dependency trees', () => {
+    fs.writeFileSync(path.join(repository, 'package.json'), JSON.stringify({dependencies: {parent: '1.0.0'}}));
+    fs.writeFileSync(path.join(repository, 'package-lock.json'), JSON.stringify({
+      name: 'root', lockfileVersion: 1,
+      dependencies: {
+        parent: {
+          version: '1.0.0',
+          dependencies: {child: {version: 'not-semver'}},
+        },
+      },
+    }));
+
+    const inventory = collectPackageInventory(repository);
+
+    expect(inventory.coordinates).toEqual([
+      expect.objectContaining({name: 'parent', exactVersion: '1.0.0'}),
+    ]);
+    expect(inventory.errors).toEqual([
+      expect.objectContaining({code: 'UNRESOLVED_VERSION', message: expect.stringMatching(/parent > child/)}),
+    ]);
+  });
+
   it('uses the root Yarn lock for child workspaces without lockless errors or duplicate coordinates', () => {
     fs.writeFileSync(path.join(repository, 'package.json'), JSON.stringify({
       name: 'root', workspaces: ['packages/*'], dependencies: {rootdep: '^1.0.0'},
@@ -279,6 +354,43 @@ describe('collectPackageInventory', () => {
     ]));
   });
 
+  it('resolves pnpm registry aliases to their target package identity', () => {
+    fs.writeFileSync(path.join(repository, 'package.json'), JSON.stringify({
+      dependencies: {foo: 'npm:lodash@^4.17.0', parent: '1.0.0'},
+    }));
+    fs.writeFileSync(path.join(repository, 'pnpm-lock.yaml'), [
+      'lockfileVersion: 9.0',
+      'importers:',
+      '  .:',
+      '    dependencies:',
+      '      foo:',
+      '        specifier: npm:lodash@^4.17.0',
+      '        version: lodash@4.17.21',
+      '      parent:',
+      '        specifier: 1.0.0',
+      '        version: 1.0.0',
+      'packages:',
+      '  lodash@4.17.21: {}',
+      '  parent@1.0.0: {}',
+      'snapshots:',
+      '  lodash@4.17.21: {}',
+      '  parent@1.0.0:',
+      '    dependencies:',
+      '      transitiveAlias: lodash@4.17.21',
+    ].join('\n'));
+
+    const inventory = collectPackageInventory(repository);
+
+    expect(inventory.coordinates).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        name: 'lodash', exactVersion: '4.17.21', direct: true,
+        dependencyPaths: ['lodash@4.17.21', 'parent@1.0.0 > lodash@4.17.21'],
+      }),
+      expect.objectContaining({name: 'parent', exactVersion: '1.0.0', direct: true}),
+    ]));
+    expect(inventory.errors).toEqual([]);
+  });
+
   it('preserves deterministic transitive dependency paths for pnpm and Yarn cycles', () => {
     fs.writeFileSync(path.join(repository, 'package.json'), JSON.stringify({dependencies: {parent: '^1.0.0'}}));
     fs.writeFileSync(path.join(repository, 'pnpm-lock.yaml'), [
@@ -337,9 +449,55 @@ describe('collectPackageInventory', () => {
     const inventory = collectPackageInventory(repository);
 
     expect(inventory.coordinates).toEqual(expect.arrayContaining([
-      expect.objectContaining({name: 'parent', dependencyPaths: ['parent']}),
-      expect.objectContaining({name: 'child', dependencyPaths: ['parent > child']}),
+      expect.objectContaining({name: 'parent', dependencyPaths: ['parent@1.0.0']}),
+      expect.objectContaining({name: 'child', dependencyPaths: ['parent@1.0.0 > child@2.0.0']}),
     ]));
+  });
+
+  it('preserves Yarn parent versions and propagates direct scopes through transitive records', () => {
+    fs.writeFileSync(path.join(repository, 'package.json'), JSON.stringify({
+      dependencies: {runtimeRoot: '1.0.0'},
+      devDependencies: {devRoot: '1.0.0'},
+    }));
+    fs.writeFileSync(path.join(repository, 'yarn.lock'), [
+      'runtimeRoot@1.0.0:',
+      '  version "1.0.0"',
+      '  dependencies:',
+      '    parent "1.0.0"',
+      'devRoot@1.0.0:',
+      '  version "1.0.0"',
+      '  dependencies:',
+      '    parent "2.0.0"',
+      'parent@1.0.0:',
+      '  version "1.0.0"',
+      '  dependencies:',
+      '    shared "3.0.0"',
+      'parent@2.0.0:',
+      '  version "2.0.0"',
+      '  dependencies:',
+      '    shared "3.0.0"',
+      'shared@3.0.0:',
+      '  version "3.0.0"',
+    ].join('\n'));
+
+    const inventory = collectPackageInventory(repository);
+    const coordinate = (name: string, version: string) => inventory.coordinates.find(candidate =>
+      candidate.name === name && candidate.exactVersion === version
+    );
+
+    expect(coordinate('parent', '1.0.0')).toMatchObject({
+      scope: 'runtime', dependencyPaths: ['runtimeRoot@1.0.0 > parent@1.0.0'],
+    });
+    expect(coordinate('parent', '2.0.0')).toMatchObject({
+      scope: 'development', dependencyPaths: ['devRoot@1.0.0 > parent@2.0.0'],
+    });
+    expect(coordinate('shared', '3.0.0')).toMatchObject({
+      scope: 'runtime',
+      dependencyPaths: [
+        'devRoot@1.0.0 > parent@2.0.0 > shared@3.0.0',
+        'runtimeRoot@1.0.0 > parent@1.0.0 > shared@3.0.0',
+      ],
+    });
   });
 
   it('matches quoted scoped Yarn Berry dependencies to the requested version', () => {
@@ -363,9 +521,9 @@ describe('collectPackageInventory', () => {
     const inventory = collectPackageInventory(repository);
 
     expect(inventory.coordinates.find(coordinate => coordinate.name === '@scope/child' && coordinate.exactVersion === '1.5.0')?.dependencyPaths)
-      .toEqual(['@scope/child']);
+      .toEqual(['@scope/child@1.5.0']);
     expect(inventory.coordinates.find(coordinate => coordinate.name === '@scope/child' && coordinate.exactVersion === '2.5.0')?.dependencyPaths)
-      .toEqual(['parent > @scope/child']);
+      .toEqual(['parent@1.0.0 > @scope/child@2.5.0']);
   });
 
   it('uses the registry package identity for Yarn aliases', () => {
@@ -492,6 +650,31 @@ describe('collectPackageInventory', () => {
     const inventory = collectPackageInventory(repository);
 
     expect(inventory.errors).toEqual([]);
+  });
+
+  it('does not treat commented Cargo workspace members as active', () => {
+    fs.writeFileSync(path.join(repository, 'Cargo.toml'), [
+      '[workspace]',
+      'members = [',
+      '  "crates/member",',
+      '  # "services/worker",',
+      ']',
+    ].join('\n'));
+    fs.writeFileSync(path.join(repository, 'Cargo.lock'), 'version = 3\n');
+    fs.mkdirSync(path.join(repository, 'crates/member'), {recursive: true});
+    fs.writeFileSync(path.join(repository, 'crates/member/Cargo.toml'), '[package]\nname = "member"\nversion = "1.0.0"\n');
+    fs.mkdirSync(path.join(repository, 'services/worker'), {recursive: true});
+    fs.writeFileSync(path.join(repository, 'services/worker/Cargo.toml'), '[package]\nname = "worker"\nversion = "1.0.0"\n');
+
+    const inventory = collectPackageInventory(repository);
+
+    expect(inventory.errors).toEqual([
+      expect.objectContaining({
+        file: 'services/worker/Cargo.toml',
+        code: 'UNSUPPORTED_FORMAT',
+        message: expect.stringMatching(/lock|workspace/i),
+      }),
+    ]);
   });
 
   it('keeps only GEM specs and reports GIT and PATH coverage as incomplete', () => {

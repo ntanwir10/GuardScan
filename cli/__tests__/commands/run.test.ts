@@ -45,7 +45,6 @@ describe('guardscan run vulnerability settings', () => {
       vulnerabilityEndpoint: 'https://osv.example.test',
       vulnerabilitySnapshotMaxAgeDays: 3,
       vulnerabilityEnrichKnownExploited: false,
-      vulnerabilityKevMaxCacheAgeDays: 3,
     });
   });
 

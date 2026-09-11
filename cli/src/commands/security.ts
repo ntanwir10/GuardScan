@@ -94,7 +94,6 @@ export async function securityCommand(options: SecurityOptions): Promise<void> {
       vulnerabilitySnapshotMaxAgeDays: config.vulnerabilities?.snapshotMaxAgeDays,
       vulnerabilityEnrichKnownExploited:
         config.vulnerabilities?.enrichKnownExploited !== false,
-      vulnerabilityKevMaxCacheAgeDays: config.vulnerabilities?.snapshotMaxAgeDays,
       packageInventory: inventory,
       licenseReport,
     });

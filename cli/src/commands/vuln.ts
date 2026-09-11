@@ -89,7 +89,6 @@ export function createVulnerabilityCommand(scanner: DependencyScanner = dependen
           endpoint: config.vulnerabilities?.endpoint,
           maxSnapshotAgeDays: snapshotMaxAgeDays,
           enrichKnownExploited: config.vulnerabilities?.enrichKnownExploited !== false,
-          kevMaxCacheAgeDays: snapshotMaxAgeDays,
         });
         const document = vulnerabilityDocument('.', results, offline, allowPartial);
         const rendered = parsed.format === 'json'
@@ -106,6 +105,9 @@ export function createVulnerabilityCommand(scanner: DependencyScanner = dependen
         }
 
         const vulnerabilities = results.flatMap(result => result.vulnerabilities);
+        if (!allowPartial && results.some(result => result.status === 'partial')) {
+          process.exitCode = 2;
+        }
         const policyFailed = vulnerabilities.some(value =>
           parsed.failOn !== undefined && SEVERITY_RANK[value.policySeverity] >= SEVERITY_RANK[parsed.failOn]
         ) || (parsed.maxVulnerabilities !== undefined && vulnerabilities.length > parsed.maxVulnerabilities);
@@ -140,7 +142,6 @@ export function createVulnerabilityCommand(scanner: DependencyScanner = dependen
           endpoint: config.vulnerabilities?.endpoint,
           scope,
           enrichKnownExploited: config.vulnerabilities?.enrichKnownExploited !== false,
-          kevMaxCacheAgeDays: maxAgeDays,
         });
         const updateErrors = results.flatMap(result => result.errors);
         if (results.some(result => result.status !== 'complete') || updateErrors.length > 0) {
@@ -184,7 +185,7 @@ export function createVulnerabilityCommand(scanner: DependencyScanner = dependen
         );
         const inventory = filterPackageInventory(rawInventory, { scope });
         const inventoryMatches = status.snapshot?.inventoryDigest === inventory.digest;
-        const kevStatus = scanner.knownExploitedStatus(maxAgeDays);
+        const kevStatus = scanner.knownExploitedStatus();
         console.log(JSON.stringify({
           schemaVersion: 'guardscan.vulnerability-snapshot-status.v1',
           exists: status.exists,
