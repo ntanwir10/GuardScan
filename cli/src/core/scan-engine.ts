@@ -77,6 +77,8 @@ function coverageAwareOutput(
 export interface ScanEngineOptions {
   repoPath?: string;
   files?: ScanFile[];
+  /** Inputs discovered by the caller but omitted after a read failure. */
+  skippedFiles?: string[];
   offline?: boolean;
   includeLicenses?: boolean;
   includeVulnerabilities?: boolean;
@@ -260,7 +262,7 @@ export class ScanEngine {
         required: true,
         run: async () => {
           const patternFindings: Finding[] = [];
-          let skippedFiles = 0;
+          let skippedFiles = options.skippedFiles?.length || 0;
           for (const file of files) {
             try {
               const content = fs.readFileSync(file.path, 'utf-8');
@@ -357,7 +359,7 @@ export class ScanEngine {
         scanner: 'secrets',
         required: true,
         run: async () => {
-          let skippedInputs = 0;
+          let skippedInputs = options.skippedFiles?.length || 0;
           const onSkippedInput = (): void => {skippedInputs += 1;};
           const filePaths = files.map(file => file.path);
           const fileSecrets = await secretsDetector.detectInFiles(filePaths, onSkippedInput);

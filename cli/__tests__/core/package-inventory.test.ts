@@ -308,11 +308,16 @@ describe('collectPackageInventory', () => {
     const inventory = collectPackageInventory(repository);
 
     expect(inventory.coordinates).toEqual(expect.arrayContaining([
-      expect.objectContaining({name: 'parent', dependencyPaths: expect.arrayContaining(['parent', 'parent > child > parent'])}),
-      expect.objectContaining({name: 'child', dependencyPaths: expect.arrayContaining(['parent > child'])}),
+      expect.objectContaining({name: 'parent', dependencyPaths: expect.arrayContaining([
+        'parent@1.0.0',
+        'parent@1.0.0 > child@2.0.0 > parent@1.0.0',
+      ])}),
+      expect.objectContaining({name: 'child', dependencyPaths: expect.arrayContaining([
+        'parent@1.0.0 > child@2.0.0',
+      ])}),
     ]));
     expect(inventory.coordinates.find(coordinate => coordinate.name === 'parent')?.dependencyPaths).toEqual([
-      'parent', 'parent > child > parent',
+      'parent@1.0.0', 'parent@1.0.0 > child@2.0.0 > parent@1.0.0',
     ]);
   });
 
@@ -363,6 +368,81 @@ describe('collectPackageInventory', () => {
       .toEqual(['parent > @scope/child']);
   });
 
+  it('uses the registry package identity for Yarn aliases', () => {
+    fs.writeFileSync(path.join(repository, 'package.json'), JSON.stringify({
+      dependencies: {foo: 'npm:lodash@^4.17.0'},
+    }));
+    fs.writeFileSync(path.join(repository, 'yarn.lock'), [
+      '"foo@npm:lodash@^4.17.0":',
+      '  version: 4.17.21',
+      '  resolution: "foo@npm:lodash@4.17.21"',
+    ].join('\n'));
+
+    const inventory = collectPackageInventory(repository);
+
+    expect(inventory.coordinates).toEqual([
+      expect.objectContaining({name: 'lodash', exactVersion: '4.17.21', direct: true}),
+    ]);
+    expect(inventory.coordinates.some(coordinate => coordinate.name === 'foo')).toBe(false);
+    expect(inventory.errors).toEqual([]);
+  });
+
+  it('keeps pnpm graph versions and propagates root scopes to transitives', () => {
+    fs.writeFileSync(path.join(repository, 'package.json'), JSON.stringify({
+      dependencies: {runtimeRoot: '1.0.0'},
+      devDependencies: {devRoot: '1.0.0'},
+    }));
+    fs.writeFileSync(path.join(repository, 'pnpm-lock.yaml'), [
+      'lockfileVersion: 9.0',
+      'importers:',
+      '  .:',
+      '    dependencies:',
+      '      runtimeRoot:',
+      '        specifier: 1.0.0',
+      '        version: 1.0.0',
+      '    devDependencies:',
+      '      devRoot:',
+      '        specifier: 1.0.0',
+      '        version: 1.0.0',
+      'snapshots:',
+      '  runtimeRoot@1.0.0:',
+      '    dependencies:',
+      '      parent: 1.0.0',
+      '  devRoot@1.0.0:',
+      '    dependencies:',
+      '      parent: 2.0.0',
+      '      devOnly: 3.0.0',
+      '  parent@1.0.0:',
+      '    dependencies:',
+      '      shared: 4.0.0',
+      '  parent@2.0.0:',
+      '    dependencies:',
+      '      shared: 4.0.0',
+      '  devOnly@3.0.0: {}',
+      '  shared@4.0.0: {}',
+    ].join('\n'));
+
+    const inventory = collectPackageInventory(repository);
+    const coordinate = (name: string, version: string) => inventory.coordinates.find(candidate =>
+      candidate.name === name && candidate.exactVersion === version
+    );
+
+    expect(coordinate('parent', '1.0.0')).toMatchObject({
+      scope: 'runtime', dependencyPaths: ['runtimeRoot@1.0.0 > parent@1.0.0'],
+    });
+    expect(coordinate('parent', '2.0.0')).toMatchObject({
+      scope: 'development', dependencyPaths: ['devRoot@1.0.0 > parent@2.0.0'],
+    });
+    expect(coordinate('devOnly', '3.0.0')).toMatchObject({scope: 'development'});
+    expect(coordinate('shared', '4.0.0')).toMatchObject({
+      scope: 'runtime',
+      dependencyPaths: [
+        'devRoot@1.0.0 > parent@2.0.0 > shared@4.0.0',
+        'runtimeRoot@1.0.0 > parent@1.0.0 > shared@4.0.0',
+      ],
+    });
+  });
+
   it('marks plain pinned requirements as direct-only inventory', () => {
     fs.writeFileSync(path.join(repository, 'requirements.txt'), 'requests==2.31.0\n');
 
@@ -374,7 +454,7 @@ describe('collectPackageInventory', () => {
     ]);
   });
 
-  it('reports Cargo and Gemfile manifests without adjacent or ancestor locks', () => {
+  it('reports Cargo and Gemfile manifests without covering locks', () => {
     fs.writeFileSync(path.join(repository, 'Cargo.toml'), '[package]\nname = "fixture"\nversion = "1.0.0"\n');
     fs.writeFileSync(path.join(repository, 'Gemfile'), "source 'https://rubygems.org'\ngem 'rack'\n");
 
@@ -385,6 +465,33 @@ describe('collectPackageInventory', () => {
       expect.objectContaining({file: 'Cargo.toml', code: 'UNSUPPORTED_FORMAT', message: expect.stringMatching(/lock/i)}),
       expect.objectContaining({file: 'Gemfile', code: 'UNSUPPORTED_FORMAT', message: expect.stringMatching(/lock/i)}),
     ]));
+  });
+
+  it('does not let unrelated ancestor locks suppress nested Cargo or Bundler manifests', () => {
+    fs.writeFileSync(path.join(repository, 'Cargo.toml'), '[package]\nname = "root"\nversion = "1.0.0"\n');
+    fs.writeFileSync(path.join(repository, 'Cargo.lock'), 'version = 3\n');
+    fs.writeFileSync(path.join(repository, 'Gemfile.lock'), 'GEM\n  specs:\n');
+    fs.mkdirSync(path.join(repository, 'services/worker'), {recursive: true});
+    fs.writeFileSync(path.join(repository, 'services/worker/Cargo.toml'), '[package]\nname = "worker"\nversion = "1.0.0"\n');
+    fs.writeFileSync(path.join(repository, 'services/worker/Gemfile'), "source 'https://rubygems.org'\ngem 'rack'\n");
+
+    const inventory = collectPackageInventory(repository);
+
+    expect(inventory.errors).toEqual(expect.arrayContaining([
+      expect.objectContaining({file: 'services/worker/Cargo.toml', message: expect.stringMatching(/lock|workspace/i)}),
+      expect.objectContaining({file: 'services/worker/Gemfile', message: expect.stringMatching(/adjacent|lock/i)}),
+    ]));
+  });
+
+  it('accepts an ancestor Cargo lock only for declared workspace members', () => {
+    fs.writeFileSync(path.join(repository, 'Cargo.toml'), '[workspace]\nmembers = ["crates/*"]\n');
+    fs.writeFileSync(path.join(repository, 'Cargo.lock'), 'version = 3\n');
+    fs.mkdirSync(path.join(repository, 'crates/member'), {recursive: true});
+    fs.writeFileSync(path.join(repository, 'crates/member/Cargo.toml'), '[package]\nname = "member"\nversion = "1.0.0"\n');
+
+    const inventory = collectPackageInventory(repository);
+
+    expect(inventory.errors).toEqual([]);
   });
 
   it('keeps only GEM specs and reports GIT and PATH coverage as incomplete', () => {
@@ -414,6 +521,49 @@ GEM
     expect(inventory.errors).toEqual([
       expect.objectContaining({code: 'UNSUPPORTED_FORMAT', message: expect.stringMatching(/GIT/i)}),
       expect.objectContaining({code: 'UNSUPPORTED_FORMAT', message: expect.stringMatching(/PATH/i)}),
+    ]);
+  });
+
+  it('strips a declared Bundler platform suffix from gem versions', () => {
+    fs.writeFileSync(path.join(repository, 'Gemfile.lock'), [
+      'GEM',
+      '  remote: https://rubygems.org/',
+      '  specs:',
+      '    nokogiri (1.18.10-x86_64-linux-gnu)',
+      '',
+      'PLATFORMS',
+      '  x86_64-linux-gnu',
+      '',
+      'DEPENDENCIES',
+      '  nokogiri',
+    ].join('\n'));
+
+    const inventory = collectPackageInventory(repository);
+
+    expect(inventory.coordinates).toEqual([
+      expect.objectContaining({name: 'nokogiri', exactVersion: '1.18.10'}),
+    ]);
+    expect(inventory.errors).toEqual([]);
+  });
+
+  it('marks Go module inventories before graph pruning as incomplete', () => {
+    fs.writeFileSync(path.join(repository, 'go.mod'), [
+      'module example.test/legacy',
+      'go 1.16',
+      'require example.test/direct v1.2.3',
+    ].join('\n'));
+
+    const inventory = collectPackageInventory(repository);
+
+    expect(inventory.coordinates).toEqual([
+      expect.objectContaining({name: 'example.test/direct', exactVersion: 'v1.2.3'}),
+    ]);
+    expect(inventory.errors).toEqual([
+      expect.objectContaining({
+        file: 'go.mod',
+        code: 'UNSUPPORTED_FORMAT',
+        message: expect.stringMatching(/1\.17|transitive|build list/i),
+      }),
     ]);
   });
 

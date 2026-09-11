@@ -67,6 +67,7 @@ describe("Reporter", () => {
           blankLines: 100,
           fileCount: 10,
           fileBreakdown: [],
+          skippedFiles: [],
         },
         provider: "openai",
         model: "gpt-4",

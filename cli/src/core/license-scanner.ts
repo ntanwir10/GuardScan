@@ -929,9 +929,25 @@ function isDirectInstallDependency(finding: LicenseFinding): boolean {
   return finding.direct === true && finding.scope !== 'development';
 }
 
-function npmDependencyNames(dependencyPath: string): string[] {
+interface NpmDependencyIdentity {
+  name: string;
+  version?: string;
+}
+
+function npmDependencyIdentity(value: string): NpmDependencyIdentity {
+  const separator = value.lastIndexOf('@');
+  if (separator > 0 && /^\d+\.\d+\.\d+(?:[-+].*)?$/.test(value.slice(separator + 1))) {
+    return {name: value.slice(0, separator), version: value.slice(separator + 1)};
+  }
+  return {name: value};
+}
+
+function npmDependencyIdentities(dependencyPath: string): NpmDependencyIdentity[] {
   if (dependencyPath.includes(' > ')) {
-    return dependencyPath.split(' > ').map(value => value.trim()).filter(Boolean);
+    return dependencyPath.split(' > ')
+      .map(value => value.trim())
+      .filter(Boolean)
+      .map(npmDependencyIdentity);
   }
   const segments = dependencyPath.replace(/\\/g, '/').split('/').filter(Boolean);
   const names: string[] = [];
@@ -946,7 +962,7 @@ function npmDependencyNames(dependencyPath: string): string[] {
       index += 1;
     }
   }
-  return names;
+  return names.map(name => ({name}));
 }
 
 function cycloneDxDependencies(
@@ -955,12 +971,17 @@ function cycloneDxDependencies(
   rootReference: string
 ): Array<{ ref: string; dependsOn: string[] }> {
   const referencesByPackage = new Map<string, string[]>();
+  const referencesByCoordinate = new Map<string, string[]>();
   for (let index = 0; index < findings.length; index++) {
     const finding = findings[index];
     const key = `${finding.source}\u0000${finding.package}`;
     const references = referencesByPackage.get(key) || [];
     references.push(components[index]['bom-ref']);
     referencesByPackage.set(key, references);
+    referencesByCoordinate.set(
+      `${key}\u0000${finding.version}`,
+      [...(referencesByCoordinate.get(`${key}\u0000${finding.version}`) || []), components[index]['bom-ref']]
+    );
   }
 
   const outgoing = new Map<string, Set<string>>();
@@ -968,9 +989,14 @@ function cycloneDxDependencies(
     const finding = findings[index];
     if (finding.source !== 'npm') {continue;}
     for (const dependencyPath of finding.dependencyPaths || []) {
-      const names = npmDependencyNames(dependencyPath);
-      if (names.length < 2 || names[names.length - 1] !== finding.package) {continue;}
-      const parentReferences = referencesByPackage.get(`npm\u0000${names[names.length - 2]}`) || [];
+      const identities = npmDependencyIdentities(dependencyPath);
+      const child = identities[identities.length - 1];
+      if (identities.length < 2 || child.name !== finding.package ||
+        (child.version !== undefined && child.version !== finding.version)) {continue;}
+      const parent = identities[identities.length - 2];
+      const parentReferences = parent.version
+        ? referencesByCoordinate.get(`npm\u0000${parent.name}\u0000${parent.version}`) || []
+        : referencesByPackage.get(`npm\u0000${parent.name}`) || [];
       if (parentReferences.length !== 1) {continue;}
       const children = outgoing.get(parentReferences[0]) || new Set<string>();
       children.add(components[index]['bom-ref']);

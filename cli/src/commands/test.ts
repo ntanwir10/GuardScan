@@ -149,6 +149,7 @@ export async function testCommand(options: TestOptions): Promise<void> {
           blankLines: 0,
           fileCount: 0,
           fileBreakdown: [],
+          skippedFiles: [],
         },
         provider: 'quality-analyzer',
         model: 'multi-tool',

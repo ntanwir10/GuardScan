@@ -165,6 +165,25 @@ describe('LicenseScanner inventory and SBOM contracts', () => {
     expect(document.dependencies.find(entry => entry.ref === rootRef)?.dependsOn).not.toContain(childRef);
   });
 
+  it('uses versioned graph paths to disambiguate duplicate npm parent versions', () => {
+    const scanner = new LicenseScanner();
+    const findings = [
+      finding({package: 'parent', version: '1.0.0', direct: true, scope: 'runtime', dependencyPaths: ['parent@1.0.0']}),
+      finding({package: 'parent', version: '2.0.0', direct: true, scope: 'development', dependencyPaths: ['parent@2.0.0']}),
+      finding({package: 'child', version: '3.0.0', dependencyPaths: ['parent@1.0.0 > child@3.0.0']}),
+    ];
+
+    const document = scanner.generateSBOM(findings, 'cyclonedx', 'fixture');
+    const runtimeParent = document.components.find(component => component.name === 'parent' && component.version === '1.0.0')!['bom-ref'];
+    const developmentParent = document.components.find(component => component.name === 'parent' && component.version === '2.0.0')!['bom-ref'];
+    const child = document.components.find(component => component.name === 'child')!['bom-ref'];
+
+    expect(document.dependencies).toEqual(expect.arrayContaining([
+      {ref: runtimeParent, dependsOn: [child]},
+    ]));
+    expect(document.dependencies.find(entry => entry.ref === developmentParent)?.dependsOn || []).not.toContain(child);
+  });
+
   it('emits Maven package URLs with namespace and artifact segments', () => {
     const scanner = new LicenseScanner();
     const document = scanner.generateSBOM([

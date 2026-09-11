@@ -435,7 +435,7 @@ describe('CLI end-to-end contracts', () => {
     try {
       const result = await runStaticAnalysis(
         { path: project, name: 'guardscan-e2e-fixture', repoId: 'fixture', isGit: false },
-        { totalLines: 0, codeLines: 0, commentLines: 0, blankLines: 0, fileCount: 0, fileBreakdown: [] },
+        { totalLines: 0, codeLines: 0, commentLines: 0, blankLines: 0, fileCount: 0, fileBreakdown: [], skippedFiles: [] },
         undefined,
         {
           offline: true,

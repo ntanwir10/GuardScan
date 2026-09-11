@@ -34,9 +34,9 @@ describe('ScanEngine built-in coverage adapters', () => {
     fs.rmSync(repository, {recursive: true, force: true});
   });
 
-  function tasks(files: ScanFile[] = []): ScannerTask[] {
+  function tasks(files: ScanFile[] = [], skippedFiles: string[] = []): ScannerTask[] {
     return (new ScanEngine() as unknown as BuiltInTaskFactory).createBuiltInTasks(
-      {includeVulnerabilities: false, includeGitHistory: false},
+      {includeVulnerabilities: false, includeGitHistory: false, skippedFiles},
       repository,
       files,
       true
@@ -45,6 +45,16 @@ describe('ScanEngine built-in coverage adapters', () => {
 
   it('marks secret coverage incomplete when a selected file cannot be read', async () => {
     const output = await tasks([{path: path.join(repository, 'missing.ts')}])
+      .find(task => task.scanner === 'secrets')!.run() as ScannerTaskOutput;
+
+    expect(output).toMatchObject({
+      findings: [],
+      error: {code: 'SECRET_SCAN_PARTIAL', retryable: true},
+    });
+  });
+
+  it('marks secret coverage incomplete when LOC discovery omitted an unreadable file', async () => {
+    const output = await tasks([], ['unreadable.rs'])
       .find(task => task.scanner === 'secrets')!.run() as ScannerTaskOutput;
 
     expect(output).toMatchObject({

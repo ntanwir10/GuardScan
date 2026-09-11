@@ -321,6 +321,7 @@ export async function runStaticAnalysis(
     const scanResult = await scanEngine.runSecurityScan({
       repoPath,
       files: locResult.fileBreakdown,
+      skippedFiles: locResult.skippedFiles,
       offline: executionPolicy.offline,
       includeLicenses: true,
       includeVulnerabilities: executionPolicy.includeCve,

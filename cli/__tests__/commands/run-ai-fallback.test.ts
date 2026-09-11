@@ -46,6 +46,7 @@ import { runCommand } from '../../src/commands/run';
 import { configManager } from '../../src/core/config';
 import { repositoryManager } from '../../src/core/repository';
 import { locCounter } from '../../src/core/loc-counter';
+import { scanEngine } from '../../src/core/scan-engine';
 import { ProviderFactory } from '../../src/providers/factory';
 
 describe('run command optional AI fallback', () => {
@@ -61,7 +62,8 @@ describe('run command optional AI fallback', () => {
       name: 'fixture', path: '/tmp/fixture', repoId: 'fixture', branch: 'main',
     } as any);
     jest.mocked(locCounter.count).mockResolvedValue({
-      totalLines: 1, codeLines: 1, commentLines: 0, blankLines: 0, fileCount: 1, fileBreakdown: [],
+      totalLines: 1, codeLines: 1, commentLines: 0, blankLines: 0, fileCount: 1,
+      fileBreakdown: [], skippedFiles: ['unreadable.rs'],
     } as any);
     jest.mocked(ProviderFactory.createForCli).mockReturnValue({
       getName: () => 'Ollama', chat,
@@ -93,6 +95,9 @@ describe('run command optional AI fallback', () => {
     expect(consoleSpy).toHaveBeenCalledWith(expect.stringMatching(/AI enhancement failed/i));
     expect(process.exitCode).toBeUndefined();
     expect(chat).toHaveBeenCalled();
+    expect(scanEngine.runSecurityScan).toHaveBeenCalledWith(expect.objectContaining({
+      skippedFiles: ['unreadable.rs'],
+    }));
 
     consoleSpy.mockRestore();
   });

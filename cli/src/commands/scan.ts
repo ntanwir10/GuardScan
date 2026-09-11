@@ -132,6 +132,7 @@ export async function scanCommand(options: ScanOptions): Promise<void> {
     const securityPromise = scanEngine.runSecurityScan({
       repoPath: repoInfo.path,
       files: locResult.fileBreakdown,
+      skippedFiles: locResult.skippedFiles,
       offline,
       includeLicenses: options.licenses === true,
       includeVulnerabilities,

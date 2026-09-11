@@ -145,9 +145,13 @@ function npmDirectDependencyRequirements(
   return result;
 }
 
+function npmAliasTarget(requested: string): {name: string; range: string} | undefined {
+  const match = requested.match(/^npm:((?:@[^/]+\/)?[^@]+)@(.+)$/);
+  return match ? {name: match[1], range: match[2]} : undefined;
+}
+
 function npmRequestMatchesVersion(requested: string, exactVersion: string): boolean {
-  const aliasRange = requested.match(/^npm:(?:@[^/]+\/[^@]+|[^@]+)@(.+)$/)?.[1];
-  const registryRange = aliasRange || requested.replace(/^npm:/, '');
+  const registryRange = npmAliasTarget(requested)?.range || requested.replace(/^npm:/, '');
   const range = semver.validRange(registryRange, { loose: true });
   return range !== null && semver.satisfies(exactVersion, range, { includePrerelease: true, loose: true });
 }
@@ -599,11 +603,20 @@ function parsePnpmLock(root: string, file: string, coordinates: DependencyCoordi
       nodes.set(`${parsed.name}\0${parsed.version}`, { ...parsed, rawKey, dependencies });
     }
     const pathsByNode = new Map<string, Set<string>>();
-    const visit = (nodeKey: string, currentPath: string, stack: Set<string>): void => {
+    const scopeByNode = new Map<string, DependencyScope>();
+    const versionedIdentity = (name: string, version: string): string => `${name}@${version}`;
+    const visit = (
+      nodeKey: string,
+      currentPath: string,
+      stack: Set<string>,
+      rootScope: DependencyScope
+    ): void => {
       const paths = pathsByNode.get(nodeKey) || new Set<string>();
       if (paths.has(currentPath)) {return;}
       paths.add(currentPath);
       pathsByNode.set(nodeKey, paths);
+      const existingScope = scopeByNode.get(nodeKey) || 'unknown';
+      if (scopeRank[rootScope] > scopeRank[existingScope]) {scopeByNode.set(nodeKey, rootScope);}
       if (stack.has(nodeKey)) {return;}
       const node = nodes.get(nodeKey);
       if (!node) {return;}
@@ -612,12 +625,18 @@ function parsePnpmLock(root: string, file: string, coordinates: DependencyCoordi
         `${left.name}\0${left.version}`.localeCompare(`${right.name}\0${right.version}`)
       )) {
         const childKey = `${dependency.name}\0${dependency.version}`;
-        visit(childKey, `${currentPath} > ${dependency.name}`, nextStack);
+        visit(
+          childKey,
+          `${currentPath} > ${versionedIdentity(dependency.name, dependency.version)}`,
+          nextStack,
+          rootScope
+        );
       }
     };
     for (const [nodeKey, direct] of directDependencies) {
-      const nodePaths = direct.dependencyPaths.length > 0 ? direct.dependencyPaths : [nodeKey.split('\0')[0]];
-      for (const nodePath of nodePaths) {visit(nodeKey, nodePath, new Set());}
+      const node = nodes.get(nodeKey);
+      if (!node) {continue;}
+      visit(nodeKey, versionedIdentity(node.name, node.version), new Set(), direct.scope);
     }
     for (const rawKey of Object.keys(records)) {
       const parsed = parseNodeKey(rawKey);
@@ -627,10 +646,12 @@ function parsePnpmLock(root: string, file: string, coordinates: DependencyCoordi
       const dependencyPaths = pathsByNode.get(nodeKey);
       addCoordinate(coordinates, {
         ecosystem: 'npm', osvEcosystem: 'npm', name: parsed.name, exactVersion: parsed.version,
-        scope: direct?.scope || 'unknown', direct: direct !== undefined,
+        scope: direct?.scope || scopeByNode.get(nodeKey) || 'unknown', direct: direct !== undefined,
         manifestPath: direct?.manifestPath || relative(root, path.join(path.dirname(file), 'package.json')),
         lockfilePath: rel,
-        dependencyPaths: dependencyPaths ? [...dependencyPaths].sort() : direct ? direct.dependencyPaths : [rawKey],
+        dependencyPaths: dependencyPaths
+          ? [...dependencyPaths].sort()
+          : [versionedIdentity(parsed.name, parsed.version)],
       });
     }
   } catch (error: unknown) {
@@ -662,7 +683,13 @@ function parseYarnLock(root: string, file: string, coordinates: DependencyCoordi
         if (unsupportedSource) {
           errors.push({file: rel, code: 'UNSUPPORTED_FORMAT', message: `Yarn package ${packageName} uses unsupported source: ${unsupportedSource.slice(0, 120)}`});
         } else {
-          records.push({name: packageName, version: exactVersion, descriptors: [...descriptors], dependencies: [...dependencies]});
+          const descriptorPackageName = packageName;
+          const registryName = descriptors
+            .map(candidate => candidate.startsWith(`${descriptorPackageName}@`) ? candidate.slice(descriptorPackageName.length + 1) : '')
+            .map(npmAliasTarget)
+            .find((candidate): candidate is {name: string; range: string} => candidate !== undefined)
+            ?.name;
+          records.push({name: registryName || packageName, version: exactVersion, descriptors: [...descriptors], dependencies: [...dependencies]});
         }
       } else if (descriptor && descriptor !== '__metadata' && !resolved) {
         errors.push({
@@ -725,14 +752,15 @@ function parseYarnLock(root: string, file: string, coordinates: DependencyCoordi
     finishRecord();
     const directForRecord = (record: typeof records[number]): {scope: DependencyScope; manifestPath: string} | undefined => {
       const candidates = workspaceDependencies.filter(candidate =>
-        candidate.name === record.name && npmRequestMatchesVersion(candidate.requested, record.version) && record.descriptors.some(candidateDescriptor =>
-          yarnDescriptorMatchesRequest(candidateDescriptor, record.name, candidate.requested)
+        npmRequestMatchesVersion(candidate.requested, record.version) && record.descriptors.some(candidateDescriptor =>
+          yarnDescriptorMatchesRequest(candidateDescriptor, candidate.name, candidate.requested)
         )
       );
-      const direct = directDependencies.get(record.name);
-      if (direct && npmRequestMatchesVersion(direct.requested, record.version) &&
-        record.descriptors.some(candidate => yarnDescriptorMatchesRequest(candidate, record.name, direct.requested))) {
-        candidates.push({...direct, name: record.name, manifestPath: relative(root, path.join(path.dirname(file), 'package.json'))});
+      for (const [name, direct] of directDependencies) {
+        if (npmRequestMatchesVersion(direct.requested, record.version) &&
+          record.descriptors.some(candidate => yarnDescriptorMatchesRequest(candidate, name, direct.requested))) {
+          candidates.push({...direct, name, manifestPath: relative(root, path.join(path.dirname(file), 'package.json'))});
+        }
       }
       return candidates.sort((left, right) =>
         scopeRank[right.scope] - scopeRank[left.scope] || left.manifestPath.localeCompare(right.manifestPath)
@@ -748,7 +776,6 @@ function parseYarnLock(root: string, file: string, coordinates: DependencyCoordi
       const nextStack = new Set(stack).add(record);
       for (const dependency of [...record.dependencies].sort((left, right) => `${left.name}\0${left.requested}`.localeCompare(`${right.name}\0${right.requested}`))) {
         const child = records.find(candidate =>
-          candidate.name === dependency.name &&
           npmRequestMatchesVersion(dependency.requested, candidate.version) &&
           candidate.descriptors.some(descriptor => yarnDescriptorMatchesRequest(descriptor, dependency.name, dependency.requested))
         );
@@ -889,10 +916,16 @@ function parseGoMod(
 
     const requirements: GoRequirement[] = [];
     const replacements: GoReplacement[] = [];
+    let declaredGoVersion: string | undefined;
     let inRequire = false;
     let inReplace = false;
     for (const raw of fs.readFileSync(file, 'utf8').split(/\r?\n/)) {
       const line = raw.trim();
+      const goDirective = line.match(/^go\s+(\d+)\.(\d+)(?:\.\d+)?$/);
+      if (goDirective) {
+        declaredGoVersion = `${goDirective[1]}.${goDirective[2]}`;
+        continue;
+      }
       if (line === 'require (') {inRequire = true; continue;}
       if (inRequire && line === ')') {inRequire = false; continue;}
       if (line === 'replace (') {inReplace = true; continue;}
@@ -969,6 +1002,16 @@ function parseGoMod(
         dependencyPaths: [replacement ? `${requirement.name} => ${name}` : name],
       });
     }
+    if (declaredGoVersion) {
+      const [major, minor] = declaredGoVersion.split('.').map(Number);
+      if (major < 1 || (major === 1 && minor < 17)) {
+        errors.push({
+          file: rel,
+          code: 'UNSUPPORTED_FORMAT',
+          message: `go.mod declares Go ${declaredGoVersion}; versions before 1.17 do not guarantee a complete transitive build list`,
+        });
+      }
+    }
   } catch (error: unknown) {
     errors.push({
       file: rel,
@@ -1015,10 +1058,19 @@ function parseGemfileLock(
 ): void {
   const rel = relative(root, file);
   try {
+    const lines = fs.readFileSync(file, 'utf8').split(/\r?\n/);
+    const platforms: string[] = [];
+    let inPlatforms = false;
+    for (const line of lines) {
+      if (line === 'PLATFORMS') {inPlatforms = true; continue;}
+      if (inPlatforms && line && !/^\s/.test(line)) {inPlatforms = false;}
+      const platform = inPlatforms ? line.match(/^\s{2}(\S+)\s*$/)?.[1] : undefined;
+      if (platform && platform !== 'ruby') {platforms.push(platform);}
+    }
     let inSpecs = false;
     let source: 'GEM' | 'GIT' | 'PATH' | undefined;
     const reportedUnsupported = new Set<'GIT' | 'PATH'>();
-    for (const line of fs.readFileSync(file, 'utf8').split(/\r?\n/)) {
+    for (const line of lines) {
       const section = line.match(/^(GEM|GIT|PATH)\s*$/)?.[1] as 'GEM' | 'GIT' | 'PATH' | undefined;
       if (section) {source = section; inSpecs = false; continue;}
       if (/^\s{2}specs:$/.test(line)) {
@@ -1039,8 +1091,11 @@ function parseGemfileLock(
       if (!inSpecs || source !== 'GEM') {continue;}
       const match = line.match(/^\s{4}([A-Za-z0-9_.-]+) \(([^ )]+)\)/);
       if (!match) {continue;}
+      const platform = [...platforms].sort((left, right) => right.length - left.length)
+        .find(candidate => match[2].endsWith(`-${candidate}`));
+      const version = platform ? match[2].slice(0, -(platform.length + 1)) : match[2];
       addCoordinate(coordinates, {
-        ecosystem: 'ruby', osvEcosystem: 'RubyGems', name: match[1], exactVersion: match[2],
+        ecosystem: 'ruby', osvEcosystem: 'RubyGems', name: match[1], exactVersion: version,
         scope: 'unknown', direct: false, manifestPath: relative(root, path.join(path.dirname(file), 'Gemfile')),
         lockfilePath: rel, dependencyPaths: [match[1]],
       });
@@ -1208,10 +1263,33 @@ function ecosystemForInventoryFile(file: string): PackageEcosystem | undefined {
   }
 }
 
-function hasAncestorLock(root: string, manifest: string, lockName: string, inventoryFiles: ReadonlySet<string>): boolean {
+function cargoWorkspacePatterns(manifest: string, key: 'members' | 'exclude'): string[] {
+  try {
+    const content = fs.readFileSync(manifest, 'utf8');
+    const section = content.match(/(?:^|\n)\s*\[workspace\]\s*\n([\s\S]*?)(?=\n\s*\[[^\]]+\]|$)/)?.[1];
+    const array = section?.match(new RegExp(`(?:^|\\n)\\s*${key}\\s*=\\s*\\[([\\s\\S]*?)\\]`))?.[1];
+    if (!array) {return [];}
+    return [...array.matchAll(/"([^"]+)"|'([^']+)'/g)].map(match => match[1] || match[2]);
+  } catch {
+    return [];
+  }
+}
+
+function hasCoveringCargoLock(root: string, manifest: string, inventoryFiles: ReadonlySet<string>): boolean {
+  const manifestDirectory = path.dirname(manifest);
   let directory = path.dirname(manifest);
   while (isWithinRoot(root, directory)) {
-    if (inventoryFiles.has(path.join(directory, lockName))) {return true;}
+    if (inventoryFiles.has(path.join(directory, 'Cargo.lock'))) {
+      if (directory === manifestDirectory) {return true;}
+      const workspaceManifest = path.join(directory, 'Cargo.toml');
+      const relativeDirectory = relative(directory, manifestDirectory);
+      const members = cargoWorkspacePatterns(workspaceManifest, 'members');
+      const excluded = cargoWorkspacePatterns(workspaceManifest, 'exclude');
+      if (members.some(pattern => yarnWorkspacePatternMatches(pattern, relativeDirectory)) &&
+        !excluded.some(pattern => yarnWorkspacePatternMatches(pattern, relativeDirectory))) {
+        return true;
+      }
+    }
     if (directory === root) {break;}
     directory = path.dirname(directory);
   }
@@ -1260,11 +1338,11 @@ export function collectPackageInventory(repoPath: string = process.cwd()): Packa
     else if (name === 'go.mod') {parseGoMod(root, file, coordinates, errors);}
     else if (name === 'Cargo.lock') {parseCargoLock(root, file, coordinates, errors);}
     else if (name === 'Gemfile.lock') {parseGemfileLock(root, file, coordinates, errors);}
-    else if (name === 'Cargo.toml' && !hasAncestorLock(root, file, 'Cargo.lock', inventoryFiles)) {
-      errors.push({file: relative(root, file), code: 'UNSUPPORTED_FORMAT', message: 'Cargo.toml has no adjacent or ancestor Cargo.lock; dependency coverage is incomplete'});
+    else if (name === 'Cargo.toml' && !hasCoveringCargoLock(root, file, inventoryFiles)) {
+      errors.push({file: relative(root, file), code: 'UNSUPPORTED_FORMAT', message: 'Cargo.toml has no adjacent Cargo.lock or ancestor workspace lock; dependency coverage is incomplete'});
     }
-    else if (name === 'Gemfile' && !hasAncestorLock(root, file, 'Gemfile.lock', inventoryFiles)) {
-      errors.push({file: relative(root, file), code: 'UNSUPPORTED_FORMAT', message: 'Gemfile has no adjacent or ancestor Gemfile.lock; dependency coverage is incomplete'});
+    else if (name === 'Gemfile' && !inventoryFiles.has(path.join(path.dirname(file), 'Gemfile.lock'))) {
+      errors.push({file: relative(root, file), code: 'UNSUPPORTED_FORMAT', message: 'Gemfile has no adjacent Gemfile.lock; dependency coverage is incomplete'});
     }
     else if (name === 'pom.xml') {parsePom(root, file, coordinates, errors);}
   }
