@@ -985,6 +985,62 @@ GEM
     expect(inventory.errors).toEqual([]);
   });
 
+  it('derives Bundler direct dependencies, scopes, and transitive graph paths', () => {
+    fs.writeFileSync(path.join(repository, 'Gemfile'), [
+      "source 'https://rubygems.org'",
+      "gem 'rack', '~> 3.0'",
+      'group :development, :test do',
+      "  gem 'rspec'",
+      'end',
+    ].join('\n'));
+    fs.writeFileSync(path.join(repository, 'Gemfile.lock'), [
+      'GEM',
+      '  remote: https://rubygems.org/',
+      '  specs:',
+      '    rack (3.1.0)',
+      '      rack-session (>= 2.0.0)',
+      '    rack-session (2.1.0)',
+      '    rspec (3.13.0)',
+      '',
+      'DEPENDENCIES',
+      '  rack (~> 3.0)',
+      '  rspec',
+    ].join('\n'));
+
+    const inventory = collectPackageInventory(repository);
+
+    expect(inventory.coordinates).toEqual(expect.arrayContaining([
+      expect.objectContaining({name: 'rack', direct: true, scope: 'runtime', dependencyPaths: ['rack@3.1.0']}),
+      expect.objectContaining({name: 'rack-session', direct: false, scope: 'runtime', dependencyPaths: ['rack@3.1.0 > rack-session@2.1.0']}),
+      expect.objectContaining({name: 'rspec', direct: true, scope: 'development', dependencyPaths: ['rspec@3.13.0']}),
+    ]));
+    expect(inventory.errors).toEqual([]);
+  });
+
+  it('reports Gemfile requirements that are absent or stale in the adjacent lock', () => {
+    fs.writeFileSync(path.join(repository, 'Gemfile'), [
+      "source 'https://rubygems.org'",
+      "gem 'rack', '~> 4.0'",
+      "gem 'new-gem'",
+    ].join('\n'));
+    fs.writeFileSync(path.join(repository, 'Gemfile.lock'), [
+      'GEM',
+      '  remote: https://rubygems.org/',
+      '  specs:',
+      '    rack (3.1.0)',
+      '',
+      'DEPENDENCIES',
+      '  rack (~> 3.0)',
+    ].join('\n'));
+
+    const inventory = collectPackageInventory(repository);
+
+    expect(inventory.errors).toEqual(expect.arrayContaining([
+      expect.objectContaining({file: 'Gemfile', code: 'UNRESOLVED_VERSION', message: expect.stringMatching(/rack.*~> 4\.0/i)}),
+      expect.objectContaining({file: 'Gemfile', code: 'UNRESOLVED_VERSION', message: expect.stringMatching(/new-gem/i)}),
+    ]));
+  });
+
   it('marks Go module inventories before graph pruning as incomplete', () => {
     fs.writeFileSync(path.join(repository, 'go.mod'), [
       'module example.test/legacy',

@@ -17,6 +17,7 @@ const MAX_CONFIG_KEYS = 2000;
 const MAX_CONFIG_SCALAR_BYTES = 64 * 1024;
 const CONFIG_LEASE_STALE_MS = 30_000;
 const CONFIG_LEASE_WAIT_MS = 5000;
+const MAX_VULNERABILITY_SNAPSHOT_AGE_DAYS = 3650;
 
 export interface Config {
   /** Legacy installation identifier. Accepted when loading, never used or re-emitted. */
@@ -641,7 +642,13 @@ function normalizeVulnerabilities(value: unknown): NonNullable<Config['vulnerabi
     source: optionalValue(section, 'source', (candidate): candidate is 'osv' => candidate === 'osv', defaults.source, 'configuration.vulnerabilities'),
     endpoint,
     scope: optionalValue(section, 'scope', (candidate): candidate is 'all' | 'runtime' => candidate === 'all' || candidate === 'runtime', defaults.scope, 'configuration.vulnerabilities'),
-    snapshotMaxAgeDays: optionalValue(section, 'snapshotMaxAgeDays', isNonNegativeInteger, defaults.snapshotMaxAgeDays, 'configuration.vulnerabilities'),
+    snapshotMaxAgeDays: optionalValue(
+      section,
+      'snapshotMaxAgeDays',
+      (candidate): candidate is number => isNonNegativeInteger(candidate) && candidate <= MAX_VULNERABILITY_SNAPSHOT_AGE_DAYS,
+      defaults.snapshotMaxAgeDays,
+      'configuration.vulnerabilities'
+    ),
     enrichKnownExploited: optionalValue(section, 'enrichKnownExploited', isBoolean, defaults.enrichKnownExploited, 'configuration.vulnerabilities'),
   };
 }

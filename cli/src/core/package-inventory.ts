@@ -1523,6 +1523,43 @@ function parseGemfileLock(
   const rel = relative(root, file);
   try {
     const lines = fs.readFileSync(file, 'utf8').split(/\r?\n/);
+    const manifest = path.join(path.dirname(file), 'Gemfile');
+    const manifestPath = relative(root, manifest);
+    type GemRequirement = {name: string; requested?: string; scope: DependencyScope; local: boolean};
+    type GemNode = {key: string; name: string; version: string; dependencies: Array<{name: string; requested?: string}>};
+    const scopeRank: Record<DependencyScope, number> = {unknown: 0, development: 1, optional: 2, runtime: 3};
+    const requirements = new Map<string, GemRequirement>();
+    if (fs.existsSync(manifest)) {
+      const blocks: Array<{groups: string[]}> = [];
+      for (const rawLine of fs.readFileSync(manifest, 'utf8').split(/\r?\n/)) {
+        const line = rawLine.replace(/\s+#.*$/, '').trim();
+        const group = line.match(/^group\s+(.+?)\s+do\s*$/);
+        if (group) {
+          blocks.push({groups: [...group[1].matchAll(/:([A-Za-z0-9_]+)/g)].map(match => match[1])});
+          continue;
+        }
+        if (/^end\b/.test(line)) {blocks.pop(); continue;}
+        const gem = line.match(/^gem\s*(?:\(\s*)?['"]([^'"]+)['"](.*)$/);
+        if (!gem) {continue;}
+        const tail = gem[2];
+        const requested = tail.match(/^\s*,\s*['"]([^'"]+)['"]/)?.[1];
+        const inlineGroups = [...tail.matchAll(/(?:groups?|:group)\s*(?:=>|:)\s*(?:\[([^\]]+)\]|:([A-Za-z0-9_]+)|['"]([^'"]+)['"])/g)]
+          .flatMap(match => match[1]
+            ? [...match[1].matchAll(/:?([A-Za-z0-9_]+)/g)].map(value => value[1])
+            : [match[2] || match[3]])
+          .filter(Boolean);
+        const groups = [...blocks.flatMap(block => block.groups), ...inlineGroups];
+        const scope: DependencyScope = groups.length > 0 && groups.every(value => ['development', 'test'].includes(value))
+          ? 'development'
+          : 'runtime';
+        const next: GemRequirement = {
+          name: gem[1], requested, scope,
+          local: /(?:^|,)\s*(?:git|github|path)\s*(?:=>|:)/.test(tail),
+        };
+        const existing = requirements.get(next.name);
+        if (!existing || scopeRank[next.scope] > scopeRank[existing.scope]) {requirements.set(next.name, next);}
+      }
+    }
     const platforms: string[] = [];
     let inPlatforms = false;
     for (const line of lines) {
@@ -1534,6 +1571,8 @@ function parseGemfileLock(
     let inSpecs = false;
     let source: 'GEM' | 'GIT' | 'PATH' | undefined;
     const reportedUnsupported = new Set<'GIT' | 'PATH'>();
+    const nodes: GemNode[] = [];
+    let currentNode: GemNode | undefined;
     for (const line of lines) {
       const section = line.match(/^(GEM|GIT|PATH)\s*$/)?.[1] as 'GEM' | 'GIT' | 'PATH' | undefined;
       if (section) {source = section; inSpecs = false; continue;}
@@ -1551,17 +1590,102 @@ function parseGemfileLock(
         }
         continue;
       }
-      if (inSpecs && line && !/^\s/.test(line)) {inSpecs = false;}
+      if (inSpecs && line && !/^\s/.test(line)) {inSpecs = false; currentNode = undefined;}
       if (!inSpecs || source !== 'GEM') {continue;}
       const match = line.match(/^\s{4}([A-Za-z0-9_.-]+) \(([^ )]+)\)/);
-      if (!match) {continue;}
-      const platform = [...platforms].sort((left, right) => right.length - left.length)
-        .find(candidate => match[2].endsWith(`-${candidate}`));
-      const version = platform ? match[2].slice(0, -(platform.length + 1)) : match[2];
+      if (match) {
+        const platform = [...platforms].sort((left, right) => right.length - left.length)
+          .find(candidate => match[2].endsWith(`-${candidate}`));
+        const version = platform ? match[2].slice(0, -(platform.length + 1)) : match[2];
+        currentNode = {key: `${match[1]}\0${version}`, name: match[1], version, dependencies: []};
+        nodes.push(currentNode);
+        continue;
+      }
+      const dependency = line.match(/^\s{6}([A-Za-z0-9_.-]+)(?: \(([^)]+)\))?/);
+      if (dependency && currentNode) {
+        currentNode.dependencies.push({name: dependency[1], requested: dependency[2]});
+      }
+    }
+
+    const rubyRequirementMatches = (requested: string | undefined, version: string): boolean => {
+      if (!requested) {return true;}
+      const candidate = semver.valid(version, {loose: true});
+      if (!candidate) {return requested.trim().replace(/^=+\s*/, '') === version;}
+      return requested.split(',').every(raw => {
+        const requirement = raw.trim();
+        const pessimistic = requirement.match(/^~>\s*(\d+)(?:\.(\d+))?(?:\.(\d+))?/);
+        if (pessimistic) {
+          const parts = pessimistic.slice(1).filter(value => value !== undefined).map(Number);
+          const lower = `${parts[0]}.${parts[1] || 0}.${parts[2] || 0}`;
+          const upper = parts.length >= 3
+            ? `${parts[0]}.${(parts[1] || 0) + 1}.0`
+            : `${parts[0] + 1}.0.0`;
+          return semver.gte(candidate, lower) && semver.lt(candidate, upper);
+        }
+        const normalized = requirement.replace(/^=\s*/, '');
+        return semver.satisfies(candidate, normalized, {includePrerelease: true, loose: true});
+      });
+    };
+    const dependencyRoots = new Map<string, string | undefined>();
+    let inDependencies = false;
+    for (const line of lines) {
+      if (line === 'DEPENDENCIES') {inDependencies = true; continue;}
+      if (inDependencies && line && !/^\s/.test(line)) {inDependencies = false;}
+      if (!inDependencies) {continue;}
+      const match = line.match(/^\s{2}([A-Za-z0-9_.-]+)(?: \(([^)]+)\))?(!)?\s*$/);
+      if (match && !match[3]) {dependencyRoots.set(match[1], match[2]);}
+    }
+    for (const requirement of requirements.values()) {
+      if (requirement.local) {continue;}
+      const locked = nodes.some(node => node.name === requirement.name &&
+        rubyRequirementMatches(requirement.requested, node.version));
+      if (!dependencyRoots.has(requirement.name) || !locked) {
+        errors.push({
+          file: manifestPath,
+          code: 'UNRESOLVED_VERSION',
+          message: `Gem dependency ${requirement.name}${requirement.requested ? ` ${requirement.requested}` : ''} is not satisfied by Gemfile.lock`,
+        });
+      }
+    }
+    const directByNode = new Map<string, DependencyScope>();
+    for (const [name, requested] of dependencyRoots) {
+      for (const node of nodes.filter(candidate => candidate.name === name && rubyRequirementMatches(requested, candidate.version))) {
+        directByNode.set(node.key, requirements.get(name)?.scope || 'unknown');
+      }
+    }
+    const resolveDependency = (dependency: {name: string; requested?: string}): GemNode | undefined => {
+      const candidates = nodes.filter(node => node.name === dependency.name &&
+        rubyRequirementMatches(dependency.requested, node.version));
+      return candidates.length === 1 ? candidates[0] : undefined;
+    };
+    const pathsByNode = new Map<string, Set<string>>();
+    const scopesByNode = new Map<string, DependencyScope>();
+    const identity = (node: GemNode): string => `${node.name}@${node.version}`;
+    const visit = (node: GemNode, currentPath: string, stack: Set<string>, scope: DependencyScope): void => {
+      const paths = pathsByNode.get(node.key) || new Set<string>();
+      if (paths.has(currentPath)) {return;}
+      paths.add(currentPath);
+      pathsByNode.set(node.key, paths);
+      const existing = scopesByNode.get(node.key) || 'unknown';
+      if (scopeRank[scope] > scopeRank[existing]) {scopesByNode.set(node.key, scope);}
+      if (stack.has(node.key)) {return;}
+      const nextStack = new Set(stack).add(node.key);
+      for (const dependency of node.dependencies) {
+        const child = resolveDependency(dependency);
+        if (child) {visit(child, `${currentPath} > ${identity(child)}`, nextStack, scope);}
+      }
+    };
+    for (const node of nodes) {
+      const directScope = directByNode.get(node.key);
+      if (directScope) {visit(node, identity(node), new Set(), directScope);}
+    }
+    for (const node of nodes) {
+      const directScope = directByNode.get(node.key);
       addCoordinate(coordinates, {
-        ecosystem: 'ruby', osvEcosystem: 'RubyGems', name: match[1], exactVersion: version,
-        scope: 'unknown', direct: false, manifestPath: relative(root, path.join(path.dirname(file), 'Gemfile')),
-        lockfilePath: rel, dependencyPaths: [match[1]],
+        ecosystem: 'ruby', osvEcosystem: 'RubyGems', name: node.name, exactVersion: node.version,
+        scope: directScope || scopesByNode.get(node.key) || 'unknown', direct: directScope !== undefined,
+        manifestPath, lockfilePath: rel,
+        dependencyPaths: pathsByNode.get(node.key) ? [...pathsByNode.get(node.key)!].sort() : [identity(node)],
       });
     }
   } catch (error: unknown) {

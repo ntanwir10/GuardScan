@@ -43,6 +43,23 @@ export class SecretsDetector {
     const findings: SecretFinding[] = [];
 
     try {
+      const insideWorkTree = execFileSync('git', ['rev-parse', '--is-inside-work-tree'], {
+        cwd: repoPath,
+        encoding: 'utf-8',
+      }).trim();
+      if (insideWorkTree !== 'true') {return findings;}
+    } catch (error: unknown) {
+      const rawStderr = error && typeof error === 'object' && 'stderr' in error
+        ? (error as {stderr?: unknown}).stderr
+        : undefined;
+      const stderr = typeof rawStderr === 'string'
+        ? rawStderr
+        : Buffer.isBuffer(rawStderr) ? rawStderr.toString('utf8') : '';
+      if (!/not a git repository/i.test(stderr)) {onSkippedInput();}
+      return findings;
+    }
+
+    try {
       // Get all commits
       const commits = execFileSync('git', ['log', '--all', '--format=%H'], {
         cwd: repoPath,
@@ -64,7 +81,7 @@ export class SecretsDetector {
         }
       }
     } catch {
-      // Git not available or not a git repo
+      onSkippedInput();
     }
 
     return findings;

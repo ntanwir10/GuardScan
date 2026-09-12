@@ -16,6 +16,7 @@ describe('SecretsDetector', () => {
   let testDir: string;
 
   beforeEach(() => {
+    mockedExecFileSync.mockReset();
     detector = new SecretsDetector();
     testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'secrets-test-'));
   });
@@ -109,6 +110,7 @@ describe('SecretsDetector', () => {
     it('reports a skipped commit when git show fails', async () => {
       const commit = 'a'.repeat(40);
       mockedExecFileSync.mockImplementation(((_command: string, args: readonly string[]) => {
+        if (args[0] === 'rev-parse') {return 'true\n';}
         if (args[0] === 'log') {return `${commit}\n`;}
         throw new Error('git object unavailable');
       }) as typeof execFileSync);
@@ -117,7 +119,28 @@ describe('SecretsDetector', () => {
       await expect(detector.scanGitHistory(testDir, onSkippedInput)).resolves.toEqual([]);
 
       expect(onSkippedInput).toHaveBeenCalledTimes(1);
-      mockedExecFileSync.mockReset();
+    });
+
+    it('reports skipped coverage when git history enumeration fails', async () => {
+      mockedExecFileSync.mockImplementation(((_command: string, args: readonly string[]) => {
+        if (args[0] === 'rev-parse') {return 'true\n';}
+        throw new Error('git log failed');
+      }) as typeof execFileSync);
+      const onSkippedInput = jest.fn();
+
+      await expect(detector.scanGitHistory(testDir, onSkippedInput)).resolves.toEqual([]);
+
+      expect(onSkippedInput).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not report skipped coverage for a path outside a git repository', async () => {
+      const error = Object.assign(new Error('not a repository'), {stderr: 'fatal: not a git repository'});
+      mockedExecFileSync.mockImplementation(() => {throw error;});
+      const onSkippedInput = jest.fn();
+
+      await expect(detector.scanGitHistory(testDir, onSkippedInput)).resolves.toEqual([]);
+
+      expect(onSkippedInput).not.toHaveBeenCalled();
     });
   });
 

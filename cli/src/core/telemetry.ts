@@ -115,9 +115,13 @@ export class TelemetryManager {
       path.join(legacyCacheDir, "telemetry.json"),
       path.join(stateDir, "telemetry.json"),
     ];
-    this.ensureSpool();
-    this.runMigrations();
-    this.pruneEvents();
+    try {
+      this.ensureSpool();
+      this.runMigrations();
+      this.pruneEvents();
+    } catch (error) {
+      if (!isTelemetrySuppressed(this.config)) {throw error;}
+    }
   }
 
   // eslint-disable-next-line @typescript-eslint/require-await

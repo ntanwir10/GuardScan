@@ -184,6 +184,24 @@ describe('LicenseScanner inventory and SBOM contracts', () => {
     expect(document.dependencies.find(entry => entry.ref === developmentParent)?.dependsOn || []).not.toContain(child);
   });
 
+  it('emits Cargo parent-child edges from versioned inventory graph paths', () => {
+    const scanner = new LicenseScanner();
+    const findings = [
+      finding({source: 'cargo', package: 'parent', version: '1.0.0', direct: true, scope: 'runtime', dependencyPaths: ['parent@1.0.0']}),
+      finding({source: 'cargo', package: 'child', version: '2.0.0', direct: false, scope: 'runtime', dependencyPaths: ['parent@1.0.0 > child@2.0.0']}),
+    ];
+
+    const document = scanner.generateSBOM(findings, 'cyclonedx', 'fixture');
+    const root = document.metadata.component['bom-ref'];
+    const parent = document.components.find(component => component.name === 'parent')!['bom-ref'];
+    const child = document.components.find(component => component.name === 'child')!['bom-ref'];
+
+    expect(document.dependencies).toEqual(expect.arrayContaining([
+      {ref: root, dependsOn: [parent]},
+      {ref: parent, dependsOn: [child]},
+    ]));
+  });
+
   it('emits Maven package URLs with namespace and artifact segments', () => {
     const scanner = new LicenseScanner();
     const document = scanner.generateSBOM([

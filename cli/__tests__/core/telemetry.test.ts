@@ -52,4 +52,20 @@ describe('TelemetryManager consent erasure', () => {
     expect(fs.readdirSync(path.join(stateDir, 'telemetry', 'quarantine'))).toEqual([]);
     expect(manager.getStats().pending).toBe(0);
   });
+
+  it('does not let suppressed telemetry spool failures abort a command', async () => {
+    fs.mkdirSync(stateDir, {recursive: true});
+    fs.writeFileSync(path.join(stateDir, 'telemetry'), 'not a directory');
+    const config: Config = {
+      provider: 'none',
+      telemetryEnabled: false,
+      offlineMode: true,
+      createdAt: new Date().toISOString(),
+      lastUsed: new Date().toISOString(),
+    };
+
+    const manager = new TelemetryManager(config, stateDir, legacyCacheDir);
+
+    await expect(manager.record({action: 'scan', loc: 1, durationMs: 1})).resolves.toBeUndefined();
+  });
 });

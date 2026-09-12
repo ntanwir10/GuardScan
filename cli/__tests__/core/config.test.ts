@@ -451,6 +451,13 @@ describe('parseConfig', () => {
     }).rateLimit).toMatchObject({ enabled: false, refillRate: 0 });
   });
 
+  it('bounds vulnerability snapshot age to ten years', () => {
+    expect(parseConfig({provider: 'none', vulnerabilities: {snapshotMaxAgeDays: 3650}}).vulnerabilities)
+      .toMatchObject({snapshotMaxAgeDays: 3650});
+    expect(() => parseConfig({provider: 'none', vulnerabilities: {snapshotMaxAgeDays: 3651}}))
+      .toThrow('configuration.vulnerabilities.snapshotMaxAgeDays');
+  });
+
   it.each([
     [{ vulnerabilities: { snapshotMaxAgeDays: 1.5 } }, 'snapshotMaxAgeDays'],
     [{ retry: { maxRetries: 1.5 } }, 'maxRetries'],

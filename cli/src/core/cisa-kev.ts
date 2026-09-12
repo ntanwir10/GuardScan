@@ -228,6 +228,9 @@ function parseCacheEntry(value: unknown): CisaKevCacheEntry {
       typeof value.sourceEndpoint !== 'string') {
     throw new Error('invalid cache envelope');
   }
+  if (Date.parse(value.retrievedAt) > Date.now() + 5 * 60 * 1000) {
+    throw new Error('cache timestamp is too far in the future');
+  }
   return {
     schemaVersion: 'guardscan.cisa-kev-cache.v1',
     retrievedAt: value.retrievedAt,

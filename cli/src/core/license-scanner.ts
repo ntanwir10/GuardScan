@@ -929,12 +929,12 @@ function isDirectInstallDependency(finding: LicenseFinding): boolean {
   return finding.direct === true && finding.scope !== 'development';
 }
 
-interface NpmDependencyIdentity {
+interface DependencyIdentity {
   name: string;
   version?: string;
 }
 
-function npmDependencyIdentity(value: string): NpmDependencyIdentity {
+function versionedDependencyIdentity(value: string): DependencyIdentity {
   const separator = value.lastIndexOf('@');
   if (separator > 0 && /^\d+\.\d+\.\d+(?:[-+].*)?$/.test(value.slice(separator + 1))) {
     return {name: value.slice(0, separator), version: value.slice(separator + 1)};
@@ -942,12 +942,12 @@ function npmDependencyIdentity(value: string): NpmDependencyIdentity {
   return {name: value};
 }
 
-function npmDependencyIdentities(dependencyPath: string): NpmDependencyIdentity[] {
+function dependencyIdentities(dependencyPath: string): DependencyIdentity[] {
   if (dependencyPath.includes(' > ')) {
     return dependencyPath.split(' > ')
       .map(value => value.trim())
       .filter(Boolean)
-      .map(npmDependencyIdentity);
+      .map(versionedDependencyIdentity);
   }
   const segments = dependencyPath.replace(/\\/g, '/').split('/').filter(Boolean);
   const names: string[] = [];
@@ -987,16 +987,16 @@ function cycloneDxDependencies(
   const outgoing = new Map<string, Set<string>>();
   for (let index = 0; index < findings.length; index++) {
     const finding = findings[index];
-    if (finding.source !== 'npm') {continue;}
+    if (!['npm', 'cargo', 'ruby'].includes(finding.source)) {continue;}
     for (const dependencyPath of finding.dependencyPaths || []) {
-      const identities = npmDependencyIdentities(dependencyPath);
+      const identities = dependencyIdentities(dependencyPath);
       const child = identities[identities.length - 1];
       if (identities.length < 2 || child.name !== finding.package ||
         (child.version !== undefined && child.version !== finding.version)) {continue;}
       const parent = identities[identities.length - 2];
       const parentReferences = parent.version
-        ? referencesByCoordinate.get(`npm\u0000${parent.name}\u0000${parent.version}`) || []
-        : referencesByPackage.get(`npm\u0000${parent.name}`) || [];
+        ? referencesByCoordinate.get(`${finding.source}\u0000${parent.name}\u0000${parent.version}`) || []
+        : referencesByPackage.get(`${finding.source}\u0000${parent.name}`) || [];
       if (parentReferences.length !== 1) {continue;}
       const children = outgoing.get(parentReferences[0]) || new Set<string>();
       children.add(components[index]['bom-ref']);

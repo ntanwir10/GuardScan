@@ -607,8 +607,8 @@ export class DependencyScanner {
       throw new DependencyScanError('INVALID_OPTIONS', 'Offline vulnerability scanning requires snapshot access; caching is disabled');
     }
     const maxSnapshotAgeDays = options.maxSnapshotAgeDays ?? 7;
-    if (!Number.isFinite(maxSnapshotAgeDays) || maxSnapshotAgeDays < 0) {
-      throw new DependencyScanError('INVALID_OPTIONS', 'Vulnerability snapshot age must be a non-negative number of days');
+    if (!Number.isInteger(maxSnapshotAgeDays) || maxSnapshotAgeDays < 0 || maxSnapshotAgeDays > 3650) {
+      throw new DependencyScanError('INVALID_OPTIONS', 'Vulnerability snapshot age must be an integer between 0 and 3650 days');
     }
     const unfilteredInventory = filterPackageInventory(
       options.inventory || collectPackageInventory(repoPath),

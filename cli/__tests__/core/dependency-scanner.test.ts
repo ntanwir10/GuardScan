@@ -631,15 +631,33 @@ describe('DependencyScanner OSV integration', () => {
     const client = {endpoint: 'https://api.osv.dev', query} as unknown as OsvClient;
 
     await scanner.scan(repository, {inventory, client, snapshotStore: store, enrichKnownExploited: false});
-    await scanner.scan(repository, {inventory, ecosystems: ['npm'], client, snapshotStore: store, enrichKnownExploited: false});
+    const filtered = filterPackageInventory(inventory, {ecosystems: ['npm']});
+    const cachedFiltered = await scanner.scan(repository, {inventory, ecosystems: ['npm'], client, snapshotStore: store, enrichKnownExploited: false});
+    const offlineFiltered = await scanner.scan(repository, {
+      inventory, ecosystems: ['npm'], offline: true, client, snapshotStore: store, enrichKnownExploited: false,
+    });
+    const refreshedFiltered = await scanner.scan(repository, {
+      inventory, ecosystems: ['npm'], refresh: true, client, snapshotStore: store, enrichKnownExploited: false,
+    });
 
     const offline = await scanner.scan(repository, {inventory, offline: true, client, snapshotStore: store, enrichKnownExploited: false});
 
     expect(query).toHaveBeenCalledTimes(2);
+    expect(cachedFiltered[0].dataFreshness).toBe('fresh-cache');
+    expect(offlineFiltered[0].dataFreshness).toBe('fresh-cache');
+    expect(refreshedFiltered[0].dataFreshness).toBe('live');
+    expect(store.status(filtered, 7, client.endpoint).inventoryMatches).toBe(true);
     expect(offline[0]).toMatchObject({dataFreshness: 'fresh-cache', status: 'complete'});
     const snapshotDirectory = fs.readdirSync(cache).find(value => fs.statSync(path.join(cache, value)).isDirectory());
     const snapshot = JSON.parse(fs.readFileSync(path.join(cache, snapshotDirectory!, 'snapshot.json'), 'utf8'));
     expect(snapshot.coordinates).toHaveLength(2);
+  });
+
+  it('rejects vulnerability snapshot ages beyond the supported ten-year bound', async () => {
+    await expect(new DependencyScanner().scan(repository, {
+      maxSnapshotAgeDays: 3651,
+      enrichKnownExploited: false,
+    })).rejects.toMatchObject({code: 'INVALID_OPTIONS'});
   });
 
   it('caches a filtered scan when no broader snapshot exists', async () => {
@@ -851,6 +869,20 @@ describe('DependencyScanner OSV integration', () => {
     });
     expect(fs.existsSync(snapshotFile)).toBe(false);
     expect(fs.readdirSync(path.join(snapshotDirectory, 'quarantine'))).toHaveLength(1);
+  });
+
+  it('quarantines CISA KEV cache entries timestamped too far in the future', () => {
+    const kevDirectory = path.join(cache, 'kev-future');
+    const store = new CisaKevCatalogStore(kevDirectory);
+    store.save(kevCatalog([]), 'https://example.test/kev.json');
+    const file = path.join(kevDirectory, 'catalog.json');
+    const value = JSON.parse(fs.readFileSync(file, 'utf8'));
+    value.retrievedAt = '2999-01-01T00:00:00.000Z';
+    fs.writeFileSync(file, JSON.stringify(value), 'utf8');
+
+    expect(store.status(1)).toEqual({exists: false, fresh: false});
+    expect(fs.existsSync(file)).toBe(false);
+    expect(fs.readdirSync(path.join(kevDirectory, 'quarantine'))).toHaveLength(1);
   });
 
   it('keeps live OSV findings when snapshot persistence fails', async () => {
