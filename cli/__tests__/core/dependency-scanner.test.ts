@@ -568,7 +568,10 @@ describe('DependencyScanner OSV integration', () => {
     expect(results[0].totalVulnerabilities).toBe(1);
     expect(vulnerability.fingerprint).toMatch(/^[a-f0-9]{64}$/);
 
-    const offline = await scanner.scan(repository, { offline: true, snapshotStore: store, kevStore });
+    const offline = await scanner.scan(repository, {
+      offline: true, snapshotStore: store, kevStore,
+      kevEndpoint: 'https://example.test/kev.json',
+    });
     expect(offline[0]).toMatchObject({ dataFreshness: 'fresh-cache', status: 'complete' });
     expect(offline[0].vulnerabilities[0].canonicalId).toBe('CVE-2026-1234');
     expect(offline[0].vulnerabilities[0].knownExploited).toBe(true);
@@ -580,9 +583,11 @@ describe('DependencyScanner OSV integration', () => {
     fs.writeFileSync(kevCacheFile, JSON.stringify(cachedKev), 'utf8');
     await expect(scanner.scan(repository, {
       offline: true, snapshotStore: store, kevStore, kevMaxCacheAgeDays: 1,
+      kevEndpoint: 'https://example.test/kev.json',
     })).rejects.toMatchObject({ code: 'KEV_COVERAGE_UNAVAILABLE' });
     const staleKev = await scanner.scan(repository, {
       offline: true, snapshotStore: store, kevStore, kevMaxCacheAgeDays: 1, allowPartial: true,
+      kevEndpoint: 'https://example.test/kev.json',
     });
     expect(staleKev[0].status).toBe('partial');
     expect(staleKev[0].knownExploitedEnrichment.status).toBe('stale-cache');
@@ -909,6 +914,66 @@ describe('DependencyScanner OSV integration', () => {
         code: 'SNAPSHOT_PERSIST_FAILED',
         message: expect.stringContaining('snapshot write fixture failed'),
       })],
+    });
+  });
+
+  it('keeps live KEV coverage when cache persistence fails', async () => {
+    const kevStore = new CisaKevCatalogStore(path.join(cache, 'kev-write-failure'));
+    jest.spyOn(kevStore, 'save').mockImplementation(() => {
+      throw new Error('KEV cache write fixture failed');
+    });
+    const fetchImpl = jest.fn(async () => jsonResponse({results: [{vulns: []}]})) as typeof fetch;
+    const kevClient = new CisaKevClient({
+      endpoint: 'https://example.test/kev.json',
+      fetchImpl: jest.fn(async () => jsonResponse(kevCatalog(['CVE-2026-1234']))) as typeof fetch,
+    });
+
+    const results = await new DependencyScanner().scan(repository, {
+      client: new OsvClient({fetchImpl, retries: 0}),
+      snapshotStore: new VulnerabilitySnapshotStore(cache),
+      kevClient,
+      kevStore,
+    });
+
+    expect(results[0]).toMatchObject({
+      status: 'complete',
+      knownExploitedEnrichment: {
+        status: 'live',
+        catalogVersion: '2026.07.13',
+        error: {
+          code: 'KEV_CACHE_PERSIST_FAILED',
+          message: expect.stringContaining('KEV cache write fixture failed'),
+        },
+      },
+    });
+  });
+
+  it('does not reuse offline KEV coverage from a different endpoint', async () => {
+    const inventory = collectPackageInventory(repository);
+    const client = new OsvClient({endpoint: 'https://api.osv.dev', retries: 0});
+    const snapshotStore = new VulnerabilitySnapshotStore(cache);
+    snapshotStore.save(inventory, [], client.endpoint);
+    const kevStore = new CisaKevCatalogStore(path.join(cache, 'kev-source-mismatch'));
+    kevStore.save(kevCatalog(['CVE-2026-1234']), 'https://source.example.test/kev.json');
+    const options = {
+      offline: true,
+      inventory,
+      client,
+      snapshotStore,
+      kevStore,
+      kevEndpoint: 'https://mirror.example.test/kev.json',
+    };
+
+    await expect(new DependencyScanner().scan(repository, options)).rejects.toMatchObject({
+      code: 'KEV_COVERAGE_UNAVAILABLE',
+    });
+    const partial = await new DependencyScanner().scan(repository, {...options, allowPartial: true});
+    expect(partial[0]).toMatchObject({
+      status: 'partial',
+      knownExploitedEnrichment: {
+        status: 'unavailable',
+        error: {code: 'CISA_KEV_SOURCE_MISMATCH'},
+      },
     });
   });
 

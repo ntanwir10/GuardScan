@@ -857,6 +857,49 @@ describe('collectPackageInventory', () => {
     expect(inventory.errors).toEqual([]);
   });
 
+  it('filters development-only inventory errors from runtime scope', () => {
+    fs.writeFileSync(path.join(repository, 'package.json'), JSON.stringify({
+      devDependencies: {devtool: '^2.0.0'},
+    }));
+    fs.writeFileSync(path.join(repository, 'package-lock.json'), JSON.stringify({
+      lockfileVersion: 3,
+      packages: {
+        '': {devDependencies: {devtool: '^1.0.0'}},
+        'node_modules/devtool': {version: '1.0.0', dev: true},
+      },
+    }));
+
+    const inventory = collectPackageInventory(repository);
+
+    expect(inventory.errors).toEqual([
+      expect.objectContaining({
+        file: 'package.json',
+        code: 'UNRESOLVED_VERSION',
+        scope: 'development',
+      }),
+    ]);
+    expect(filterPackageInventory(inventory, {scope: 'runtime'}).errors).toEqual([]);
+  });
+
+  it('reports malformed Cargo package blocks instead of silently omitting them', () => {
+    fs.writeFileSync(path.join(repository, 'Cargo.lock'), [
+      'version = 3',
+      '[[package]]',
+      'version = "1.0.0"',
+      'source = "registry+https://github.com/rust-lang/crates.io-index"',
+      '[[package]]',
+      'name = "missing-version"',
+      'source = "registry+https://github.com/rust-lang/crates.io-index"',
+    ].join('\n'));
+
+    const inventory = collectPackageInventory(repository);
+
+    expect(inventory.errors).toEqual([
+      expect.objectContaining({file: 'Cargo.lock', code: 'INVALID_MANIFEST', message: expect.stringMatching(/package block 1.*name/i)}),
+      expect.objectContaining({file: 'Cargo.lock', code: 'INVALID_MANIFEST', message: expect.stringMatching(/package block 2.*version/i)}),
+    ]);
+  });
+
   it('marks plain pinned requirements as direct-only inventory', () => {
     fs.writeFileSync(path.join(repository, 'requirements.txt'), 'requests==2.31.0\n');
 

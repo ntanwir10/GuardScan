@@ -32,6 +32,8 @@ export interface ProviderOptions {
   enableObservability?: boolean;
   /** Effective network policy for this provider instance. */
   offline?: boolean;
+  /** Receives non-fatal provider decoration warnings. */
+  onWarning?: (message: string) => void;
 }
 
 export interface CreateForCliOptions {
@@ -392,8 +394,15 @@ export class ProviderFactory {
 
     // Observability (outermost - tracks everything including cache hits)
     if (options.enableObservability !== false && observabilityConfig?.enabled) {
-      const metrics = new MetricsCollector(repoId);
-      enhanced = new ObservableProvider(enhanced, metrics, observabilityConfig);
+      try {
+        const metrics = new MetricsCollector(repoId);
+        enhanced = new ObservableProvider(enhanced, metrics, observabilityConfig);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        (options.onWarning || console.warn)(
+          `Warning: AI metrics disabled because local metrics storage could not be initialized: ${message}`
+        );
+      }
     }
 
     return enhanced;
@@ -470,6 +479,7 @@ export class ProviderFactory {
       repoId,
       offline,
       enableRateLimit: merged.rateLimit?.enabled === true,
+      onWarning: options.onWarning,
     });
   }
 

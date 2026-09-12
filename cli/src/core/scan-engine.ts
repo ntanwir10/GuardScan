@@ -361,7 +361,11 @@ export class ScanEngine {
         run: async () => {
           let skippedInputs = options.skippedFiles?.length || 0;
           const onSkippedInput = (): void => {skippedInputs += 1;};
-          const filePaths = files.map(file => file.path);
+          const discoveredFiles = await secretsDetector.discoverFiles(repoPath, onSkippedInput);
+          const filePaths = [...new Set([
+            ...files.map(file => path.isAbsolute(file.path) ? file.path : path.resolve(repoPath, file.path)),
+            ...discoveredFiles,
+          ])].sort();
           const fileSecrets = await secretsDetector.detectInFiles(filePaths, onSkippedInput);
           const gitSecrets = options.includeGitHistory === false
             ? []

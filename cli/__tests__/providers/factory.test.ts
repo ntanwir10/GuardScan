@@ -9,6 +9,7 @@ import { LMStudioEmbeddingProvider } from "../../src/providers/embedding-lmstudi
 import { ClaudeEmbeddingProvider } from "../../src/providers/embedding-claude";
 import { OpenAIEmbeddingProvider } from "../../src/providers/embedding-openai";
 import { validateOfflineLocalEndpoint } from "../../src/commands/init";
+import { configManager } from "../../src/core/config";
 
 import { afterEach, beforeEach, describe, expect, it } from "@jest/globals";
 
@@ -188,6 +189,28 @@ describe("ProviderFactory", () => {
           code: "MISSING_CREDENTIAL",
         })
       );
+    });
+
+    it('keeps the AI provider usable when local metrics initialization fails', () => {
+      jest.spyOn(configManager, 'getCacheDir').mockImplementation(() => {
+        throw new Error('metrics path fixture is unwritable');
+      });
+      const warnings: string[] = [];
+
+      const created = ProviderFactory.createEnhanced('ollama', {
+        endpoint: 'http://127.0.0.1:11434',
+        config: makeConfig({provider: 'ollama', observability: {enabled: true}}),
+        enableRetry: false,
+        enableCache: false,
+        enableCircuitBreaker: false,
+        enableRateLimit: false,
+        onWarning: message => warnings.push(message),
+      });
+
+      expect(created.getName()).toBe('Ollama');
+      expect(warnings).toEqual([
+        expect.stringMatching(/metrics disabled.*metrics path fixture is unwritable/i),
+      ]);
     });
   });
 

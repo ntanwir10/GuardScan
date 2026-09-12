@@ -202,6 +202,24 @@ describe('LicenseScanner inventory and SBOM contracts', () => {
     ]));
   });
 
+  it('emits RubyGems parent-child edges from versioned inventory graph paths', () => {
+    const scanner = new LicenseScanner();
+    const findings = [
+      finding({source: 'rubygems', package: 'rack', version: '3.1.0', direct: true, scope: 'runtime', dependencyPaths: ['rack@3.1.0']}),
+      finding({source: 'rubygems', package: 'rack-session', version: '2.1.0', direct: false, scope: 'runtime', dependencyPaths: ['rack@3.1.0 > rack-session@2.1.0']}),
+    ];
+
+    const document = scanner.generateSBOM(findings, 'cyclonedx', 'fixture');
+    const root = document.metadata.component['bom-ref'];
+    const parent = document.components.find(component => component.name === 'rack')!['bom-ref'];
+    const child = document.components.find(component => component.name === 'rack-session')!['bom-ref'];
+
+    expect(document.dependencies).toEqual(expect.arrayContaining([
+      {ref: root, dependsOn: [parent]},
+      {ref: parent, dependsOn: [child]},
+    ]));
+  });
+
   it('emits Maven package URLs with namespace and artifact segments', () => {
     const scanner = new LicenseScanner();
     const document = scanner.generateSBOM([

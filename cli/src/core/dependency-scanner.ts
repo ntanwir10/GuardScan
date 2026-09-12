@@ -511,7 +511,11 @@ function kevMetadata(
   ageDays?: number,
   error?: unknown
 ): KnownExploitedEnrichment {
-  const failure = error instanceof CisaKevError
+  const failure = error && typeof error === 'object' &&
+    'code' in error && typeof error.code === 'string' &&
+    'message' in error && typeof error.message === 'string'
+    ? {code: error.code, message: error.message}
+    : error instanceof CisaKevError
     ? { code: error.code, message: error.message }
     : error
       ? { code: 'CISA_KEV_ENRICHMENT_FAILED', message: error instanceof Error ? error.message : String(error) }
@@ -553,12 +557,6 @@ async function knownExploitedData(options: DependencyScanOptions): Promise<{
     };
   };
 
-  if (options.offline) {
-    return cached.entry
-      ? fromCache(cached.fresh ? 'fresh-cache' : 'stale-cache')
-      : { cves: new Set<string>(), metadata: kevMetadata('unavailable', undefined, undefined, undefined, new Error('No cached CISA KEV catalog is available offline')) };
-  }
-
   let client: CisaKevClient;
   try {
     client = options.kevClient || new CisaKevClient({
@@ -567,19 +565,40 @@ async function knownExploitedData(options: DependencyScanOptions): Promise<{
       maxResponseBytes: options.kevMaxResponseBytes,
     });
   } catch (error) {
-    return cached.entry
-      ? fromCache(cached.fresh ? 'fresh-cache' : 'stale-cache', error)
-      : { cves: new Set<string>(), metadata: kevMetadata('unavailable', undefined, undefined, undefined, error) };
+    return { cves: new Set<string>(), metadata: kevMetadata('unavailable', undefined, undefined, undefined, error) };
   }
   const cacheMatchesSource = cached.entry?.sourceEndpoint === client.endpoint;
+  if (options.offline) {
+    if (cached.entry && cacheMatchesSource) {
+      return fromCache(cached.fresh ? 'fresh-cache' : 'stale-cache');
+    }
+    const error = cached.entry
+      ? {
+          code: 'CISA_KEV_SOURCE_MISMATCH',
+          message: 'Cached CISA KEV catalog source does not match the requested endpoint',
+        }
+      : new Error('No cached CISA KEV catalog is available offline');
+    return {cves: new Set<string>(), metadata: kevMetadata('unavailable', undefined, undefined, undefined, error)};
+  }
   if (cached.fresh && cacheMatchesSource && !options.refresh) {return fromCache('fresh-cache');}
 
   try {
     const catalog = await client.fetchCatalog();
-    const entry = options.cache === false ? undefined : store.save(catalog, client.endpoint);
+    let entry: ReturnType<CisaKevCatalogStore['save']> | undefined;
+    let persistenceError: DependencyScanErrorInfo | undefined;
+    if (options.cache !== false) {
+      try {
+        entry = store.save(catalog, client.endpoint);
+      } catch (error) {
+        persistenceError = {
+          code: 'KEV_CACHE_PERSIST_FAILED',
+          message: error instanceof Error ? error.message : String(error),
+        };
+      }
+    }
     return {
       cves: new Set(catalog.vulnerabilities.map(value => value.cveID.toUpperCase())),
-      metadata: kevMetadata('live', catalog, entry?.retrievedAt),
+      metadata: kevMetadata('live', catalog, entry?.retrievedAt, undefined, persistenceError),
     };
   } catch (error) {
     return cached.entry && cacheMatchesSource

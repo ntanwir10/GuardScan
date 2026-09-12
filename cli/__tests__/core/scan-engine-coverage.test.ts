@@ -63,6 +63,24 @@ describe('ScanEngine built-in coverage adapters', () => {
     });
   });
 
+  it('discovers ignored environment and configuration files independently of LOC inputs', async () => {
+    fs.writeFileSync(path.join(repository, '.gitignore'), '.env\nconfig.yaml\n');
+    fs.writeFileSync(path.join(repository, '.env'), 'AWS_ACCESS_KEY_ID=AKIA1234567890123456\n');
+    fs.writeFileSync(
+      path.join(repository, 'config.yaml'),
+      'github_token: ghp_1234567890abcdefghijklmnopqrstuvwxyz\n'
+    );
+
+    const output = await tasks().find(task => task.scanner === 'secrets')!.run() as ScannerTaskOutput;
+    const findings = Array.isArray(output) ? output : output.findings;
+
+    expect(output).not.toHaveProperty('error');
+    expect(findings).toEqual(expect.arrayContaining([
+      expect.objectContaining({file: fs.realpathSync(path.join(repository, '.env'))}),
+      expect.objectContaining({file: fs.realpathSync(path.join(repository, 'config.yaml'))}),
+    ]));
+  });
+
   it('marks IaC coverage incomplete when selected YAML cannot be parsed', async () => {
     fs.writeFileSync(path.join(repository, 'deployment.yaml'), 'apiVersion: [unterminated\n');
 

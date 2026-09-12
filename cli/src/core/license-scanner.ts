@@ -987,7 +987,7 @@ function cycloneDxDependencies(
   const outgoing = new Map<string, Set<string>>();
   for (let index = 0; index < findings.length; index++) {
     const finding = findings[index];
-    if (!['npm', 'cargo', 'ruby'].includes(finding.source)) {continue;}
+    if (!['npm', 'cargo', 'rubygems'].includes(finding.source)) {continue;}
     for (const dependencyPath of finding.dependencyPaths || []) {
       const identities = dependencyIdentities(dependencyPath);
       const child = identities[identities.length - 1];

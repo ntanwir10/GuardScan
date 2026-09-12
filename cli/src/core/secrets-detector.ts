@@ -1,7 +1,20 @@
 import * as fs from 'fs';
 import * as crypto from 'crypto';
+import * as path from 'path';
 import { execFileSync } from 'child_process';
+import fastGlob from 'fast-glob';
 import { SECURITY_CONSTANTS } from '../constants/security-constants';
+
+const MAX_SECRET_FILE_BYTES = 2 * 1024 * 1024;
+const SECRET_DISCOVERY_IGNORES = [
+  '**/.git/**', '**/.guardscan/**', '**/node_modules/**', '**/vendor/**', '**/dist/**',
+  '**/build/**', '**/coverage/**', '**/.venv/**', '**/venv/**', '**/target/**',
+];
+
+function isWithinRoot(root: string, candidate: string): boolean {
+  const relative = path.relative(root, candidate);
+  return relative === '' || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative));
+}
 
 export interface SecretFinding {
   type: string;
@@ -14,6 +27,46 @@ export interface SecretFinding {
 }
 
 export class SecretsDetector {
+  /** Discover bounded working-tree inputs independently from language/LOC discovery. */
+  async discoverFiles(
+    repoPath: string = process.cwd(),
+    onSkippedInput: () => void = () => {}
+  ): Promise<string[]> {
+    let root: string;
+    try {
+      root = fs.realpathSync(repoPath);
+      if (!fs.statSync(root).isDirectory()) {throw new Error('repository path is not a directory');}
+    } catch {
+      onSkippedInput();
+      return [];
+    }
+
+    try {
+      const candidates = await fastGlob('**/*', {
+        cwd: root,
+        absolute: true,
+        dot: true,
+        onlyFiles: true,
+        followSymbolicLinks: false,
+        ignore: SECRET_DISCOVERY_IGNORES,
+      });
+      const files: string[] = [];
+      for (const candidate of candidates.sort()) {
+        try {
+          if (fs.lstatSync(candidate).isSymbolicLink()) {continue;}
+          const real = fs.realpathSync(candidate);
+          if (isWithinRoot(root, real) && fs.statSync(real).isFile()) {files.push(real);}
+        } catch {
+          onSkippedInput();
+        }
+      }
+      return files;
+    } catch {
+      onSkippedInput();
+      return [];
+    }
+  }
+
   /**
    * Detect secrets in files
    */
@@ -22,7 +75,15 @@ export class SecretsDetector {
 
     for (const file of files) {
       try {
-        const content = fs.readFileSync(file, 'utf-8');
+        const stat = fs.statSync(file);
+        if (!stat.isFile()) {continue;}
+        if (stat.size > MAX_SECRET_FILE_BYTES) {
+          onSkippedInput();
+          continue;
+        }
+        const raw = fs.readFileSync(file);
+        if (raw.includes(0)) {continue;}
+        const content = raw.toString('utf-8');
         const fileFindings = this.scanContent(file, content);
         findings.push(...fileFindings);
       } catch {

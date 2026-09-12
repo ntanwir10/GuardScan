@@ -24,6 +24,8 @@ export interface PackageInventoryError {
   code: 'INVALID_MANIFEST' | 'UNRESOLVED_VERSION' | 'UNSUPPORTED_FORMAT';
   message: string;
   ecosystem?: PackageEcosystem;
+  /** Narrowest dependency scope affected by this error, when it is provable. */
+  scope?: DependencyScope;
 }
 
 export interface PackageInventory {
@@ -655,7 +657,7 @@ function parseExactPackageJson(
         workspacePackages = firstPartyWorkspacePackages(root, coveringLock);
         workspacePackagesByLock.set(coveringLock, workspacePackages);
       }
-      for (const [dependencies] of groups) {
+      for (const [dependencies, scope] of groups) {
         for (const [installName, requestedValue] of Object.entries(dependencies)) {
           const requested = typeof requestedValue === 'string' ? requestedValue : '';
           const packageName = npmRequestedPackageName(installName, requested);
@@ -682,6 +684,7 @@ function parseExactPackageJson(
               file: rel,
               code: 'UNRESOLVED_VERSION',
               message: `${installName} requirement ${requested || '<invalid>'} is not satisfied by ${path.basename(coveringLock)}`,
+              scope,
             });
           }
         }
@@ -689,12 +692,21 @@ function parseExactPackageJson(
       return;
     }
     let hasDependencies = false;
+    let locklessCoverageScope: DependencyScope = 'development';
     for (const [dependencies, scope] of groups) {
       for (const [name, requested] of Object.entries(dependencies)) {
         hasDependencies = true;
+        if (scope === 'runtime' || (scope === 'optional' && locklessCoverageScope === 'development')) {
+          locklessCoverageScope = scope;
+        }
         const version = semver.valid(String(requested).replace(/^=/, ''), { loose: true });
         if (!version) {
-          errors.push({ file: rel, code: 'UNRESOLVED_VERSION', message: `${name} is not pinned to an exact npm version` });
+          errors.push({
+            file: rel,
+            code: 'UNRESOLVED_VERSION',
+            message: `${name} is not pinned to an exact npm version`,
+            scope,
+          });
           continue;
         }
         addCoordinate(coordinates, {
@@ -708,6 +720,7 @@ function parseExactPackageJson(
         file: rel,
         code: 'UNSUPPORTED_FORMAT',
         message: 'npm dependency inventory is lockless; transitive coverage is incomplete',
+        scope: locklessCoverageScope,
       });
     }
   } catch (error: unknown) {
@@ -796,7 +809,12 @@ function parsePnpmLock(root: string, file: string, coordinates: DependencyCoordi
             : semver.valid(normalizedVersion, {loose: true}) || undefined;
           if (!version || (aliasTarget && parsedLocator && parsedLocator.name !== dependencyName)) {
             if (rawVersion) {
-              errors.push({file: rel, code: 'UNSUPPORTED_FORMAT', message: `pnpm direct dependency ${name} uses unsupported resolution: ${rawVersion.slice(0, 120)}`});
+              errors.push({
+                file: rel,
+                code: 'UNSUPPORTED_FORMAT',
+                message: `pnpm direct dependency ${name} uses unsupported resolution: ${rawVersion.slice(0, 120)}`,
+                scope,
+              });
             }
             continue;
           }
@@ -1309,11 +1327,19 @@ function parseCargoLock(root: string, file: string, coordinates: DependencyCoord
   try {
     const blocks = fs.readFileSync(file, 'utf8').split(/\[\[package\]\]/).slice(1);
     const nodes: CargoNode[] = [];
-    for (const block of blocks) {
+    for (const [index, block] of blocks.entries()) {
       const name = block.match(/^\s*name\s*=\s*"([^"]+)"/m)?.[1];
       const version = block.match(/^\s*version\s*=\s*"([^"]+)"/m)?.[1];
       const source = block.match(/^\s*source\s*=\s*"([^"]+)"/m)?.[1];
-      if (!name || !version) {continue;}
+      if (!name || !version) {
+        const missing = [!name ? 'name' : '', !version ? 'version' : ''].filter(Boolean).join(' and ');
+        errors.push({
+          file: rel,
+          code: 'INVALID_MANIFEST',
+          message: `Cargo.lock package block ${index + 1} has no valid ${missing}`,
+        });
+        continue;
+      }
       const dependencies = [...(block.match(/^\s*dependencies\s*=\s*\[([\s\S]*?)\]/m)?.[1] || '')
         .matchAll(/"([^"]+)"|'([^']+)'/g)]
         .map(match => match[1] || match[2])
@@ -1450,6 +1476,7 @@ function parseCargoLock(root: string, file: string, coordinates: DependencyCoord
             file: relative(root, manifest),
             code: 'UNRESOLVED_VERSION',
             message: `Cargo dependency ${record.name}${parsed.requested ? ` ${parsed.requested}` : ''} is not satisfied by Cargo.lock`,
+            scope: development ? 'development' : 'runtime',
           });
           continue;
         }
@@ -1644,6 +1671,7 @@ function parseGemfileLock(
           file: manifestPath,
           code: 'UNRESOLVED_VERSION',
           message: `Gem dependency ${requirement.name}${requirement.requested ? ` ${requirement.requested}` : ''} is not satisfied by Gemfile.lock`,
+          scope: requirement.scope,
         });
       }
     }
@@ -1930,6 +1958,7 @@ export function filterPackageInventory(inventory: PackageInventory, filter: Pack
     (filter.scope !== 'runtime' || coordinate.scope !== 'development')
   );
   const errors = inventory.errors.filter(error => {
+    if (filter.scope === 'runtime' && error.scope === 'development') {return false;}
     if (!filter.ecosystems) {return true;}
     const ecosystem = error.ecosystem || ecosystemForInventoryFile(error.file);
     return ecosystem === undefined || filter.ecosystems.includes(ecosystem);
