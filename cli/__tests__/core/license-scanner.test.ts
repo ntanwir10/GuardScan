@@ -220,6 +220,22 @@ describe('LicenseScanner inventory and SBOM contracts', () => {
     ]));
   });
 
+  it('retains RubyGems graph edges for non-semver version forms', () => {
+    const scanner = new LicenseScanner();
+    const findings = [
+      finding({source: 'rubygems', package: 'parent', version: '1.0.0.1', direct: true, scope: 'runtime', dependencyPaths: ['parent@1.0.0.1']}),
+      finding({source: 'rubygems', package: 'child', version: '2.0.0.pre', direct: false, scope: 'runtime', dependencyPaths: ['parent@1.0.0.1 > child@2.0.0.pre']}),
+    ];
+
+    const document = scanner.generateSBOM(findings, 'cyclonedx', 'fixture');
+    const parent = document.components.find(component => component.name === 'parent')!['bom-ref'];
+    const child = document.components.find(component => component.name === 'child')!['bom-ref'];
+
+    expect(document.dependencies).toEqual(expect.arrayContaining([
+      {ref: parent, dependsOn: [child]},
+    ]));
+  });
+
   it('emits Maven package URLs with namespace and artifact segments', () => {
     const scanner = new LicenseScanner();
     const document = scanner.generateSBOM([

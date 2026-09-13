@@ -936,7 +936,7 @@ interface DependencyIdentity {
 
 function versionedDependencyIdentity(value: string): DependencyIdentity {
   const separator = value.lastIndexOf('@');
-  if (separator > 0 && /^\d+\.\d+\.\d+(?:[-+].*)?$/.test(value.slice(separator + 1))) {
+  if (separator > 0 && separator < value.length - 1) {
     return {name: value.slice(0, separator), version: value.slice(separator + 1)};
   }
   return {name: value};

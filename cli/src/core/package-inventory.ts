@@ -1101,6 +1101,7 @@ function parseRequirements(
       file: rel,
       code: 'INVALID_MANIFEST',
       message: `Unable to resolve requirements file: ${errorMessage(error)}`,
+      ecosystem: 'pip',
     });
     return;
   }
@@ -1109,6 +1110,7 @@ function parseRequirements(
       file: rel,
       code: 'UNSUPPORTED_FORMAT',
       message: 'Python requirement include resolves outside the repository',
+      ecosystem: 'pip',
     });
     return;
   }
@@ -1133,6 +1135,7 @@ function parseRequirements(
             file: rel,
             code: 'UNSUPPORTED_FORMAT',
             message: `Python requirement include cannot be resolved within the repository: ${requested}`,
+            ecosystem: 'pip',
           });
         } else {
           parseRequirements(root, resolved, coordinates, errors, visited);
@@ -1144,6 +1147,7 @@ function parseRequirements(
           file: rel,
           code: 'UNSUPPORTED_FORMAT',
           message: `Python requirement directive is not followed automatically: ${line.slice(0, 120)}`,
+          ecosystem: 'pip',
         });
         continue;
       }
@@ -1152,7 +1156,12 @@ function parseRequirements(
         /^([A-Za-z0-9_.-]+)(?:\s*\[\s*[A-Za-z0-9_.-]+(?:\s*,\s*[A-Za-z0-9_.-]+)*\s*\])?\s*==\s*([A-Za-z0-9][A-Za-z0-9._!+-]*)(?:\s|;|$)/
       );
       if (!match) {
-        errors.push({ file: rel, code: 'UNRESOLVED_VERSION', message: `Python requirement is not pinned: ${line.slice(0, 120)}` });
+        errors.push({
+          file: rel,
+          code: 'UNRESOLVED_VERSION',
+          message: `Python requirement is not pinned: ${line.slice(0, 120)}`,
+          ecosystem: 'pip',
+        });
         continue;
       }
       addCoordinate(coordinates, {
@@ -1165,6 +1174,7 @@ function parseRequirements(
       file: rel,
       code: 'INVALID_MANIFEST',
       message: `Unable to parse requirements.txt: ${errorMessage(error)}`,
+      ecosystem: 'pip',
     });
   }
   if (rootRequirementsFile) {
@@ -1172,6 +1182,7 @@ function parseRequirements(
       file: rel,
       code: 'UNSUPPORTED_FORMAT',
       message: 'requirements.txt inventory is direct-only; transitive coverage is incomplete without a lock export',
+      ecosystem: 'pip',
     });
   }
 }
@@ -1560,12 +1571,17 @@ function parseGemfileLock(
       const blocks: Array<{groups: string[]}> = [];
       for (const rawLine of fs.readFileSync(manifest, 'utf8').split(/\r?\n/)) {
         const line = rawLine.replace(/\s+#.*$/, '').trim();
-        const group = line.match(/^group\s+(.+?)\s+do\s*$/);
+        const group = line.match(/^group\s*(?:\(\s*)?(.+?)(?:\s*\))?\s+do(?:\s*\|[^|]*\|)?\s*$/);
         if (group) {
           blocks.push({groups: [...group[1].matchAll(/:([A-Za-z0-9_]+)/g)].map(match => match[1])});
           continue;
         }
         if (/^end\b/.test(line)) {blocks.pop(); continue;}
+        if (/\bdo(?:\s*\|[^|]*\|)?\s*$/.test(line) ||
+            /^(?:if|unless|case|begin|class|module|def|while|until|for)\b/.test(line)) {
+          blocks.push({groups: []});
+          continue;
+        }
         const gem = line.match(/^gem\s*(?:\(\s*)?['"]([^'"]+)['"](.*)$/);
         if (!gem) {continue;}
         const tail = gem[2];
@@ -1785,8 +1801,19 @@ function parsePom(root: string, file: string, coordinates: DependencyCoordinate[
     }
     const dependencies = xml.replace(dependencyManagementPattern, '');
     const dependencyBlocks = dependencies.match(/<dependency(?:\s[^>]*)?>[\s\S]*?<\/dependency>/g) || [];
+    const dependencyScopes: DependencyScope[] = [];
     for (const block of dependencyBlocks) {
       const { group, artifact, name } = dependencyName(block);
+      const declaredScope = block.match(/<scope>\s*([^<\s]+)\s*<\/scope>/)?.[1].toLowerCase();
+      const optional = /<optional>\s*true\s*<\/optional>/i.test(block);
+      const scope: DependencyScope = ['test', 'provided', 'system', 'import'].includes(declaredScope || '')
+        ? 'development'
+        : optional
+          ? 'optional'
+          : !declaredScope || declaredScope === 'compile' || declaredScope === 'runtime'
+            ? 'runtime'
+            : 'unknown';
+      dependencyScopes.push(scope);
       const declaredVersion = block.match(/<version>\s*([^<]+?)\s*<\/version>/)?.[1];
       const version = declaredVersion ? resolveVersion(declaredVersion) : name ? managedVersions.get(name) : undefined;
       if (!group || !artifact || !name) {continue;}
@@ -1795,12 +1822,13 @@ function parsePom(root: string, file: string, coordinates: DependencyCoordinate[
           file: rel,
           code: 'UNRESOLVED_VERSION',
           message: `Maven dependency version is unresolved for ${name}`,
+          scope,
         });
         continue;
       }
       addCoordinate(coordinates, {
         ecosystem: 'maven', osvEcosystem: 'Maven', name, exactVersion: version,
-        scope: /<scope>\s*test\s*<\/scope>/.test(block) ? 'development' : 'runtime', direct: true,
+        scope, direct: true,
         manifestPath: rel, lockfilePath: rel, dependencyPaths: [name],
       });
     }
@@ -1809,6 +1837,11 @@ function parsePom(root: string, file: string, coordinates: DependencyCoordinate[
         file: rel,
         code: 'UNSUPPORTED_FORMAT',
         message: 'Maven dependency inventory is direct-POM-only; transitive coverage requires effective-model resolution',
+        scope: dependencyScopes.every(scope => scope === 'development')
+          ? 'development'
+          : dependencyScopes.includes('runtime')
+            ? 'runtime'
+            : dependencyScopes.includes('optional') ? 'optional' : 'unknown',
       });
     }
   } catch (error: any) {

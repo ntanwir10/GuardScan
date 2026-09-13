@@ -11,6 +11,7 @@ import {
 import {apiScanner} from '../../src/core/api-scanner';
 import {complianceChecker} from '../../src/core/compliance-checker';
 import {dockerfileScanner} from '../../src/core/dockerfile-scanner';
+import {iacScanner} from '../../src/core/iac-scanner';
 import {owaspScanner} from '../../src/core/owasp-scanner';
 
 type BuiltInTaskFactory = {
@@ -107,5 +108,25 @@ describe('ScanEngine built-in coverage adapters', () => {
     const output = await tasks().find(task => task.scanner === scannerName)!.run() as ScannerTaskOutput;
 
     expect(output).toMatchObject({findings: [], error: {code, retryable: true}});
+  });
+
+  it.each([
+    ['api', apiScanner, 'scan'],
+    ['owasp', owaspScanner, 'scan'],
+    ['compliance', complianceChecker, 'check'],
+    ['dockerfile', dockerfileScanner, 'scan'],
+    ['iac', iacScanner, 'scan'],
+  ] as const)('reports depth-pruned %s traversal as incomplete', async (_name, scanner, method) => {
+    const deepDirectory = path.join(repository, 'one', 'two', 'three', 'four', 'five', 'six');
+    fs.mkdirSync(deepDirectory, {recursive: true});
+    fs.writeFileSync(path.join(deepDirectory, 'ignored.ts'), 'export const ignored = true;\n');
+    const onSkippedInput = jest.fn();
+
+    await ((scanner as unknown as Record<string, (root: string, skipped: () => void) => Promise<unknown>>)[method])(
+      repository,
+      onSkippedInput
+    );
+
+    expect(onSkippedInput).toHaveBeenCalled();
   });
 });

@@ -13,6 +13,7 @@ import {
   ScanOutputFormat,
   ScanPolicy,
   ScanPolicyResult,
+  ScanEngineResult,
   scanEngine,
   writeScanResult,
 } from '../core/scan-engine';
@@ -122,7 +123,7 @@ export async function securityCommand(options: SecurityOptions): Promise<void> {
     let reportPath: string;
     if (outputFormat === 'markdown') {
       reportPath = await reporter.saveReport(
-        securityReview(scanResult.findings, policyResult, repoInfo, locResult, Date.now() - startedAt),
+        securityReview(scanResult, policyResult, repoInfo, locResult, Date.now() - startedAt),
         'markdown',
         options.output,
         'security'
@@ -161,18 +162,20 @@ export async function securityCommand(options: SecurityOptions): Promise<void> {
   }
 }
 
-function securityReview(
-  findings: Finding[],
+export function securityReview(
+  scanResult: ScanEngineResult,
   policy: ScanPolicyResult,
   repoInfo: ReturnType<typeof repositoryManager.getRepoInfo>,
   locStats: Awaited<ReturnType<typeof locCounter.count>>,
   durationMs: number
 ): ReviewResult {
+  const findings = scanResult.findings;
   const counts = countSeverities(findings);
   return {
     summary: [
       `Security scan found ${findings.length} issue(s).`,
       ...Object.entries(counts).map(([severity, count]) => `${severity}: ${count}`),
+      `Coverage: ${scanResult.status}`,
       `Policy: ${policy.outcome}`,
     ].join('\n'),
     findings,
@@ -186,6 +189,21 @@ function securityReview(
       provider: 'security-scanner',
       model: 'multi-scanner',
       durationMs,
+      operationalFailure: policy.operationalFailure,
+      scannerCoverage: {
+        status: scanResult.status,
+        scanners: scanResult.scannerResults.map(scanner => ({
+          name: scanner.scanner,
+          status: scanner.status,
+          required: scanner.required,
+          detail: scanner.error?.message || scanner.skipReason,
+        })),
+        errors: scanResult.errors.map(error => ({
+          scanner: error.scanner,
+          code: error.code,
+          message: error.message,
+        })),
+      },
     },
   };
 }

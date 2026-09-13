@@ -351,7 +351,7 @@ export class IaCScanner {
     const files: string[] = [];
 
     const search = (currentDir: string, depth: number) => {
-      if (depth > maxDepth) {return;}
+      if (depth > maxDepth) {onSkippedInput(); return;}
 
       try {
         const items = fs.readdirSync(currentDir);

@@ -24,7 +24,7 @@ export class DockerfileScanner {
     const dockerfiles: string[] = [];
 
     const search = (currentDir: string, depth: number) => {
-      if (depth > 5) {return;}
+      if (depth > 5) {onSkippedInput(); return;}
 
       try {
         const items = fs.readdirSync(currentDir);

@@ -881,6 +881,23 @@ describe('collectPackageInventory', () => {
     expect(filterPackageInventory(inventory, {scope: 'runtime'}).errors).toEqual([]);
   });
 
+  it('tags errors from recursively included Python requirement files', () => {
+    fs.writeFileSync(path.join(repository, 'requirements.txt'), '-r requirements/base.txt\n');
+    fs.mkdirSync(path.join(repository, 'requirements'));
+    fs.writeFileSync(path.join(repository, 'requirements/base.txt'), 'requests>=2.31.0\n');
+
+    const inventory = collectPackageInventory(repository);
+
+    expect(inventory.errors).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        file: 'requirements/base.txt',
+        code: 'UNRESOLVED_VERSION',
+        ecosystem: 'pip',
+      }),
+    ]));
+    expect(filterPackageInventory(inventory, {ecosystems: ['npm']}).errors).toEqual([]);
+  });
+
   it('reports malformed Cargo package blocks instead of silently omitting them', () => {
     fs.writeFileSync(path.join(repository, 'Cargo.lock'), [
       'version = 3',
@@ -1058,6 +1075,69 @@ GEM
       expect.objectContaining({name: 'rspec', direct: true, scope: 'development', dependencyPaths: ['rspec@3.13.0']}),
     ]));
     expect(inventory.errors).toEqual([]);
+  });
+
+  it('preserves a Bundler group scope across nested non-group blocks', () => {
+    fs.writeFileSync(path.join(repository, 'Gemfile'), [
+      "source 'https://rubygems.org'",
+      'group :development, :test do',
+      '  platforms :ruby do',
+      "    gem 'inner-dev'",
+      '  end',
+      "  gem 'after-inner-dev'",
+      'end',
+    ].join('\n'));
+    fs.writeFileSync(path.join(repository, 'Gemfile.lock'), [
+      'GEM',
+      '  remote: https://rubygems.org/',
+      '  specs:',
+      '    after-inner-dev (1.0.0)',
+      '    inner-dev (1.0.0)',
+      '',
+      'DEPENDENCIES',
+      '  after-inner-dev',
+      '  inner-dev',
+    ].join('\n'));
+
+    const inventory = collectPackageInventory(repository);
+
+    expect(inventory.coordinates).toEqual(expect.arrayContaining([
+      expect.objectContaining({name: 'inner-dev', scope: 'development'}),
+      expect.objectContaining({name: 'after-inner-dev', scope: 'development'}),
+    ]));
+    expect(filterPackageInventory(inventory, {scope: 'runtime'}).coordinates).toEqual([]);
+    expect(inventory.errors).toEqual([]);
+  });
+
+  it('preserves Maven optional and non-runtime scopes', () => {
+    const dependency = (artifact: string, extra = '') => [
+      '<dependency>',
+      '  <groupId>org.example</groupId>',
+      `  <artifactId>${artifact}</artifactId>`,
+      '  <version>1.0.0</version>',
+      extra,
+      '</dependency>',
+    ].filter(Boolean).join('\n');
+    fs.writeFileSync(path.join(repository, 'pom.xml'), [
+      '<project><dependencies>',
+      dependency('required'),
+      dependency('optional', '<optional>true</optional>'),
+      dependency('provided', '<scope>provided</scope>'),
+      dependency('system', '<scope>system</scope>'),
+      dependency('test-only', '<scope>test</scope>'),
+      '</dependencies></project>',
+    ].join('\n'));
+
+    const inventory = collectPackageInventory(repository);
+    const scope = (artifact: string) => inventory.coordinates.find(
+      coordinate => coordinate.name === `org.example:${artifact}`
+    )?.scope;
+
+    expect(scope('required')).toBe('runtime');
+    expect(scope('optional')).toBe('optional');
+    expect(scope('provided')).toBe('development');
+    expect(scope('system')).toBe('development');
+    expect(scope('test-only')).toBe('development');
   });
 
   it('reports Gemfile requirements that are absent or stale in the adjacent lock', () => {

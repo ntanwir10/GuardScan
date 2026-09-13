@@ -16,6 +16,17 @@ function isWithinRoot(root: string, candidate: string): boolean {
   return relative === '' || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative));
 }
 
+function hasNulBytePrefix(file: string, size: number): boolean {
+  const sample = Buffer.alloc(Math.min(size, 8 * 1024));
+  const descriptor = fs.openSync(file, 'r');
+  try {
+    const bytesRead = fs.readSync(descriptor, sample, 0, sample.length, 0);
+    return sample.subarray(0, bytesRead).includes(0);
+  } finally {
+    fs.closeSync(descriptor);
+  }
+}
+
 export interface SecretFinding {
   type: string;
   file: string;
@@ -78,6 +89,7 @@ export class SecretsDetector {
         const stat = fs.statSync(file);
         if (!stat.isFile()) {continue;}
         if (stat.size > MAX_SECRET_FILE_BYTES) {
+          if (hasNulBytePrefix(file, stat.size)) {continue;}
           onSkippedInput();
           continue;
         }

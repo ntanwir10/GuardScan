@@ -104,6 +104,16 @@ describe('SecretsDetector', () => {
 
       expect(findings).toEqual([]);
     });
+
+    it('skips a large binary without degrading secret coverage', async () => {
+      const binary = path.join(testDir, 'large-image.bin');
+      fs.writeFileSync(binary, Buffer.alloc(2 * 1024 * 1024 + 1));
+      const onSkippedInput = jest.fn();
+
+      await expect(detector.detectInFiles([binary], onSkippedInput)).resolves.toEqual([]);
+
+      expect(onSkippedInput).not.toHaveBeenCalled();
+    });
   });
 
   describe('scanGitHistory', () => {
