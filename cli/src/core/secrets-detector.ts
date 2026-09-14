@@ -133,11 +133,18 @@ export class SecretsDetector {
     }
 
     try {
-      // Get all commits
-      const commits = execFileSync('git', ['log', '--all', '--format=%H'], {
+      // Request one extra commit so bounded history is explicit in coverage.
+      const commitWindow = execFileSync('git', [
+        'log',
+        '--all',
+        '--format=%H',
+        `--max-count=${SECURITY_CONSTANTS.GIT_HISTORY_COMMIT_LIMIT + 1}`,
+      ], {
         cwd: repoPath,
         encoding: 'utf-8',
-      }).split('\n').filter(Boolean).slice(0, SECURITY_CONSTANTS.GIT_HISTORY_COMMIT_LIMIT);
+      }).split('\n').filter(Boolean);
+      if (commitWindow.length > SECURITY_CONSTANTS.GIT_HISTORY_COMMIT_LIMIT) {onSkippedInput();}
+      const commits = commitWindow.slice(0, SECURITY_CONSTANTS.GIT_HISTORY_COMMIT_LIMIT);
 
       for (const commit of commits) {
         try {

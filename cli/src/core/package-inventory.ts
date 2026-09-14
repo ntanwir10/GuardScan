@@ -485,6 +485,7 @@ function parseNpmLock(
       };
       const pathsByNode = new Map<string, Set<string>>();
       const scopeByNode = new Map<string, DependencyScope>();
+      const missingEdges = new Set<string>();
       const identity = (node: NpmNode): string => `${node.name}@${node.version}`;
       const visit = (node: NpmNode, currentPath: string, stack: Set<string>, rootScope: DependencyScope): void => {
         const paths = pathsByNode.get(node.packagePath) || new Set<string>();
@@ -495,13 +496,25 @@ function parseNpmLock(
         if (scopeRank[rootScope] > scopeRank[existingScope]) {scopeByNode.set(node.packagePath, rootScope);}
         if (stack.has(node.packagePath)) {return;}
         const nextStack = new Set(stack).add(node.packagePath);
-        const dependencies = [
-          ...Object.keys(asRecord(node.value.dependencies) || {}),
-          ...Object.keys(asRecord(node.value.optionalDependencies) || {}),
-        ];
-        for (const dependencyName of [...new Set(dependencies)].sort()) {
+        const requiredDependencies = new Set(Object.keys(asRecord(node.value.dependencies) || {}));
+        const optionalDependencies = new Set(Object.keys(asRecord(node.value.optionalDependencies) || {}));
+        for (const dependencyName of [...new Set([...requiredDependencies, ...optionalDependencies])].sort()) {
+          const edgeScope = requiredDependencies.has(dependencyName) ? rootScope : 'optional';
           const child = resolveInstalledNode(node.packagePath, dependencyName);
-          if (child) {visit(child, `${currentPath} > ${identity(child)}`, nextStack, rootScope);}
+          if (child) {
+            visit(child, `${currentPath} > ${identity(child)}`, nextStack, edgeScope);
+          } else {
+            const missingKey = `${node.packagePath}\0${dependencyName}\0${edgeScope}`;
+            if (!missingEdges.has(missingKey)) {
+              missingEdges.add(missingKey);
+              errors.push({
+                file: rel,
+                code: 'INVALID_MANIFEST',
+                message: `npm lockfile is missing a reachable package record for ${dependencyName} referenced by ${identity(node)}`,
+                scope: edgeScope,
+              });
+            }
+          }
         }
       };
       for (const node of nodes.values()) {
@@ -761,15 +774,13 @@ function parsePnpmLock(root: string, file: string, coordinates: DependencyCoordi
   try {
     const data = asRecord(yaml.load(fs.readFileSync(file, 'utf8')));
     const importers = asRecord(data?.importers) || {};
-    const validatedWorkspaceLink = (
-      importerPath: string,
+    const validatedWorkspaceTarget = (
+      baseDirectory: string,
       dependencyName: string,
-      specifier: string,
       resolution: string
     ): boolean => {
-      if (!/^workspace:/i.test(specifier) || !/^link:/i.test(resolution)) {return false;}
-      const importerDirectory = path.resolve(path.dirname(file), importerPath === '.' ? '' : importerPath);
-      const targetDirectory = path.resolve(importerDirectory, resolution.slice('link:'.length));
+      if (!/^link:/i.test(resolution)) {return false;}
+      const targetDirectory = path.resolve(baseDirectory, resolution.slice('link:'.length));
       if (!isWithinRoot(root, targetDirectory)) {return false;}
       const targetImporter = relative(path.dirname(file), targetDirectory) || '.';
       if (!Object.prototype.hasOwnProperty.call(importers, targetImporter)) {return false;}
@@ -780,6 +791,16 @@ function parsePnpmLock(root: string, file: string, coordinates: DependencyCoordi
       } catch {
         return false;
       }
+    };
+    const validatedWorkspaceLink = (
+      importerPath: string,
+      dependencyName: string,
+      specifier: string,
+      resolution: string
+    ): boolean => {
+      if (!/^workspace:/i.test(specifier)) {return false;}
+      const importerDirectory = path.resolve(path.dirname(file), importerPath === '.' ? '' : importerPath);
+      return validatedWorkspaceTarget(importerDirectory, dependencyName, resolution);
     };
     const parseNodeKey = (rawKey: string): {name: string; version: string} | undefined => {
       const key = rawKey.replace(/^\//, '').split('(')[0];
@@ -865,7 +886,13 @@ function parsePnpmLock(root: string, file: string, coordinates: DependencyCoordi
       ...(asRecord(data?.packages) || {}),
       ...(asRecord(data?.snapshots) || {}),
     };
-    type PnpmNode = {name: string; version: string; rawKey: string; dependencies: Array<{name: string; version: string}>};
+    type PnpmNode = {
+      name: string;
+      version: string;
+      rawKey: string;
+      dependencies: Array<{name: string; version: string; optional: boolean}>;
+      unresolvedDependencies: Array<{name: string; resolution: string; optional: boolean}>;
+    };
     const nodes = new Map<string, PnpmNode>();
     const parseDependency = (name: string, value: unknown): {name: string; version: string} | undefined => {
       const record = asRecord(value);
@@ -880,14 +907,31 @@ function parsePnpmLock(root: string, file: string, coordinates: DependencyCoordi
       const parsed = parseNodeKey(rawKey);
       const record = asRecord(rawValue);
       if (!parsed || !record) {continue;}
-      const dependencies: Array<{name: string; version: string}> = [];
+      const dependencies: PnpmNode['dependencies'] = [];
+      const unresolvedDependencies: PnpmNode['unresolvedDependencies'] = [];
       for (const group of ['dependencies', 'optionalDependencies']) {
         for (const [name, value] of Object.entries(asRecord(record[group]) || {})) {
           const dependency = parseDependency(name, value);
-          if (dependency) {dependencies.push(dependency);}
+          const optional = group === 'optionalDependencies';
+          if (dependency) {
+            dependencies.push({...dependency, optional});
+            continue;
+          }
+          const valueRecord = asRecord(value);
+          const resolution = typeof value === 'string'
+            ? value
+            : typeof valueRecord?.version === 'string' ? valueRecord.version : '<missing>';
+          if (!validatedWorkspaceTarget(path.dirname(file), name, resolution)) {
+            unresolvedDependencies.push({name, resolution, optional});
+          }
         }
       }
-      nodes.set(`${parsed.name}\0${parsed.version}`, { ...parsed, rawKey, dependencies });
+      nodes.set(`${parsed.name}\0${parsed.version}`, {
+        ...parsed,
+        rawKey,
+        dependencies,
+        unresolvedDependencies,
+      });
     }
     const pathsByNode = new Map<string, Set<string>>();
     const scopeByNode = new Map<string, DependencyScope>();
@@ -922,6 +966,18 @@ function parsePnpmLock(root: string, file: string, coordinates: DependencyCoordi
         return;
       }
       const nextStack = new Set(stack).add(nodeKey);
+      for (const dependency of node.unresolvedDependencies) {
+        const unresolvedScope = dependency.optional ? 'optional' : rootScope;
+        const missingKey = `${nodeKey}\0${dependency.name}\0${dependency.resolution}\0${unresolvedScope}`;
+        if (missingNodes.has(missingKey)) {continue;}
+        missingNodes.add(missingKey);
+        errors.push({
+          file: rel,
+          code: 'INVALID_MANIFEST',
+          message: `pnpm dependency ${dependency.name} has an unresolved reachable resolution: ${dependency.resolution.slice(0, 120)}`,
+          scope: unresolvedScope,
+        });
+      }
       for (const dependency of [...node.dependencies].sort((left, right) =>
         `${left.name}\0${left.version}`.localeCompare(`${right.name}\0${right.version}`)
       )) {
@@ -930,7 +986,7 @@ function parsePnpmLock(root: string, file: string, coordinates: DependencyCoordi
           childKey,
           `${currentPath} > ${versionedIdentity(dependency.name, dependency.version)}`,
           nextStack,
-          rootScope
+          dependency.optional ? 'optional' : rootScope
         );
       }
     };
@@ -1073,6 +1129,7 @@ function parseYarnLock(root: string, file: string, coordinates: DependencyCoordi
     };
     const pathsByRecord = new Map<typeof records[number], Set<string>>();
     const scopeByRecord = new Map<typeof records[number], DependencyScope>();
+    const unresolvedEdges = new Set<string>();
     const versionedIdentity = (record: typeof records[number]): string => `${record.name}@${record.version}`;
     const visit = (
       record: typeof records[number],
@@ -1093,7 +1150,20 @@ function parseYarnLock(root: string, file: string, coordinates: DependencyCoordi
           npmRequestMatchesVersion(dependency.requested, candidate.version) &&
           candidate.descriptors.some(descriptor => yarnDescriptorMatchesRequest(descriptor, dependency.name, dependency.requested))
         );
-        if (child) {visit(child, `${currentPath} > ${versionedIdentity(child)}`, nextStack, rootScope);}
+        if (child) {
+          visit(child, `${currentPath} > ${versionedIdentity(child)}`, nextStack, rootScope);
+        } else {
+          const edge = `${versionedIdentity(record)}\0${dependency.name}\0${dependency.requested}\0${rootScope}`;
+          if (!unresolvedEdges.has(edge)) {
+            unresolvedEdges.add(edge);
+            errors.push({
+              file: rel,
+              code: 'INVALID_MANIFEST',
+              message: `Yarn lockfile cannot resolve reachable dependency ${dependency.name} ${dependency.requested} from ${versionedIdentity(record)}`,
+              scope: rootScope,
+            });
+          }
+        }
       }
     };
     for (const record of records) {
@@ -1545,6 +1615,7 @@ function parseCargoLock(root: string, file: string, coordinates: DependencyCoord
     };
     const pathsByNode = new Map<string, Set<string>>();
     const scopeByNode = new Map<string, DependencyScope>();
+    const unresolvedEdges = new Set<string>();
     const identity = (node: CargoNode): string => `${node.name}@${node.version}`;
     const visit = (node: CargoNode, currentPath: string, stack: Set<string>, rootScope: DependencyScope): void => {
       const paths = pathsByNode.get(node.key) || new Set<string>();
@@ -1558,7 +1629,22 @@ function parseCargoLock(root: string, file: string, coordinates: DependencyCoord
       for (const dependency of [...node.dependencies].sort((left, right) =>
         `${left.name}\0${left.version || ''}`.localeCompare(`${right.name}\0${right.version || ''}`))) {
         const child = resolveDependency(dependency);
-        if (child) {visit(child, `${currentPath} > ${identity(child)}`, nextStack, rootScope);}
+        if (child) {
+          visit(child, `${currentPath} > ${identity(child)}`, nextStack, rootScope);
+        } else {
+          const requested = [dependency.name, dependency.version, dependency.source ? `(${dependency.source})` : '']
+            .filter(Boolean).join(' ');
+          const edge = `${node.key}\0${requested}\0${rootScope}`;
+          if (!unresolvedEdges.has(edge)) {
+            unresolvedEdges.add(edge);
+            errors.push({
+              file: rel,
+              code: 'INVALID_MANIFEST',
+              message: `Cargo.lock cannot resolve reachable dependency ${requested} from ${identity(node)}`,
+              scope: rootScope,
+            });
+          }
+        }
       }
     };
     for (const node of nodes) {
@@ -1741,6 +1827,7 @@ function parseGemfileLock(
     };
     const pathsByNode = new Map<string, Set<string>>();
     const scopesByNode = new Map<string, DependencyScope>();
+    const unresolvedEdges = new Set<string>();
     const identity = (node: GemNode): string => `${node.name}@${node.version}`;
     const visit = (node: GemNode, currentPath: string, stack: Set<string>, scope: DependencyScope): void => {
       const paths = pathsByNode.get(node.key) || new Set<string>();
@@ -1753,7 +1840,21 @@ function parseGemfileLock(
       const nextStack = new Set(stack).add(node.key);
       for (const dependency of node.dependencies) {
         const child = resolveDependency(dependency);
-        if (child) {visit(child, `${currentPath} > ${identity(child)}`, nextStack, scope);}
+        if (child) {
+          visit(child, `${currentPath} > ${identity(child)}`, nextStack, scope);
+        } else {
+          const requested = `${dependency.name}${dependency.requested ? ` (${dependency.requested})` : ''}`;
+          const edge = `${node.key}\0${requested}\0${scope}`;
+          if (!unresolvedEdges.has(edge)) {
+            unresolvedEdges.add(edge);
+            errors.push({
+              file: rel,
+              code: 'INVALID_MANIFEST',
+              message: `Gemfile.lock cannot resolve reachable dependency ${requested} from ${identity(node)}`,
+              scope,
+            });
+          }
+        }
       }
     };
     for (const node of nodes) {

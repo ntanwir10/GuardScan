@@ -256,7 +256,9 @@ export class LicenseScanner {
         continue;
       }
       if (normalized.includes(' > ')) {
-        const names = normalized.split(' > ').map(value => value.trim()).filter(Boolean);
+        const names = normalized.split(' > ')
+          .map(value => versionedDependencyIdentity(value.trim()).name)
+          .filter(Boolean);
         const packagePath = names.reduce(
           (current, name) => path.join(current, 'node_modules', name),
           lockfileDirectory

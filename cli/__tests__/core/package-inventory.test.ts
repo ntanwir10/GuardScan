@@ -214,6 +214,28 @@ describe('collectPackageInventory', () => {
     expect(inventory.errors).toEqual([]);
   });
 
+  it('reports unresolved reachable npm package records', () => {
+    fs.writeFileSync(path.join(repository, 'package.json'), JSON.stringify({dependencies: {parent: '^1.0.0'}}));
+    fs.writeFileSync(path.join(repository, 'package-lock.json'), JSON.stringify({
+      name: 'root', lockfileVersion: 3,
+      packages: {
+        '': {dependencies: {parent: '^1.0.0'}},
+        'node_modules/parent': {version: '1.0.0', dependencies: {'missing-child': '^2.0.0'}},
+      },
+    }));
+
+    const inventory = collectPackageInventory(repository);
+
+    expect(inventory.errors).toEqual([
+      expect.objectContaining({
+        file: 'package-lock.json',
+        code: 'INVALID_MANIFEST',
+        message: expect.stringMatching(/missing-child|unresolved|record/i),
+        scope: 'runtime',
+      }),
+    ]);
+  });
+
   it('skips first-party npm workspace links without accepting external links', () => {
     fs.writeFileSync(path.join(repository, 'package.json'), JSON.stringify({
       name: 'root', workspaces: ['packages/*'],
@@ -628,6 +650,34 @@ describe('collectPackageInventory', () => {
     ]);
   });
 
+  it('reports malformed reachable pnpm dependency locators', () => {
+    fs.writeFileSync(path.join(repository, 'package.json'), JSON.stringify({dependencies: {parent: '1.0.0'}}));
+    fs.writeFileSync(path.join(repository, 'pnpm-lock.yaml'), [
+      'lockfileVersion: 9.0',
+      'importers:',
+      '  .:',
+      '    dependencies:',
+      '      parent:',
+      '        specifier: 1.0.0',
+      '        version: 1.0.0',
+      'snapshots:',
+      '  parent@1.0.0:',
+      '    dependencies:',
+      '      malformed-child: definitely-not-a-supported-locator',
+    ].join('\n'));
+
+    const inventory = collectPackageInventory(repository);
+
+    expect(inventory.errors).toEqual([
+      expect.objectContaining({
+        file: 'pnpm-lock.yaml',
+        code: 'INVALID_MANIFEST',
+        message: expect.stringMatching(/malformed-child|locator|resolution/i),
+        scope: 'runtime',
+      }),
+    ]);
+  });
+
   it('resolves pnpm registry aliases to their target package identity', () => {
     fs.writeFileSync(path.join(repository, 'package.json'), JSON.stringify({
       dependencies: {foo: 'npm:lodash@^4.17.0', parent: '1.0.0'},
@@ -726,6 +776,28 @@ describe('collectPackageInventory', () => {
       expect.objectContaining({name: 'parent', dependencyPaths: ['parent@1.0.0']}),
       expect.objectContaining({name: 'child', dependencyPaths: ['parent@1.0.0 > child@2.0.0']}),
     ]));
+  });
+
+  it('reports unresolved reachable Yarn dependency records', () => {
+    fs.writeFileSync(path.join(repository, 'package.json'), JSON.stringify({dependencies: {parent: '^1.0.0'}}));
+    fs.writeFileSync(path.join(repository, 'yarn.lock'), [
+      'parent@^1.0.0:',
+      '  version "1.0.0"',
+      '  resolved "https://registry.yarnpkg.com/parent/-/parent-1.0.0.tgz"',
+      '  dependencies:',
+      '    missing-child "^2.0.0"',
+    ].join('\n'));
+
+    const inventory = collectPackageInventory(repository);
+
+    expect(inventory.errors).toEqual([
+      expect.objectContaining({
+        file: 'yarn.lock',
+        code: 'INVALID_MANIFEST',
+        message: expect.stringMatching(/missing-child|unresolved|record/i),
+        scope: 'runtime',
+      }),
+    ]);
   });
 
   it('preserves Yarn parent versions and propagates direct scopes through transitive records', () => {
@@ -1010,6 +1082,64 @@ describe('collectPackageInventory', () => {
     expect(inventory.errors).toEqual([
       expect.objectContaining({file: 'Cargo.lock', code: 'INVALID_MANIFEST', message: expect.stringMatching(/package block 1.*name/i)}),
       expect.objectContaining({file: 'Cargo.lock', code: 'INVALID_MANIFEST', message: expect.stringMatching(/package block 2.*version/i)}),
+    ]);
+  });
+
+  it('reports unresolved reachable Cargo dependency records', () => {
+    fs.writeFileSync(path.join(repository, 'Cargo.toml'), [
+      '[package]',
+      'name = "fixture"',
+      'version = "0.1.0"',
+      '[dependencies]',
+      'parent = "1.0.0"',
+    ].join('\n'));
+    fs.writeFileSync(path.join(repository, 'Cargo.lock'), [
+      'version = 3',
+      '[[package]]',
+      'name = "fixture"',
+      'version = "0.1.0"',
+      'dependencies = ["parent 1.0.0"]',
+      '[[package]]',
+      'name = "parent"',
+      'version = "1.0.0"',
+      'source = "registry+https://github.com/rust-lang/crates.io-index"',
+      'dependencies = ["missing-child 2.0.0"]',
+    ].join('\n'));
+
+    const inventory = collectPackageInventory(repository);
+
+    expect(inventory.errors).toEqual([
+      expect.objectContaining({
+        file: 'Cargo.lock',
+        code: 'INVALID_MANIFEST',
+        message: expect.stringMatching(/missing-child|unresolved|record/i),
+        scope: 'runtime',
+      }),
+    ]);
+  });
+
+  it('reports unresolved reachable Bundler dependency records', () => {
+    fs.writeFileSync(path.join(repository, 'Gemfile'), "source 'https://rubygems.org'\ngem 'parent'\n");
+    fs.writeFileSync(path.join(repository, 'Gemfile.lock'), [
+      'GEM',
+      '  remote: https://rubygems.org/',
+      '  specs:',
+      '    parent (1.0.0)',
+      '      missing-child (~> 2.0)',
+      '',
+      'DEPENDENCIES',
+      '  parent',
+    ].join('\n'));
+
+    const inventory = collectPackageInventory(repository);
+
+    expect(inventory.errors).toEqual([
+      expect.objectContaining({
+        file: 'Gemfile.lock',
+        code: 'INVALID_MANIFEST',
+        message: expect.stringMatching(/missing-child|unresolved|spec/i),
+        scope: 'runtime',
+      }),
     ]);
   });
 

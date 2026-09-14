@@ -55,6 +55,8 @@ export interface ScannerTaskOutput {
   findings: Finding[];
   /** Marks useful-but-incomplete scanner output as an operational failure. */
   error?: ScannerError;
+  /** Scanner evidence that must survive even when the finding set is empty. */
+  metadata?: Record<string, unknown>;
 }
 
 function coverageAwareOutput(
@@ -113,6 +115,7 @@ export interface ScannerRunResult {
   /** Kept as an explicit legacy signal while commands migrate to status. */
   skipped?: boolean;
   error?: ScannerError;
+  metadata?: Record<string, unknown>;
 }
 
 export interface ScanExecutionError extends ScannerError {
@@ -337,12 +340,15 @@ export class ScanEngine {
             }
           }
           const partialResults = results.filter(result => result.status === 'partial');
+          const enrichment = results[0]?.knownExploitedEnrichment;
+          const metadata = enrichment ? {knownExploitedEnrichment: enrichment} : undefined;
           if (partialResults.length > 0) {
             const errorCodes = Array.from(new Set(
               partialResults.flatMap(result => result.errors.map(error => error.code))
             )).sort();
             return {
               findings: dependencyFindings,
+              metadata,
               error: {
                 code: 'DEPENDENCY_SCAN_PARTIAL',
                 message: `Dependency vulnerability coverage is incomplete${
@@ -352,7 +358,7 @@ export class ScanEngine {
               },
             };
           }
-          return dependencyFindings;
+          return {findings: dependencyFindings, metadata};
         },
       },
       {
@@ -553,6 +559,7 @@ export class ScanEngine {
         const rawFindings = Array.isArray(output) ? output : output.findings;
         const findings = normalizeAndDedupeFindings(rawFindings, task.scanner, repoRoot);
         const partialError = Array.isArray(output) ? undefined : output.error;
+        const metadata = Array.isArray(output) ? undefined : output.metadata;
         result = {
           scanner: task.scanner,
           required,
@@ -563,6 +570,7 @@ export class ScanEngine {
           deduplicatedCount: rawFindings.length - findings.length,
           durationMs: Date.now() - scannerStartedAt,
           error: partialError,
+          metadata,
         };
       } catch (error) {
         result = {
@@ -744,6 +752,12 @@ function mergeExecutionErrors(
 function collectKnownExploitedEnrichment(
   result: ScanEngineResult
 ): Record<string, unknown> | undefined {
+  const scannerEnrichment = result.scannerResults
+    .find(scanner => scanner.scanner === 'dependencies')
+    ?.metadata?.knownExploitedEnrichment;
+  if (scannerEnrichment && typeof scannerEnrichment === 'object' && !Array.isArray(scannerEnrichment)) {
+    return scannerEnrichment as Record<string, unknown>;
+  }
   for (const finding of result.findings) {
     const enrichment = finding.metadata?.knownExploitedEnrichment;
     if (enrichment && typeof enrichment === 'object' && !Array.isArray(enrichment)) {

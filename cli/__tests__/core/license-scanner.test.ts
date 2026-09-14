@@ -101,7 +101,10 @@ describe('LicenseScanner inventory and SBOM contracts', () => {
     const report = await new LicenseScanner().scan(repository, 'proprietary', {
       offline: true,
       inventory: inventory(repository, [
-        coordinate({ name: 'child', exactVersion: '2.0.0', dependencyPaths: ['parent > child'] }),
+        coordinate({
+          name: 'child', exactVersion: '2.0.0',
+          dependencyPaths: ['parent@1.0.0 > child@2.0.0'],
+        }),
         coordinate({ name: 'child', exactVersion: '1.0.0', dependencyPaths: ['node_modules/child'] }),
       ]),
     });

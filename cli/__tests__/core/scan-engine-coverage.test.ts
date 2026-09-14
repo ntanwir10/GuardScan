@@ -2,17 +2,20 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import {
+  createScanEnvelope,
   ScanEngine,
   ScanEngineOptions,
   ScanFile,
   ScannerTask,
   ScannerTaskOutput,
+  serializeScanResult,
 } from '../../src/core/scan-engine';
 import {apiScanner} from '../../src/core/api-scanner';
 import {complianceChecker} from '../../src/core/compliance-checker';
 import {dockerfileScanner} from '../../src/core/dockerfile-scanner';
 import {iacScanner} from '../../src/core/iac-scanner';
 import {owaspScanner} from '../../src/core/owasp-scanner';
+import {dependencyScanner} from '../../src/core/dependency-scanner';
 
 type BuiltInTaskFactory = {
   createBuiltInTasks(
@@ -90,6 +93,40 @@ describe('ScanEngine built-in coverage adapters', () => {
     expect(output).toMatchObject({
       findings: [],
       error: {code: 'IAC_SCAN_PARTIAL', retryable: true},
+    });
+  });
+
+  it('preserves dependency enrichment metadata when no vulnerabilities are found', async () => {
+    const enrichment = {status: 'disabled', source: 'cisa-kev'};
+    const result = await new ScanEngine().runSecurityScan({
+      repoPath: repository,
+      files: [],
+      scannerTasks: [{
+        scanner: 'dependencies',
+        run: async () => ({findings: [], metadata: {knownExploitedEnrichment: enrichment}}),
+      }],
+    });
+
+    expect(createScanEnvelope(result).security.knownExploitedEnrichment).toEqual(enrichment);
+    const sarif = JSON.parse(serializeScanResult(result, 'sarif', repository));
+    expect(sarif.runs[0].invocations[0].properties.knownExploitedEnrichment).toEqual(enrichment);
+  });
+
+  it('returns KEV evidence from a clean built-in dependency scan', async () => {
+    const enrichment = {status: 'fresh-cache' as const, source: 'cisa-kev' as const};
+    jest.spyOn(dependencyScanner, 'scan').mockResolvedValue([{
+      vulnerabilities: [], totalVulnerabilities: 0, critical: 0, high: 0, medium: 0, low: 0,
+      ecosystem: 'npm', status: 'complete', source: 'osv', queriedPackages: 1,
+      unresolvedPackages: 0, inventoryDigest: 'fixture', dataFreshness: 'fresh-cache',
+      knownExploitedEnrichment: enrichment, errors: [],
+    }]);
+    const dependencyTask = (new ScanEngine() as unknown as BuiltInTaskFactory).createBuiltInTasks(
+      {includeVulnerabilities: true}, repository, [], false
+    ).find(task => task.scanner === 'dependencies')!;
+
+    await expect(dependencyTask.run()).resolves.toMatchObject({
+      findings: [],
+      metadata: {knownExploitedEnrichment: enrichment},
     });
   });
 

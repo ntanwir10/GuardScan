@@ -117,6 +117,27 @@ describe('SecretsDetector', () => {
   });
 
   describe('scanGitHistory', () => {
+    it('marks history coverage partial when the commit window is truncated', async () => {
+      const commits = Array.from({length: 101}, (_, index) => index.toString(16).padStart(40, '0'));
+      mockedExecFileSync.mockImplementation(((_command: string, args: readonly string[]) => {
+        if (args[0] === 'rev-parse') {return 'true\n';}
+        if (args[0] === 'log') {return `${commits.join('\n')}\n`;}
+        if (args[0] === 'show') {return '';}
+        throw new Error(`unexpected git invocation: ${args.join(' ')}`);
+      }) as typeof execFileSync);
+      const onSkippedInput = jest.fn();
+
+      await expect(detector.scanGitHistory(testDir, onSkippedInput)).resolves.toEqual([]);
+
+      expect(mockedExecFileSync).toHaveBeenCalledWith(
+        'git',
+        ['log', '--all', '--format=%H', '--max-count=101'],
+        expect.objectContaining({cwd: testDir})
+      );
+      expect(mockedExecFileSync.mock.calls.filter(([, args]) => args?.[0] === 'show')).toHaveLength(100);
+      expect(onSkippedInput).toHaveBeenCalledTimes(1);
+    });
+
     it('reports a skipped commit when git show fails', async () => {
       const commit = 'a'.repeat(40);
       mockedExecFileSync.mockImplementation(((_command: string, args: readonly string[]) => {
