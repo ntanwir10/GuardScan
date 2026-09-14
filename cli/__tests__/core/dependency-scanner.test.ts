@@ -917,6 +917,26 @@ describe('DependencyScanner OSV integration', () => {
     });
   });
 
+  it('fails a refresh when snapshot sanitization drops a live advisory', async () => {
+    const inventory = collectPackageInventory(repository);
+    const coordinate = inventory.coordinates[0];
+    const malformed = {
+      ...advisory('GHSA-malformed-refresh', []),
+      severity: [{type: 'CVSS_V3', score: 9}],
+    };
+    const client = {
+      endpoint: 'https://api.osv.dev',
+      query: jest.fn(async () => [{coordinate, vulnerability: malformed}]),
+    } as unknown as OsvClient;
+
+    await expect(new DependencyScanner().updateSnapshot(repository, {
+      inventory,
+      client,
+      snapshotStore: new VulnerabilitySnapshotStore(cache),
+      enrichKnownExploited: false,
+    })).rejects.toMatchObject({code: 'OFFLINE_COVERAGE_INCOMPLETE'});
+  });
+
   it('keeps live KEV coverage when cache persistence fails', async () => {
     const kevStore = new CisaKevCatalogStore(path.join(cache, 'kev-write-failure'));
     jest.spyOn(kevStore, 'save').mockImplementation(() => {

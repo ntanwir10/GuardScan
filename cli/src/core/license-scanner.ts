@@ -75,8 +75,8 @@ export interface Spdx23Document {
   creationInfo: { created: string; creators: string[] };
   packages: Spdx23Package[];
   relationships: Array<{
-    spdxElementId: 'SPDXRef-DOCUMENT';
-    relationshipType: 'DESCRIBES';
+    spdxElementId: string;
+    relationshipType: 'DESCRIBES' | 'DEPENDS_ON';
     relatedSpdxElement: string;
   }>;
 }
@@ -834,7 +834,7 @@ export class LicenseScanner {
       };
     }
 
-    const packages: Spdx23Package[] = ordered.map(finding => {
+    const dependencyPackages: Spdx23Package[] = ordered.map(finding => {
       const purl = this.generatePURL(finding);
       const license = isSpdxExpression(finding.license) ? finding.license : 'NOASSERTION';
       return {
@@ -853,6 +853,17 @@ export class LicenseScanner {
         }],
       };
     });
+    const rootPackage: Spdx23Package = {
+      name: projectName,
+      SPDXID: `SPDXRef-RootPackage-${stableIdentifier(projectName)}`,
+      versionInfo: 'NOASSERTION',
+      downloadLocation: 'NOASSERTION',
+      filesAnalyzed: false,
+      licenseConcluded: 'NOASSERTION',
+      licenseDeclared: 'NOASSERTION',
+      copyrightText: 'NOASSERTION',
+      externalRefs: [],
+    };
     return {
       spdxVersion: 'SPDX-2.3',
       dataLicense: 'CC0-1.0',
@@ -860,12 +871,12 @@ export class LicenseScanner {
       name: projectName,
       documentNamespace: `https://guardscancli.com/spdx/${encodeURIComponent(projectName)}/${randomUUID()}`,
       creationInfo: { created, creators: [`Tool: GuardScan-${PACKAGE_VERSION}`] },
-      packages,
-      relationships: packages.map(value => ({
+      packages: [...dependencyPackages, rootPackage],
+      relationships: [{
         spdxElementId: 'SPDXRef-DOCUMENT',
         relationshipType: 'DESCRIBES',
-        relatedSpdxElement: value.SPDXID,
-      })),
+        relatedSpdxElement: rootPackage.SPDXID,
+      }, ...spdxDependencyRelationships(ordered, dependencyPackages, rootPackage.SPDXID)],
     };
   }
 
@@ -1017,6 +1028,58 @@ function cycloneDxDependencies(
     }
   }
   return dependencies;
+}
+
+function spdxDependencyRelationships(
+  findings: LicenseFinding[],
+  packages: Spdx23Package[],
+  rootReference: string
+): Spdx23Document['relationships'] {
+  const referencesByPackage = new Map<string, string[]>();
+  const referencesByCoordinate = new Map<string, string[]>();
+  for (let index = 0; index < findings.length; index++) {
+    const finding = findings[index];
+    const key = `${finding.source}\u0000${finding.package}`;
+    referencesByPackage.set(key, [...(referencesByPackage.get(key) || []), packages[index].SPDXID]);
+    const coordinateKey = `${key}\u0000${finding.version}`;
+    referencesByCoordinate.set(coordinateKey, [
+      ...(referencesByCoordinate.get(coordinateKey) || []),
+      packages[index].SPDXID,
+    ]);
+  }
+
+  const relationships: Spdx23Document['relationships'] = packages.flatMap((value, index) =>
+    findings[index].direct === true ? [{
+      spdxElementId: rootReference,
+      relationshipType: 'DEPENDS_ON' as const,
+      relatedSpdxElement: value.SPDXID,
+    }] : []
+  );
+  const edges = new Set<string>();
+  for (let index = 0; index < findings.length; index++) {
+    const finding = findings[index];
+    if (!['npm', 'cargo', 'rubygems'].includes(finding.source)) {continue;}
+    for (const dependencyPath of finding.dependencyPaths || []) {
+      const identities = dependencyIdentities(dependencyPath);
+      const child = identities[identities.length - 1];
+      if (identities.length < 2 || child.name !== finding.package ||
+        (child.version !== undefined && child.version !== finding.version)) {continue;}
+      const parent = identities[identities.length - 2];
+      const parentReferences = parent.version
+        ? referencesByCoordinate.get(`${finding.source}\u0000${parent.name}\u0000${parent.version}`) || []
+        : referencesByPackage.get(`${finding.source}\u0000${parent.name}`) || [];
+      if (parentReferences.length !== 1) {continue;}
+      const edge = `${parentReferences[0]}\u0000${packages[index].SPDXID}`;
+      if (edges.has(edge)) {continue;}
+      edges.add(edge);
+      relationships.push({
+        spdxElementId: parentReferences[0],
+        relationshipType: 'DEPENDS_ON',
+        relatedSpdxElement: packages[index].SPDXID,
+      });
+    }
+  }
+  return relationships;
 }
 
 function stableIdentifier(value: string): string {

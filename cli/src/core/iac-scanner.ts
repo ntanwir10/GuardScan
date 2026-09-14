@@ -345,14 +345,11 @@ export class IaCScanner {
   private findFiles(
     dir: string,
     pattern: RegExp,
-    onSkippedInput: () => void,
-    maxDepth: number = 5
+    onSkippedInput: () => void
   ): string[] {
     const files: string[] = [];
 
     const search = (currentDir: string, depth: number) => {
-      if (depth > maxDepth) {onSkippedInput(); return;}
-
       try {
         const items = fs.readdirSync(currentDir);
 

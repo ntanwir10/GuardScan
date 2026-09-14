@@ -535,16 +535,17 @@ function parseNpmLock(
       errors.push({ file: rel, code: 'UNSUPPORTED_FORMAT', message: 'npm lockfile does not contain packages or dependencies' });
       return;
     }
-    const walk = (dependencies: Record<string, unknown>, chain: string[]): void => {
+    const walk = (dependencies: Record<string, unknown>, chain: string[], nameChain: string[]): void => {
       for (const [name, dependencyValue] of Object.entries(dependencies)) {
         const value = asRecord(dependencyValue);
         if (!value) {continue;}
+        const displayPath = [...nameChain, name];
         const unsupportedSource = unsupportedNpmSource(value);
         if (unsupportedSource) {
           errors.push({
             file: rel,
             code: 'UNSUPPORTED_FORMAT',
-            message: `npm package ${[...chain, name].join(' > ')} uses unsupported source: ${unsupportedSource.slice(0, 120)}`,
+            message: `npm package ${displayPath.join(' > ')} uses unsupported source: ${unsupportedSource.slice(0, 120)}`,
           });
         }
         const version = typeof value.version === 'string' ? value.version : '';
@@ -556,22 +557,23 @@ function parseNpmLock(
           errors.push({
             file: rel,
             code: 'UNRESOLVED_VERSION',
-            message: `npm package ${[...chain, name].join(' > ')} has no valid exact version${version ? `: ${version.slice(0, 120)}` : ''}`,
+            message: `npm package ${displayPath.join(' > ')} has no valid exact version${version ? `: ${version.slice(0, 120)}` : ''}`,
           });
         }
+        const dependencyPath = [...chain, semver.valid(version, {loose: true}) ? `${name}@${version}` : name];
         if (!unsupportedSource && semver.valid(version, { loose: true })) {
           addCoordinate(coordinates, {
             ecosystem: 'npm', osvEcosystem: 'npm', name, exactVersion: version,
             scope: value.optional === true ? 'optional' : value.dev === true ? 'development' : directScope || 'runtime',
             direct: directScope !== undefined,
-            manifestPath: manifest, lockfilePath: rel, dependencyPaths: [[...chain, name].join(' > ')],
+            manifestPath: manifest, lockfilePath: rel, dependencyPaths: [dependencyPath.join(' > ')],
           });
         }
         const nestedDependencies = asRecord(value.dependencies);
-        if (nestedDependencies) {walk(nestedDependencies, [...chain, name]);}
+        if (nestedDependencies) {walk(nestedDependencies, dependencyPath, displayPath);}
       }
     };
-    walk(rootDependencies, []);
+    walk(rootDependencies, [], []);
   } catch (error: unknown) {
     errors.push({ file: rel, code: 'INVALID_MANIFEST', message: `Unable to parse npm lockfile: ${errorMessage(error)}` });
   }
@@ -758,6 +760,27 @@ function parsePnpmLock(root: string, file: string, coordinates: DependencyCoordi
   const rel = relative(root, file);
   try {
     const data = asRecord(yaml.load(fs.readFileSync(file, 'utf8')));
+    const importers = asRecord(data?.importers) || {};
+    const validatedWorkspaceLink = (
+      importerPath: string,
+      dependencyName: string,
+      specifier: string,
+      resolution: string
+    ): boolean => {
+      if (!/^workspace:/i.test(specifier) || !/^link:/i.test(resolution)) {return false;}
+      const importerDirectory = path.resolve(path.dirname(file), importerPath === '.' ? '' : importerPath);
+      const targetDirectory = path.resolve(importerDirectory, resolution.slice('link:'.length));
+      if (!isWithinRoot(root, targetDirectory)) {return false;}
+      const targetImporter = relative(path.dirname(file), targetDirectory) || '.';
+      if (!Object.prototype.hasOwnProperty.call(importers, targetImporter)) {return false;}
+      const targetManifest = path.join(targetDirectory, 'package.json');
+      if (!fs.existsSync(targetManifest)) {return false;}
+      try {
+        return asRecord(readJson(targetManifest))?.name === dependencyName;
+      } catch {
+        return false;
+      }
+    };
     const parseNodeKey = (rawKey: string): {name: string; version: string} | undefined => {
       const key = rawKey.replace(/^\//, '').split('(')[0];
       const match = key.match(/^(@[^/]+\/[^@/]+)@([^/]+)$/) || key.match(/^(@[^/]+\/[^/]+)\/([^/]+)$/)
@@ -782,7 +805,7 @@ function parsePnpmLock(root: string, file: string, coordinates: DependencyCoordi
       ['devDependencies', 'development'],
       ['optionalDependencies', 'optional'],
     ];
-    for (const [rawImporterPath, importer] of Object.entries(asRecord(data?.importers) || {})) {
+    for (const [rawImporterPath, importer] of Object.entries(importers)) {
       const importerPath = rawImporterPath === '.' ? '' : rawImporterPath;
       const manifest = path.resolve(path.dirname(file), importerPath, 'package.json');
       if (!isWithinRoot(root, manifest)) {continue;}
@@ -802,6 +825,7 @@ function parsePnpmLock(root: string, file: string, coordinates: DependencyCoordi
           const normalizedVersion = rawVersion.replace(/^\//, '').split('(')[0];
           const parsedLocator = parseNodeKey(normalizedVersion);
           const dependencyName = aliasTarget?.name || name;
+          if (validatedWorkspaceLink(rawImporterPath, dependencyName, specifier, rawVersion)) {continue;}
           const version = aliasTarget
             ? parsedLocator?.name === dependencyName
               ? parsedLocator.version
@@ -867,6 +891,7 @@ function parsePnpmLock(root: string, file: string, coordinates: DependencyCoordi
     }
     const pathsByNode = new Map<string, Set<string>>();
     const scopeByNode = new Map<string, DependencyScope>();
+    const missingNodes = new Set<string>();
     const versionedIdentity = (name: string, version: string): string => `${name}@${version}`;
     const visit = (
       nodeKey: string,
@@ -882,7 +907,20 @@ function parsePnpmLock(root: string, file: string, coordinates: DependencyCoordi
       if (scopeRank[rootScope] > scopeRank[existingScope]) {scopeByNode.set(nodeKey, rootScope);}
       if (stack.has(nodeKey)) {return;}
       const node = nodes.get(nodeKey);
-      if (!node) {return;}
+      if (!node) {
+        const missingKey = `${nodeKey}\0${rootScope}`;
+        if (!missingNodes.has(missingKey)) {
+          missingNodes.add(missingKey);
+          const [name, version] = nodeKey.split('\0');
+          errors.push({
+            file: rel,
+            code: 'INVALID_MANIFEST',
+            message: `pnpm lockfile is missing a reachable package record for ${versionedIdentity(name, version)}`,
+            scope: rootScope,
+          });
+        }
+        return;
+      }
       const nextStack = new Set(stack).add(nodeKey);
       for (const dependency of [...node.dependencies].sort((left, right) =>
         `${left.name}\0${left.version}`.localeCompare(`${right.name}\0${right.version}`)
@@ -897,10 +935,9 @@ function parsePnpmLock(root: string, file: string, coordinates: DependencyCoordi
       }
     };
     for (const [nodeKey, directValues] of directDependencies) {
-      const node = nodes.get(nodeKey);
-      if (!node) {continue;}
+      const [name, version] = nodeKey.split('\0');
       for (const direct of directValues) {
-        visit(nodeKey, versionedIdentity(node.name, node.version), new Set(), direct.scope);
+        visit(nodeKey, versionedIdentity(name, version), new Set(), direct.scope);
       }
     }
     for (const rawKey of Object.keys(records)) {
@@ -1760,6 +1797,14 @@ function parsePom(root: string, file: string, coordinates: DependencyCoordinate[
       .replace(/<build(?:\s[^>]*)?>[\s\S]*?<\/build>/gi, '')
       .replace(/<profiles(?:\s[^>]*)?>[\s\S]*?<\/profiles>/gi, '')
       .replace(/<reporting(?:\s[^>]*)?>[\s\S]*?<\/reporting>/gi, '');
+    if (/<parent(?:\s[^>]*)?>[\s\S]*?<\/parent>/i.test(xml)) {
+      errors.push({
+        file: rel,
+        code: 'UNSUPPORTED_FORMAT',
+        message: 'Maven parent inheritance requires effective-model resolution',
+        scope: 'runtime',
+      });
+    }
     const properties = new Map<string, string>();
     const propertiesBlock = xml.match(/<properties(?:\s[^>]*)?>([\s\S]*?)<\/properties>/)?.[1] || '';
     const propertyPattern = /<([A-Za-z_][A-Za-z0-9_.-]*)>\s*([^<]+?)\s*<\/\1>/g;

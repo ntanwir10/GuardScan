@@ -289,6 +289,31 @@ describe('collectPackageInventory', () => {
     ]);
   });
 
+  it('versions every npm v1 dependency path hop when package versions repeat', () => {
+    fs.writeFileSync(path.join(repository, 'package.json'), JSON.stringify({
+      dependencies: {left: '1.0.0', right: '1.0.0'},
+    }));
+    fs.writeFileSync(path.join(repository, 'package-lock.json'), JSON.stringify({
+      name: 'root', lockfileVersion: 1,
+      dependencies: {
+        left: {version: '1.0.0', dependencies: {
+          parent: {version: '1.0.0', dependencies: {child: {version: '1.0.0'}}},
+        }},
+        right: {version: '1.0.0', dependencies: {
+          parent: {version: '2.0.0', dependencies: {child: {version: '2.0.0'}}},
+        }},
+      },
+    }));
+
+    const inventory = collectPackageInventory(repository);
+
+    expect(inventory.coordinates.find(value => value.name === 'child' && value.exactVersion === '1.0.0')?.dependencyPaths)
+      .toEqual(['left@1.0.0 > parent@1.0.0 > child@1.0.0']);
+    expect(inventory.coordinates.find(value => value.name === 'child' && value.exactVersion === '2.0.0')?.dependencyPaths)
+      .toEqual(['right@1.0.0 > parent@2.0.0 > child@2.0.0']);
+    expect(inventory.errors).toEqual([]);
+  });
+
   it('reports stale direct requirements covered by npm, Yarn, and pnpm locks', () => {
     const fixtures = ['npm', 'yarn', 'pnpm'];
     for (const fixture of fixtures) {
@@ -530,6 +555,77 @@ describe('collectPackageInventory', () => {
       expect.objectContaining({code: 'UNSUPPORTED_FORMAT', message: expect.stringMatching(/filedep|unsupported/i)}),
       expect.objectContaining({code: 'UNSUPPORTED_FORMAT', message: expect.stringMatching(/urldep|unsupported/i)}),
     ]));
+  });
+
+  it('skips validated first-party pnpm workspace links but rejects external links', () => {
+    fs.writeFileSync(path.join(repository, 'package.json'), JSON.stringify({
+      name: 'root', workspaces: ['packages/*'],
+    }));
+    fs.mkdirSync(path.join(repository, 'packages/app'), {recursive: true});
+    fs.mkdirSync(path.join(repository, 'packages/library'), {recursive: true});
+    fs.writeFileSync(path.join(repository, 'packages/app/package.json'), JSON.stringify({
+      name: '@fixture/app',
+      dependencies: {'@fixture/library': 'workspace:*', external: 'workspace:*'},
+    }));
+    fs.writeFileSync(path.join(repository, 'packages/library/package.json'), JSON.stringify({
+      name: '@fixture/library', version: '1.0.0',
+    }));
+    fs.writeFileSync(path.join(repository, 'pnpm-lock.yaml'), [
+      'lockfileVersion: 9.0',
+      'importers:',
+      '  .: {}',
+      '  packages/app:',
+      '    dependencies:',
+      '      "@fixture/library":',
+      '        specifier: workspace:*',
+      '        version: link:../library',
+      '      external:',
+      '        specifier: workspace:*',
+      '        version: link:../../../external',
+      '  packages/library: {}',
+    ].join('\n'));
+
+    const inventory = collectPackageInventory(repository);
+
+    expect(inventory.coordinates).toEqual([]);
+    expect(inventory.errors).toEqual([
+      expect.objectContaining({
+        file: 'pnpm-lock.yaml',
+        code: 'UNSUPPORTED_FORMAT',
+        message: expect.stringMatching(/external|workspace|link/i),
+      }),
+    ]);
+  });
+
+  it('reports reachable pnpm dependencies whose package record is missing', () => {
+    fs.writeFileSync(path.join(repository, 'package.json'), JSON.stringify({dependencies: {parent: '1.0.0'}}));
+    fs.writeFileSync(path.join(repository, 'pnpm-lock.yaml'), [
+      'lockfileVersion: 9.0',
+      'importers:',
+      '  .:',
+      '    dependencies:',
+      '      parent:',
+      '        specifier: 1.0.0',
+      '        version: 1.0.0',
+      'snapshots:',
+      '  parent@1.0.0:',
+      '    dependencies:',
+      '      missing-child: 2.0.0',
+    ].join('\n'));
+
+    const inventory = collectPackageInventory(repository);
+
+    expect(inventory.coordinates).toEqual([
+      expect.objectContaining({name: 'parent', exactVersion: '1.0.0'}),
+    ]);
+    expect(inventory.errors).toEqual([
+      expect.objectContaining({
+        file: 'pnpm-lock.yaml',
+        code: 'INVALID_MANIFEST',
+        message: expect.stringMatching(/missing-child@2\.0\.0|missing.*record/i),
+        scope: 'runtime',
+      }),
+    ]);
   });
 
   it('resolves pnpm registry aliases to their target package identity', () => {
@@ -1234,6 +1330,32 @@ GEM
     ]);
     expect(inventory.errors).toEqual([
       expect.objectContaining({code: 'UNSUPPORTED_FORMAT', message: expect.stringMatching(/direct-POM-only/i)}),
+    ]);
+  });
+
+  it('marks a Maven parent model incomplete even without local dependencies', () => {
+    fs.writeFileSync(path.join(repository, 'pom.xml'), `
+      <project>
+        <parent>
+          <groupId>org.example</groupId>
+          <artifactId>shared-parent</artifactId>
+          <version>1.0.0</version>
+        </parent>
+        <artifactId>child</artifactId>
+      </project>
+    `);
+
+    const inventory = collectPackageInventory(repository);
+
+    expect(inventory.coordinates).toEqual([]);
+    expect(inventory.errors).toEqual([
+      expect.objectContaining({
+        file: 'pom.xml',
+        ecosystem: 'maven',
+        code: 'UNSUPPORTED_FORMAT',
+        message: expect.stringMatching(/parent|effective-model/i),
+        scope: 'runtime',
+      }),
     ]);
   });
 

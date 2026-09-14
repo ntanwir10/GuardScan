@@ -658,7 +658,7 @@ export class DependencyScanner {
       if (snapshot.droppedMatches === 0) {return;}
       const error = new DependencyScanError(
         'OFFLINE_COVERAGE_INCOMPLETE',
-        `The offline vulnerability snapshot omitted ${snapshot.droppedMatches} malformed ${snapshot.droppedMatches === 1 ? 'advisory' : 'advisories'}. Refresh it online or use --allow-partial.`
+        `The vulnerability snapshot omitted ${snapshot.droppedMatches} malformed ${snapshot.droppedMatches === 1 ? 'advisory' : 'advisories'}, so offline coverage is incomplete. Retry with a valid advisory source or use --allow-partial.`
       );
       if (!options.allowPartial) {throw error;}
       errors.push({ code: error.code, message: error.message });
@@ -722,11 +722,13 @@ export class DependencyScanner {
           broaderSnapshot.inventoryMatches &&
           broaderSnapshot.sourceMatches !== false;
         if (freshness === 'live' && options.cache !== false && !preserveBroaderSnapshot) {
+          let savedSnapshot: VulnerabilitySnapshot | undefined;
           try {
-            store.save(inventory, matches, client.endpoint);
+            savedSnapshot = store.save(inventory, matches, client.endpoint);
           } catch (error: unknown) {
             errors.push(operationalError(error, 'SNAPSHOT_PERSIST_FAILED'));
           }
+          if (savedSnapshot) {recordDroppedMatches(savedSnapshot);}
         }
       }
     }

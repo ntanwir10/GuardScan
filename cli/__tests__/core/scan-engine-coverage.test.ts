@@ -111,22 +111,25 @@ describe('ScanEngine built-in coverage adapters', () => {
   });
 
   it.each([
-    ['api', apiScanner, 'scan'],
-    ['owasp', owaspScanner, 'scan'],
-    ['compliance', complianceChecker, 'check'],
-    ['dockerfile', dockerfileScanner, 'scan'],
-    ['iac', iacScanner, 'scan'],
-  ] as const)('reports depth-pruned %s traversal as incomplete', async (_name, scanner, method) => {
+    ['api', apiScanner, 'scan', 'route.ts', 'console.log("password", password);'],
+    ['owasp', owaspScanner, 'scan', 'code.ts', 'eval(userInput);'],
+    ['compliance', complianceChecker, 'check', 'config.ts', 'const password = "secret";'],
+    ['dockerfile', dockerfileScanner, 'scan', 'Dockerfile', 'FROM ubuntu:latest'],
+    ['iac', iacScanner, 'scan', 'main.tf', 'storage_encrypted = false'],
+  ] as const)('scans eligible %s inputs beyond the former depth limit', async (
+    _name, scanner, method, filename, content
+  ) => {
     const deepDirectory = path.join(repository, 'one', 'two', 'three', 'four', 'five', 'six');
     fs.mkdirSync(deepDirectory, {recursive: true});
-    fs.writeFileSync(path.join(deepDirectory, 'ignored.ts'), 'export const ignored = true;\n');
+    fs.writeFileSync(path.join(deepDirectory, filename), content);
     const onSkippedInput = jest.fn();
 
-    await ((scanner as unknown as Record<string, (root: string, skipped: () => void) => Promise<unknown>>)[method])(
+    const output = await ((scanner as unknown as Record<string, (root: string, skipped: () => void) => Promise<unknown[]>>)[method])(
       repository,
       onSkippedInput
     );
 
-    expect(onSkippedInput).toHaveBeenCalled();
+    expect(output.length).toBeGreaterThan(0);
+    expect(onSkippedInput).not.toHaveBeenCalled();
   });
 });

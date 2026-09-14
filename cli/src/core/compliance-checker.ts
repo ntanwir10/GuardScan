@@ -79,8 +79,6 @@ export class ComplianceChecker {
     const files: string[] = [];
 
     const search = (currentDir: string, depth: number) => {
-      if (depth > 5) {onSkippedInput(); return;}
-
       try {
         const items = fs.readdirSync(currentDir);
         for (const item of items) {

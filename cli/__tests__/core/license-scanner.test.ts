@@ -236,6 +236,22 @@ describe('LicenseScanner inventory and SBOM contracts', () => {
     ]));
   });
 
+  it('emits SPDX project, direct, and transitive dependency relationships', () => {
+    const document = new LicenseScanner().generateSBOM([
+      finding({source: 'npm', package: 'parent', version: '1.0.0', direct: true, dependencyPaths: ['parent@1.0.0']}),
+      finding({source: 'npm', package: 'child', version: '2.0.0', direct: false, dependencyPaths: ['parent@1.0.0 > child@2.0.0']}),
+    ], 'spdx', 'fixture');
+    const root = document.packages.find(value => value.name === 'fixture')!;
+    const parent = document.packages.find(value => value.name === 'parent')!;
+    const child = document.packages.find(value => value.name === 'child')!;
+
+    expect(document.relationships).toEqual(expect.arrayContaining([
+      {spdxElementId: 'SPDXRef-DOCUMENT', relationshipType: 'DESCRIBES', relatedSpdxElement: root.SPDXID},
+      {spdxElementId: root.SPDXID, relationshipType: 'DEPENDS_ON', relatedSpdxElement: parent.SPDXID},
+      {spdxElementId: parent.SPDXID, relationshipType: 'DEPENDS_ON', relatedSpdxElement: child.SPDXID},
+    ]));
+  });
+
   it('emits Maven package URLs with namespace and artifact segments', () => {
     const scanner = new LicenseScanner();
     const document = scanner.generateSBOM([
@@ -258,7 +274,7 @@ describe('LicenseScanner inventory and SBOM contracts', () => {
       'pkg:golang/example.com/module@1.0.0',
       'pkg:pypi/requests@1.0.0',
     ]);
-    expect(spdx.packages.map(pkg => pkg.externalRefs[0].referenceLocator)).toEqual([
+    expect(spdx.packages.filter(pkg => pkg.name !== 'fixture').map(pkg => pkg.externalRefs[0].referenceLocator)).toEqual([
       'pkg:golang/example.com/module@1.0.0',
       'pkg:pypi/requests@1.0.0',
     ]);
