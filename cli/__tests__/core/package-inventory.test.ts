@@ -1010,6 +1010,85 @@ describe('collectPackageInventory', () => {
     expect(inventory.errors).toEqual([]);
   });
 
+  it('bounds dependency path enumeration for shared npm DAGs', () => {
+    const packages: Record<string, unknown> = {
+      '': {
+        dependencies: {layer8a: '1.0.0'},
+        devDependencies: {layer0a: '1.0.0'},
+      },
+    };
+    for (let layer = 0; layer <= 8; layer++) {
+      for (const suffix of ['a', 'b']) {
+        packages[`node_modules/layer${layer}${suffix}`] = {
+          version: '1.0.0',
+          dependencies: layer < 8
+            ? { [`layer${layer + 1}a`]: '1.0.0', [`layer${layer + 1}b`]: '1.0.0' }
+            : {},
+        };
+      }
+    }
+    fs.writeFileSync(path.join(repository, 'package.json'), JSON.stringify({
+      dependencies: {layer8a: '1.0.0'},
+      devDependencies: {layer0a: '1.0.0'},
+    }));
+    fs.writeFileSync(path.join(repository, 'package-lock.json'), JSON.stringify({
+      lockfileVersion: 3,
+      packages,
+    }));
+
+    const inventory = collectPackageInventory(repository);
+    const pathCounts = inventory.coordinates.map(coordinate => coordinate.dependencyPaths.length);
+
+    expect(Math.max(...pathCounts)).toBeLessThanOrEqual(64);
+    expect(inventory.coordinates.find(coordinate => coordinate.name === 'layer8a')?.dependencyPaths).toHaveLength(64);
+    expect(inventory.coordinates.find(coordinate => coordinate.name === 'layer8a')?.scope).toBe('runtime');
+    expect(inventory.errors).toEqual([]);
+  });
+
+  it('accepts validated first-party Go module replacements inside the repository', () => {
+    fs.mkdirSync(path.join(repository, 'app'));
+    fs.mkdirSync(path.join(repository, 'library'));
+    fs.writeFileSync(path.join(repository, 'app/go.mod'), [
+      'module example.test/app',
+      'go 1.22',
+      'require example.test/library v1.2.3',
+      'replace example.test/library => ../library',
+    ].join('\n'));
+    fs.writeFileSync(path.join(repository, 'library/go.mod'), [
+      'module example.test/library',
+      'go 1.22',
+    ].join('\n'));
+
+    const inventory = collectPackageInventory(repository);
+
+    expect(inventory.coordinates).toEqual([]);
+    expect(inventory.errors).toEqual([]);
+  });
+
+  it('reports unsupported Poetry and Pipenv lockfile projects', () => {
+    fs.mkdirSync(path.join(repository, 'poetry'));
+    fs.writeFileSync(path.join(repository, 'poetry/pyproject.toml'), '[tool.poetry]\nname = "fixture"\n');
+    fs.writeFileSync(path.join(repository, 'poetry/poetry.lock'), 'package = []\n');
+    fs.mkdirSync(path.join(repository, 'pipenv'));
+    fs.writeFileSync(path.join(repository, 'pipenv/Pipfile'), '[packages]\nrequests = "*"\n');
+    fs.writeFileSync(path.join(repository, 'pipenv/Pipfile.lock'), '{}\n');
+
+    const inventory = collectPackageInventory(repository);
+
+    expect(inventory.coordinates).toEqual([]);
+    expect(inventory.errors).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        file: 'poetry/poetry.lock', ecosystem: 'pip', code: 'UNSUPPORTED_FORMAT',
+        message: expect.stringMatching(/Poetry|unsupported|incomplete/i),
+      }),
+      expect.objectContaining({
+        file: 'pipenv/Pipfile.lock', ecosystem: 'pip', code: 'UNSUPPORTED_FORMAT',
+        message: expect.stringMatching(/Pipenv|unsupported|incomplete/i),
+      }),
+    ]));
+    expect(filterPackageInventory(inventory, {ecosystems: ['npm']}).errors).toEqual([]);
+  });
+
   it('rejects go.mod files without a Go directive because they default to the incomplete Go 1.16 graph', () => {
     fs.writeFileSync(path.join(repository, 'go.mod'), [
       'module example.test/fixture',

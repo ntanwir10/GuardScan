@@ -86,7 +86,11 @@ describe('ScanEngine built-in coverage adapters', () => {
   });
 
   it('marks IaC coverage incomplete when selected YAML cannot be parsed', async () => {
-    fs.writeFileSync(path.join(repository, 'deployment.yaml'), 'apiVersion: [unterminated\n');
+    fs.writeFileSync(path.join(repository, 'deployment.yaml'), [
+      'apiVersion: apps/v1',
+      'kind: Deployment',
+      'spec: [unterminated',
+    ].join('\n'));
 
     const output = await tasks().find(task => task.scanner === 'iac')!.run() as ScannerTaskOutput;
 

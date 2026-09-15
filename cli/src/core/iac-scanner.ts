@@ -3,6 +3,17 @@ import * as path from 'path';
 import yaml from 'js-yaml';
 import { Finding } from '../utils/reporter';
 
+function looksLikeKubernetesManifest(content: string): boolean {
+  return content.split(/^---(?:\s+#.*)?\s*$/m).some(document => {
+    const lines = document.split(/\r?\n/).filter(line => line.trim() && !line.trimStart().startsWith('#'));
+    if (lines.length === 0) {return false;}
+    const minimumIndent = Math.min(...lines.map(line => line.match(/^[ \t]*/)?.[0].length || 0));
+    const topLevelLines = lines.filter(line => (line.match(/^[ \t]*/)?.[0].length || 0) === minimumIndent);
+    return topLevelLines.some(line => /^\s*apiVersion\s*:/.test(line)) &&
+      topLevelLines.some(line => /^\s*kind\s*:/.test(line));
+  });
+}
+
 export class IaCScanner {
   /**
    * Scan Infrastructure as Code files
@@ -129,6 +140,7 @@ export class IaCScanner {
     for (const file of k8sFiles) {
       try {
         const content = fs.readFileSync(file, 'utf-8');
+        if (!looksLikeKubernetesManifest(content)) {continue;}
         const docs = yaml.loadAll(content) as any[];
 
         for (const doc of docs) {

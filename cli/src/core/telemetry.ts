@@ -597,6 +597,19 @@ export function createTelemetryManager(
   return new TelemetryManager(config, stateDir, legacyCacheDir);
 }
 
+export function createTelemetryRecorder(
+  config: Config,
+  stateDir = configManager.getConfigDir(),
+  legacyCacheDir = configManager.getCacheDir()
+): Pick<TelemetryManager, "record"> {
+  try {
+    return createTelemetryManager(config, stateDir, legacyCacheDir);
+  } catch (error) {
+    logger.error("Telemetry recording could not be initialized", error);
+    return {record: () => Promise.resolve()};
+  }
+}
+
 function legacyEvent(value: unknown, index: number): TelemetryEvent | undefined {
   if (!isRecord(value) || !isTelemetryAction(value.action)) {return undefined;}
   const occurredAt = Number(value.timestamp);

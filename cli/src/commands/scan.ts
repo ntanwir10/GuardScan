@@ -20,7 +20,7 @@ import {
   scanEngine,
   writeScanResult,
 } from '../core/scan-engine';
-import { createTelemetryManager } from '../core/telemetry';
+import { createTelemetryRecorder } from '../core/telemetry';
 import { testRunner } from '../core/test-runner';
 import { handleCommandError } from '../utils/error-handler';
 import { reporter, ReviewResult } from '../utils/reporter';
@@ -211,7 +211,7 @@ export async function scanCommand(options: ScanOptions): Promise<void> {
     displaySummary(securityResult, quality, sbom, policyResult, Date.now() - startedAt);
     applyExitCode(policyResult.exitCode);
 
-    await createTelemetryManager(config).record({
+    await createTelemetryRecorder(config).record({
       action: 'scan',
       loc: locResult.codeLines,
       durationMs: Date.now() - startedAt,

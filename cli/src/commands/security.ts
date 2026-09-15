@@ -17,7 +17,7 @@ import {
   scanEngine,
   writeScanResult,
 } from '../core/scan-engine';
-import { createTelemetryManager } from '../core/telemetry';
+import { createTelemetryRecorder } from '../core/telemetry';
 import { FixSuggestionsGenerator, SecurityIssue } from '../features/fix-suggestions';
 import {
   ProviderConfigurationError,
@@ -151,7 +151,7 @@ export async function securityCommand(options: SecurityOptions): Promise<void> {
     displaySecuritySummary(scanResult.findings, scanResult.status, policyResult);
     applyExitCode(policyResult.exitCode);
 
-    await createTelemetryManager(config).record({
+    await createTelemetryRecorder(config).record({
       action: 'security',
       loc: locResult.codeLines,
       durationMs: Date.now() - startedAt,

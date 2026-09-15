@@ -9,7 +9,7 @@ import {
   ProviderFactory,
 } from '../providers/factory';
 import { Finding, reporter, ReviewResult } from '../utils/reporter';
-import { createTelemetryManager } from '../core/telemetry';
+import { createTelemetryRecorder } from '../core/telemetry';
 import { displaySimpleBanner } from '../utils/ascii-art';
 import { createDebugLogger } from '../utils/debug-logger';
 import { createPerformanceTracker } from '../utils/performance-tracker';
@@ -256,7 +256,7 @@ Provide constructive feedback with specific suggestions for improvement.`,
     // Record telemetry (only if enabled)
     if (config.telemetryEnabled) {
       perfTracker.start('record-telemetry');
-      const telemetryManager = createTelemetryManager(config);
+      const telemetryManager = createTelemetryRecorder(config);
       await telemetryManager.record({
         action: 'review',
         loc: locResult.codeLines,

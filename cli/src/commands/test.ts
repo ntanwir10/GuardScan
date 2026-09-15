@@ -6,7 +6,7 @@ import { codeSmellDetector } from '../core/code-smells';
 import { linterIntegration } from '../core/linter-integration';
 import { reporter, ReviewResult } from '../utils/reporter';
 import { configManager } from '../core/config';
-import { createTelemetryManager } from '../core/telemetry';
+import { createTelemetryRecorder } from '../core/telemetry';
 import { repositoryManager } from '../core/repository';
 import { createProgressBar } from '../utils/progress';
 import { createDebugLogger } from '../utils/debug-logger';
@@ -167,7 +167,7 @@ export async function testCommand(options: TestOptions): Promise<void> {
     // Record telemetry only when an existing config explicitly allows it.
     if (configManager.exists()) {
       const config = configManager.load({ touchLastUsed: false });
-      const telemetryManager = createTelemetryManager(config);
+      const telemetryManager = createTelemetryRecorder(config);
       await telemetryManager.record({
         action: 'test',
         loc: 0, // We don't count LOC for test command

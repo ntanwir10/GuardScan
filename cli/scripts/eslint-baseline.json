@@ -176,7 +176,7 @@
     "warnings": 2
   },
   "src/core/iac-scanner.ts": {
-    "errors": 52,
+    "errors": 51,
     "warnings": 0
   },
   "src/core/license-scanner.ts": {

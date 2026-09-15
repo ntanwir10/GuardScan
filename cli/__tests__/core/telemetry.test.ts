@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { Config } from '../../src/core/config';
-import { TelemetryManager } from '../../src/core/telemetry';
+import { createTelemetryManager, createTelemetryRecorder, TelemetryManager } from '../../src/core/telemetry';
 
 describe('TelemetryManager consent erasure', () => {
   let root: string;
@@ -67,5 +67,23 @@ describe('TelemetryManager consent erasure', () => {
     const manager = new TelemetryManager(config, stateDir, legacyCacheDir);
 
     await expect(manager.record({action: 'scan', loc: 1, durationMs: 1})).resolves.toBeUndefined();
+  });
+
+  it('keeps recording initialization best-effort while management remains strict', async () => {
+    fs.mkdirSync(stateDir, {recursive: true});
+    fs.writeFileSync(path.join(stateDir, 'telemetry'), 'not a directory');
+    const config: Config = {
+      provider: 'none',
+      telemetryEnabled: true,
+      offlineMode: false,
+      createdAt: new Date().toISOString(),
+      lastUsed: new Date().toISOString(),
+    };
+    jest.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    expect(() => createTelemetryManager(config, stateDir, legacyCacheDir)).toThrow();
+    const recorder = createTelemetryRecorder(config, stateDir, legacyCacheDir);
+
+    await expect(recorder.record({action: 'scan', loc: 1, durationMs: 1})).resolves.toBeUndefined();
   });
 });

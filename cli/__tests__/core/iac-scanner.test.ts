@@ -34,4 +34,14 @@ describe('IaCScanner', () => {
       }),
     ]));
   });
+
+  it('does not degrade coverage for malformed non-Kubernetes YAML', async () => {
+    fs.writeFileSync(path.join(repository, 'application-config.yaml'), 'features: [unterminated\n');
+    const onSkippedInput = jest.fn();
+
+    const findings = await new IaCScanner().scan(repository, onSkippedInput);
+
+    expect(findings).toEqual([]);
+    expect(onSkippedInput).not.toHaveBeenCalled();
+  });
 });

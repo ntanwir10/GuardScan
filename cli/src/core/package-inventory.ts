@@ -48,6 +48,10 @@ const TARGET_FILES = new Set([
   'pnpm-lock.yaml',
   'yarn.lock',
   'requirements.txt',
+  'pyproject.toml',
+  'poetry.lock',
+  'Pipfile',
+  'Pipfile.lock',
   'go.mod',
   'Cargo.lock',
   'Cargo.toml',
@@ -60,6 +64,20 @@ const IGNORED_DIRS = new Set([
   '.git', '.guardscan', 'node_modules', 'vendor', 'dist', 'build', 'coverage',
   '.venv', 'venv', 'target',
 ]);
+
+const MAX_DEPENDENCY_PATHS_PER_COORDINATE = 64;
+
+function recordDependencyPath<Key>(
+  pathsByKey: Map<Key, Set<string>>,
+  key: Key,
+  dependencyPath: string
+): boolean {
+  const paths = pathsByKey.get(key) || new Set<string>();
+  if (paths.has(dependencyPath) || paths.size >= MAX_DEPENDENCY_PATHS_PER_COORDINATE) {return false;}
+  paths.add(dependencyPath);
+  pathsByKey.set(key, paths);
+  return true;
+}
 
 function relative(root: string, file: string): string {
   return path.relative(root, file).split(path.sep).join('/') || '.';
@@ -114,7 +132,7 @@ function addCoordinate(target: DependencyCoordinate[], coordinate: DependencyCoo
   target.push({
     ...coordinate,
     name: coordinate.ecosystem === 'pip' ? coordinate.name.toLowerCase().replace(/[-_.]+/g, '-') : coordinate.name,
-    dependencyPaths: [...new Set(coordinate.dependencyPaths)].sort(),
+    dependencyPaths: [...new Set(coordinate.dependencyPaths)].sort().slice(0, MAX_DEPENDENCY_PATHS_PER_COORDINATE),
   });
 }
 
@@ -488,12 +506,10 @@ function parseNpmLock(
       const missingEdges = new Set<string>();
       const identity = (node: NpmNode): string => `${node.name}@${node.version}`;
       const visit = (node: NpmNode, currentPath: string, stack: Set<string>, rootScope: DependencyScope): void => {
-        const paths = pathsByNode.get(node.packagePath) || new Set<string>();
-        if (paths.has(currentPath)) {return;}
-        paths.add(currentPath);
-        pathsByNode.set(node.packagePath, paths);
         const existingScope = scopeByNode.get(node.packagePath) || 'unknown';
-        if (scopeRank[rootScope] > scopeRank[existingScope]) {scopeByNode.set(node.packagePath, rootScope);}
+        const scopeIncreased = scopeRank[rootScope] > scopeRank[existingScope];
+        if (scopeIncreased) {scopeByNode.set(node.packagePath, rootScope);}
+        if (!recordDependencyPath(pathsByNode, node.packagePath, currentPath) && !scopeIncreased) {return;}
         if (stack.has(node.packagePath)) {return;}
         const nextStack = new Set(stack).add(node.packagePath);
         const requiredDependencies = new Set(Object.keys(asRecord(node.value.dependencies) || {}));
@@ -953,12 +969,10 @@ function parsePnpmLock(root: string, file: string, coordinates: DependencyCoordi
       stack: Set<string>,
       rootScope: DependencyScope
     ): void => {
-      const paths = pathsByNode.get(nodeKey) || new Set<string>();
-      if (paths.has(currentPath)) {return;}
-      paths.add(currentPath);
-      pathsByNode.set(nodeKey, paths);
       const existingScope = scopeByNode.get(nodeKey) || 'unknown';
-      if (scopeRank[rootScope] > scopeRank[existingScope]) {scopeByNode.set(nodeKey, rootScope);}
+      const scopeIncreased = scopeRank[rootScope] > scopeRank[existingScope];
+      if (scopeIncreased) {scopeByNode.set(nodeKey, rootScope);}
+      if (!recordDependencyPath(pathsByNode, nodeKey, currentPath) && !scopeIncreased) {return;}
       if (stack.has(nodeKey)) {return;}
       const node = nodes.get(nodeKey);
       if (!node) {
@@ -1158,12 +1172,10 @@ function parseYarnLock(root: string, file: string, coordinates: DependencyCoordi
       stack: Set<typeof records[number]>,
       rootScope: DependencyScope
     ): void => {
-      const paths = pathsByRecord.get(record) || new Set<string>();
-      if (paths.has(currentPath)) {return;}
-      paths.add(currentPath);
-      pathsByRecord.set(record, paths);
       const existingScope = scopeByRecord.get(record) || 'unknown';
-      if (scopeRank[rootScope] > scopeRank[existingScope]) {scopeByRecord.set(record, rootScope);}
+      const scopeIncreased = scopeRank[rootScope] > scopeRank[existingScope];
+      if (scopeIncreased) {scopeByRecord.set(record, rootScope);}
+      if (!recordDependencyPath(pathsByRecord, record, currentPath) && !scopeIncreased) {return;}
       if (stack.has(record)) {return;}
       const nextStack = new Set(stack).add(record);
       for (const dependency of [...record.dependencies].sort((left, right) => `${left.name}\0${left.requested}`.localeCompare(`${right.name}\0${right.requested}`))) {
@@ -1415,6 +1427,22 @@ function parseGoMod(
         candidate.oldVersion === requirement.version
       ) || matchingReplacements.find(candidate => candidate.oldVersion === undefined);
       if (replacement?.localPath) {
+        const target = path.resolve(path.dirname(file), replacement.localPath);
+        let validatedFirstParty = false;
+        try {
+          const realTarget = fs.realpathSync(target);
+          const targetManifest = fs.realpathSync(path.join(realTarget, 'go.mod'));
+          const moduleName = fs.readFileSync(targetManifest, 'utf8').split(/\r?\n/)
+            .map(line => line.replace(/\s+\/\/.*$/, '').trim())
+            .find(line => line.startsWith('module '))
+            ?.match(/^module\s+(\S+)$/)?.[1];
+          validatedFirstParty = isWithinRoot(root, realTarget) &&
+            isWithinRoot(root, targetManifest) &&
+            moduleName === requirement.name;
+        } catch {
+          validatedFirstParty = false;
+        }
+        if (validatedFirstParty) {continue;}
         errors.push({
           file: rel,
           code: 'UNSUPPORTED_FORMAT',
@@ -1647,12 +1675,10 @@ function parseCargoLock(root: string, file: string, coordinates: DependencyCoord
     const unresolvedEdges = new Set<string>();
     const identity = (node: CargoNode): string => `${node.name}@${node.version}`;
     const visit = (node: CargoNode, currentPath: string, stack: Set<string>, rootScope: DependencyScope): void => {
-      const paths = pathsByNode.get(node.key) || new Set<string>();
-      if (paths.has(currentPath)) {return;}
-      paths.add(currentPath);
-      pathsByNode.set(node.key, paths);
       const existingScope = scopeByNode.get(node.key) || 'unknown';
-      if (scopeRank[rootScope] > scopeRank[existingScope]) {scopeByNode.set(node.key, rootScope);}
+      const scopeIncreased = scopeRank[rootScope] > scopeRank[existingScope];
+      if (scopeIncreased) {scopeByNode.set(node.key, rootScope);}
+      if (!recordDependencyPath(pathsByNode, node.key, currentPath) && !scopeIncreased) {return;}
       if (stack.has(node.key)) {return;}
       const nextStack = new Set(stack).add(node.key);
       for (const dependency of [...node.dependencies].sort((left, right) =>
@@ -1859,12 +1885,10 @@ function parseGemfileLock(
     const unresolvedEdges = new Set<string>();
     const identity = (node: GemNode): string => `${node.name}@${node.version}`;
     const visit = (node: GemNode, currentPath: string, stack: Set<string>, scope: DependencyScope): void => {
-      const paths = pathsByNode.get(node.key) || new Set<string>();
-      if (paths.has(currentPath)) {return;}
-      paths.add(currentPath);
-      pathsByNode.set(node.key, paths);
       const existing = scopesByNode.get(node.key) || 'unknown';
-      if (scopeRank[scope] > scopeRank[existing]) {scopesByNode.set(node.key, scope);}
+      const scopeIncreased = scopeRank[scope] > scopeRank[existing];
+      if (scopeIncreased) {scopesByNode.set(node.key, scope);}
+      if (!recordDependencyPath(pathsByNode, node.key, currentPath) && !scopeIncreased) {return;}
       if (stack.has(node.key)) {return;}
       const nextStack = new Set(stack).add(node.key);
       for (const dependency of node.dependencies) {
@@ -2040,7 +2064,9 @@ function mergeCoordinates(coordinates: DependencyCoordinate[]): DependencyCoordi
     } else {
       existing.direct ||= coordinate.direct;
       if (scopeRank[coordinate.scope] > scopeRank[existing.scope]) {existing.scope = coordinate.scope;}
-      existing.dependencyPaths = [...new Set([...existing.dependencyPaths, ...coordinate.dependencyPaths])].sort();
+      existing.dependencyPaths = [...new Set([...existing.dependencyPaths, ...coordinate.dependencyPaths])]
+        .sort()
+        .slice(0, MAX_DEPENDENCY_PATHS_PER_COORDINATE);
       if (coordinate.manifestPath < existing.manifestPath) {existing.manifestPath = coordinate.manifestPath;}
       if (coordinate.lockfilePath < existing.lockfilePath) {existing.lockfilePath = coordinate.lockfilePath;}
     }
@@ -2071,6 +2097,10 @@ function ecosystemForInventoryFile(file: string): PackageEcosystem | undefined {
     case 'yarn.lock':
       return 'npm';
     case 'requirements.txt':
+    case 'pyproject.toml':
+    case 'poetry.lock':
+    case 'Pipfile':
+    case 'Pipfile.lock':
       return 'pip';
     case 'go.mod':
       return 'go';
@@ -2201,6 +2231,18 @@ export function collectPackageInventory(repoPath: string = process.cwd()): Packa
     else if (name === 'pnpm-lock.yaml') {parsePnpmLock(root, file, coordinates, errors);}
     else if (name === 'yarn.lock') {parseYarnLock(root, file, coordinates, errors);}
     else if (name === 'requirements.txt') {parseRequirements(root, file, coordinates, errors);}
+    else if (name === 'poetry.lock') {
+      errors.push({
+        file: relative(root, file), ecosystem: 'pip', code: 'UNSUPPORTED_FORMAT',
+        message: 'Poetry lockfile inventory is unsupported; Python dependency coverage is incomplete',
+      });
+    }
+    else if (name === 'Pipfile.lock') {
+      errors.push({
+        file: relative(root, file), ecosystem: 'pip', code: 'UNSUPPORTED_FORMAT',
+        message: 'Pipenv lockfile inventory is unsupported; Python dependency coverage is incomplete',
+      });
+    }
     else if (name === 'go.mod') {parseGoMod(root, file, coordinates, errors);}
     else if (name === 'Cargo.lock') {parseCargoLock(root, file, coordinates, errors);}
     else if (name === 'Gemfile.lock') {parseGemfileLock(root, file, coordinates, errors);}
