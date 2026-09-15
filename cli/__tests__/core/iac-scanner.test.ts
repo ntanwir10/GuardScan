@@ -44,4 +44,38 @@ describe('IaCScanner', () => {
     expect(findings).toEqual([]);
     expect(onSkippedInput).not.toHaveBeenCalled();
   });
+
+  it('scans Kubernetes YAML with quoted keys and flow-map syntax', async () => {
+    fs.writeFileSync(path.join(repository, 'quoted.yaml'), [
+      '"apiVersion": v1',
+      '"kind": Pod',
+      '"spec":',
+      '  "containers":',
+      '    - "name": quoted',
+      '      "image": example.test/quoted:1',
+      '      "securityContext":',
+      '        "privileged": true',
+    ].join('\n'));
+    fs.writeFileSync(path.join(repository, 'flow.yaml'),
+      '{apiVersion: v1, kind: Pod, spec: {containers: [{name: flow, image: "example.test/flow:1", securityContext: {privileged: true}}]}}\n');
+    const onSkippedInput = jest.fn();
+
+    const findings = await new IaCScanner().scan(repository, onSkippedInput);
+
+    expect(findings.filter(finding => /privileged mode/.test(finding.description))).toHaveLength(2);
+    expect(onSkippedInput).not.toHaveBeenCalled();
+  });
+
+  it('degrades coverage for malformed Kubernetes YAML with quoted keys', async () => {
+    fs.writeFileSync(path.join(repository, 'broken-kubernetes.yaml'), [
+      '"apiVersion": v1',
+      '"kind": Pod',
+      'spec: [unterminated',
+    ].join('\n'));
+    const onSkippedInput = jest.fn();
+
+    await new IaCScanner().scan(repository, onSkippedInput);
+
+    expect(onSkippedInput).toHaveBeenCalledTimes(1);
+  });
 });

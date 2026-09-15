@@ -16,6 +16,7 @@ export interface LicenseFinding {
   scope?: DependencyCoordinate['scope'];
   direct?: boolean;
   dependencyPaths?: string[];
+  dependencyParents?: string[];
   license: string; // SPDX identifier
   category: 'permissive' | 'weak-copyleft' | 'strong-copyleft' | 'proprietary' | 'unknown';
   risk: 'critical' | 'high' | 'medium' | 'low' | 'info';
@@ -232,6 +233,9 @@ export class LicenseScanner {
       scope: coordinate.scope,
       direct: coordinate.direct,
       dependencyPaths: [...coordinate.dependencyPaths],
+      ...(coordinate.dependencyParents !== undefined
+        ? {dependencyParents: [...coordinate.dependencyParents]}
+        : {}),
       license,
       category: this.categorizeLicense(license),
       risk: 'info',
@@ -314,6 +318,9 @@ export class LicenseScanner {
         findings.set(key, {
           ...value,
           dependencyPaths: [...new Set(value.dependencyPaths || [])].sort(),
+          ...(value.dependencyParents !== undefined
+            ? {dependencyParents: [...new Set(value.dependencyParents)].sort()}
+            : {}),
         });
         continue;
       }
@@ -337,6 +344,12 @@ export class LicenseScanner {
           ...(existing.dependencyPaths || []),
           ...(value.dependencyPaths || []),
         ])].sort(),
+        ...(existing.dependencyParents !== undefined || value.dependencyParents !== undefined
+          ? {dependencyParents: [...new Set([
+              ...(existing.dependencyParents || []),
+              ...(value.dependencyParents || []),
+            ])].sort()}
+          : {}),
       });
     }
     return [...findings.values()].sort((left, right) =>
@@ -978,6 +991,22 @@ function dependencyIdentities(dependencyPath: string): DependencyIdentity[] {
   return names.map(name => ({name}));
 }
 
+function dependencyParentIdentities(finding: LicenseFinding): DependencyIdentity[] {
+  if (finding.dependencyParents !== undefined) {
+    return finding.dependencyParents.map(versionedDependencyIdentity);
+  }
+  const parents = new Map<string, DependencyIdentity>();
+  for (const dependencyPath of finding.dependencyPaths || []) {
+    const identities = dependencyIdentities(dependencyPath);
+    const child = identities[identities.length - 1];
+    if (identities.length < 2 || child.name !== finding.package ||
+      (child.version !== undefined && child.version !== finding.version)) {continue;}
+    const parent = identities[identities.length - 2];
+    parents.set(`${parent.name}\0${parent.version || ''}`, parent);
+  }
+  return [...parents.values()];
+}
+
 function cycloneDxDependencies(
   findings: LicenseFinding[],
   components: CycloneDx17Component[],
@@ -1001,12 +1030,7 @@ function cycloneDxDependencies(
   for (let index = 0; index < findings.length; index++) {
     const finding = findings[index];
     if (!['npm', 'cargo', 'rubygems'].includes(finding.source)) {continue;}
-    for (const dependencyPath of finding.dependencyPaths || []) {
-      const identities = dependencyIdentities(dependencyPath);
-      const child = identities[identities.length - 1];
-      if (identities.length < 2 || child.name !== finding.package ||
-        (child.version !== undefined && child.version !== finding.version)) {continue;}
-      const parent = identities[identities.length - 2];
+    for (const parent of dependencyParentIdentities(finding)) {
       const parentReferences = parent.version
         ? referencesByCoordinate.get(`${finding.source}\u0000${parent.name}\u0000${parent.version}`) || []
         : referencesByPackage.get(`${finding.source}\u0000${parent.name}`) || [];
@@ -1061,12 +1085,7 @@ function spdxDependencyRelationships(
   for (let index = 0; index < findings.length; index++) {
     const finding = findings[index];
     if (!['npm', 'cargo', 'rubygems'].includes(finding.source)) {continue;}
-    for (const dependencyPath of finding.dependencyPaths || []) {
-      const identities = dependencyIdentities(dependencyPath);
-      const child = identities[identities.length - 1];
-      if (identities.length < 2 || child.name !== finding.package ||
-        (child.version !== undefined && child.version !== finding.version)) {continue;}
-      const parent = identities[identities.length - 2];
+    for (const parent of dependencyParentIdentities(finding)) {
       const parentReferences = parent.version
         ? referencesByCoordinate.get(`${finding.source}\u0000${parent.name}\u0000${parent.version}`) || []
         : referencesByPackage.get(`${finding.source}\u0000${parent.name}`) || [];

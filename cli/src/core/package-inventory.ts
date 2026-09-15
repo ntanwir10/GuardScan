@@ -17,6 +17,8 @@ export interface DependencyCoordinate {
   manifestPath: string;
   lockfilePath: string;
   dependencyPaths: string[];
+  /** Complete immediate-parent identities for graph-capable lockfiles. */
+  dependencyParents?: string[];
 }
 
 export interface PackageInventoryError {
@@ -79,6 +81,16 @@ function recordDependencyPath<Key>(
   return true;
 }
 
+function recordDependencyParent<Key>(
+  parentsByKey: Map<Key, Set<string>>,
+  key: Key,
+  parent: string
+): void {
+  const parents = parentsByKey.get(key) || new Set<string>();
+  parents.add(parent);
+  parentsByKey.set(key, parents);
+}
+
 function relative(root: string, file: string): string {
   return path.relative(root, file).split(path.sep).join('/') || '.';
 }
@@ -133,6 +145,9 @@ function addCoordinate(target: DependencyCoordinate[], coordinate: DependencyCoo
     ...coordinate,
     name: coordinate.ecosystem === 'pip' ? coordinate.name.toLowerCase().replace(/[-_.]+/g, '-') : coordinate.name,
     dependencyPaths: [...new Set(coordinate.dependencyPaths)].sort().slice(0, MAX_DEPENDENCY_PATHS_PER_COORDINATE),
+    ...(coordinate.dependencyParents !== undefined
+      ? {dependencyParents: [...new Set(coordinate.dependencyParents)].sort()}
+      : {}),
   });
 }
 
@@ -502,6 +517,7 @@ function parseNpmLock(
         return undefined;
       };
       const pathsByNode = new Map<string, Set<string>>();
+      const parentsByNode = new Map<string, Set<string>>();
       const scopeByNode = new Map<string, DependencyScope>();
       const missingEdges = new Set<string>();
       const identity = (node: NpmNode): string => `${node.name}@${node.version}`;
@@ -518,6 +534,7 @@ function parseNpmLock(
           const edgeScope = requiredDependencies.has(dependencyName) ? rootScope : 'optional';
           const child = resolveInstalledNode(node.packagePath, dependencyName);
           if (child) {
+            recordDependencyParent(parentsByNode, child.packagePath, identity(node));
             visit(child, `${currentPath} > ${identity(child)}`, nextStack, edgeScope);
           } else {
             const missingKey = `${node.packagePath}\0${dependencyName}\0${edgeScope}`;
@@ -553,6 +570,7 @@ function parseNpmLock(
             dependencyPaths: pathsByNode.get(node.packagePath)
               ? [...pathsByNode.get(node.packagePath)!].sort()
               : [node.packagePath],
+            dependencyParents: [...(parentsByNode.get(node.packagePath) || [])].sort(),
           });
         }
       }
@@ -960,6 +978,7 @@ function parsePnpmLock(root: string, file: string, coordinates: DependencyCoordi
       });
     }
     const pathsByNode = new Map<string, Set<string>>();
+    const parentsByNode = new Map<string, Set<string>>();
     const scopeByNode = new Map<string, DependencyScope>();
     const missingNodes = new Set<string>();
     const versionedIdentity = (name: string, version: string): string => `${name}@${version}`;
@@ -1006,6 +1025,7 @@ function parsePnpmLock(root: string, file: string, coordinates: DependencyCoordi
         `${left.name}\0${left.version}`.localeCompare(`${right.name}\0${right.version}`)
       )) {
         const childKey = `${dependency.name}\0${dependency.version}`;
+        recordDependencyParent(parentsByNode, childKey, versionedIdentity(node.name, node.version));
         visit(
           childKey,
           `${currentPath} > ${versionedIdentity(dependency.name, dependency.version)}`,
@@ -1036,6 +1056,7 @@ function parsePnpmLock(root: string, file: string, coordinates: DependencyCoordi
           dependencyPaths: dependencyPaths
             ? [...dependencyPaths].sort()
             : [versionedIdentity(parsed.name, parsed.version)],
+          dependencyParents: [...(parentsByNode.get(nodeKey) || [])].sort(),
         });
       }
     }
@@ -1119,11 +1140,11 @@ function parseYarnLock(root: string, file: string, coordinates: DependencyCoordi
         }
         if (/^\s{2}\S/.test(line)) {dependencySection = undefined;}
         if (dependencySection) {
-          const dependencyMatch = line.match(/^\s{4}(?:"([^"]+)"|'([^']+)'|([^:\s]+))(?::|\s+)\s*["']?([^"'\s]+)["']?/);
+          const dependencyMatch = line.match(/^\s{4}(?:"([^"]+)"|'([^']+)'|([^:\s]+))(?::|\s+)\s*(?:"([^"]+)"|'([^']+)'|(\S+))\s*$/);
           if (dependencyMatch) {
             dependencies.push({
               name: dependencyMatch[1] || dependencyMatch[2] || dependencyMatch[3],
-              requested: dependencyMatch[4],
+              requested: dependencyMatch[4] || dependencyMatch[5] || dependencyMatch[6],
               optional: dependencySection === 'optional',
             });
           }
@@ -1163,6 +1184,7 @@ function parseYarnLock(root: string, file: string, coordinates: DependencyCoordi
       );
     };
     const pathsByRecord = new Map<typeof records[number], Set<string>>();
+    const parentsByRecord = new Map<typeof records[number], Set<string>>();
     const scopeByRecord = new Map<typeof records[number], DependencyScope>();
     const unresolvedEdges = new Set<string>();
     const versionedIdentity = (record: typeof records[number]): string => `${record.name}@${record.version}`;
@@ -1184,6 +1206,7 @@ function parseYarnLock(root: string, file: string, coordinates: DependencyCoordi
           candidate.descriptors.some(descriptor => yarnDescriptorMatchesRequest(descriptor, dependency.name, dependency.requested))
         );
         if (child) {
+          recordDependencyParent(parentsByRecord, child, versionedIdentity(record));
           visit(
             child,
             `${currentPath} > ${versionedIdentity(child)}`,
@@ -1222,6 +1245,7 @@ function parseYarnLock(root: string, file: string, coordinates: DependencyCoordi
           manifestPath: direct?.manifestPath || relative(root, path.join(path.dirname(file), 'package.json')),
           lockfilePath: rel,
           dependencyPaths: pathsByRecord.get(record) ? [...pathsByRecord.get(record)!].sort() : [versionedIdentity(record)],
+          dependencyParents: [...(parentsByRecord.get(record) || [])].sort(),
         });
       }
     }
@@ -1671,6 +1695,7 @@ function parseCargoLock(root: string, file: string, coordinates: DependencyCoord
       return candidates.length === 1 ? candidates[0] : undefined;
     };
     const pathsByNode = new Map<string, Set<string>>();
+    const parentsByNode = new Map<string, Set<string>>();
     const scopeByNode = new Map<string, DependencyScope>();
     const unresolvedEdges = new Set<string>();
     const identity = (node: CargoNode): string => `${node.name}@${node.version}`;
@@ -1685,6 +1710,7 @@ function parseCargoLock(root: string, file: string, coordinates: DependencyCoord
         `${left.name}\0${left.version || ''}`.localeCompare(`${right.name}\0${right.version || ''}`))) {
         const child = resolveDependency(dependency);
         if (child) {
+          recordDependencyParent(parentsByNode, child.key, identity(node));
           visit(child, `${currentPath} > ${identity(child)}`, nextStack, rootScope);
         } else {
           const requested = [dependency.name, dependency.version, dependency.source ? `(${dependency.source})` : '']
@@ -1723,6 +1749,7 @@ function parseCargoLock(root: string, file: string, coordinates: DependencyCoord
         scope: direct?.scope || scopeByNode.get(node.key) || 'unknown', direct: direct !== undefined,
         manifestPath: direct?.manifestPath || relative(root, rootManifest), lockfilePath: rel,
         dependencyPaths: pathsByNode.get(node.key) ? [...pathsByNode.get(node.key)!].sort() : [identity(node)],
+        dependencyParents: [...(parentsByNode.get(node.key) || [])].sort(),
       });
     }
   } catch (error: unknown) {
@@ -1881,6 +1908,7 @@ function parseGemfileLock(
       return candidates.length === 1 ? candidates[0] : undefined;
     };
     const pathsByNode = new Map<string, Set<string>>();
+    const parentsByNode = new Map<string, Set<string>>();
     const scopesByNode = new Map<string, DependencyScope>();
     const unresolvedEdges = new Set<string>();
     const identity = (node: GemNode): string => `${node.name}@${node.version}`;
@@ -1894,6 +1922,7 @@ function parseGemfileLock(
       for (const dependency of node.dependencies) {
         const child = resolveDependency(dependency);
         if (child) {
+          recordDependencyParent(parentsByNode, child.key, identity(node));
           visit(child, `${currentPath} > ${identity(child)}`, nextStack, scope);
         } else {
           const requested = `${dependency.name}${dependency.requested ? ` (${dependency.requested})` : ''}`;
@@ -1921,6 +1950,7 @@ function parseGemfileLock(
         scope: directScope || scopesByNode.get(node.key) || 'unknown', direct: directScope !== undefined,
         manifestPath, lockfilePath: rel,
         dependencyPaths: pathsByNode.get(node.key) ? [...pathsByNode.get(node.key)!].sort() : [identity(node)],
+        dependencyParents: [...(parentsByNode.get(node.key) || [])].sort(),
       });
     }
   } catch (error: unknown) {
@@ -2067,6 +2097,12 @@ function mergeCoordinates(coordinates: DependencyCoordinate[]): DependencyCoordi
       existing.dependencyPaths = [...new Set([...existing.dependencyPaths, ...coordinate.dependencyPaths])]
         .sort()
         .slice(0, MAX_DEPENDENCY_PATHS_PER_COORDINATE);
+      if (existing.dependencyParents !== undefined || coordinate.dependencyParents !== undefined) {
+        existing.dependencyParents = [...new Set([
+          ...(existing.dependencyParents || []),
+          ...(coordinate.dependencyParents || []),
+        ])].sort();
+      }
       if (coordinate.manifestPath < existing.manifestPath) {existing.manifestPath = coordinate.manifestPath;}
       if (coordinate.lockfilePath < existing.lockfilePath) {existing.lockfilePath = coordinate.lockfilePath;}
     }
@@ -2115,6 +2151,25 @@ function ecosystemForInventoryFile(file: string): PackageEcosystem | undefined {
     default:
       return undefined;
   }
+}
+
+function pyprojectDeclaresDependencies(file: string): boolean {
+  let section = '';
+  for (const rawLine of fs.readFileSync(file, 'utf8').split(/\r?\n/)) {
+    const line = rawLine.replace(/\s+#.*$/, '').trim();
+    if (!line) {continue;}
+    const sectionMatch = line.match(/^\[([^\]]+)]$/);
+    if (sectionMatch) {
+      section = sectionMatch[1].trim().toLowerCase();
+      if (section === 'project.optional-dependencies' || section === 'dependency-groups' ||
+        /^tool\.(?:poetry|pdm)(?:\..+)?\.dependencies$/.test(section)) {
+        return true;
+      }
+      continue;
+    }
+    if (section === 'project' && /^dependencies\s*=/.test(line)) {return true;}
+  }
+  return false;
 }
 
 function stripTomlComments(content: string): string {
@@ -2231,6 +2286,26 @@ export function collectPackageInventory(repoPath: string = process.cwd()): Packa
     else if (name === 'pnpm-lock.yaml') {parsePnpmLock(root, file, coordinates, errors);}
     else if (name === 'yarn.lock') {parseYarnLock(root, file, coordinates, errors);}
     else if (name === 'requirements.txt') {parseRequirements(root, file, coordinates, errors);}
+    else if (name === 'pyproject.toml') {
+      const directory = path.dirname(file);
+      const covered = inventoryFiles.has(path.join(directory, 'requirements.txt')) ||
+        inventoryFiles.has(path.join(directory, 'poetry.lock'));
+      if (!covered) {
+        try {
+          if (pyprojectDeclaresDependencies(file)) {
+            errors.push({
+              file: relative(root, file), ecosystem: 'pip', code: 'UNSUPPORTED_FORMAT',
+              message: 'pyproject.toml dependency inventory is unsupported without an adjacent requirements.txt; Python dependency coverage is incomplete',
+            });
+          }
+        } catch (error: unknown) {
+          errors.push({
+            file: relative(root, file), ecosystem: 'pip', code: 'INVALID_MANIFEST',
+            message: `Unable to inspect pyproject.toml dependency declarations: ${errorMessage(error)}`,
+          });
+        }
+      }
+    }
     else if (name === 'poetry.lock') {
       errors.push({
         file: relative(root, file), ecosystem: 'pip', code: 'UNSUPPORTED_FORMAT',
@@ -2241,6 +2316,14 @@ export function collectPackageInventory(repoPath: string = process.cwd()): Packa
       errors.push({
         file: relative(root, file), ecosystem: 'pip', code: 'UNSUPPORTED_FORMAT',
         message: 'Pipenv lockfile inventory is unsupported; Python dependency coverage is incomplete',
+      });
+    }
+    else if (name === 'Pipfile' &&
+      !inventoryFiles.has(path.join(path.dirname(file), 'Pipfile.lock')) &&
+      !inventoryFiles.has(path.join(path.dirname(file), 'requirements.txt'))) {
+      errors.push({
+        file: relative(root, file), ecosystem: 'pip', code: 'UNSUPPORTED_FORMAT',
+        message: 'Pipfile has no supported adjacent dependency inventory; Python dependency coverage is incomplete',
       });
     }
     else if (name === 'go.mod') {parseGoMod(root, file, coordinates, errors);}

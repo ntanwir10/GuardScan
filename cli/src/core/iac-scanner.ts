@@ -9,8 +9,13 @@ function looksLikeKubernetesManifest(content: string): boolean {
     if (lines.length === 0) {return false;}
     const minimumIndent = Math.min(...lines.map(line => line.match(/^[ \t]*/)?.[0].length || 0));
     const topLevelLines = lines.filter(line => (line.match(/^[ \t]*/)?.[0].length || 0) === minimumIndent);
-    return topLevelLines.some(line => /^\s*apiVersion\s*:/.test(line)) &&
-      topLevelLines.some(line => /^\s*kind\s*:/.test(line));
+    const topLevelKey = (key: string): boolean => topLevelLines.some(line =>
+      new RegExp(`^\\s*(?:${key}|"${key}"|'${key}')\\s*:`).test(line)
+    );
+    const flowKey = (key: string): boolean =>
+      new RegExp(`(?:^|[,{])\\s*(?:${key}|"${key}"|'${key}')\\s*:`, 'm').test(document);
+    return (topLevelKey('apiVersion') && topLevelKey('kind')) ||
+      (flowKey('apiVersion') && flowKey('kind'));
   });
 }
 
@@ -138,21 +143,27 @@ export class IaCScanner {
     const k8sFiles = this.findFiles(repoPath, /\.ya?ml$/, onSkippedInput);
 
     for (const file of k8sFiles) {
+      let content: string;
       try {
-        const content = fs.readFileSync(file, 'utf-8');
-        if (!looksLikeKubernetesManifest(content)) {continue;}
-        const docs = yaml.loadAll(content) as any[];
-
-        for (const doc of docs) {
-          if (!doc || typeof doc !== 'object') {continue;}
-
-          // Check if it's a Kubernetes resource
-          if (doc.apiVersion && doc.kind) {
-            findings.push(...this.checkK8sResource(doc, file));
-          }
-        }
+        content = fs.readFileSync(file, 'utf-8');
       } catch {
         onSkippedInput();
+        continue;
+      }
+      let docs: any[];
+      try {
+        docs = yaml.loadAll(content);
+      } catch {
+        if (looksLikeKubernetesManifest(content)) {onSkippedInput();}
+        continue;
+      }
+      for (const doc of docs) {
+        if (!doc || typeof doc !== 'object') {continue;}
+
+        // Check if it's a Kubernetes resource
+        if (doc.apiVersion && doc.kind) {
+          findings.push(...this.checkK8sResource(doc, file));
+        }
       }
     }
 

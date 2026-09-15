@@ -722,7 +722,7 @@ export class DependencyScanner {
         const broaderSnapshot = filteredIdentity && unfilteredInventory.digest !== inventory.digest
           ? store.status(unfilteredInventory, maxSnapshotAgeDays, client.endpoint)
           : undefined;
-        const preserveBroaderSnapshot = broaderSnapshot?.exists === true &&
+        const preserveBroaderSnapshot = !options.refresh && broaderSnapshot?.exists === true &&
           broaderSnapshot.inventoryMatches &&
           broaderSnapshot.sourceMatches !== false;
         if (freshness === 'live' && options.cache !== false && !preserveBroaderSnapshot) {

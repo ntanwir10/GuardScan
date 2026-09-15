@@ -778,6 +778,26 @@ describe('collectPackageInventory', () => {
     ]));
   });
 
+  it('parses complete quoted compound ranges in Yarn dependency entries', () => {
+    fs.writeFileSync(path.join(repository, 'package.json'), JSON.stringify({dependencies: {parent: '1.0.0'}}));
+    fs.writeFileSync(path.join(repository, 'yarn.lock'), [
+      'parent@1.0.0:',
+      '  version "1.0.0"',
+      '  dependencies:',
+      '    child ">=1.0.0 <2.0.0"',
+      'child@>=1.0.0 <2.0.0:',
+      '  version "1.5.0"',
+    ].join('\n'));
+
+    const inventory = collectPackageInventory(repository);
+
+    expect(inventory.coordinates.find(coordinate => coordinate.name === 'child')).toMatchObject({
+      exactVersion: '1.5.0',
+      dependencyPaths: ['parent@1.0.0 > child@1.5.0'],
+    });
+    expect(inventory.errors).toEqual([]);
+  });
+
   it('traverses Yarn optional dependencies and preserves their scope', () => {
     fs.writeFileSync(path.join(repository, 'package.json'), JSON.stringify({dependencies: {parent: '1.0.0'}}));
     fs.writeFileSync(path.join(repository, 'yarn.lock'), [
@@ -1045,6 +1065,27 @@ describe('collectPackageInventory', () => {
     expect(inventory.errors).toEqual([]);
   });
 
+  it('preserves every immediate dependency parent when display paths are capped', () => {
+    const parentNames = Array.from({length: 65}, (_, index) => `parent-${index.toString().padStart(2, '0')}`);
+    const dependencies = Object.fromEntries(parentNames.map(name => [name, '1.0.0']));
+    const packages: Record<string, unknown> = {
+      '': {dependencies},
+      'node_modules/shared': {version: '2.0.0'},
+    };
+    for (const name of parentNames) {
+      packages[`node_modules/${name}`] = {version: '1.0.0', dependencies: {shared: '2.0.0'}};
+    }
+    fs.writeFileSync(path.join(repository, 'package.json'), JSON.stringify({dependencies}));
+    fs.writeFileSync(path.join(repository, 'package-lock.json'), JSON.stringify({lockfileVersion: 3, packages}));
+
+    const inventory = collectPackageInventory(repository);
+    const shared = inventory.coordinates.find(coordinate => coordinate.name === 'shared');
+
+    expect(shared?.dependencyPaths).toHaveLength(64);
+    expect(shared?.dependencyParents).toEqual(parentNames.map(name => `${name}@1.0.0`));
+    expect(inventory.errors).toEqual([]);
+  });
+
   it('accepts validated first-party Go module replacements inside the repository', () => {
     fs.mkdirSync(path.join(repository, 'app'));
     fs.mkdirSync(path.join(repository, 'library'));
@@ -1087,6 +1128,44 @@ describe('collectPackageInventory', () => {
       }),
     ]));
     expect(filterPackageInventory(inventory, {ecosystems: ['npm']}).errors).toEqual([]);
+  });
+
+  it('reports dependency-bearing pyproject and unlocked Pipfile manifests without supported inventory', () => {
+    fs.mkdirSync(path.join(repository, 'uv'));
+    fs.writeFileSync(path.join(repository, 'uv/pyproject.toml'), [
+      '[project]',
+      'name = "fixture"',
+      'dependencies = ["requests>=2"]',
+    ].join('\n'));
+    fs.writeFileSync(path.join(repository, 'uv/uv.lock'), 'version = 1\n');
+    fs.mkdirSync(path.join(repository, 'pipenv'));
+    fs.writeFileSync(path.join(repository, 'pipenv/Pipfile'), '[packages]\nrequests = "*"\n');
+
+    const inventory = collectPackageInventory(repository);
+
+    expect(inventory.coordinates).toEqual([]);
+    expect(inventory.errors).toEqual(expect.arrayContaining([
+      expect.objectContaining({file: 'uv/pyproject.toml', ecosystem: 'pip', code: 'UNSUPPORTED_FORMAT'}),
+      expect.objectContaining({file: 'pipenv/Pipfile', ecosystem: 'pip', code: 'UNSUPPORTED_FORMAT'}),
+    ]));
+  });
+
+  it('accepts requirements inventory beside a dependency-bearing pyproject', () => {
+    fs.writeFileSync(path.join(repository, 'pyproject.toml'), '[project]\ndependencies = ["requests"]\n');
+    fs.writeFileSync(path.join(repository, 'requirements.txt'), 'requests==2.32.0\n');
+
+    const inventory = collectPackageInventory(repository);
+
+    expect(inventory.coordinates).toEqual([
+      expect.objectContaining({ecosystem: 'pip', name: 'requests', exactVersion: '2.32.0'}),
+    ]);
+    expect(inventory.errors).toEqual([
+      expect.objectContaining({
+        file: 'requirements.txt', ecosystem: 'pip', code: 'UNSUPPORTED_FORMAT',
+        message: expect.stringMatching(/direct-only|transitive|incomplete/i),
+      }),
+    ]);
+    expect(inventory.errors.some(error => error.file === 'pyproject.toml')).toBe(false);
   });
 
   it('rejects go.mod files without a Go directive because they default to the incomplete Go 1.16 graph', () => {

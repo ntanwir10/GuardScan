@@ -255,6 +255,37 @@ describe('LicenseScanner inventory and SBOM contracts', () => {
     ]));
   });
 
+  it('emits every retained parent edge when dependency display paths are capped', () => {
+    const parents = Array.from({length: 65}, (_, index) => `parent-${index.toString().padStart(2, '0')}@1.0.0`);
+    const findings = [
+      ...parents.map(parent => finding({
+        package: parent.slice(0, parent.lastIndexOf('@')),
+        version: '1.0.0',
+        direct: true,
+        dependencyPaths: [parent],
+      })),
+      finding({
+        package: 'shared',
+        version: '2.0.0',
+        direct: false,
+        dependencyPaths: parents.slice(0, 64).map(parent => `${parent} > shared@2.0.0`),
+        dependencyParents: parents,
+      }),
+    ];
+
+    const cycloneDx = new LicenseScanner().generateSBOM(findings, 'cyclonedx', 'fixture');
+    const spdx = new LicenseScanner().generateSBOM(findings, 'spdx', 'fixture');
+    const sharedRef = cycloneDx.components.find(component => component.name === 'shared')!['bom-ref'];
+    const cycloneDxParentEdges = cycloneDx.dependencies.filter(dependency => dependency.dependsOn.includes(sharedRef));
+    const sharedPackage = spdx.packages.find(value => value.name === 'shared')!;
+    const spdxParentEdges = spdx.relationships.filter(relationship =>
+      relationship.relationshipType === 'DEPENDS_ON' && relationship.relatedSpdxElement === sharedPackage.SPDXID
+    );
+
+    expect(cycloneDxParentEdges).toHaveLength(65);
+    expect(spdxParentEdges).toHaveLength(65);
+  });
+
   it('emits Maven package URLs with namespace and artifact segments', () => {
     const scanner = new LicenseScanner();
     const document = scanner.generateSBOM([

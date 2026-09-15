@@ -641,21 +641,40 @@ describe('DependencyScanner OSV integration', () => {
     const offlineFiltered = await scanner.scan(repository, {
       inventory, ecosystems: ['npm'], offline: true, client, snapshotStore: store, enrichKnownExploited: false,
     });
-    const refreshedFiltered = await scanner.scan(repository, {
-      inventory, ecosystems: ['npm'], refresh: true, client, snapshotStore: store, enrichKnownExploited: false,
-    });
-
     const offline = await scanner.scan(repository, {inventory, offline: true, client, snapshotStore: store, enrichKnownExploited: false});
 
-    expect(query).toHaveBeenCalledTimes(2);
+    expect(query).toHaveBeenCalledTimes(1);
     expect(cachedFiltered[0].dataFreshness).toBe('fresh-cache');
     expect(offlineFiltered[0].dataFreshness).toBe('fresh-cache');
-    expect(refreshedFiltered[0].dataFreshness).toBe('live');
     expect(store.status(filtered, 7, client.endpoint).inventoryMatches).toBe(true);
     expect(offline[0]).toMatchObject({dataFreshness: 'fresh-cache', status: 'complete'});
     const snapshotDirectory = fs.readdirSync(cache).find(value => fs.statSync(path.join(cache, value)).isDirectory());
     const snapshot = JSON.parse(fs.readFileSync(path.join(cache, snapshotDirectory!, 'snapshot.json'), 'utf8'));
     expect(snapshot.coordinates).toHaveLength(2);
+  });
+
+  it('persists an explicit filtered refresh even when a broader snapshot exists', async () => {
+    const scanner = new DependencyScanner();
+    const store = new VulnerabilitySnapshotStore(cache);
+    const coordinates = [
+      {ecosystem: 'npm' as const, osvEcosystem: 'npm' as const, name: 'lodash', exactVersion: '4.17.20', scope: 'runtime' as const, direct: true, manifestPath: 'package.json', lockfilePath: 'package-lock.json', dependencyPaths: ['lodash']},
+      {ecosystem: 'pip' as const, osvEcosystem: 'PyPI' as const, name: 'requests', exactVersion: '2.31.0', scope: 'development' as const, direct: true, manifestPath: 'requirements.txt', lockfilePath: 'requirements.txt', dependencyPaths: ['requests']},
+    ];
+    const inventory = {repository, coordinates, manifests: ['package-lock.json', 'requirements.txt'], errors: [], digest: 'full'};
+    const query = jest.fn(async () => []);
+    const client = {endpoint: 'https://api.osv.dev', query} as unknown as OsvClient;
+    await scanner.scan(repository, {inventory, client, snapshotStore: store, enrichKnownExploited: false});
+
+    const refreshed = await scanner.scan(repository, {
+      inventory, scope: 'runtime', refresh: true, client, snapshotStore: store, enrichKnownExploited: false,
+    });
+    const filtered = filterPackageInventory(inventory, {scope: 'runtime'});
+    const status = store.status(filtered, 7, client.endpoint);
+
+    expect(refreshed[0]).toMatchObject({dataFreshness: 'live', status: 'complete'});
+    expect(status.snapshot?.inventoryDigest).toBe(filtered.digest);
+    expect(status.snapshot?.coordinates).toHaveLength(1);
+    expect(query).toHaveBeenCalledTimes(2);
   });
 
   it('rejects vulnerability snapshot ages beyond the supported ten-year bound', async () => {
