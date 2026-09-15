@@ -10,6 +10,8 @@ export interface LOCResult {
   blankLines: number;
   fileCount: number;
   fileBreakdown: FileStats[];
+  /** Files matched by discovery but omitted because their content could not be read. */
+  skippedFiles: string[];
 }
 
 export interface FileStats {
@@ -70,11 +72,14 @@ export class LOCCounter {
   async count(patterns?: string[]): Promise<LOCResult> {
     const files = await this.getFiles(patterns);
     const fileStats: FileStats[] = [];
+    const skippedFiles: string[] = [];
 
     for (const file of files) {
       const stats = this.countFile(file);
       if (stats) {
         fileStats.push(stats);
+      } else {
+        skippedFiles.push(file);
       }
     }
 
@@ -85,6 +90,7 @@ export class LOCCounter {
       blankLines: 0,
       fileCount: fileStats.length,
       fileBreakdown: fileStats,
+      skippedFiles,
     };
 
     for (const stats of fileStats) {
@@ -109,6 +115,7 @@ export class LOCCounter {
     const files = await fastGlob(globPatterns, {
       cwd: process.cwd(),
       absolute: true, // Get absolute paths first
+      followSymbolicLinks: false,
       ignore: ['node_modules/**', '.git/**', 'dist/**', 'build/**'],
     });
 

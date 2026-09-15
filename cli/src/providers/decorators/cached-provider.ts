@@ -7,7 +7,7 @@
 
 import { AIProviderDecorator } from './base-decorator';
 import { AIProvider, AIMessage, AIResponse, ChatOptions } from '../base';
-import { AICache } from '../../core/ai-cache';
+import { AICache, CacheStats } from '../../core/ai-cache';
 import * as crypto from 'crypto';
 
 export interface CacheConfig {
@@ -35,8 +35,7 @@ export interface CachedResponse {
 
 export class CachedProvider extends AIProviderDecorator {
   private config: CacheConfig;
-  private cache: AICache;
-  private embeddingProvider?: AIProvider;
+  private cache?: AICache;
   private semanticCache?: SemanticCache;
 
   constructor(
@@ -47,13 +46,31 @@ export class CachedProvider extends AIProviderDecorator {
   ) {
     super(wrapped);
     this.config = { ...DEFAULT_CACHE_CONFIG, ...config };
-    this.cache = new AICache(repoId, this.config.maxSizeMB);
-    this.embeddingProvider = embeddingProvider;
-    
-    // Initialize semantic cache if embedding provider available
-    if (embeddingProvider && this.config.useSemanticSimilarity) {
+    if (this.cacheDisabledByEnvironment()) {
+      this.config.enabled = false;
+    }
+    // Disabled caching must not initialize disk or semantic cache state. This
+    // also prevents an embedding request whose only purpose is cache lookup.
+    if (this.config.enabled) {
+      this.cache = new AICache(repoId, {
+        enabled: true,
+        maxSizeMB: this.config.maxSizeMB,
+        ttlSeconds: this.config.ttlSeconds,
+      });
+    }
+
+    if (this.config.enabled && embeddingProvider && this.config.useSemanticSimilarity) {
       this.semanticCache = new SemanticCache(embeddingProvider);
     }
+  }
+
+  private cacheDisabledByEnvironment(): boolean {
+    const value = process.env.GUARDSCAN_NO_CACHE?.toLowerCase();
+    return value === 'true' || value === '1';
+  }
+
+  private isCacheEnabled(): boolean {
+    return this.config.enabled && !this.cacheDisabledByEnvironment();
   }
 
   /**
@@ -63,7 +80,7 @@ export class CachedProvider extends AIProviderDecorator {
     messages: AIMessage[],
     options?: ChatOptions
   ): Promise<AIResponse> {
-    if (!this.config.enabled) {
+    if (!this.isCacheEnabled()) {
       return this.wrapped.chat(messages, options);
     }
 
@@ -97,7 +114,7 @@ export class CachedProvider extends AIProviderDecorator {
     }
 
     // 2. Try exact match cache
-    const cached = await this.cache.get(prompt, model);
+    const cached = await this.cache!.get(prompt, model);
 
     if (cached) {
       // Cache hit!
@@ -116,7 +133,7 @@ export class CachedProvider extends AIProviderDecorator {
     const response = await this.wrapped.chat(messages, options);
 
     // 4. Store in both caches
-    await this.cache.set(prompt, model, response.content);
+    await this.cache!.set(prompt, model, response.content);
 
     if (this.semanticCache && this.config.useSemanticSimilarity) {
       try {
@@ -148,13 +165,13 @@ export class CachedProvider extends AIProviderDecorator {
       }
 
       // Cache the complete response after streaming
-      if (this.config.enabled && chunks.length > 0) {
+      if (this.isCacheEnabled() && chunks.length > 0) {
         const prompt = this.messagesToPrompt(messages);
         const model = options?.model || 'default';
         const fullResponse = chunks.join('');
         
         // Store in exact match cache (fire and forget)
-        this.cache.set(prompt, model, fullResponse).catch(err => {
+        this.cache!.set(prompt, model, fullResponse).catch(err => {
           console.warn('Failed to cache streamed response:', err);
         });
 
@@ -192,29 +209,36 @@ export class CachedProvider extends AIProviderDecorator {
   /**
    * Get cache statistics
    */
-  getCacheStats() {
-    return this.cache.getStats();
+  getCacheStats(): CacheStats {
+    return this.cache?.getStats() || {
+      hits: 0,
+      misses: 0,
+      totalEntries: 0,
+      totalSize: 0,
+      hitRate: 0,
+    };
   }
 
   /**
    * Clear cache
    */
   async clearCache() {
-    await this.cache.clear();
+    await this.cache?.clear();
+    this.semanticCache?.clear();
   }
 
   /**
    * Invalidate cache for changed files
    */
   async invalidateCache(changedFiles: string[]) {
-    await this.cache.invalidate(changedFiles);
+    await this.cache?.invalidate(changedFiles);
   }
 
   /**
    * Get cache configuration
    */
   getCacheConfig(): CacheConfig {
-    return { ...this.config };
+    return { ...this.config, enabled: this.isCacheEnabled() };
   }
 }
 

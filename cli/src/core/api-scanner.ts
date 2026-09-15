@@ -15,9 +15,9 @@ export class APIScanner {
   /**
    * Scan for API security vulnerabilities
    */
-  async scan(repoPath: string = process.cwd()): Promise<APIFinding[]> {
+  async scan(repoPath: string = process.cwd(), onSkippedInput: () => void = () => {}): Promise<APIFinding[]> {
     const findings: APIFinding[] = [];
-    const files = this.findAPIFiles(repoPath);
+    const files = this.findAPIFiles(repoPath, onSkippedInput);
 
     for (const file of files) {
       try {
@@ -28,7 +28,7 @@ export class APIScanner {
         findings.push(...this.scanGraphQL(file, content, language));
         findings.push(...this.scanGeneralAPI(file, content, language));
       } catch {
-        // Skip files that can't be read
+        onSkippedInput();
       }
     }
 
@@ -38,19 +38,19 @@ export class APIScanner {
   /**
    * Find API-related files
    */
-  private findAPIFiles(dir: string): string[] {
+  private findAPIFiles(dir: string, onSkippedInput: () => void): string[] {
     const files: string[] = [];
 
     const search = (currentDir: string, depth: number) => {
-      if (depth > 5) {return;}
-
       try {
         const items = fs.readdirSync(currentDir);
         for (const item of items) {
           if (item === 'node_modules' || item === '.git' || item === 'vendor') {continue;}
 
           const fullPath = path.join(currentDir, item);
-          const stat = fs.statSync(fullPath);
+          const stat = fs.lstatSync(fullPath);
+
+          if (stat.isSymbolicLink()) {continue;}
 
           if (stat.isDirectory()) {
             search(fullPath, depth + 1);
@@ -59,7 +59,7 @@ export class APIScanner {
           }
         }
       } catch {
-        // Skip directories we can't read
+        onSkippedInput();
       }
     };
 

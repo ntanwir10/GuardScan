@@ -146,6 +146,18 @@ const y = 2;`;
       expect(result.fileCount).toBeGreaterThanOrEqual(1);
       expect(result.fileBreakdown.some(f => f.path.includes('file1.js'))).toBe(true);
     });
+
+    it('reports files that were discovered but could not be read', async () => {
+      const unreadable = path.join(testDir, 'unreadable.rs');
+      fs.writeFileSync(unreadable, 'fn main() {}');
+      const countFile = jest.spyOn(counter as any, 'countFile').mockReturnValue(null);
+
+      const result = await counter.count([unreadable]);
+
+      expect(result.fileBreakdown).toEqual([]);
+      expect(result.skippedFiles).toEqual([expect.stringContaining('unreadable.rs')]);
+      countFile.mockRestore();
+    });
   });
 
   describe('isComment', () => {

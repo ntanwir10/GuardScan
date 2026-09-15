@@ -1,7 +1,31 @@
 import * as fs from 'fs';
 import * as crypto from 'crypto';
-import { execSync } from 'child_process';
+import * as path from 'path';
+import { execFileSync } from 'child_process';
+import fastGlob from 'fast-glob';
 import { SECURITY_CONSTANTS } from '../constants/security-constants';
+
+const MAX_SECRET_FILE_BYTES = 2 * 1024 * 1024;
+const SECRET_DISCOVERY_IGNORES = [
+  '**/.git/**', '**/.guardscan/**', '**/node_modules/**', '**/vendor/**', '**/dist/**',
+  '**/build/**', '**/coverage/**', '**/.venv/**', '**/venv/**', '**/target/**',
+];
+
+function isWithinRoot(root: string, candidate: string): boolean {
+  const relative = path.relative(root, candidate);
+  return relative === '' || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative));
+}
+
+function hasNulBytePrefix(file: string, size: number): boolean {
+  const sample = Buffer.alloc(Math.min(size, 8 * 1024));
+  const descriptor = fs.openSync(file, 'r');
+  try {
+    const bytesRead = fs.readSync(descriptor, sample, 0, sample.length, 0);
+    return sample.subarray(0, bytesRead).includes(0);
+  } finally {
+    fs.closeSync(descriptor);
+  }
+}
 
 export interface SecretFinding {
   type: string;
@@ -14,19 +38,68 @@ export interface SecretFinding {
 }
 
 export class SecretsDetector {
+  /** Discover bounded working-tree inputs independently from language/LOC discovery. */
+  async discoverFiles(
+    repoPath: string = process.cwd(),
+    onSkippedInput: () => void = () => {}
+  ): Promise<string[]> {
+    let root: string;
+    try {
+      root = fs.realpathSync(repoPath);
+      if (!fs.statSync(root).isDirectory()) {throw new Error('repository path is not a directory');}
+    } catch {
+      onSkippedInput();
+      return [];
+    }
+
+    try {
+      const candidates = await fastGlob('**/*', {
+        cwd: root,
+        absolute: true,
+        dot: true,
+        onlyFiles: true,
+        followSymbolicLinks: false,
+        ignore: SECRET_DISCOVERY_IGNORES,
+      });
+      const files: string[] = [];
+      for (const candidate of candidates.sort()) {
+        try {
+          if (fs.lstatSync(candidate).isSymbolicLink()) {continue;}
+          const real = fs.realpathSync(candidate);
+          if (isWithinRoot(root, real) && fs.statSync(real).isFile()) {files.push(real);}
+        } catch {
+          onSkippedInput();
+        }
+      }
+      return files;
+    } catch {
+      onSkippedInput();
+      return [];
+    }
+  }
+
   /**
    * Detect secrets in files
    */
-  async detectInFiles(files: string[]): Promise<SecretFinding[]> {
+  async detectInFiles(files: string[], onSkippedInput: () => void = () => {}): Promise<SecretFinding[]> {
     const findings: SecretFinding[] = [];
 
     for (const file of files) {
       try {
-        const content = fs.readFileSync(file, 'utf-8');
+        const stat = fs.statSync(file);
+        if (!stat.isFile()) {continue;}
+        if (stat.size > MAX_SECRET_FILE_BYTES) {
+          if (hasNulBytePrefix(file, stat.size)) {continue;}
+          onSkippedInput();
+          continue;
+        }
+        const raw = fs.readFileSync(file);
+        if (raw.includes(0)) {continue;}
+        const content = raw.toString('utf-8');
         const fileFindings = this.scanContent(file, content);
         findings.push(...fileFindings);
       } catch {
-        // Skip files that can't be read
+        onSkippedInput();
       }
     }
 
@@ -36,20 +109,47 @@ export class SecretsDetector {
   /**
    * Scan git history for secrets
    */
-  async scanGitHistory(repoPath: string = process.cwd()): Promise<SecretFinding[]> {
+  async scanGitHistory(
+    repoPath: string = process.cwd(),
+    onSkippedInput: () => void = () => {}
+  ): Promise<SecretFinding[]> {
     const findings: SecretFinding[] = [];
 
     try {
-      // Get all commits
-      const commits = execSync('git log --all --format=%H', {
+      const insideWorkTree = execFileSync('git', ['rev-parse', '--is-inside-work-tree'], {
         cwd: repoPath,
         encoding: 'utf-8',
-      }).split('\n').filter(Boolean).slice(0, SECURITY_CONSTANTS.GIT_HISTORY_COMMIT_LIMIT);
+      }).trim();
+      if (insideWorkTree !== 'true') {return findings;}
+    } catch (error: unknown) {
+      const rawStderr = error && typeof error === 'object' && 'stderr' in error
+        ? (error as {stderr?: unknown}).stderr
+        : undefined;
+      const stderr = typeof rawStderr === 'string'
+        ? rawStderr
+        : Buffer.isBuffer(rawStderr) ? rawStderr.toString('utf8') : '';
+      if (!/not a git repository/i.test(stderr)) {onSkippedInput();}
+      return findings;
+    }
+
+    try {
+      // Request one extra commit so bounded history is explicit in coverage.
+      const commitWindow = execFileSync('git', [
+        'log',
+        '--all',
+        '--format=%H',
+        `--max-count=${SECURITY_CONSTANTS.GIT_HISTORY_COMMIT_LIMIT + 1}`,
+      ], {
+        cwd: repoPath,
+        encoding: 'utf-8',
+      }).split('\n').filter(Boolean);
+      if (commitWindow.length > SECURITY_CONSTANTS.GIT_HISTORY_COMMIT_LIMIT) {onSkippedInput();}
+      const commits = commitWindow.slice(0, SECURITY_CONSTANTS.GIT_HISTORY_COMMIT_LIMIT);
 
       for (const commit of commits) {
         try {
           // Get diff for commit
-          const diff = execSync(`git show ${commit}`, {
+          const diff = execFileSync('git', ['show', '--end-of-options', commit], {
             cwd: repoPath,
             encoding: 'utf-8',
           });
@@ -57,11 +157,11 @@ export class SecretsDetector {
           const commitFindings = this.scanContent(`commit:${commit.substring(0, 8)}`, diff);
           findings.push(...commitFindings);
         } catch {
-          // Skip commits that error
+          onSkippedInput();
         }
       }
     } catch {
-      // Git not available or not a git repo
+      onSkippedInput();
     }
 
     return findings;

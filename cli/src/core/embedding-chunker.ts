@@ -7,6 +7,7 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
+import fastGlob from 'fast-glob';
 import { CodebaseIndexer, CodebaseIndex } from './codebase-indexer';
 import { ParsedFunction, ParsedClass } from './ast-parser';
 import { CodeChunk, EmbeddingMetadata, hashContent } from './embeddings';
@@ -255,14 +256,25 @@ export class EmbeddingChunker {
       'docs/**/*.md',
     ];
 
-    for (const pattern of docPatterns) {
-      try {
-        const docPath = path.join(this.repoRoot, pattern);
+    const docPaths = await fastGlob(docPatterns, {
+      cwd: this.repoRoot,
+      onlyFiles: true,
+      followSymbolicLinks: false,
+      unique: true,
+    });
+    const realRepoRoot = await fs.promises.realpath(this.repoRoot);
 
-        if (fs.existsSync(docPath) && fs.statSync(docPath).isFile()) {
-          const content = await fs.promises.readFile(docPath, 'utf-8');
+    for (const docPath of docPaths) {
+      try {
+        const candidatePath = path.resolve(this.repoRoot, docPath);
+        if ((await fs.promises.lstat(candidatePath)).isSymbolicLink()) {continue;}
+        const fullPath = await fs.promises.realpath(candidatePath);
+        if (!isWithinRoot(realRepoRoot, fullPath)) {continue;}
+
+        if ((await fs.promises.stat(fullPath)).isFile()) {
+          const content = await fs.promises.readFile(fullPath, 'utf-8');
           const formattedContent = this.formatDocumentationForEmbedding(
-            pattern,
+            docPath,
             content
           );
 
@@ -273,10 +285,10 @@ export class EmbeddingChunker {
               language: 'markdown',
               dependencies: [],
               exports: [],
-              tags: ['documentation', this.inferDocType(pattern)],
-              lastModified: await this.getFileModificationTime(pattern),
+              tags: ['documentation', this.inferDocType(docPath)],
+              lastModified: await this.getFileModificationTime(fullPath),
             },
-            source: pattern,
+            source: docPath,
           });
         }
       } catch (error) {
@@ -511,7 +523,7 @@ export class EmbeddingChunker {
    */
   private async getFileModificationTime(filePath: string): Promise<Date> {
     try {
-      const fullPath = path.join(this.repoRoot, filePath);
+      const fullPath = path.isAbsolute(filePath) ? filePath : path.join(this.repoRoot, filePath);
       const stats = await fs.promises.stat(fullPath);
       return stats.mtime;
     } catch (error) {
@@ -532,4 +544,9 @@ export class EmbeddingChunker {
       minComplexity: options.minComplexity || 0,
     };
   }
+}
+
+function isWithinRoot(root: string, candidate: string): boolean {
+  const relative = path.relative(root, candidate);
+  return relative === '' || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative));
 }

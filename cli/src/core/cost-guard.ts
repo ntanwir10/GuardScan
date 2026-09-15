@@ -53,7 +53,7 @@ export class CostGuard {
   ) {
     this.config = { ...DEFAULT_BUDGET_CONFIG, ...config };
     this.usage = new UsageTracker(repoId);
-    this.metrics = metrics || new MetricsCollector(repoId, false);
+    this.metrics = metrics || new MetricsCollector(repoId);
   }
 
   /**
