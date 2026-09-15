@@ -778,6 +778,36 @@ describe('collectPackageInventory', () => {
     ]));
   });
 
+  it('traverses Yarn optional dependencies and preserves their scope', () => {
+    fs.writeFileSync(path.join(repository, 'package.json'), JSON.stringify({dependencies: {parent: '1.0.0'}}));
+    fs.writeFileSync(path.join(repository, 'yarn.lock'), [
+      'parent@1.0.0:',
+      '  version "1.0.0"',
+      '  optionalDependencies:',
+      '    optional-child "2.0.0"',
+      '    missing-optional "3.0.0"',
+      'optional-child@2.0.0:',
+      '  version "2.0.0"',
+    ].join('\n'));
+
+    const inventory = collectPackageInventory(repository);
+
+    expect(inventory.coordinates.find(coordinate => coordinate.name === 'optional-child')).toMatchObject({
+      exactVersion: '2.0.0',
+      direct: false,
+      scope: 'optional',
+      dependencyPaths: ['parent@1.0.0 > optional-child@2.0.0'],
+    });
+    expect(inventory.errors).toEqual([
+      expect.objectContaining({
+        file: 'yarn.lock',
+        code: 'INVALID_MANIFEST',
+        message: expect.stringMatching(/missing-optional|unresolved|record/i),
+        scope: 'optional',
+      }),
+    ]);
+  });
+
   it('reports unresolved reachable Yarn dependency records', () => {
     fs.writeFileSync(path.join(repository, 'package.json'), JSON.stringify({dependencies: {parent: '^1.0.0'}}));
     fs.writeFileSync(path.join(repository, 'yarn.lock'), [
@@ -947,6 +977,39 @@ describe('collectPackageInventory', () => {
     });
   });
 
+  it('reads direct dependency groups from legacy single-project pnpm lockfiles', () => {
+    fs.writeFileSync(path.join(repository, 'package.json'), JSON.stringify({
+      dependencies: {runtimeRoot: '1.2.3'},
+      devDependencies: {devRoot: '2.3.4'},
+      optionalDependencies: {optionalRoot: '3.4.5'},
+    }));
+    fs.writeFileSync(path.join(repository, 'pnpm-lock.yaml'), [
+      'lockfileVersion: 5.4',
+      'specifiers:',
+      '  runtimeRoot: 1.2.3',
+      '  devRoot: 2.3.4',
+      '  optionalRoot: 3.4.5',
+      'dependencies:',
+      '  runtimeRoot: 1.2.3',
+      'devDependencies:',
+      '  devRoot: 2.3.4',
+      'optionalDependencies:',
+      '  optionalRoot: 3.4.5',
+      'packages:',
+      '  /runtimeRoot/1.2.3: {}',
+      '  /devRoot/2.3.4: {}',
+      '  /optionalRoot/3.4.5: {}',
+    ].join('\n'));
+
+    const inventory = collectPackageInventory(repository);
+    const coordinate = (name: string) => inventory.coordinates.find(candidate => candidate.name === name);
+
+    expect(coordinate('runtimeRoot')).toMatchObject({exactVersion: '1.2.3', direct: true, scope: 'runtime'});
+    expect(coordinate('devRoot')).toMatchObject({exactVersion: '2.3.4', direct: true, scope: 'development'});
+    expect(coordinate('optionalRoot')).toMatchObject({exactVersion: '3.4.5', direct: true, scope: 'optional'});
+    expect(inventory.errors).toEqual([]);
+  });
+
   it('rejects go.mod files without a Go directive because they default to the incomplete Go 1.16 graph', () => {
     fs.writeFileSync(path.join(repository, 'go.mod'), [
       'module example.test/fixture',
@@ -1022,6 +1085,36 @@ describe('collectPackageInventory', () => {
     });
     expect(filterPackageInventory(inventory, {scope: 'runtime'}).coordinates.map(value => value.name))
       .toEqual(['runtime-root', 'shared']);
+    expect(inventory.errors).toEqual([]);
+  });
+
+  it('preserves optional scope for feature-gated Cargo dependencies', () => {
+    fs.writeFileSync(path.join(repository, 'Cargo.toml'), [
+      '[package]',
+      'name = "fixture"',
+      'version = "0.1.0"',
+      '[dependencies]',
+      'optional-crate = { version = "1.2.3", optional = true }',
+    ].join('\n'));
+    fs.writeFileSync(path.join(repository, 'Cargo.lock'), [
+      'version = 3',
+      '[[package]]',
+      'name = "fixture"',
+      'version = "0.1.0"',
+      'dependencies = ["optional-crate"]',
+      '[[package]]',
+      'name = "optional-crate"',
+      'version = "1.2.3"',
+      'source = "registry+https://github.com/rust-lang/crates.io-index"',
+    ].join('\n'));
+
+    const inventory = collectPackageInventory(repository);
+
+    expect(inventory.coordinates.find(coordinate => coordinate.name === 'optional-crate')).toMatchObject({
+      exactVersion: '1.2.3',
+      direct: true,
+      scope: 'optional',
+    });
     expect(inventory.errors).toEqual([]);
   });
 

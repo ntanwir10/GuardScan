@@ -315,8 +315,18 @@ export class IaCScanner {
             }
 
             // Check for environment variables with secrets
-            if (service.environment) {
-              for (const env of service.environment) {
+            const environment = service.environment as unknown;
+            if (environment) {
+              const environmentEntries: unknown[] = Array.isArray(environment)
+                ? environment
+                : typeof environment === 'object' && environment !== null
+                  ? Object.entries(environment).map(([name, value]) =>
+                      value === null || value === undefined
+                        ? name
+                        : `${name}=${typeof value === 'string' ? value : JSON.stringify(value)}`
+                    )
+                  : [];
+              for (const env of environmentEntries) {
                 const envStr = typeof env === 'string' ? env : JSON.stringify(env);
                 if (/password|secret|token|key/i.test(envStr) && /=/.test(envStr)) {
                   findings.push({

@@ -184,6 +184,7 @@ export interface GuardScanResultEnvelope {
     findings: ScanFinding[];
     scanners: ScannerRunResult[];
     knownExploitedEnrichment?: Record<string, unknown>;
+    snapshotPersistenceError?: Record<string, unknown>;
   };
   quality: Record<string, unknown>;
   sbom: Record<string, unknown>;
@@ -341,7 +342,14 @@ export class ScanEngine {
           }
           const partialResults = results.filter(result => result.status === 'partial');
           const enrichment = results[0]?.knownExploitedEnrichment;
-          const metadata = enrichment ? {knownExploitedEnrichment: enrichment} : undefined;
+          const snapshotPersistenceError = results.find(result => result.snapshotPersistenceError)
+            ?.snapshotPersistenceError;
+          const metadata = enrichment || snapshotPersistenceError
+            ? {
+                ...(enrichment ? {knownExploitedEnrichment: enrichment} : {}),
+                ...(snapshotPersistenceError ? {snapshotPersistenceError} : {}),
+              }
+            : undefined;
           if (partialResults.length > 0) {
             const errorCodes = Array.from(new Set(
               partialResults.flatMap(result => result.errors.map(error => error.code))
@@ -721,6 +729,7 @@ export function createScanEnvelope(
       findings: result.findings,
       scanners: result.scannerResults,
       knownExploitedEnrichment: collectKnownExploitedEnrichment(result),
+      snapshotPersistenceError: collectSnapshotPersistenceError(result),
     },
     quality: normalizeEnvelopeSection(context.quality, 'not-provided'),
     sbom: normalizeEnvelopeSection(context.sbom, 'not-provided'),
@@ -775,6 +784,17 @@ function collectKnownExploitedEnrichment(
       retryable: unavailable.retryable,
     },
   };
+}
+
+function collectSnapshotPersistenceError(
+  result: ScanEngineResult
+): Record<string, unknown> | undefined {
+  const error = result.scannerResults
+    .find(scanner => scanner.scanner === 'dependencies')
+    ?.metadata?.snapshotPersistenceError;
+  return error && typeof error === 'object' && !Array.isArray(error)
+    ? error as Record<string, unknown>
+    : undefined;
 }
 
 export function serializeScanResult(
@@ -880,6 +900,7 @@ function toSarif(
             executionSuccessful: overallStatus === 'complete',
             properties: {
               knownExploitedEnrichment: collectKnownExploitedEnrichment(result),
+              snapshotPersistenceError: collectSnapshotPersistenceError(result),
             },
             toolExecutionNotifications: notifications.size > 0
               ? [...notifications.values()]

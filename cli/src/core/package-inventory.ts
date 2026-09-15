@@ -773,7 +773,17 @@ function parsePnpmLock(root: string, file: string, coordinates: DependencyCoordi
   const rel = relative(root, file);
   try {
     const data = asRecord(yaml.load(fs.readFileSync(file, 'utf8')));
-    const importers = asRecord(data?.importers) || {};
+    const parsedImporters = asRecord(data?.importers);
+    const legacyRootImporter = Object.fromEntries(
+      ['dependencies', 'devDependencies', 'optionalDependencies']
+        .map(group => [group, asRecord(data?.[group])] as const)
+        .filter((entry): entry is readonly [string, Record<string, unknown>] => entry[1] !== undefined)
+    );
+    const importers = parsedImporters && Object.keys(parsedImporters).length > 0
+      ? parsedImporters
+      : Object.keys(legacyRootImporter).length > 0
+        ? {'.': legacyRootImporter}
+        : {};
     const validatedWorkspaceTarget = (
       baseDirectory: string,
       dependencyName: string,
@@ -1034,9 +1044,14 @@ function parseYarnLock(root: string, file: string, coordinates: DependencyCoordi
     let unsupportedSource: string | undefined;
     let exactVersion: string | undefined;
     let localWorkspace = false;
-    let inDependencies = false;
-    let dependencies: Array<{name: string; requested: string}> = [];
-    const records: Array<{name: string; version: string; descriptors: string[]; dependencies: Array<{name: string; requested: string}>}> = [];
+    let dependencySection: 'required' | 'optional' | undefined;
+    let dependencies: Array<{name: string; requested: string; optional: boolean}> = [];
+    const records: Array<{
+      name: string;
+      version: string;
+      descriptors: string[];
+      dependencies: Array<{name: string; requested: string; optional: boolean}>;
+    }> = [];
     const finishRecord = (): void => {
       if (localWorkspace) {
         // Workspace packages are first-party project code, not registry dependencies.
@@ -1066,7 +1081,7 @@ function parseYarnLock(root: string, file: string, coordinates: DependencyCoordi
       unsupportedSource = undefined;
       exactVersion = undefined;
       localWorkspace = false;
-      inDependencies = false;
+      dependencySection = undefined;
       dependencies = [];
     };
     for (const line of lines) {
@@ -1083,13 +1098,19 @@ function parseYarnLock(root: string, file: string, coordinates: DependencyCoordi
           unsupportedSource = unsupportedYarnDescriptor(descriptors, packageName);
         }
       } else if (packageName) {
-        if (/^\s{2}dependencies\s*:\s*$/.test(line)) {inDependencies = true; continue;}
-        if (inDependencies) {
+        const dependencySectionMatch = line.match(/^\s{2}(dependencies|optionalDependencies)\s*:\s*$/);
+        if (dependencySectionMatch) {
+          dependencySection = dependencySectionMatch[1] === 'optionalDependencies' ? 'optional' : 'required';
+          continue;
+        }
+        if (/^\s{2}\S/.test(line)) {dependencySection = undefined;}
+        if (dependencySection) {
           const dependencyMatch = line.match(/^\s{4}(?:"([^"]+)"|'([^']+)'|([^:\s]+))(?::|\s+)\s*["']?([^"'\s]+)["']?/);
           if (dependencyMatch) {
             dependencies.push({
               name: dependencyMatch[1] || dependencyMatch[2] || dependencyMatch[3],
               requested: dependencyMatch[4],
+              optional: dependencySection === 'optional',
             });
           }
         }
@@ -1151,16 +1172,22 @@ function parseYarnLock(root: string, file: string, coordinates: DependencyCoordi
           candidate.descriptors.some(descriptor => yarnDescriptorMatchesRequest(descriptor, dependency.name, dependency.requested))
         );
         if (child) {
-          visit(child, `${currentPath} > ${versionedIdentity(child)}`, nextStack, rootScope);
+          visit(
+            child,
+            `${currentPath} > ${versionedIdentity(child)}`,
+            nextStack,
+            dependency.optional ? 'optional' : rootScope
+          );
         } else {
-          const edge = `${versionedIdentity(record)}\0${dependency.name}\0${dependency.requested}\0${rootScope}`;
+          const dependencyScope = dependency.optional ? 'optional' : rootScope;
+          const edge = `${versionedIdentity(record)}\0${dependency.name}\0${dependency.requested}\0${dependencyScope}`;
           if (!unresolvedEdges.has(edge)) {
             unresolvedEdges.add(edge);
             errors.push({
               file: rel,
               code: 'INVALID_MANIFEST',
               message: `Yarn lockfile cannot resolve reachable dependency ${dependency.name} ${dependency.requested} from ${versionedIdentity(record)}`,
-              scope: rootScope,
+              scope: dependencyScope,
             });
           }
         }
@@ -1470,7 +1497,7 @@ function parseCargoLock(root: string, file: string, coordinates: DependencyCoord
     }
 
     const rootManifest = path.join(lockDirectory, 'Cargo.toml');
-    const workspaceDefinitions = new Map<string, {name: string; requested?: string; local: boolean}>();
+    const workspaceDefinitions = new Map<string, {name: string; requested?: string; local: boolean; optional: boolean}>();
     const parseDependencyValue = (installName: string, rawValue: string) => {
       const packageName = rawValue.match(/\bpackage\s*=\s*["']([^"']+)["']/)?.[1] || installName;
       const directVersion = rawValue.match(/^\s*["']([^"']+)["']\s*$/)?.[1];
@@ -1481,6 +1508,7 @@ function parseCargoLock(root: string, file: string, coordinates: DependencyCoord
         name: workspace ? inherited?.name || packageName : packageName,
         requested: workspace ? inherited?.requested : directVersion || tableVersion,
         local: workspace ? inherited?.local === true : /\b(?:path|git)\s*=/.test(rawValue),
+        optional: /\boptional\s*=\s*true\b/.test(rawValue) || (workspace && inherited?.optional === true),
       };
     };
     const manifestLines = (manifest: string): Array<{section: string; name: string; value: string}> => {
@@ -1580,6 +1608,7 @@ function parseCargoLock(root: string, file: string, coordinates: DependencyCoord
         if ((!development && !runtime) || record.section.startsWith('workspace.')) {continue;}
         const parsed = parseDependencyValue(record.name, record.value);
         if (parsed.local) {continue;}
+        const scope: DependencyScope = development ? 'development' : parsed.optional ? 'optional' : 'runtime';
         const lockedRoots = manifestRoots.flatMap(node => node.dependencies)
           .filter(dependency => dependency.name === parsed.name)
           .map(lockedDependency => nodes.filter(node => node.name === lockedDependency.name &&
@@ -1594,12 +1623,12 @@ function parseCargoLock(root: string, file: string, coordinates: DependencyCoord
             file: relative(root, manifest),
             code: 'UNRESOLVED_VERSION',
             message: `Cargo dependency ${record.name}${parsed.requested ? ` ${parsed.requested}` : ''} is not satisfied by Cargo.lock`,
-            scope: development ? 'development' : 'runtime',
+            scope,
           });
           continue;
         }
         for (const candidate of candidates) {
-          const next = {scope: development ? 'development' as const : 'runtime' as const,
+          const next = {scope,
             manifestPath: relative(root, manifest), requested: parsed.requested};
           const existing = directByNode.get(candidate.key);
           if (!existing || scopeRank[next.scope] > scopeRank[existing.scope]) {directByNode.set(candidate.key, next);}

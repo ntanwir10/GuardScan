@@ -98,27 +98,34 @@ describe('ScanEngine built-in coverage adapters', () => {
 
   it('preserves dependency enrichment metadata when no vulnerabilities are found', async () => {
     const enrichment = {status: 'disabled', source: 'cisa-kev'};
+    const snapshotPersistenceError = {code: 'SNAPSHOT_PERSIST_FAILED', message: 'read-only cache'};
     const result = await new ScanEngine().runSecurityScan({
       repoPath: repository,
       files: [],
       scannerTasks: [{
         scanner: 'dependencies',
-        run: async () => ({findings: [], metadata: {knownExploitedEnrichment: enrichment}}),
+        run: async () => ({
+          findings: [],
+          metadata: {knownExploitedEnrichment: enrichment, snapshotPersistenceError},
+        }),
       }],
     });
 
     expect(createScanEnvelope(result).security.knownExploitedEnrichment).toEqual(enrichment);
+    expect(createScanEnvelope(result).security.snapshotPersistenceError).toEqual(snapshotPersistenceError);
     const sarif = JSON.parse(serializeScanResult(result, 'sarif', repository));
     expect(sarif.runs[0].invocations[0].properties.knownExploitedEnrichment).toEqual(enrichment);
+    expect(sarif.runs[0].invocations[0].properties.snapshotPersistenceError).toEqual(snapshotPersistenceError);
   });
 
   it('returns KEV evidence from a clean built-in dependency scan', async () => {
     const enrichment = {status: 'fresh-cache' as const, source: 'cisa-kev' as const};
+    const snapshotPersistenceError = {code: 'SNAPSHOT_PERSIST_FAILED', message: 'read-only cache'};
     jest.spyOn(dependencyScanner, 'scan').mockResolvedValue([{
       vulnerabilities: [], totalVulnerabilities: 0, critical: 0, high: 0, medium: 0, low: 0,
       ecosystem: 'npm', status: 'complete', source: 'osv', queriedPackages: 1,
       unresolvedPackages: 0, inventoryDigest: 'fixture', dataFreshness: 'fresh-cache',
-      knownExploitedEnrichment: enrichment, errors: [],
+      knownExploitedEnrichment: enrichment, snapshotPersistenceError, errors: [],
     }]);
     const dependencyTask = (new ScanEngine() as unknown as BuiltInTaskFactory).createBuiltInTasks(
       {includeVulnerabilities: true}, repository, [], false
@@ -126,7 +133,7 @@ describe('ScanEngine built-in coverage adapters', () => {
 
     await expect(dependencyTask.run()).resolves.toMatchObject({
       findings: [],
-      metadata: {knownExploitedEnrichment: enrichment},
+      metadata: {knownExploitedEnrichment: enrichment, snapshotPersistenceError},
     });
   });
 

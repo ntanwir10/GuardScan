@@ -78,6 +78,7 @@ export interface DependencyScanResult {
   inventoryDigest: string;
   dataFreshness: 'live' | 'fresh-cache' | 'stale-cache' | 'unavailable';
   knownExploitedEnrichment: KnownExploitedEnrichment;
+  snapshotPersistenceError?: DependencyScanErrorInfo;
   errors: DependencyScanErrorInfo[];
 }
 
@@ -481,7 +482,8 @@ function resultFor(
   vulnerabilities: DependencyVulnerability[],
   freshness: DependencyScanResult['dataFreshness'],
   errors: DependencyScanErrorInfo[],
-  knownExploitedEnrichment: KnownExploitedEnrichment
+  knownExploitedEnrichment: KnownExploitedEnrichment,
+  snapshotPersistenceError?: DependencyScanErrorInfo
 ): DependencyScanResult {
   const coordinates = inventory.coordinates.filter(item => item.ecosystem === ecosystem);
   const values = vulnerabilities.filter(item => item.ecosystem === ecosystem);
@@ -500,6 +502,7 @@ function resultFor(
     inventoryDigest: inventory.digest,
     dataFreshness: freshness,
     knownExploitedEnrichment,
+    snapshotPersistenceError,
     errors,
   };
 }
@@ -654,6 +657,7 @@ export class DependencyScanner {
     });
     let matches: OsvMatch[] = [];
     let freshness: DependencyScanResult['dataFreshness'] = 'live';
+    let snapshotPersistenceError: DependencyScanErrorInfo | undefined;
     const recordDroppedMatches = (snapshot: VulnerabilitySnapshot): void => {
       if (snapshot.droppedMatches === 0) {return;}
       const error = new DependencyScanError(
@@ -726,7 +730,8 @@ export class DependencyScanner {
           try {
             savedSnapshot = store.save(inventory, matches, client.endpoint);
           } catch (error: unknown) {
-            errors.push(operationalError(error, 'SNAPSHOT_PERSIST_FAILED'));
+            snapshotPersistenceError = operationalError(error, 'SNAPSHOT_PERSIST_FAILED');
+            if (options.refresh) {errors.push(snapshotPersistenceError);}
           }
           if (savedSnapshot) {recordDroppedMatches(savedSnapshot);}
         }
@@ -758,7 +763,8 @@ export class DependencyScanner {
       vulnerabilities,
       freshness,
       errors,
-      knownExploited.metadata
+      knownExploited.metadata,
+      snapshotPersistenceError
     ));
   }
 

@@ -83,7 +83,8 @@
           "type": "array",
           "items": { "$ref": "#/definitions/scanner" }
         },
-        "knownExploitedEnrichment": { "type": "object" }
+        "knownExploitedEnrichment": { "type": "object" },
+        "snapshotPersistenceError": { "type": "object" }
       }
     },
     "quality": { "$ref": "#/definitions/section" },

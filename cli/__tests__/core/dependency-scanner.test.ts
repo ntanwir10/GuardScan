@@ -907,12 +907,41 @@ describe('DependencyScanner OSV integration', () => {
     });
 
     expect(results[0]).toMatchObject({
-      status: 'partial',
+      status: 'complete',
       dataFreshness: 'live',
       totalVulnerabilities: 1,
-      errors: [expect.objectContaining({
+      errors: [],
+      snapshotPersistenceError: expect.objectContaining({
         code: 'SNAPSHOT_PERSIST_FAILED',
         message: expect.stringContaining('snapshot write fixture failed'),
+      }),
+    });
+  });
+
+  it('fails an explicit OSV snapshot refresh when persistence fails', async () => {
+    const store = new VulnerabilitySnapshotStore(cache);
+    jest.spyOn(store, 'save').mockImplementation(() => {
+      throw new Error('snapshot refresh write fixture failed');
+    });
+    const fetchImpl = jest.fn(async (input: string | URL | Request) =>
+      String(input).endsWith('/v1/querybatch')
+        ? jsonResponse({ results: [{ vulns: [] }] })
+        : jsonResponse({})) as typeof fetch;
+
+    const results = await new DependencyScanner().scan(repository, {
+      client: new OsvClient({ fetchImpl, retries: 0 }),
+      snapshotStore: store,
+      enrichKnownExploited: false,
+      refresh: true,
+    });
+
+    expect(results[0]).toMatchObject({
+      status: 'partial',
+      dataFreshness: 'live',
+      snapshotPersistenceError: expect.objectContaining({code: 'SNAPSHOT_PERSIST_FAILED'}),
+      errors: [expect.objectContaining({
+        code: 'SNAPSHOT_PERSIST_FAILED',
+        message: expect.stringContaining('snapshot refresh write fixture failed'),
       })],
     });
   });

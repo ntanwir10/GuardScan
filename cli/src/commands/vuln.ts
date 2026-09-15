@@ -297,6 +297,7 @@ function parseSnapshotMaxAge(value: unknown): number {
 
 function vulnerabilityDocument(repository: string, results: DependencyScanResult[], offline: boolean, allowPartial: boolean) {
   const vulnerabilities = results.flatMap(result => result.vulnerabilities);
+  const snapshotPersistenceError = results.find(result => result.snapshotPersistenceError)?.snapshotPersistenceError;
   return {
     schemaVersion: 'guardscan.vulnerability.v1',
     run: {
@@ -315,6 +316,7 @@ function vulnerabilityDocument(repository: string, results: DependencyScanResult
       low: vulnerabilities.filter(value => value.policySeverity === 'low').length,
     },
     enrichment: results[0]?.knownExploitedEnrichment,
+    snapshotPersistenceError,
     ecosystems: results,
     errors: results.flatMap(result => result.errors),
   };
@@ -342,6 +344,10 @@ function renderTable(results: DependencyScanResult[]): string {
     lines.push(chalk.gray(`CISA KEV enrichment: ${enrichment.status}`));
     if (enrichment.error) {lines.push(chalk.yellow(`KEV enrichment warning: ${enrichment.error.message}`));}
   }
+  const snapshotPersistenceError = results.find(result => result.snapshotPersistenceError)?.snapshotPersistenceError;
+  if (snapshotPersistenceError) {
+    lines.push(chalk.yellow(`Vulnerability snapshot warning: ${snapshotPersistenceError.message}`));
+  }
   return lines.join('\n');
 }
 
@@ -350,6 +356,7 @@ function toSarif(results: DependencyScanResult[]): Record<string, unknown> {
   const uniqueRules = new Map<string, DependencyVulnerability>();
   vulnerabilities.forEach(value => uniqueRules.set(value.canonicalId, value));
   const enrichmentError = results[0]?.knownExploitedEnrichment.error;
+  const snapshotPersistenceError = results.find(result => result.snapshotPersistenceError)?.snapshotPersistenceError;
   return {
     version: '2.1.0',
     $schema: 'https://docs.oasis-open.org/sarif/sarif/v2.1.0/errata01/os/schemas/sarif-schema-2.1.0.json',
@@ -369,13 +376,21 @@ function toSarif(results: DependencyScanResult[]): Record<string, unknown> {
       },
       invocations: [{
         executionSuccessful: results.every(result => result.status === 'complete'),
-        toolExecutionNotifications: results.flatMap(result => result.errors.map(error => ({
-          level: 'error', message: { text: error.message }, descriptor: { id: error.code },
-        }))).concat(enrichmentError ? [{
-          level: 'warning',
-          message: { text: enrichmentError.message },
-          descriptor: { id: enrichmentError.code },
-        }] : []),
+        toolExecutionNotifications: [
+          ...results.flatMap(result => result.errors.map(error => ({
+            level: 'error', message: { text: error.message }, descriptor: { id: error.code },
+          }))),
+          ...(enrichmentError ? [{
+            level: 'warning',
+            message: { text: enrichmentError.message },
+            descriptor: { id: enrichmentError.code },
+          }] : []),
+          ...(snapshotPersistenceError ? [{
+            level: 'warning',
+            message: { text: snapshotPersistenceError.message },
+            descriptor: { id: snapshotPersistenceError.code },
+          }] : []),
+        ],
       }],
       results: vulnerabilities.map(value => ({
         ruleId: value.canonicalId,
