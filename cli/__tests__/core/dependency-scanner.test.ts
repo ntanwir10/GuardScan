@@ -909,6 +909,18 @@ describe('DependencyScanner OSV integration', () => {
     expect(fs.readdirSync(path.join(kevDirectory, 'quarantine'))).toHaveLength(1);
   });
 
+  it('keeps the last usable KEV cache when serialized replacement exceeds the read limit', () => {
+    const kevDirectory = path.join(cache, 'kev-size-limit');
+    const store = new CisaKevCatalogStore(kevDirectory);
+    store.save(kevCatalog(['CVE-2026-1234']), 'https://example.test/kev.json');
+    const oversized = kevCatalog(['CVE-2026-5678']);
+    oversized.vulnerabilities[0].notes = 'x'.repeat(16 * 1024 * 1024);
+
+    expect(() => store.save(oversized, 'https://example.test/kev.json')).toThrow(/cache size limit/i);
+    expect(store.status().entry?.catalog.vulnerabilities[0].cveID).toBe('CVE-2026-1234');
+    expect(fs.existsSync(path.join(kevDirectory, 'quarantine'))).toBe(false);
+  });
+
   it('keeps live OSV findings when snapshot persistence fails', async () => {
     const store = new VulnerabilitySnapshotStore(cache);
     jest.spyOn(store, 'save').mockImplementation(() => {

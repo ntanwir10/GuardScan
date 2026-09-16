@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { getGuardScanCacheDir } from '../utils/path-helper';
 import {
-  atomicReplaceJson,
+  atomicReplaceText,
   ensurePrivateDirectory,
   quarantineFile,
   readJsonFileBounded,
@@ -253,9 +253,13 @@ export class CisaKevCatalogStore {
       sourceEndpoint,
       catalog,
     };
+    const serialized = JSON.stringify(entry, null, 2);
+    if (Buffer.byteLength(serialized, 'utf8') > MAX_CACHE_BYTES) {
+      throw new CisaKevError('RESPONSE_TOO_LARGE', 'CISA KEV catalog exceeds the cache size limit after serialization');
+    }
     ensurePrivateDirectory(this.baseDir);
     const target = path.join(this.baseDir, 'catalog.json');
-    atomicReplaceJson(target, entry);
+    atomicReplaceText(target, serialized);
     return entry;
   }
 

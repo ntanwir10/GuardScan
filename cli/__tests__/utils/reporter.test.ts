@@ -2,7 +2,7 @@ import { Reporter, ReviewResult, Finding } from "../../src/utils/reporter";
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
-import { runProcess, sanitizeChildEnvironment } from "../../src/utils/process-runner";
+import { resolveProcessInvocation, runProcess, sanitizeChildEnvironment } from "../../src/utils/process-runner";
 import {
   APIClient,
   TelemetryDeliveryError,
@@ -334,6 +334,42 @@ describe("runProcess", () => {
     ]);
 
     expect(result.status).not.toBe(0);
+  });
+});
+
+describe("isolated tool discovery", () => {
+  it("runs Windows npm shims through their Node entry points without a shell", () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "guardscan-npm-shim-"));
+    try {
+      const bin = path.join(directory, "node_modules", "npm", "bin");
+      fs.mkdirSync(bin, {recursive: true});
+      for (const command of ["npm", "npx"]) {
+        fs.writeFileSync(path.join(directory, `${command}.cmd`), "@echo off\r\n");
+        fs.writeFileSync(path.join(bin, `${command}-cli.js`), "");
+        const args = ["test", "path & echo unsafe"];
+        expect(resolveProcessInvocation(command, args, {Path: directory}, "win32")).toEqual({
+          command: "node",
+          args: [path.join(bin, `${command}-cli.js`), ...args],
+        });
+      }
+    } finally {
+      fs.rmSync(directory, {recursive: true, force: true});
+    }
+  });
+
+  it("preserves the rustup toolchain home only for Cargo execution", () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "guardscan-rustup-home-"));
+    try {
+      fs.mkdirSync(path.join(home, ".rustup"));
+      const environment = {HOME: home, PATH: "/usr/bin"};
+      const cargo = sanitizeChildEnvironment(environment, "/isolated", "cargo");
+      expect(cargo.HOME).toBe("/isolated");
+      expect(cargo.RUSTUP_HOME).toBe(path.join(home, ".rustup"));
+      expect(cargo.CARGO_HOME).toBeUndefined();
+      expect(sanitizeChildEnvironment(environment, "/isolated", "npm").RUSTUP_HOME).toBeUndefined();
+    } finally {
+      fs.rmSync(home, {recursive: true, force: true});
+    }
   });
 });
 

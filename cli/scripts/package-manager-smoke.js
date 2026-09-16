@@ -104,11 +104,20 @@ function main(argv = process.argv.slice(2)) {
     const help = runCli(manager, ['--help'], project, env);
     assert(help.stdout.includes('scan'), `${manager} CLI help is missing scan`);
 
-    const output = path.join(project, 'scan.json');
-    runCli(manager, [
+    // The installer project records this local tarball as a file: dependency.
+    // Scan an independent fixture so strict SBOM coverage tests the installed
+    // CLI rather than correctly rejecting the smoke harness's local source.
+    const scanProject = path.join(project, 'scan-fixture');
+    fs.mkdirSync(scanProject);
+    fs.writeFileSync(path.join(scanProject, 'index.js'), 'export const answer = 42;\n');
+    const output = path.join(scanProject, 'scan.json');
+    // Yarn Classic changes back to the package root when dispatching a binary.
+    // Invoke the installed entry point directly to keep this scan in scanProject.
+    const installedCli = path.join(project, 'node_modules', 'guardscan', packageJson.bin.guardscan);
+    run(process.execPath, [installedCli,
       '--no-telemetry', 'scan', '--offline', '--no-cve', '--skip-tests', '--skip-ai',
       '--format', 'json', '--output', output,
-    ], project, env);
+    ], scanProject, env);
     const scan = JSON.parse(fs.readFileSync(output, 'utf8'));
     assert(scan.schemaVersion === 'guardscan.scan.v1', `${manager} emitted the wrong scan schema`);
     assert(scan.run?.executionMode === 'static-analysis', `${manager} did not preserve safe execution mode`);

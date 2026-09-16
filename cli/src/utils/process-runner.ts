@@ -78,7 +78,8 @@ function isBlockedEnvironmentName(name: string): boolean {
 
 export function sanitizeChildEnvironment(
   environment: NodeJS.ProcessEnv = process.env,
-  isolatedHome: string
+  isolatedHome: string,
+  command?: string
 ): NodeJS.ProcessEnv {
   const sanitized: NodeJS.ProcessEnv = {};
   for (const [name, value] of Object.entries(environment)) {
@@ -93,6 +94,17 @@ export function sanitizeChildEnvironment(
   sanitized.XDG_CONFIG_HOME = path.join(isolatedHome, '.config');
   sanitized.XDG_CACHE_HOME = path.join(isolatedHome, '.cache');
   sanitized.XDG_DATA_HOME = path.join(isolatedHome, '.local', 'share');
+  // The rustup proxy needs its toolchain metadata even when the child HOME is isolated.
+  // Do not expose the default CARGO_HOME, which can contain registry credentials.
+  if ((command === 'cargo' || command === 'rustc') && !sanitized.RUSTUP_HOME) {
+    const inheritedHome = environment.HOME || environment.USERPROFILE;
+    if (inheritedHome) {
+      const rustupHome = path.join(inheritedHome, '.rustup');
+      try {
+        if (fs.statSync(rustupHome).isDirectory()) {sanitized.RUSTUP_HOME = rustupHome;}
+      } catch { /* rustup is not installed in the inherited home */ }
+    }
+  }
   return sanitized;
 }
 
@@ -101,6 +113,34 @@ export function resolveExecutable(command: string, platform = process.platform):
     return `${command}.cmd`;
   }
   return command;
+}
+
+export function resolveProcessInvocation(
+  command: string,
+  args: string[],
+  environment: NodeJS.ProcessEnv = process.env,
+  platform = process.platform
+): ProcessInvocation {
+  if (platform !== 'win32' || (command !== 'npm' && command !== 'npx')) {
+    return {command: resolveExecutable(command, platform), args: [...args]};
+  }
+
+  // Windows cannot spawn a .cmd shim with shell:false. Run the known npm CLI script
+  // directly with an external Node runtime so repository paths remain literal
+  // arguments, not cmd syntax. process.execPath may be the GuardScan SEA binary.
+  const searchPath = Object.entries(environment).find(([name]) => name.toUpperCase() === 'PATH')?.[1] || '';
+  for (const rawDirectory of searchPath.split(';')) {
+    const directory = rawDirectory.trim().replace(/^"|"$/g, '');
+    if (!directory) {continue;}
+    const shim = path.join(directory, `${command}.cmd`);
+    const entryPoint = path.join(directory, 'node_modules', 'npm', 'bin', `${command}-cli.js`);
+    try {
+      if (fs.statSync(shim).isFile() && fs.statSync(entryPoint).isFile()) {
+        return {command: 'node', args: [entryPoint, ...args]};
+      }
+    } catch { /* search the next PATH directory */ }
+  }
+  throw new Error(`Required ${command} Node CLI entry point not found on PATH`);
 }
 
 export function resolveNetworkIsolatedInvocation(
@@ -131,11 +171,11 @@ export function runProcess(
 ): ProcessResult {
   const invocation = options.networkIsolation
     ? resolveNetworkIsolatedInvocation(command, args)
-    : {command: resolveExecutable(command), args: [...args]};
+    : resolveProcessInvocation(command, args, options.env);
   const isolatedHome = fs.mkdtempSync(path.join(os.tmpdir(), 'guardscan-child-home-'));
   const spawnOptions: SpawnSyncOptionsWithStringEncoding = {
     cwd: options.cwd,
-    env: sanitizeChildEnvironment(options.env, isolatedHome),
+    env: sanitizeChildEnvironment(options.env, isolatedHome, command),
     encoding: 'utf8',
     shell: false,
     timeout: options.timeoutMs,

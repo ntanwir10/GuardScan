@@ -715,6 +715,52 @@ describe('collectPackageInventory', () => {
     expect(inventory.errors).toEqual([]);
   });
 
+  it('traverses distinct pnpm peer-context snapshots before merging package coordinates', () => {
+    fs.writeFileSync(path.join(repository, 'package.json'), JSON.stringify({
+      dependencies: {'root-a': '1.0.0', 'root-b': '1.0.0'},
+    }));
+    fs.writeFileSync(path.join(repository, 'pnpm-lock.yaml'), [
+      'lockfileVersion: 9.0',
+      'importers:',
+      '  .:',
+      '    dependencies:',
+      '      root-a:',
+      '        specifier: 1.0.0',
+      '        version: 1.0.0',
+      '      root-b:',
+      '        specifier: 1.0.0',
+      '        version: 1.0.0',
+      'snapshots:',
+      '  root-a@1.0.0:',
+      '    dependencies:',
+      '      shared: 1.0.0(peer@1.0.0)',
+      '  root-b@1.0.0:',
+      '    dependencies:',
+      '      shared: 1.0.0(peer@2.0.0)',
+      '  shared@1.0.0(peer@1.0.0):',
+      '    dependencies:',
+      '      first-child: 2.0.0',
+      '  shared@1.0.0(peer@2.0.0):',
+      '    dependencies:',
+      '      second-child: 3.0.0',
+      '  first-child@2.0.0: {}',
+      '  second-child@3.0.0: {}',
+    ].join('\n'));
+
+    const inventory = collectPackageInventory(repository);
+
+    expect(inventory.errors).toEqual([]);
+    expect(inventory.coordinates.filter(coordinate => coordinate.name === 'shared')).toHaveLength(1);
+    expect(inventory.coordinates).toEqual(expect.arrayContaining([
+      expect.objectContaining({name: 'first-child', dependencyPaths: [
+        'root-a@1.0.0 > shared@1.0.0 > first-child@2.0.0',
+      ]}),
+      expect.objectContaining({name: 'second-child', dependencyPaths: [
+        'root-b@1.0.0 > shared@1.0.0 > second-child@3.0.0',
+      ]}),
+    ]));
+  });
+
   it('preserves deterministic transitive dependency paths for pnpm and Yarn cycles', () => {
     fs.writeFileSync(path.join(repository, 'package.json'), JSON.stringify({dependencies: {parent: '^1.0.0'}}));
     fs.writeFileSync(path.join(repository, 'pnpm-lock.yaml'), [
@@ -1147,6 +1193,25 @@ describe('collectPackageInventory', () => {
     expect(inventory.errors).toEqual(expect.arrayContaining([
       expect.objectContaining({file: 'uv/pyproject.toml', ecosystem: 'pip', code: 'UNSUPPORTED_FORMAT'}),
       expect.objectContaining({file: 'pipenv/Pipfile', ecosystem: 'pip', code: 'UNSUPPORTED_FORMAT'}),
+    ]));
+  });
+
+  it('reports dotted PEP 621 dependencies without a supported Python inventory', () => {
+    fs.writeFileSync(path.join(repository, 'pyproject.toml'), [
+      'project.name = "fixture"',
+      'project.dependencies = ["requests>=2"]',
+    ].join('\n'));
+    fs.mkdirSync(path.join(repository, 'quoted'));
+    fs.writeFileSync(path.join(repository, 'quoted/pyproject.toml'), [
+      "'project'.'dependencies' = ['flask>=3']",
+    ].join('\n'));
+
+    const inventory = collectPackageInventory(repository);
+
+    expect(inventory.coordinates).toEqual([]);
+    expect(inventory.errors).toEqual(expect.arrayContaining([
+      expect.objectContaining({file: 'pyproject.toml', ecosystem: 'pip', code: 'UNSUPPORTED_FORMAT'}),
+      expect.objectContaining({file: 'quoted/pyproject.toml', ecosystem: 'pip', code: 'UNSUPPORTED_FORMAT'}),
     ]));
   });
 

@@ -853,6 +853,12 @@ function parsePnpmLock(root: string, file: string, coordinates: DependencyCoordi
       if (!match || !semver.valid(match[2], {loose: true})) {return undefined;}
       return {name: match[1], version: semver.valid(match[2], {loose: true})!};
     };
+    const peerContext = (locator: string): string => {
+      const start = locator.indexOf('(');
+      return start < 0 ? '' : locator.slice(start);
+    };
+    const nodeIdentity = (name: string, version: string, locator: string): string =>
+      `${name}\0${version}\0${peerContext(locator)}`;
     type PnpmDirectDependency = {
       scope: DependencyScope;
       manifestPath: string;
@@ -907,7 +913,7 @@ function parsePnpmLock(root: string, file: string, coordinates: DependencyCoordi
             }
             continue;
           }
-          const key = `${dependencyName}\0${version}`;
+          const key = nodeIdentity(dependencyName, version, rawVersion);
           const values = directDependencies.get(key) || [];
           const manifestPath = relative(root, manifest);
           const existing = values.find(value => value.manifestPath === manifestPath);
@@ -934,18 +940,19 @@ function parsePnpmLock(root: string, file: string, coordinates: DependencyCoordi
       name: string;
       version: string;
       rawKey: string;
-      dependencies: Array<{name: string; version: string; optional: boolean}>;
+      dependencies: Array<{name: string; version: string; peerContext: string; optional: boolean}>;
       unresolvedDependencies: Array<{name: string; resolution: string; optional: boolean}>;
     };
     const nodes = new Map<string, PnpmNode>();
-    const parseDependency = (name: string, value: unknown): {name: string; version: string} | undefined => {
+    const parseDependency = (name: string, value: unknown): {name: string; version: string; peerContext: string} | undefined => {
       const record = asRecord(value);
       const raw = typeof value === 'string' ? value : typeof record?.version === 'string' ? record.version : undefined;
       if (!raw) {return undefined;}
       const normalized = raw.replace(/^\//, '').split('(')[0];
       const version = semver.valid(normalized, {loose: true});
-      if (version) {return {name, version};}
-      return parseNodeKey(normalized);
+      if (version) {return {name, version, peerContext: peerContext(raw)};}
+      const parsed = parseNodeKey(normalized);
+      return parsed ? {...parsed, peerContext: peerContext(raw)} : undefined;
     };
     for (const [rawKey, rawValue] of Object.entries(records)) {
       const parsed = parseNodeKey(rawKey);
@@ -970,7 +977,7 @@ function parsePnpmLock(root: string, file: string, coordinates: DependencyCoordi
           }
         }
       }
-      nodes.set(`${parsed.name}\0${parsed.version}`, {
+      nodes.set(nodeIdentity(parsed.name, parsed.version, rawKey), {
         ...parsed,
         rawKey,
         dependencies,
@@ -1024,7 +1031,7 @@ function parsePnpmLock(root: string, file: string, coordinates: DependencyCoordi
       for (const dependency of [...node.dependencies].sort((left, right) =>
         `${left.name}\0${left.version}`.localeCompare(`${right.name}\0${right.version}`)
       )) {
-        const childKey = `${dependency.name}\0${dependency.version}`;
+        const childKey = `${dependency.name}\0${dependency.version}\0${dependency.peerContext}`;
         recordDependencyParent(parentsByNode, childKey, versionedIdentity(node.name, node.version));
         visit(
           childKey,
@@ -1043,7 +1050,7 @@ function parsePnpmLock(root: string, file: string, coordinates: DependencyCoordi
     for (const rawKey of Object.keys(records)) {
       const parsed = parseNodeKey(rawKey);
       if (!parsed) {continue;}
-      const nodeKey = `${parsed.name}\0${parsed.version}`;
+      const nodeKey = nodeIdentity(parsed.name, parsed.version, rawKey);
       const directValues = directDependencies.get(nodeKey) || [];
       const dependencyPaths = pathsByNode.get(nodeKey);
       const outputs: Array<PnpmDirectDependency | undefined> = directValues.length > 0 ? directValues : [undefined];
@@ -2168,6 +2175,9 @@ function pyprojectDeclaresDependencies(file: string): boolean {
       continue;
     }
     if (section === 'project' && /^dependencies\s*=/.test(line)) {return true;}
+    if (!section && /^(?:project|"project"|'project')\s*\.\s*(?:(?:dependencies|"dependencies"|'dependencies')\s*=|(?:optional-dependencies|"optional-dependencies"|'optional-dependencies')\s*\.)/.test(line)) {
+      return true;
+    }
   }
   return false;
 }
