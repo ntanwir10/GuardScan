@@ -324,6 +324,7 @@ function applicableFixedVersions(records: OsvVulnerability[], coordinate: Depend
     for (const affected of record.affected || []) {
       if (affected.package?.ecosystem !== coordinate.osvEcosystem || affected.package?.name !== coordinate.name) {continue;}
       for (const range of affected.ranges || []) {
+        if (range.type !== 'SEMVER') {continue;}
         let introduced: string | undefined;
         for (const event of range.events || []) {
           if (event.introduced) {introduced = semver.valid(event.introduced, { loose: true }) || undefined;}
@@ -337,6 +338,21 @@ function applicableFixedVersions(records: OsvVulnerability[], coordinate: Depend
     }
   }
   return [...applicable].sort(semver.compare);
+}
+
+function usesOnlySemverFixedRanges(records: OsvVulnerability[], coordinate: DependencyCoordinate): boolean {
+  let foundFixedRange = false;
+  for (const record of records) {
+    for (const affected of record.affected || []) {
+      if (affected.package?.ecosystem !== coordinate.osvEcosystem || affected.package?.name !== coordinate.name) {continue;}
+      for (const range of affected.ranges || []) {
+        if (!(range.events || []).some(event => event.fixed)) {continue;}
+        if (range.type !== 'SEMVER') {return false;}
+        foundFixedRange = true;
+      }
+    }
+  }
+  return foundFixedRange;
 }
 
 function remediationRecommendation(
@@ -400,7 +416,8 @@ function toVulnerability(
   const fixed = fixedVersions(group.records, coordinate);
   const recommendationFixed = coordinate.ecosystem === 'npm'
     ? fixed
-    : semver.valid(coordinate.exactVersion, { loose: true })
+    : semver.valid(coordinate.exactVersion, { loose: true }) &&
+        usesOnlySemverFixedRanges(group.records, coordinate)
       ? applicableFixedVersions(group.records, coordinate)
       : fixed;
   const first = [...group.records].sort((a, b) => a.id.localeCompare(b.id))[0];

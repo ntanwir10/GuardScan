@@ -687,7 +687,9 @@ function parseNpmLock(
         const child = resolution.node && npmRequestMatchesVersion(requested, resolution.node.version)
           ? resolution.node
           : undefined;
-        const edgeScope: DependencyScope = nestedRecord?.optional === true ? 'optional' : rootScope;
+        const edgeScope: DependencyScope = nestedRecord?.optional === true || child?.value.optional === true
+          ? 'optional'
+          : rootScope;
         if (child) {
           recordDependencyParent(parentsByNode, child.packagePath, identity(node));
           visit(child, `${currentPath} > ${identity(child)}`, nextStack, edgeScope);
@@ -1488,9 +1490,11 @@ function parseGoMod(
 
     const requirements: GoRequirement[] = [];
     const replacements: GoReplacement[] = [];
+    const exclusions: Array<{name: string; version: string}> = [];
     let declaredGoVersion: string | undefined;
     let inRequire = false;
     let inReplace = false;
+    let inExclude = false;
     for (const raw of fs.readFileSync(file, 'utf8').split(/\r?\n/)) {
       const line = raw.trim();
       const goDirective = line.match(/^go\s+(\d+)\.(\d+)(?:\.\d+)?$/);
@@ -1502,6 +1506,24 @@ function parseGoMod(
       if (inRequire && line === ')') {inRequire = false; continue;}
       if (line === 'replace (') {inReplace = true; continue;}
       if (inReplace && line === ')') {inReplace = false; continue;}
+      if (line === 'exclude (') {inExclude = true; continue;}
+      if (inExclude && line === ')') {inExclude = false; continue;}
+
+      const isExcludeLine = inExclude || /^exclude\s+/.test(line);
+      if (isExcludeLine) {
+        const content = line.replace(/^exclude\s+/, '').replace(/\s+\/\/.*$/, '').trim();
+        const parts = content.split(/\s+/).filter(Boolean);
+        if (parts.length !== 2 || !/^v\S+$/.test(parts[1])) {
+          errors.push({
+            file: rel,
+            code: 'UNSUPPORTED_FORMAT',
+            message: `Go exclusion is not supported: ${line.slice(0, 120)}`,
+          });
+        } else {
+          exclusions.push({name: parts[0], version: parts[1]});
+        }
+        continue;
+      }
 
       const isReplaceLine = inReplace || /^replace\s+/.test(line);
       if (isReplaceLine) {
@@ -1588,6 +1610,13 @@ function parseGoMod(
         ecosystem: 'go', osvEcosystem: 'Go', name, exactVersion: version,
         scope: 'runtime', direct: requirement.direct, manifestPath: rel, lockfilePath: rel,
         dependencyPaths: [replacement ? `${requirement.name} => ${name}` : name],
+      });
+    }
+    for (const exclusion of exclusions) {
+      errors.push({
+        file: rel,
+        code: 'UNSUPPORTED_FORMAT',
+        message: `Go exclusion ${exclusion.name} ${exclusion.version} requires effective module graph resolution; inventory is incomplete`,
       });
     }
     if (!declaredGoVersion) {

@@ -362,6 +362,26 @@ describe('collectPackageInventory', () => {
     ]);
   });
 
+  it('preserves optional scope for hoisted npm v1 requires edges', () => {
+    fs.writeFileSync(path.join(repository, 'package.json'), JSON.stringify({dependencies: {parent: '1.0.0'}}));
+    fs.writeFileSync(path.join(repository, 'package-lock.json'), JSON.stringify({
+      name: 'root', lockfileVersion: 1,
+      dependencies: {
+        parent: {version: '1.0.0', requires: {'optional-child': '^2.0.0'}},
+        'optional-child': {version: '2.1.0', optional: true},
+      },
+    }));
+
+    const inventory = collectPackageInventory(repository);
+
+    expect(inventory.coordinates.find(value => value.name === 'optional-child')).toMatchObject({
+      exactVersion: '2.1.0',
+      scope: 'optional',
+      dependencyPaths: ['parent@1.0.0 > optional-child@2.1.0'],
+    });
+    expect(inventory.errors).toEqual([]);
+  });
+
   it('rejects npm v1 requires edges whose nearest package record has the wrong version', () => {
     fs.writeFileSync(path.join(repository, 'package.json'), JSON.stringify({dependencies: {parent: '1.0.0'}}));
     fs.writeFileSync(path.join(repository, 'package-lock.json'), JSON.stringify({
@@ -1550,6 +1570,24 @@ describe('collectPackageInventory', () => {
         message: expect.stringMatching(/workspace|resolution|incomplete/i),
       }),
     ]));
+  });
+
+  it('fails closed when Go exclusions require effective module graph resolution', () => {
+    fs.writeFileSync(path.join(repository, 'go.mod'), [
+      'module example.test/app',
+      'go 1.22',
+      'require example.test/library v1.0.0',
+      'exclude example.test/library v1.0.0',
+    ].join('\n'));
+
+    const inventory = collectPackageInventory(repository);
+
+    expect(inventory.errors).toEqual([
+      expect.objectContaining({
+        file: 'go.mod', ecosystem: 'go', code: 'UNSUPPORTED_FORMAT',
+        message: expect.stringMatching(/exclusion|module graph|incomplete/i),
+      }),
+    ]);
   });
 
   it('does not let unrelated ancestor locks suppress nested Cargo or Bundler manifests', () => {

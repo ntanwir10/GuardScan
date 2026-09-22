@@ -100,11 +100,13 @@ describe('LicenseScanner inventory and SBOM contracts', () => {
 
   it('restricts executable license enrichment to exact inventory coordinates', () => {
     const packageInventory = inventory(repository, [
-      coordinate({ecosystem: 'pip', osvEcosystem: 'PyPI', name: 'Requests', exactVersion: '2.32.0'}),
+      coordinate({ecosystem: 'pip', osvEcosystem: 'PyPI', name: 'requests', exactVersion: '2.32.0'}),
+      coordinate({ecosystem: 'pip', osvEcosystem: 'PyPI', name: 'pyyaml', exactVersion: '6.0.2'}),
       coordinate({ecosystem: 'cargo', osvEcosystem: 'crates.io', name: 'third-party', exactVersion: '1.0.0'}),
     ]);
     const enriched = filterLicenseEnrichment([
       finding({source: 'pip', package: 'requests', version: '2.32.0'}),
+      finding({source: 'pip', package: 'PyYAML', version: '6.0.2'}),
       finding({source: 'pip', package: 'unrelated-global-package', version: '9.9.9'}),
       finding({source: 'cargo', package: 'workspace-member', version: '0.1.0'}),
       finding({source: 'cargo', package: 'third-party', version: '1.0.0'}),
@@ -112,6 +114,7 @@ describe('LicenseScanner inventory and SBOM contracts', () => {
 
     expect(enriched).toEqual([
       expect.objectContaining({source: 'pip', package: 'requests', version: '2.32.0'}),
+      expect.objectContaining({source: 'pip', package: 'pyyaml', version: '6.0.2'}),
       expect.objectContaining({source: 'cargo', package: 'third-party', version: '1.0.0'}),
     ]);
   });

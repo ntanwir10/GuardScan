@@ -102,6 +102,21 @@ describe('ScanEngine built-in coverage adapters', () => {
     ]));
   });
 
+  it('excludes hidden dependency environments from required pattern coverage', async () => {
+    const dependencyDirectory = path.join(repository, '.venv', 'lib', 'python3.12', 'site-packages');
+    fs.mkdirSync(dependencyDirectory, {recursive: true});
+    fs.writeFileSync(path.join(dependencyDirectory, 'third_party.py'), 'execute = new Function(untrusted_input)\n');
+
+    const result = await new ScanEngine().runSecurityScan({
+      repoPath: repository,
+      includeVulnerabilities: false,
+      includeGitHistory: false,
+    });
+
+    const patternResult = result.scannerResults.find(scanner => scanner.scanner === 'patterns');
+    expect(patternResult?.findings.some(finding => finding.file.includes('.venv'))).toBe(false);
+  });
+
   (process.platform === 'win32' ? it.skip : it)('replaces a report symlink without overwriting its target', async () => {
     const external = path.join(os.tmpdir(), `guardscan-report-target-${process.pid}-${Date.now()}.json`);
     const output = path.join(repository, 'guardscan-scan.json');

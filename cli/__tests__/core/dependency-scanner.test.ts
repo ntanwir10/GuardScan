@@ -1400,7 +1400,42 @@ describe('DependencyScanner OSV integration', () => {
     expect(results[0].vulnerabilities[0].recommendation).not.toMatch(/or later/i);
   });
 
-  it('recommends only a non-npm fix applicable to the installed version', async () => {
+  it('retains non-semver fixes from non-npm ecosystem ranges when the installed version looks like semver', async () => {
+    fs.rmSync(path.join(repository, 'package.json'));
+    fs.rmSync(path.join(repository, 'package-lock.json'));
+    fs.writeFileSync(path.join(repository, 'requirements.txt'), 'demo==1.0.0\n');
+    const record = {
+      schema_version: '1.6.0',
+      id: 'PYSEC-2026-post-release-fix',
+      modified: '2026-01-02T00:00:00Z',
+      summary: 'Fixture advisory',
+      affected: [{
+        package: { ecosystem: 'PyPI', name: 'demo' },
+        ranges: [{
+          type: 'ECOSYSTEM',
+          events: [{ introduced: '0' }, { fixed: '1.1.0.post1' }],
+        }],
+      }],
+    };
+    const fetchImpl = jest.fn(async (input: string | URL | Request) =>
+      String(input).endsWith('/v1/querybatch')
+        ? jsonResponse({ results: [{ vulns: [{ id: record.id, modified: record.modified }] }] })
+        : jsonResponse(record)
+    ) as typeof fetch;
+
+    const results = await new DependencyScanner().scan(repository, {
+      client: new OsvClient({ fetchImpl, retries: 0 }),
+      snapshotStore: new VulnerabilitySnapshotStore(cache),
+      enrichKnownExploited: false,
+    });
+
+    expect(results[0].vulnerabilities[0]).toMatchObject({
+      fixedVersions: ['1.1.0.post1'],
+      recommendation: expect.stringMatching(/1\.1\.0\.post1|published fixed versions/i),
+    });
+  });
+
+  it('recommends only an applicable fix for non-npm SEMVER ranges', async () => {
     fs.rmSync(path.join(repository, 'package.json'));
     fs.rmSync(path.join(repository, 'package-lock.json'));
     fs.writeFileSync(path.join(repository, 'requirements.txt'), 'demo==2.0.0\n');
@@ -1412,7 +1447,7 @@ describe('DependencyScanner OSV integration', () => {
       affected: [{
         package: { ecosystem: 'PyPI', name: 'demo' },
         ranges: [{
-          type: 'ECOSYSTEM',
+          type: 'SEMVER',
           events: [
             { introduced: '0' },
             { fixed: '1.5.0' },

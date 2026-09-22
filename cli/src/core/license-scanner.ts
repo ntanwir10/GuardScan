@@ -146,14 +146,24 @@ export function filterLicenseEnrichment(
   findings: LicenseFinding[],
   inventory: PackageInventory
 ): LicenseFinding[] {
-  const allowed = new Set(inventory.coordinates.map(coordinate => normalizedLicenseCoordinate(
-    coordinate.ecosystem === 'ruby' ? 'rubygems' : coordinate.ecosystem,
-    coordinate.name,
-    coordinate.exactVersion
-  )));
-  return findings.filter(finding => allowed.has(
-    normalizedLicenseCoordinate(finding.source, finding.package, finding.version)
-  ));
+  const allowed = new Map<string, DependencyCoordinate>();
+  for (const coordinate of inventory.coordinates) {
+    allowed.set(normalizedLicenseCoordinate(
+      coordinate.ecosystem === 'ruby' ? 'rubygems' : coordinate.ecosystem,
+      coordinate.name,
+      coordinate.exactVersion
+    ), coordinate);
+  }
+  return findings.flatMap(finding => {
+    const coordinate = allowed.get(normalizedLicenseCoordinate(
+      finding.source,
+      finding.package,
+      finding.version
+    ));
+    return coordinate
+      ? [{...finding, package: coordinate.name, version: coordinate.exactVersion}]
+      : [];
+  });
 }
 
 export class LicenseScanner {
