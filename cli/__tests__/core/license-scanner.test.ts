@@ -1,7 +1,12 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { LicenseFinding, LicenseScanner } from '../../src/core/license-scanner';
+import {
+  filterLicenseEnrichment,
+  LicenseFinding,
+  LicenseScanner,
+  parseNpmLicenseKey,
+} from '../../src/core/license-scanner';
 import { DependencyCoordinate, PackageInventory } from '../../src/core/package-inventory';
 import {
   ScanEngine,
@@ -86,6 +91,29 @@ describe('LicenseScanner inventory and SBOM contracts', () => {
 
     expect(report.findings).toHaveLength(1);
     expect(report.findings[0]).toMatchObject({ scope: 'runtime', direct: true });
+  });
+
+  it('preserves scoped npm package names from license-checker keys', () => {
+    expect(parseNpmLicenseKey('@scope/pkg@1.2.3')).toEqual({name: '@scope/pkg', version: '1.2.3'});
+    expect(parseNpmLicenseKey('plain@2.0.0')).toEqual({name: 'plain', version: '2.0.0'});
+  });
+
+  it('restricts executable license enrichment to exact inventory coordinates', () => {
+    const packageInventory = inventory(repository, [
+      coordinate({ecosystem: 'pip', osvEcosystem: 'PyPI', name: 'Requests', exactVersion: '2.32.0'}),
+      coordinate({ecosystem: 'cargo', osvEcosystem: 'crates.io', name: 'third-party', exactVersion: '1.0.0'}),
+    ]);
+    const enriched = filterLicenseEnrichment([
+      finding({source: 'pip', package: 'requests', version: '2.32.0'}),
+      finding({source: 'pip', package: 'unrelated-global-package', version: '9.9.9'}),
+      finding({source: 'cargo', package: 'workspace-member', version: '0.1.0'}),
+      finding({source: 'cargo', package: 'third-party', version: '1.0.0'}),
+    ], packageInventory);
+
+    expect(enriched).toEqual([
+      expect.objectContaining({source: 'pip', package: 'requests', version: '2.32.0'}),
+      expect.objectContaining({source: 'cargo', package: 'third-party', version: '1.0.0'}),
+    ]);
   });
 
   it('uses only exact installed npm metadata and resolves nested lockfile-v1 packages', async () => {

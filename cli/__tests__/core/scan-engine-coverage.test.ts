@@ -9,6 +9,7 @@ import {
   ScannerTask,
   ScannerTaskOutput,
   serializeScanResult,
+  writeScanResult,
 } from '../../src/core/scan-engine';
 import {apiScanner} from '../../src/core/api-scanner';
 import {complianceChecker} from '../../src/core/compliance-checker';
@@ -83,6 +84,58 @@ describe('ScanEngine built-in coverage adapters', () => {
       expect.objectContaining({file: fs.realpathSync(path.join(repository, '.env'))}),
       expect.objectContaining({file: fs.realpathSync(path.join(repository, 'config.yaml'))}),
     ]));
+  });
+
+  it('includes executable source beneath dot-directories in required pattern coverage', async () => {
+    const actionDirectory = path.join(repository, '.github', 'actions', 'fixture');
+    fs.mkdirSync(actionDirectory, {recursive: true});
+    fs.writeFileSync(path.join(actionDirectory, 'index.js'), 'const execute = new Function(userInput);\n');
+
+    const result = await new ScanEngine().runSecurityScan({
+      repoPath: repository,
+      includeVulnerabilities: false,
+      includeGitHistory: false,
+    });
+
+    expect(result.findings).toEqual(expect.arrayContaining([
+      expect.objectContaining({file: expect.stringContaining('.github/actions/fixture/index.js')}),
+    ]));
+  });
+
+  (process.platform === 'win32' ? it.skip : it)('replaces a report symlink without overwriting its target', async () => {
+    const external = path.join(os.tmpdir(), `guardscan-report-target-${process.pid}-${Date.now()}.json`);
+    const output = path.join(repository, 'guardscan-scan.json');
+    fs.writeFileSync(external, 'preserve me');
+    fs.symlinkSync(external, output);
+    const result = await new ScanEngine().runSecurityScan({repoPath: repository, scannerTasks: []});
+
+    try {
+      writeScanResult(result, 'json', output, repository);
+      expect(fs.lstatSync(output).isSymbolicLink()).toBe(false);
+      expect(JSON.parse(fs.readFileSync(output, 'utf8'))).toMatchObject({schemaVersion: 'guardscan.scan.v1'});
+      expect(fs.readFileSync(external, 'utf8')).toBe('preserve me');
+    } finally {
+      fs.rmSync(external, {force: true});
+    }
+  });
+
+  (process.platform === 'win32' ? it.skip : it)('rejects report paths through repository symlink directories', async () => {
+    const external = fs.mkdtempSync(path.join(os.tmpdir(), 'guardscan-report-directory-'));
+    const linkedDirectory = path.join(repository, 'reports');
+    fs.symlinkSync(external, linkedDirectory);
+    const result = await new ScanEngine().runSecurityScan({repoPath: repository, scannerTasks: []});
+
+    try {
+      expect(() => writeScanResult(
+        result,
+        'json',
+        path.join(linkedDirectory, 'scan.json'),
+        repository
+      )).toThrow(/symlink/i);
+      expect(fs.existsSync(path.join(external, 'scan.json'))).toBe(false);
+    } finally {
+      fs.rmSync(external, {recursive: true, force: true});
+    }
   });
 
   it('marks IaC coverage incomplete when selected YAML cannot be parsed', async () => {

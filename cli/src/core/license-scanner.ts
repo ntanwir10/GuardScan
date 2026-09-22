@@ -129,6 +129,33 @@ export interface CycloneDx17Component {
 const PACKAGE_VERSION = packageManifest.version;
 const SPDX_IDENTIFIERS = loadSpdxIdentifierRegistry();
 
+export function parseNpmLicenseKey(value: string): {name: string; version: string} {
+  const separator = value.lastIndexOf('@');
+  if (separator <= 0 || separator === value.length - 1) {
+    return {name: value, version: 'unknown'};
+  }
+  return {name: value.slice(0, separator), version: value.slice(separator + 1)};
+}
+
+function normalizedLicenseCoordinate(source: LicenseFinding['source'], name: string, version: string): string {
+  const normalizedName = source === 'pip' ? name.toLowerCase().replace(/[-_.]+/g, '-') : name;
+  return `${source}\0${normalizedName}\0${version}`;
+}
+
+export function filterLicenseEnrichment(
+  findings: LicenseFinding[],
+  inventory: PackageInventory
+): LicenseFinding[] {
+  const allowed = new Set(inventory.coordinates.map(coordinate => normalizedLicenseCoordinate(
+    coordinate.ecosystem === 'ruby' ? 'rubygems' : coordinate.ecosystem,
+    coordinate.name,
+    coordinate.exactVersion
+  )));
+  return findings.filter(finding => allowed.has(
+    normalizedLicenseCoordinate(finding.source, finding.package, finding.version)
+  ));
+}
+
 export class LicenseScanner {
   // License compatibility matrix
   private readonly COMPATIBILITY_MATRIX: Record<string, { compatible: string[]; incompatible?: string[] }> = {
@@ -169,14 +196,17 @@ export class LicenseScanner {
 
     if (!options.offline && options.runProjectCode === true) {
       // Scan different ecosystems
-      findings = this.mergeFindings([
-        ...findings,
+      const enrichment = filterLicenseEnrichment([
         ...await this.scanNpm(repoPath, options.networkIsolation),
         ...await this.scanPip(repoPath, options.networkIsolation),
         ...await this.scanGo(repoPath, options.networkIsolation),
         ...await this.scanCargo(repoPath, options.networkIsolation),
         ...await this.scanMaven(repoPath),
         ...await this.scanRubygems(repoPath, options.networkIsolation),
+      ], inventory);
+      findings = this.mergeFindings([
+        ...findings,
+        ...enrichment,
       ]);
     }
 
@@ -385,12 +415,12 @@ export class LicenseScanner {
       const licenses = JSON.parse(output);
 
       for (const [pkg, data] of Object.entries(licenses)) {
-        const [name, version] = pkg.split('@').filter(Boolean);
+        const {name, version} = parseNpmLicenseKey(pkg);
         const license = (data as any).licenses || 'Unknown';
 
         findings.push({
-          package: name || pkg,
-          version: version || 'unknown',
+          package: name,
+          version,
           license: this.normalizeLicense(license),
           category: this.categorizeLicense(license),
           risk: 'info', // Will be calculated later

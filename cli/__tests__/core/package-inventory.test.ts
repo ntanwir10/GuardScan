@@ -336,6 +336,52 @@ describe('collectPackageInventory', () => {
     expect(inventory.errors).toEqual([]);
   });
 
+  it('traverses hoisted npm v1 requires edges and reports missing required records', () => {
+    fs.writeFileSync(path.join(repository, 'package.json'), JSON.stringify({dependencies: {parent: '1.0.0'}}));
+    fs.writeFileSync(path.join(repository, 'package-lock.json'), JSON.stringify({
+      name: 'root', lockfileVersion: 1,
+      dependencies: {
+        parent: {version: '1.0.0', requires: {child: '^2.0.0', missing: '^3.0.0'}},
+        child: {version: '2.1.0'},
+      },
+    }));
+
+    const inventory = collectPackageInventory(repository);
+    const child = inventory.coordinates.find(value => value.name === 'child');
+
+    expect(child).toMatchObject({
+      exactVersion: '2.1.0',
+      dependencyPaths: ['parent@1.0.0 > child@2.1.0'],
+      dependencyParents: ['parent@1.0.0'],
+    });
+    expect(inventory.errors).toEqual([
+      expect.objectContaining({
+        file: 'package-lock.json', code: 'INVALID_MANIFEST', scope: 'runtime',
+        message: expect.stringMatching(/missing|requires|record/i),
+      }),
+    ]);
+  });
+
+  it('rejects npm v1 requires edges whose nearest package record has the wrong version', () => {
+    fs.writeFileSync(path.join(repository, 'package.json'), JSON.stringify({dependencies: {parent: '1.0.0'}}));
+    fs.writeFileSync(path.join(repository, 'package-lock.json'), JSON.stringify({
+      name: 'root', lockfileVersion: 1,
+      dependencies: {
+        parent: {version: '1.0.0', requires: {child: '^2.0.0'}},
+        child: {version: '1.5.0'},
+      },
+    }));
+
+    const inventory = collectPackageInventory(repository);
+
+    expect(inventory.errors).toEqual([
+      expect.objectContaining({
+        file: 'package-lock.json', code: 'INVALID_MANIFEST', scope: 'runtime',
+        message: expect.stringMatching(/child|\^2\.0\.0|matching/i),
+      }),
+    ]);
+  });
+
   it('reports stale direct requirements covered by npm, Yarn, and pnpm locks', () => {
     const fixtures = ['npm', 'yarn', 'pnpm'];
     for (const fixture of fixtures) {
@@ -1483,6 +1529,29 @@ describe('collectPackageInventory', () => {
     ]));
   });
 
+  it('fails closed when a Go workspace can override member module resolution', () => {
+    fs.writeFileSync(path.join(repository, 'go.work'), [
+      'go 1.22',
+      'use ./app',
+      'replace example.test/library v1.0.0 => example.test/library v1.0.1',
+    ].join('\n'));
+    fs.mkdirSync(path.join(repository, 'app'));
+    fs.writeFileSync(path.join(repository, 'app/go.mod'), [
+      'module example.test/app',
+      'go 1.22',
+      'require example.test/library v1.0.0',
+    ].join('\n'));
+
+    const inventory = collectPackageInventory(repository);
+
+    expect(inventory.errors).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        file: 'go.work', ecosystem: 'go', code: 'UNSUPPORTED_FORMAT',
+        message: expect.stringMatching(/workspace|resolution|incomplete/i),
+      }),
+    ]));
+  });
+
   it('does not let unrelated ancestor locks suppress nested Cargo or Bundler manifests', () => {
     fs.writeFileSync(path.join(repository, 'Cargo.toml'), '[package]\nname = "root"\nversion = "1.0.0"\n');
     fs.writeFileSync(path.join(repository, 'Cargo.lock'), 'version = 3\n');
@@ -1584,6 +1653,40 @@ GEM
     expect(inventory.coordinates).toEqual([
       expect.objectContaining({name: 'nokogiri', exactVersion: '1.18.10'}),
     ]);
+    expect(inventory.errors).toEqual([]);
+  });
+
+  it('resolves RubyGems prerelease ranges and duplicate platform variants', () => {
+    fs.writeFileSync(path.join(repository, 'Gemfile'), [
+      "source 'https://rubygems.org'",
+      "gem 'parent'",
+    ].join('\n'));
+    fs.writeFileSync(path.join(repository, 'Gemfile.lock'), [
+      'GEM',
+      '  remote: https://rubygems.org/',
+      '  specs:',
+      '    parent (1.0.0)',
+      '      child (>= 1.0.0.pre)',
+      '    child (1.0.0.pre-x86_64-linux)',
+      '    child (1.0.0.pre-arm64-darwin)',
+      '',
+      'PLATFORMS',
+      '  x86_64-linux',
+      '  arm64-darwin',
+      '',
+      'DEPENDENCIES',
+      '  parent',
+    ].join('\n'));
+
+    const inventory = collectPackageInventory(repository);
+    const children = inventory.coordinates.filter(value => value.name === 'child');
+
+    expect(children).toHaveLength(1);
+    expect(children[0]).toMatchObject({
+      exactVersion: '1.0.0.pre',
+      dependencyPaths: ['parent@1.0.0 > child@1.0.0.pre'],
+      dependencyParents: ['parent@1.0.0'],
+    });
     expect(inventory.errors).toEqual([]);
   });
 

@@ -55,6 +55,7 @@ const TARGET_FILES = new Set([
   'Pipfile',
   'Pipfile.lock',
   'go.mod',
+  'go.work',
   'Cargo.lock',
   'Cargo.toml',
   'Gemfile',
@@ -582,11 +583,28 @@ function parseNpmLock(
       errors.push({ file: rel, code: 'UNSUPPORTED_FORMAT', message: 'npm lockfile does not contain packages or dependencies' });
       return;
     }
-    const walk = (dependencies: Record<string, unknown>, chain: string[], nameChain: string[]): void => {
-      for (const [name, dependencyValue] of Object.entries(dependencies)) {
+    type LegacyNpmNode = {
+      packagePath: string;
+      name: string;
+      version: string;
+      value: Record<string, unknown>;
+      directDependency?: {scope: DependencyScope; requested: string};
+    };
+    const nodes = new Map<string, LegacyNpmNode>();
+    const packageRecordPaths = new Set<string>();
+    const collectNodes = (
+      dependencies: Record<string, unknown>,
+      parentPackagePath: string,
+      nameChain: string[]
+    ): void => {
+      for (const [installName, dependencyValue] of Object.entries(dependencies)) {
         const value = asRecord(dependencyValue);
         if (!value) {continue;}
-        const displayPath = [...nameChain, name];
+        const displayPath = [...nameChain, installName];
+        const packagePath = parentPackagePath
+          ? `${parentPackagePath}/node_modules/${installName}`
+          : `node_modules/${installName}`;
+        packageRecordPaths.add(packagePath);
         const unsupportedSource = unsupportedNpmSource(value);
         if (unsupportedSource) {
           errors.push({
@@ -596,9 +614,9 @@ function parseNpmLock(
           });
         }
         const version = typeof value.version === 'string' ? value.version : '';
-        const directDependency = chain.length === 0 ? direct.get(name) : undefined;
-        const directScope = directDependency && npmRequestMatchesVersion(directDependency.requested, version)
-          ? directDependency.scope
+        const directRequirement = parentPackagePath === '' ? direct.get(installName) : undefined;
+        const directDependency = directRequirement && npmRequestMatchesVersion(directRequirement.requested, version)
+          ? directRequirement
           : undefined;
         if (!unsupportedSource && !semver.valid(version, {loose: true})) {
           errors.push({
@@ -607,20 +625,103 @@ function parseNpmLock(
             message: `npm package ${displayPath.join(' > ')} has no valid exact version${version ? `: ${version.slice(0, 120)}` : ''}`,
           });
         }
-        const dependencyPath = [...chain, semver.valid(version, {loose: true}) ? `${name}@${version}` : name];
-        if (!unsupportedSource && semver.valid(version, { loose: true })) {
-          addCoordinate(coordinates, {
-            ecosystem: 'npm', osvEcosystem: 'npm', name, exactVersion: version,
-            scope: value.optional === true ? 'optional' : value.dev === true ? 'development' : directScope || 'runtime',
-            direct: directScope !== undefined,
-            manifestPath: manifest, lockfilePath: rel, dependencyPaths: [dependencyPath.join(' > ')],
+        if (!unsupportedSource && semver.valid(version, {loose: true})) {
+          nodes.set(packagePath, {
+            packagePath,
+            name: typeof value.name === 'string' ? value.name : installName,
+            version,
+            value,
+            ...(directDependency ? {directDependency} : {}),
           });
         }
         const nestedDependencies = asRecord(value.dependencies);
-        if (nestedDependencies) {walk(nestedDependencies, dependencyPath, displayPath);}
+        if (nestedDependencies) {collectNodes(nestedDependencies, packagePath, displayPath);}
       }
     };
-    walk(rootDependencies, [], []);
+    collectNodes(rootDependencies, '', []);
+
+    const resolveReachablePackageRecord = (
+      parent: LegacyNpmNode,
+      installName: string
+    ): {exists: boolean; node?: LegacyNpmNode} => {
+      let directory = parent.packagePath;
+      for (;;) {
+        const candidatePath = path.posix.normalize(
+          directory ? `${directory}/node_modules/${installName}` : `node_modules/${installName}`
+        );
+        if (packageRecordPaths.has(candidatePath)) {
+          const node = nodes.get(candidatePath);
+          return node ? {exists: true, node} : {exists: true};
+        }
+        if (!directory) {return {exists: false};}
+        const marker = directory.lastIndexOf('/node_modules/');
+        directory = marker >= 0 ? directory.slice(0, marker) : '';
+      }
+    };
+    const pathsByNode = new Map<string, Set<string>>();
+    const parentsByNode = new Map<string, Set<string>>();
+    const scopeByNode = new Map<string, DependencyScope>();
+    const missingEdges = new Set<string>();
+    const identity = (node: LegacyNpmNode): string => `${node.name}@${node.version}`;
+    const visit = (
+      node: LegacyNpmNode,
+      currentPath: string,
+      stack: Set<string>,
+      rootScope: DependencyScope
+    ): void => {
+      const existingScope = scopeByNode.get(node.packagePath) || 'unknown';
+      const scopeIncreased = scopeRank[rootScope] > scopeRank[existingScope];
+      if (scopeIncreased) {scopeByNode.set(node.packagePath, rootScope);}
+      if (!recordDependencyPath(pathsByNode, node.packagePath, currentPath) && !scopeIncreased) {return;}
+      if (stack.has(node.packagePath)) {return;}
+      const nextStack = new Set(stack).add(node.packagePath);
+      const requires = asRecord(node.value.requires) || {};
+      const nested = asRecord(node.value.dependencies) || {};
+      for (const dependencyName of [...new Set([...Object.keys(requires), ...Object.keys(nested)])].sort()) {
+        const requestedValue = requires[dependencyName];
+        const nestedRecord = asRecord(nested[dependencyName]);
+        const requested = typeof requestedValue === 'string'
+          ? requestedValue
+          : typeof nestedRecord?.version === 'string' ? nestedRecord.version : '*';
+        const resolution = resolveReachablePackageRecord(node, dependencyName);
+        const child = resolution.node && npmRequestMatchesVersion(requested, resolution.node.version)
+          ? resolution.node
+          : undefined;
+        const edgeScope: DependencyScope = nestedRecord?.optional === true ? 'optional' : rootScope;
+        if (child) {
+          recordDependencyParent(parentsByNode, child.packagePath, identity(node));
+          visit(child, `${currentPath} > ${identity(child)}`, nextStack, edgeScope);
+        } else if (resolution.exists && !resolution.node) {
+          // A malformed or unsupported reachable record already emitted the
+          // more precise fail-closed diagnostic while the tree was collected.
+        } else {
+          const edge = `${node.packagePath}\0${dependencyName}\0${requested}\0${edgeScope}`;
+          if (missingEdges.has(edge)) {continue;}
+          missingEdges.add(edge);
+          errors.push({
+            file: rel,
+            code: 'INVALID_MANIFEST',
+            message: `npm v1 requires ${dependencyName} ${requested} from ${identity(node)} but no matching package record is reachable`,
+            scope: edgeScope,
+          });
+        }
+      }
+    };
+    for (const node of nodes.values()) {
+      if (node.directDependency) {visit(node, identity(node), new Set(), node.directDependency.scope);}
+    }
+    for (const node of nodes.values()) {
+      addCoordinate(coordinates, {
+        ecosystem: 'npm', osvEcosystem: 'npm', name: node.name, exactVersion: node.version,
+        scope: node.directDependency?.scope || scopeByNode.get(node.packagePath) ||
+          (node.value.optional === true ? 'optional' : node.value.dev === true ? 'development' : 'runtime'),
+        direct: node.directDependency !== undefined,
+        manifestPath: manifest,
+        lockfilePath: rel,
+        dependencyPaths: [...(pathsByNode.get(node.packagePath) || [node.packagePath])].sort(),
+        dependencyParents: [...(parentsByNode.get(node.packagePath) || [])].sort(),
+      });
+    }
   } catch (error: unknown) {
     errors.push({ file: rel, code: 'INVALID_MANIFEST', message: `Unable to parse npm lockfile: ${errorMessage(error)}` });
   }
@@ -1764,6 +1865,61 @@ function parseCargoLock(root: string, file: string, coordinates: DependencyCoord
   }
 }
 
+function rubyVersionSegments(version: string): Array<number | string> {
+  return (version.toLowerCase().replace(/-/g, '.pre.').match(/[0-9]+|[a-z]+/g) || [])
+    .map(segment => /^\d+$/.test(segment) ? Number(segment) : segment);
+}
+
+function compareRubyVersions(leftVersion: string, rightVersion: string): number {
+  const left = rubyVersionSegments(leftVersion);
+  const right = rubyVersionSegments(rightVersion);
+  const length = Math.max(left.length, right.length);
+  for (let index = 0; index < length; index++) {
+    const leftValue = left[index];
+    const rightValue = right[index];
+    if (leftValue === undefined && rightValue === undefined) {return 0;}
+    if (leftValue === undefined) {
+      if (typeof rightValue === 'string') {return 1;}
+      if (rightValue === 0) {continue;}
+      return -1;
+    }
+    if (rightValue === undefined) {
+      if (typeof leftValue === 'string') {return -1;}
+      if (leftValue === 0) {continue;}
+      return 1;
+    }
+    if (typeof leftValue === 'number' && typeof rightValue === 'string') {return 1;}
+    if (typeof leftValue === 'string' && typeof rightValue === 'number') {return -1;}
+    if (leftValue < rightValue) {return -1;}
+    if (leftValue > rightValue) {return 1;}
+  }
+  return 0;
+}
+
+function rubyRequirementMatches(requested: string | undefined, version: string): boolean {
+  if (!requested) {return true;}
+  return requested.split(',').every(raw => {
+    const match = raw.trim().match(/^(~>|>=|<=|!=|=|>|<)?\s*([^\s]+)$/);
+    if (!match) {return false;}
+    const operator = match[1] || '=';
+    const required = match[2];
+    const comparison = compareRubyVersions(version, required);
+    if (operator === '=') {return comparison === 0;}
+    if (operator === '!=') {return comparison !== 0;}
+    if (operator === '>') {return comparison > 0;}
+    if (operator === '>=') {return comparison >= 0;}
+    if (operator === '<') {return comparison < 0;}
+    if (operator === '<=') {return comparison <= 0;}
+    const numeric = [...required.matchAll(/\d+/g)].map(value => Number(value[0]));
+    if (numeric.length === 0 || comparison < 0) {return false;}
+    const bumpIndex = numeric.length >= 2 ? numeric.length - 2 : 0;
+    const upper = numeric.slice(0, bumpIndex + 1);
+    upper[bumpIndex] += 1;
+    while (upper.length < numeric.length) {upper.push(0);}
+    return compareRubyVersions(version, upper.join('.')) < 0;
+  });
+}
+
 function parseGemfileLock(
   root: string,
   file: string,
@@ -1827,6 +1983,7 @@ function parseGemfileLock(
     let source: 'GEM' | 'GIT' | 'PATH' | undefined;
     const reportedUnsupported = new Set<'GIT' | 'PATH'>();
     const nodes: GemNode[] = [];
+    const nodesByKey = new Map<string, GemNode>();
     let currentNode: GemNode | undefined;
     for (const line of lines) {
       const section = line.match(/^(GEM|GIT|PATH)\s*$/)?.[1] as 'GEM' | 'GIT' | 'PATH' | undefined;
@@ -1852,8 +2009,13 @@ function parseGemfileLock(
         const platform = [...platforms].sort((left, right) => right.length - left.length)
           .find(candidate => match[2].endsWith(`-${candidate}`));
         const version = platform ? match[2].slice(0, -(platform.length + 1)) : match[2];
-        currentNode = {key: `${match[1]}\0${version}`, name: match[1], version, dependencies: []};
-        nodes.push(currentNode);
+        const key = `${match[1]}\0${version}`;
+        currentNode = nodesByKey.get(key);
+        if (!currentNode) {
+          currentNode = {key, name: match[1], version, dependencies: []};
+          nodesByKey.set(key, currentNode);
+          nodes.push(currentNode);
+        }
         continue;
       }
       const dependency = line.match(/^\s{6}([A-Za-z0-9_.-]+)(?: \(([^)]+)\))?/);
@@ -1862,25 +2024,6 @@ function parseGemfileLock(
       }
     }
 
-    const rubyRequirementMatches = (requested: string | undefined, version: string): boolean => {
-      if (!requested) {return true;}
-      const candidate = semver.valid(version, {loose: true});
-      if (!candidate) {return requested.trim().replace(/^=+\s*/, '') === version;}
-      return requested.split(',').every(raw => {
-        const requirement = raw.trim();
-        const pessimistic = requirement.match(/^~>\s*(\d+)(?:\.(\d+))?(?:\.(\d+))?/);
-        if (pessimistic) {
-          const parts = pessimistic.slice(1).filter(value => value !== undefined).map(Number);
-          const lower = `${parts[0]}.${parts[1] || 0}.${parts[2] || 0}`;
-          const upper = parts.length >= 3
-            ? `${parts[0]}.${(parts[1] || 0) + 1}.0`
-            : `${parts[0] + 1}.0.0`;
-          return semver.gte(candidate, lower) && semver.lt(candidate, upper);
-        }
-        const normalized = requirement.replace(/^=\s*/, '');
-        return semver.satisfies(candidate, normalized, {includePrerelease: true, loose: true});
-      });
-    };
     const dependencyRoots = new Map<string, string | undefined>();
     let inDependencies = false;
     for (const line of lines) {
@@ -2146,6 +2289,7 @@ function ecosystemForInventoryFile(file: string): PackageEcosystem | undefined {
     case 'Pipfile.lock':
       return 'pip';
     case 'go.mod':
+    case 'go.work':
       return 'go';
     case 'Gemfile.lock':
     case 'Gemfile':
@@ -2337,6 +2481,12 @@ export function collectPackageInventory(repoPath: string = process.cwd()): Packa
       });
     }
     else if (name === 'go.mod') {parseGoMod(root, file, coordinates, errors);}
+    else if (name === 'go.work') {
+      errors.push({
+        file: relative(root, file), ecosystem: 'go', code: 'UNSUPPORTED_FORMAT',
+        message: 'Go workspace resolution is unsupported; go.work use and replace directives make dependency coverage incomplete',
+      });
+    }
     else if (name === 'Cargo.lock') {parseCargoLock(root, file, coordinates, errors);}
     else if (name === 'Gemfile.lock') {parseGemfileLock(root, file, coordinates, errors);}
     else if (name === 'Cargo.toml' && !hasCoveringCargoLock(root, file, inventoryFiles)) {
