@@ -929,6 +929,16 @@ function toSarif(
       },
     });
   }
+  const policyResult = context.policyResult;
+  if (policyResult?.failed) {
+    notifications.set('policy', {
+      level: 'error',
+      message: {
+        text: `GuardScan policy ${policyResult.outcome}: ${policyResult.reasons.join('; ') || 'policy failed'}`,
+      },
+      descriptor: {id: 'guardscan.policy'},
+    });
+  }
   const overallStatus = context.executionStatus || result.status;
 
   return {
@@ -950,6 +960,11 @@ function toSarif(
             properties: {
               knownExploitedEnrichment: collectKnownExploitedEnrichment(result),
               snapshotPersistenceError: collectSnapshotPersistenceError(result),
+              policy: policyResult ? {
+                status: policyResult.outcome,
+                reasons: policyResult.reasons,
+                exitCode: policyResult.exitCode,
+              } : undefined,
             },
             toolExecutionNotifications: notifications.size > 0
               ? [...notifications.values()]

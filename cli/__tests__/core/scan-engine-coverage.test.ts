@@ -190,6 +190,34 @@ describe('ScanEngine built-in coverage adapters', () => {
     expect(sarif.runs[0].invocations[0].properties.snapshotPersistenceError).toEqual(snapshotPersistenceError);
   });
 
+  it('serializes policy failures and reasons into SARIF', async () => {
+    const result = await new ScanEngine().runSecurityScan({repoPath: repository, scannerTasks: []});
+    const sarif = JSON.parse(serializeScanResult(result, 'sarif', repository, {
+      executionStatus: 'complete',
+      policyResult: {
+        failed: true,
+        operationalFailure: false,
+        outcome: 'policy-failed',
+        exitCode: 1,
+        reasons: ['1 test(s) failed', '2 lint error(s) found'],
+      },
+    }));
+    const invocation = sarif.runs[0].invocations[0];
+
+    expect(invocation.properties.policy).toEqual({
+      status: 'policy-failed',
+      exitCode: 1,
+      reasons: ['1 test(s) failed', '2 lint error(s) found'],
+    });
+    expect(invocation.toolExecutionNotifications).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        level: 'error',
+        descriptor: {id: 'guardscan.policy'},
+        message: {text: expect.stringMatching(/1 test.*2 lint error/i)},
+      }),
+    ]));
+  });
+
   it('returns KEV evidence from a clean built-in dependency scan', async () => {
     const enrichment = {status: 'fresh-cache' as const, source: 'cisa-kev' as const};
     const snapshotPersistenceError = {code: 'SNAPSHOT_PERSIST_FAILED', message: 'read-only cache'};

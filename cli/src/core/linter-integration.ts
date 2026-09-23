@@ -420,7 +420,7 @@ export class LinterIntegration {
       // Parse go vet output: file.go:line:column: message
       const lines = output.split('\n').filter(l => l.trim());
       for (const line of lines) {
-        const match = line.match(/^(.+?\.go):(\d+):(\d+):\s*(.+)$/);
+        const match = line.match(/^(?:vet:\s*)?(.+?\.go):(\d+):(\d+):\s*(.+)$/);
         if (match) {
           const [, file, lineNum, column, message] = match;
           results.push({
@@ -434,7 +434,7 @@ export class LinterIntegration {
           });
         }
       }
-      if (results.length === 0 && execution.status > 1) {throw reportError(linter, execution);}
+      if (results.length === 0 && execution.status !== 0) {throw reportError(linter, execution);}
 
       return {
         linter,

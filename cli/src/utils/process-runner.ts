@@ -105,6 +105,19 @@ export function sanitizeChildEnvironment(
       } catch { /* rustup is not installed in the inherited home */ }
     }
   }
+  // Go derives GOMODCACHE from GOPATH, whose default is rooted in HOME. Preserve an
+  // existing default module cache before isolating HOME so offline project checks
+  // can reuse already-downloaded modules without exposing unrelated home state.
+  if ((command === 'go' || command === 'golangci-lint') &&
+      !sanitized.GOMODCACHE && !sanitized.GOPATH) {
+    const inheritedHome = environment.HOME || environment.USERPROFILE;
+    if (inheritedHome) {
+      const moduleCache = path.join(inheritedHome, 'go', 'pkg', 'mod');
+      try {
+        if (fs.statSync(moduleCache).isDirectory()) {sanitized.GOMODCACHE = moduleCache;}
+      } catch { /* the inherited home has no default Go module cache */ }
+    }
+  }
   return sanitized;
 }
 

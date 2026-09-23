@@ -124,6 +124,98 @@ describe('collectPackageInventory', () => {
     expect(inventory.errors).toEqual([]);
   });
 
+  it('traverses resolvable npm peer dependencies with peer scope semantics', () => {
+    fs.writeFileSync(path.join(repository, 'package.json'), JSON.stringify({dependencies: {parent: '1.0.0'}}));
+    fs.writeFileSync(path.join(repository, 'package-lock.json'), JSON.stringify({
+      name: 'fixture', lockfileVersion: 3,
+      packages: {
+        '': {dependencies: {parent: '1.0.0'}},
+        'node_modules/parent': {
+          name: 'parent', version: '1.0.0',
+          peerDependencies: {peer: '^2.0.0', 'optional-peer': '^3.0.0', missing: '^4.0.0'},
+          peerDependenciesMeta: {'optional-peer': {optional: true}},
+        },
+        'node_modules/peer': {name: 'peer', version: '2.1.0'},
+        'node_modules/optional-peer': {name: 'optional-peer', version: '3.1.0'},
+      },
+    }));
+
+    const inventory = collectPackageInventory(repository);
+
+    expect(inventory.coordinates.find(coordinate => coordinate.name === 'peer')).toMatchObject({
+      scope: 'runtime',
+      dependencyPaths: ['parent@1.0.0 > peer@2.1.0'],
+      dependencyParents: ['parent@1.0.0'],
+    });
+    expect(inventory.coordinates.find(coordinate => coordinate.name === 'optional-peer')).toMatchObject({
+      scope: 'optional',
+      dependencyPaths: ['parent@1.0.0 > optional-peer@3.1.0'],
+      dependencyParents: ['parent@1.0.0'],
+    });
+    expect(inventory.errors).toEqual([]);
+  });
+
+  it('keeps runtime direct scope while honoring optional dependency overrides', () => {
+    fs.writeFileSync(path.join(repository, 'package.json'), JSON.stringify({
+      dependencies: {'runtime-dev': '1.0.0', 'optional-override': '2.0.0'},
+      devDependencies: {'runtime-dev': '1.0.0', 'optional-override': '2.0.0'},
+      optionalDependencies: {'optional-override': '2.0.0'},
+    }));
+    fs.writeFileSync(path.join(repository, 'package-lock.json'), JSON.stringify({
+      name: 'fixture', lockfileVersion: 3,
+      packages: {
+        '': {
+          dependencies: {'runtime-dev': '1.0.0', 'optional-override': '2.0.0'},
+          devDependencies: {'runtime-dev': '1.0.0', 'optional-override': '2.0.0'},
+          optionalDependencies: {'optional-override': '2.0.0'},
+        },
+        'node_modules/runtime-dev': {name: 'runtime-dev', version: '1.0.0'},
+        'node_modules/optional-override': {name: 'optional-override', version: '2.0.0', optional: true},
+      },
+    }));
+
+    const inventory = collectPackageInventory(repository);
+
+    expect(inventory.coordinates.find(coordinate => coordinate.name === 'runtime-dev')).toMatchObject({
+      direct: true, scope: 'runtime',
+    });
+    expect(inventory.coordinates.find(coordinate => coordinate.name === 'optional-override')).toMatchObject({
+      direct: true, scope: 'optional',
+    });
+    expect(inventory.errors).toEqual([]);
+  });
+
+  it('keeps runtime direct scope for duplicate npm workspace declarations', () => {
+    fs.writeFileSync(path.join(repository, 'package.json'), JSON.stringify({
+      name: 'root', workspaces: ['packages/app'],
+    }));
+    fs.mkdirSync(path.join(repository, 'packages/app'), {recursive: true});
+    fs.writeFileSync(path.join(repository, 'packages/app/package.json'), JSON.stringify({
+      name: 'app',
+      dependencies: {shared: '1.0.0'},
+      devDependencies: {shared: '1.0.0'},
+    }));
+    fs.writeFileSync(path.join(repository, 'package-lock.json'), JSON.stringify({
+      name: 'root', lockfileVersion: 3,
+      packages: {
+        '': {name: 'root', workspaces: ['packages/app']},
+        'packages/app': {
+          name: 'app', version: '1.0.0',
+          dependencies: {shared: '1.0.0'},
+          devDependencies: {shared: '1.0.0'},
+        },
+        'node_modules/shared': {name: 'shared', version: '1.0.0'},
+      },
+    }));
+
+    const inventory = collectPackageInventory(repository);
+
+    expect(inventory.coordinates.find(coordinate => coordinate.name === 'shared')).toMatchObject({
+      direct: true, scope: 'runtime', manifestPath: 'packages/app/package.json',
+    });
+    expect(inventory.errors).toEqual([]);
+  });
+
   it('rejects non-registry npm lock sources while retaining registry tarballs', () => {
     fs.writeFileSync(path.join(repository, 'package.json'), JSON.stringify({
       dependencies: {registry: '1.0.0', tarball: '1.0.0', gitdep: '1.0.0'},

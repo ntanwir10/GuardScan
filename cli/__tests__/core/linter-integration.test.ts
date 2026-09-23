@@ -172,6 +172,45 @@ describe('LinterIntegration isolation failures', () => {
     );
   });
 
+  it('fails when go vet exits nonzero without a recognized diagnostic', async () => {
+    fs.rmSync(path.join(repository, 'fixture.py'));
+    fs.writeFileSync(path.join(repository, 'go.mod'), 'module example.test/fixture\n');
+    mockedRunProcess
+      .mockReturnValueOnce({
+        command: 'golangci-lint', args: [], status: 1, stdout: '', stderr: 'configuration failed',
+        signal: null, timedOut: false,
+      })
+      .mockReturnValueOnce({
+        command: 'go', args: [], status: 1, stdout: '',
+        stderr: 'vet: package failed to load', signal: null, timedOut: false,
+      });
+
+    await expect(new LinterIntegration().runAll(repository)).rejects.toThrow(
+      /Go lint execution failed.*Go Vet/i
+    );
+  });
+
+  it('parses prefixed go vet diagnostics without including the prefix in the file path', async () => {
+    fs.rmSync(path.join(repository, 'fixture.py'));
+    fs.writeFileSync(path.join(repository, 'go.mod'), 'module example.test/fixture\n');
+    mockedRunProcess
+      .mockReturnValueOnce({
+        command: 'golangci-lint', args: [], status: 1, stdout: '', stderr: 'configuration failed',
+        signal: null, timedOut: false,
+      })
+      .mockReturnValueOnce({
+        command: 'go', args: [], status: 1, stdout: '',
+        stderr: 'vet: ./fixture.go:2:8: expected expression', signal: null, timedOut: false,
+      });
+
+    await expect(new LinterIntegration().runAll(repository)).resolves.toEqual([
+      expect.objectContaining({
+        linter: 'Go Vet',
+        results: [expect.objectContaining({file: path.join(repository, 'fixture.go')})],
+      }),
+    ]);
+  });
+
   it('preserves later linter reports when partial execution is allowed', async () => {
     fs.writeFileSync(path.join(repository, 'package.json'), JSON.stringify({
       devDependencies: { eslint: '^9.0.0' },

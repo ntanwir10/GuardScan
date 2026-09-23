@@ -156,6 +156,20 @@ function readJson(file: string): unknown {
   return JSON.parse(fs.readFileSync(file, 'utf8')) as unknown;
 }
 
+function setNpmDirectRequirement<T extends {scope: DependencyScope}>(
+  target: Map<string, T>,
+  name: string,
+  value: T
+): void {
+  const existing = target.get(name);
+  // npm treats optionalDependencies as an override. Runtime declarations take
+  // precedence over duplicate devDependencies, regardless of traversal order.
+  if (!existing || value.scope === 'optional' ||
+      (value.scope === 'runtime' && existing.scope === 'development')) {
+    target.set(name, value);
+  }
+}
+
 function npmDirectDependencyRequirements(
   directory: string
 ): Map<string, {scope: DependencyScope; requested: string}> {
@@ -172,7 +186,8 @@ function npmDirectDependencyRequirements(
     ];
     for (const [dependencies, scope] of groups) {
       for (const [name, requested] of Object.entries(dependencies)) {
-        if (typeof requested === 'string') {result.set(name, {scope, requested});}
+        if (typeof requested !== 'string') {continue;}
+        setNpmDirectRequirement(result, name, {scope, requested});
       }
     }
   } catch {
@@ -402,11 +417,13 @@ function parseNpmLock(
         for (const [name, requested] of Object.entries(dependencies || {})) {
           if (typeof requested !== 'string') {continue;}
           const value = {scope, manifestPath, requested};
-          workspace.set(name, value);
-          workspaceDirect.push({name, ...value});
+          setNpmDirectRequirement(workspace, name, value);
         }
       }
-      if (workspace.size > 0) {directByWorkspace.set(packagePath, workspace);}
+      if (workspace.size > 0) {
+        directByWorkspace.set(packagePath, workspace);
+        for (const [name, value] of workspace) {workspaceDirect.push({name, ...value});}
+      }
     }
     const scopeRank: Record<DependencyScope, number> = {unknown: 0, development: 1, optional: 2, runtime: 3};
     const workspaceDirectFor = (
@@ -531,12 +548,25 @@ function parseNpmLock(
         const nextStack = new Set(stack).add(node.packagePath);
         const requiredDependencies = new Set(Object.keys(asRecord(node.value.dependencies) || {}));
         const optionalDependencies = new Set(Object.keys(asRecord(node.value.optionalDependencies) || {}));
-        for (const dependencyName of [...new Set([...requiredDependencies, ...optionalDependencies])].sort()) {
-          const edgeScope = requiredDependencies.has(dependencyName) ? rootScope : 'optional';
+        const peerDependencies = new Set(Object.keys(asRecord(node.value.peerDependencies) || {}));
+        const peerMetadata = asRecord(node.value.peerDependenciesMeta) || {};
+        for (const dependencyName of [
+          ...new Set([...requiredDependencies, ...optionalDependencies, ...peerDependencies]),
+        ].sort()) {
+          const peerOnly = peerDependencies.has(dependencyName) &&
+            !requiredDependencies.has(dependencyName) && !optionalDependencies.has(dependencyName);
+          const optionalPeer = asRecord(peerMetadata[dependencyName])?.optional === true;
+          const edgeScope = optionalDependencies.has(dependencyName) || (peerOnly && optionalPeer)
+            ? 'optional'
+            : rootScope;
           const child = resolveInstalledNode(node.packagePath, dependencyName);
           if (child) {
             recordDependencyParent(parentsByNode, child.packagePath, identity(node));
             visit(child, `${currentPath} > ${identity(child)}`, nextStack, edgeScope);
+          } else if (peerOnly) {
+            // Peers can legitimately be supplied outside this lockfile. Traverse
+            // resolvable peers, but do not turn an absent peer into lock corruption.
+            continue;
           } else {
             const missingKey = `${node.packagePath}\0${dependencyName}\0${edgeScope}`;
             if (!missingEdges.has(missingKey)) {

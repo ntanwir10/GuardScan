@@ -371,6 +371,24 @@ describe("isolated tool discovery", () => {
       fs.rmSync(home, {recursive: true, force: true});
     }
   });
+
+  it("preserves an existing default Go module cache for Go tooling", () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "guardscan-go-home-"));
+    try {
+      const moduleCache = path.join(home, "go", "pkg", "mod");
+      fs.mkdirSync(moduleCache, {recursive: true});
+      const environment = {HOME: home, PATH: "/usr/bin"};
+
+      for (const command of ["go", "golangci-lint"]) {
+        const sanitized = sanitizeChildEnvironment(environment, "/isolated", command);
+        expect(sanitized.HOME).toBe("/isolated");
+        expect(sanitized.GOMODCACHE).toBe(moduleCache);
+      }
+      expect(sanitizeChildEnvironment(environment, "/isolated", "npm").GOMODCACHE).toBeUndefined();
+    } finally {
+      fs.rmSync(home, {recursive: true, force: true});
+    }
+  });
 });
 
 describe("APIClient endpoint validation", () => {
