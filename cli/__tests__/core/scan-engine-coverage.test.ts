@@ -102,8 +102,8 @@ describe('ScanEngine built-in coverage adapters', () => {
     ]));
   });
 
-  it('excludes hidden dependency environments from required pattern coverage', async () => {
-    const dependencyDirectory = path.join(repository, '.venv', 'lib', 'python3.12', 'site-packages');
+  it.each(['.venv', 'venv'])('excludes root %s dependency environments from required pattern coverage', async environment => {
+    const dependencyDirectory = path.join(repository, environment, 'lib', 'python3.12', 'site-packages');
     fs.mkdirSync(dependencyDirectory, {recursive: true});
     fs.writeFileSync(path.join(dependencyDirectory, 'third_party.py'), 'execute = new Function(untrusted_input)\n');
 
@@ -114,7 +114,24 @@ describe('ScanEngine built-in coverage adapters', () => {
     });
 
     const patternResult = result.scannerResults.find(scanner => scanner.scanner === 'patterns');
-    expect(patternResult?.findings.some(finding => finding.file.includes('.venv'))).toBe(false);
+    expect(patternResult?.findings.some(finding => finding.file.includes(environment))).toBe(false);
+  });
+
+  it('includes first-party source in an ordinary nested venv directory', async () => {
+    const sourceDirectory = path.join(repository, 'src', 'venv');
+    fs.mkdirSync(sourceDirectory, {recursive: true});
+    fs.writeFileSync(path.join(sourceDirectory, 'security.py'), 'execute = new Function(untrusted_input)\n');
+
+    const result = await new ScanEngine().runSecurityScan({
+      repoPath: repository,
+      includeVulnerabilities: false,
+      includeGitHistory: false,
+    });
+
+    const patternResult = result.scannerResults.find(scanner => scanner.scanner === 'patterns');
+    expect(patternResult?.findings).toEqual(expect.arrayContaining([
+      expect.objectContaining({file: expect.stringContaining('src/venv/security.py')}),
+    ]));
   });
 
   (process.platform === 'win32' ? it.skip : it)('replaces a report symlink without overwriting its target', async () => {

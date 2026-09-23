@@ -621,7 +621,7 @@ export class ScanEngine {
           'build/**',
           'coverage/**',
           '**/.venv/**',
-          '**/venv/**',
+          'venv/**',
           '**/.tox/**',
           '**/.nox/**',
           '**/.cache/**',
