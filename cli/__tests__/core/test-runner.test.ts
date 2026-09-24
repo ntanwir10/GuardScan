@@ -70,6 +70,28 @@ describe('TestRunner discovery and empty-suite behavior', () => {
     expect(mockedRunProcess).not.toHaveBeenCalled();
   });
 
+  it('runs Create React App suites through the Jest adapter', async () => {
+    fs.writeFileSync(path.join(repository, 'package.json'), JSON.stringify({
+      scripts: {test: 'react-scripts test'},
+      dependencies: {'react-scripts': '^5.0.1'},
+    }));
+    mockedRunProcess.mockImplementation((_command, args) => {
+      const reportIndex = args.indexOf('--outputFile');
+      fs.writeFileSync(args[reportIndex + 1], JSON.stringify({
+        success: true,
+        testResults: [{
+          name: 'fixture.test.js', status: 'passed',
+          assertionResults: [{status: 'passed', title: 'fixture'}],
+        }],
+      }));
+      return processResult(0);
+    });
+
+    await expect(new TestRunner().runTests(repository)).resolves.toEqual([
+      expect.objectContaining({framework: 'Jest', totalTests: 1, passed: 1, failed: 0}),
+    ]);
+  });
+
   it.each([false, true])('treats pytest exit 5 as an empty suite (json report: %s)', async withReport => {
     fs.writeFileSync(path.join(repository, 'pytest.ini'), '[pytest]\n');
     mockedRunProcess.mockImplementation((_command, args) => {

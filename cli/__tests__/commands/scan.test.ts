@@ -113,6 +113,30 @@ describe('runQualityAnalysis partial tool execution', () => {
     expect(quality.checks.tests).toMatchObject({status: 'succeeded', data: []});
   });
 
+  it('requires output from configured Create React App Jest suites', async () => {
+    fs.writeFileSync(path.join(repository, 'package.json'), JSON.stringify({
+      scripts: {test: 'react-scripts test'},
+      dependencies: {'react-scripts': '^5.0.1'},
+    }));
+    jest.spyOn(testRunner, 'runTests').mockResolvedValue([]);
+    jest.spyOn(linterIntegration, 'runAll').mockResolvedValue([]);
+    jest.spyOn(codeMetricsAnalyzer, 'analyze').mockResolvedValue([]);
+    jest.spyOn(codeSmellDetector, 'detect').mockResolvedValue([]);
+
+    const quality = await runQualityAnalysis(repository, {}, {
+      offline: false,
+      runProjectCode: true,
+      isolateProjectNetwork: false,
+      includeCve: false,
+      allowPartial: false,
+    });
+
+    expect(quality.checks.tests).toMatchObject({
+      status: 'failed',
+      error: {code: 'TOOL_OUTPUT_UNAVAILABLE'},
+    });
+  });
+
   it.each([
     ['Flake8', '.flake8', '[flake8]\nmax-line-length = 100\n'],
     ['Pylint', '.pylintrc', '[MAIN]\n'],

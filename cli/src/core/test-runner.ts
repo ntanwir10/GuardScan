@@ -75,6 +75,35 @@ interface GoTestEvent {
   Output?: string;
 }
 
+export function hasConfiguredJestRunner(repoPath: string): boolean {
+  const packageJsonPath = path.join(repoPath, 'package.json');
+  if (!fs.existsSync(packageJsonPath)) {return false;}
+
+  let packageJson: {
+    scripts?: {test?: unknown};
+    devDependencies?: Record<string, unknown>;
+    dependencies?: Record<string, unknown>;
+  };
+  try {
+    packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf-8')) as typeof packageJson;
+  } catch {
+    return false;
+  }
+
+  const rawTestScript = packageJson.scripts?.test;
+  const testScript = typeof rawTestScript === 'string' ? rawTestScript.trim() : '';
+  if (!testScript || /no test specified/i.test(testScript)) {return false;}
+  if (/\b(?:vitest|mocha)\b/i.test(testScript) && !/\bjest\b/i.test(testScript)) {return false;}
+  if (/\bjest\b/i.test(testScript)) {return true;}
+
+  const dependencies = {...packageJson.dependencies, ...packageJson.devDependencies};
+  if (dependencies.jest) {return true;}
+  if (/\breact-scripts\s+test\b/i.test(testScript) && dependencies['react-scripts']) {return true;}
+  if (['jest.config.js', 'jest.config.cjs', 'jest.config.mjs', 'jest.config.ts']
+    .some(file => fs.existsSync(path.join(repoPath, file)))) {return true;}
+  return false;
+}
+
 export class TestRunner {
   /**
    * Auto-detect and run tests for the project
@@ -144,41 +173,7 @@ export class TestRunner {
    * Check if Jest is configured
    */
   private hasJest(repoPath: string): boolean {
-    const packageJsonPath = path.join(repoPath, 'package.json');
-    if (!fs.existsSync(packageJsonPath)) {return false;}
-
-    let packageJson: {
-      scripts?: { test?: unknown };
-      devDependencies?: Record<string, unknown>;
-      dependencies?: Record<string, unknown>;
-    };
-    try {
-      packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf-8')) as typeof packageJson;
-    } catch {
-      return false;
-    }
-
-    const rawTestScript = packageJson.scripts?.test;
-    const testScript = typeof rawTestScript === 'string'
-      ? rawTestScript.trim()
-      : '';
-    if (!testScript || /no test specified/i.test(testScript)) {return false;}
-    if (/\b(?:vitest|mocha)\b/i.test(testScript) && !/\bjest\b/i.test(testScript)) {
-      return false;
-    }
-    if (/\bjest\b/i.test(testScript)) {return true;}
-    if (packageJson.devDependencies?.jest || packageJson.dependencies?.jest) {
-      return true;
-    }
-    if (packageJson.devDependencies?.vitest || packageJson.dependencies?.vitest ||
-        packageJson.devDependencies?.mocha || packageJson.dependencies?.mocha) {
-      return false;
-    }
-    if (['jest.config.js', 'jest.config.cjs', 'jest.config.mjs', 'jest.config.ts']
-      .some(file => fs.existsSync(path.join(repoPath, file)))) {
-      return true;
-    }
-    return false;
+    return hasConfiguredJestRunner(repoPath);
   }
 
   /**

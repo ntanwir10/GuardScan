@@ -11,7 +11,7 @@ import { configManager } from '../core/config';
 import { filterPackageInventory, PackageEcosystem } from '../core/package-inventory';
 import { snapshotCoversInventory } from '../core/vulnerability-cache';
 import { resolveExecutionPolicy } from '../utils/execution-policy';
-import { atomicReplaceText } from '../utils/private-state';
+import { atomicReplaceText, prepareAtomicOutputTarget } from '../utils/private-state';
 
 type VulnerabilityFormat = 'table' | 'json' | 'sarif';
 type FailureSeverity = 'critical' | 'high' | 'medium' | 'low';
@@ -99,7 +99,8 @@ export function createVulnerabilityCommand(scanner: DependencyScanner = dependen
             : renderTable(results);
 
         if (options.output) {
-          atomicReplaceText(path.resolve(options.output), `${rendered}\n`, {privateParent: false});
+          const target = prepareAtomicOutputTarget(path.resolve(options.output), repoPath);
+          atomicReplaceText(target, `${rendered}\n`, {privateParent: false});
           if (parsed.format === 'table') {console.log(chalk.green(`Vulnerability report written to ${path.resolve(options.output)}`));}
         } else {
           console.log(rendered);

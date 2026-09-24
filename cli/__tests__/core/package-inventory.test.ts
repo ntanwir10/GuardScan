@@ -44,6 +44,43 @@ describe('collectPackageInventory', () => {
     ]));
   });
 
+  it('does not treat standalone constraint files as installed requirements', () => {
+    fs.mkdirSync(path.join(repository, 'requirements'));
+    fs.writeFileSync(path.join(repository, 'requirements/base.txt'), 'flask==3.1.0\n');
+    fs.writeFileSync(path.join(repository, 'requirements/constraints.txt'), 'urllib3==2.5.0\n');
+
+    const inventory = collectPackageInventory(repository);
+
+    expect(inventory.coordinates).toEqual([
+      expect.objectContaining({ecosystem: 'pip', name: 'flask', exactVersion: '3.1.0'}),
+    ]);
+    expect(inventory.manifests).not.toContain('requirements/constraints.txt');
+  });
+
+  it('fails closed when a requirements root relies on unapplied constraints', () => {
+    fs.writeFileSync(path.join(repository, 'requirements.txt'), [
+      '-c requirements/constraints.txt',
+      'flask==3.1.0',
+    ].join('\n'));
+    fs.mkdirSync(path.join(repository, 'requirements'));
+    fs.writeFileSync(path.join(repository, 'requirements/constraints.txt'), 'urllib3==2.5.0\n');
+
+    const inventory = collectPackageInventory(repository);
+
+    expect(inventory.coordinates).toEqual([
+      expect.objectContaining({ecosystem: 'pip', name: 'flask', exactVersion: '3.1.0'}),
+    ]);
+    expect(inventory.coordinates).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({name: 'urllib3'}),
+    ]));
+    expect(inventory.errors).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        code: 'UNSUPPORTED_FORMAT',
+        message: expect.stringMatching(/constraint directives are not applied/i),
+      }),
+    ]));
+  });
+
   it('handles cycles between Python requirement includes once', () => {
     fs.writeFileSync(path.join(repository, 'requirements.txt'), '-r requirements/base.txt\nroot==1.0.0\n');
     fs.mkdirSync(path.join(repository, 'requirements'));

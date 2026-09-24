@@ -2,10 +2,13 @@ import * as fs from 'fs';
 import * as crypto from 'crypto';
 import * as path from 'path';
 import { execFileSync } from 'child_process';
+import { StringDecoder } from 'string_decoder';
 import fastGlob from 'fast-glob';
 import { SECURITY_CONSTANTS } from '../constants/security-constants';
 
 const MAX_SECRET_FILE_BYTES = 2 * 1024 * 1024;
+const MAX_SECRET_LINE_FRAGMENT_CHARS = 256 * 1024;
+const SECRET_LINE_OVERLAP_CHARS = 1024;
 const SECRET_DISCOVERY_IGNORES = [
   '**/.git/**', '**/.guardscan/**', '**/node_modules/**', '**/vendor/**', '**/dist/**',
   '**/build/**', '**/coverage/**', '**/.venv/**', '**/venv/**', '**/target/**',
@@ -14,17 +17,6 @@ const SECRET_DISCOVERY_IGNORES = [
 function isWithinRoot(root: string, candidate: string): boolean {
   const relative = path.relative(root, candidate);
   return relative === '' || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative));
-}
-
-function hasNulBytePrefix(file: string, size: number): boolean {
-  const sample = Buffer.alloc(Math.min(size, 8 * 1024));
-  const descriptor = fs.openSync(file, 'r');
-  try {
-    const bytesRead = fs.readSync(descriptor, sample, 0, sample.length, 0);
-    return sample.subarray(0, bytesRead).includes(0);
-  } finally {
-    fs.closeSync(descriptor);
-  }
 }
 
 export interface SecretFinding {
@@ -89,8 +81,7 @@ export class SecretsDetector {
         const stat = fs.statSync(file);
         if (!stat.isFile()) {continue;}
         if (stat.size > MAX_SECRET_FILE_BYTES) {
-          if (hasNulBytePrefix(file, stat.size)) {continue;}
-          onSkippedInput();
+          findings.push(...await this.scanLargeFile(file));
           continue;
         }
         const raw = fs.readFileSync(file);
@@ -175,16 +166,67 @@ export class SecretsDetector {
     const lines = content.split('\n');
 
     for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
-
-      // Check specific patterns first
-      findings.push(...this.checkPatterns(file, line, i + 1));
-
-      // Check for high-entropy strings
-      findings.push(...this.checkEntropy(file, line, i + 1));
+      findings.push(...this.scanLine(file, lines[i], i + 1));
     }
 
     return findings;
+  }
+
+  private scanLine(file: string, line: string, lineNum: number): SecretFinding[] {
+    return [
+      ...this.checkPatterns(file, line, lineNum),
+      ...this.checkEntropy(file, line, lineNum),
+    ];
+  }
+
+  /** Stream readable oversized text while bounding memory for minified single-line inputs. */
+  private async scanLargeFile(file: string): Promise<SecretFinding[]> {
+    const findings: SecretFinding[] = [];
+    const seen = new Set<string>();
+    const decoder = new StringDecoder('utf8');
+    const stream = fs.createReadStream(file, {highWaterMark: 64 * 1024});
+    let pending = '';
+    let lineNumber = 1;
+    const record = (fragment: string): void => {
+      for (const finding of this.scanLine(file, fragment.replace(/\r$/, ''), lineNumber)) {
+        const key = [finding.type, finding.line, finding.secret, finding.severity].join('\0');
+        if (seen.has(key)) {continue;}
+        seen.add(key);
+        findings.push(finding);
+      }
+    };
+    const drain = (): void => {
+      for (;;) {
+        const newline = pending.indexOf('\n');
+        if (newline >= 0 && newline <= MAX_SECRET_LINE_FRAGMENT_CHARS) {
+          record(pending.slice(0, newline));
+          pending = pending.slice(newline + 1);
+          lineNumber += 1;
+          continue;
+        }
+        if (pending.length > MAX_SECRET_LINE_FRAGMENT_CHARS) {
+          record(pending.slice(0, MAX_SECRET_LINE_FRAGMENT_CHARS));
+          pending = pending.slice(MAX_SECRET_LINE_FRAGMENT_CHARS - SECRET_LINE_OVERLAP_CHARS);
+          continue;
+        }
+        break;
+      }
+    };
+
+    try {
+      for await (const rawChunk of stream) {
+        const chunk = Buffer.isBuffer(rawChunk) ? rawChunk : Buffer.from(rawChunk);
+        if (chunk.includes(0)) {return [];}
+        pending += decoder.write(chunk);
+        drain();
+      }
+      pending += decoder.end();
+      drain();
+      if (pending) {record(pending);}
+      return findings;
+    } finally {
+      stream.destroy();
+    }
   }
 
   /**

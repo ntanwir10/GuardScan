@@ -210,6 +210,29 @@ describe('vuln database commands', () => {
     }
   });
 
+  (process.platform === 'win32' ? it.skip : it)('rejects output paths through repository symlink directories', async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'guardscan-vuln-parent-'));
+    const repository = path.join(directory, 'repository');
+    const external = path.join(directory, 'external');
+    fs.mkdirSync(repository);
+    fs.mkdirSync(external);
+    fs.symlinkSync(external, path.join(repository, 'reports'));
+    const scanner = {
+      scan: jest.fn<DependencyScanner['scan']>().mockResolvedValue([scanResult()]),
+    } as unknown as DependencyScanner;
+
+    try {
+      await createVulnerabilityCommand(scanner).parseAsync([
+        repository, '--format', 'json', '--output', path.join(repository, 'reports/vuln.json'),
+      ], {from: 'user'});
+      expect(process.exitCode).toBe(2);
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringMatching(/symlink/i));
+      expect(fs.existsSync(path.join(external, 'vuln.json'))).toBe(false);
+    } finally {
+      fs.rmSync(directory, {recursive: true, force: true});
+    }
+  });
+
   it('fails a partial vulnerability result unless partial coverage is allowed', async () => {
     mockedConfigManager.loadOrInit.mockReturnValue({
       clientId: 'test', provider: 'none', telemetryEnabled: false, offlineMode: false,

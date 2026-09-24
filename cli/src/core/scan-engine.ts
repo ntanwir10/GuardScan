@@ -4,7 +4,7 @@ import * as os from 'os';
 import * as path from 'path';
 import fastGlob from 'fast-glob';
 import { Finding } from '../utils/reporter';
-import { atomicReplaceText } from '../utils/private-state';
+import { atomicReplaceText, prepareAtomicOutputTarget } from '../utils/private-state';
 import { apiScanner } from './api-scanner';
 import { complianceChecker } from './compliance-checker';
 import { dependencyScanner } from './dependency-scanner';
@@ -828,51 +828,9 @@ export function writeScanResult(
   repoRoot: string = process.cwd(),
   context: ScanSerializationContext = {}
 ): string {
-  const requestedPath = path.resolve(outputPath);
-  const requestedParent = path.dirname(requestedPath);
-  assertNoRepositorySymlinkParents(requestedParent, repoRoot);
-  fs.mkdirSync(requestedParent, {recursive: true});
-  const resolvedParent = fs.realpathSync(requestedParent);
-  const resolvedRepoRoot = fs.realpathSync(repoRoot);
-  const relativeParent = path.relative(resolvedRepoRoot, resolvedParent);
-  const requestedRelative = path.relative(path.resolve(repoRoot), requestedParent);
-  const requestedInsideRepository = requestedRelative === '' || (
-    requestedRelative !== '..' &&
-    !requestedRelative.startsWith(`..${path.sep}`) &&
-    !path.isAbsolute(requestedRelative)
-  );
-  if (requestedInsideRepository && (
-    relativeParent === '..' || relativeParent.startsWith(`..${path.sep}`) || path.isAbsolute(relativeParent)
-  )) {
-    throw new Error('Scan report output directory resolves outside the repository through a symlink');
-  }
-  const target = path.join(resolvedParent, path.basename(requestedPath));
+  const target = prepareAtomicOutputTarget(outputPath, repoRoot);
   atomicReplaceText(target, serializeScanResult(result, format, repoRoot, context), {privateParent: false});
   return outputPath;
-}
-
-function assertNoRepositorySymlinkParents(outputParent: string, repoRoot: string): void {
-  const absoluteRoot = path.resolve(repoRoot);
-  const relativeParent = path.relative(absoluteRoot, outputParent);
-  if (relativeParent === '..' || relativeParent.startsWith(`..${path.sep}`) || path.isAbsolute(relativeParent)) {
-    return;
-  }
-  let current = absoluteRoot;
-  for (const segment of relativeParent.split(path.sep).filter(Boolean)) {
-    current = path.join(current, segment);
-    try {
-      const stat = fs.lstatSync(current);
-      if (stat.isSymbolicLink()) {
-        throw new Error(`Scan report output directory is a symlink: ${current}`);
-      }
-      if (!stat.isDirectory()) {
-        throw new Error(`Scan report output parent is not a directory: ${current}`);
-      }
-    } catch (error: unknown) {
-      if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') {break;}
-      throw error;
-    }
-  }
 }
 
 function normalizeEnvelopeSection(

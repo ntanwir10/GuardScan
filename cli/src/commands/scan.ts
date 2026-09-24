@@ -1,6 +1,4 @@
 import chalk from 'chalk';
-import * as fs from 'fs';
-import * as path from 'path';
 import { ConfigManager } from '../core/config';
 import { codeMetricsAnalyzer } from '../core/code-metrics';
 import { codeSmellDetector } from '../core/code-smells';
@@ -21,7 +19,7 @@ import {
   writeScanResult,
 } from '../core/scan-engine';
 import { createTelemetryRecorder } from '../core/telemetry';
-import { testRunner } from '../core/test-runner';
+import { hasConfiguredJestRunner, testRunner } from '../core/test-runner';
 import { handleCommandError } from '../utils/error-handler';
 import { reporter, ReviewResult } from '../utils/reporter';
 import { EffectiveExecutionPolicy, resolveExecutionPolicy } from '../utils/execution-policy';
@@ -245,7 +243,7 @@ export async function runQualityAnalysis(
   const tests = requireConfiguredToolOutput(
     'tests',
     markRetainedExecutionErrors('tests', rawTests),
-    hasConfiguredNodeTool(repoPath, ['jest'])
+    hasConfiguredJestRunner(repoPath)
   );
   const lint = requireConfiguredToolOutput(
     'lint',
@@ -299,25 +297,6 @@ function markRetainedExecutionErrors(name: string, check: CheckResult): CheckRes
       retryable: true,
     },
   };
-}
-
-function hasConfiguredNodeTool(repoPath: string, tools: string[]): boolean {
-  const packagePath = path.join(repoPath, 'package.json');
-  if (!fs.existsSync(packagePath)) {
-    return false;
-  }
-  try {
-    const manifest = JSON.parse(fs.readFileSync(packagePath, 'utf-8')) as {
-      dependencies?: Record<string, string>;
-      devDependencies?: Record<string, string>;
-    };
-    return tools.some(tool => Boolean(
-      manifest.dependencies?.[tool] || manifest.devDependencies?.[tool]
-    ));
-  } catch {
-    // Inventory scanning reports malformed package manifests separately.
-    return false;
-  }
 }
 
 function requireConfiguredToolOutput(

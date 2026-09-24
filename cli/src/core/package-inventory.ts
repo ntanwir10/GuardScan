@@ -72,6 +72,7 @@ const MAX_DEPENDENCY_PATHS_PER_COORDINATE = 64;
 
 function isRequirementsInventoryFile(file: string): boolean {
   const basename = path.basename(file).toLowerCase();
+  if (/^constraints?(?:[-_.][a-z0-9_.-]+)?\.txt$/.test(basename)) {return false;}
   return /^requirements(?:[-_.][a-z0-9_.-]+)?\.txt$/.test(basename) ||
     (path.basename(path.dirname(file)).toLowerCase() === 'requirements' && basename.endsWith('.txt'));
 }
@@ -1469,6 +1470,22 @@ function parseRequirements(
         } else {
           parseRequirements(root, resolved, coordinates, errors, visited);
         }
+        continue;
+      }
+      const constraint = line.match(/^(?:-c|--constraint)(?:=|\s+)(.+)$/);
+      if (constraint) {
+        const requested = constraint[1].trim();
+        const candidate = path.resolve(path.dirname(canonicalFile), requested);
+        let resolved: string | undefined;
+        try {resolved = fs.realpathSync(candidate);} catch { /* Report incomplete coverage below. */ }
+        errors.push({
+          file: rel,
+          code: 'UNSUPPORTED_FORMAT',
+          message: resolved && isWithinRoot(root, resolved)
+            ? `Python constraint directives are not applied automatically: ${requested}`
+            : `Python constraint file cannot be resolved within the repository: ${requested}`,
+          ecosystem: 'pip',
+        });
         continue;
       }
       if (/^(?:-e(?:\s|$)|--editable(?:=|\s))/.test(line)) {

@@ -114,6 +114,22 @@ describe('SecretsDetector', () => {
 
       expect(onSkippedInput).not.toHaveBeenCalled();
     });
+
+    it('scans oversized single-line text without degrading secret coverage', async () => {
+      const largeText = path.join(testDir, 'large-lock.json');
+      fs.writeFileSync(
+        largeText,
+        `${'a'.repeat(2 * 1024 * 1024 + 1)} GITHUB_TOKEN=ghp_1234567890abcdefghijklmnopqrstuvwxyz`
+      );
+      const onSkippedInput = jest.fn();
+
+      const findings = await detector.detectInFiles([largeText], onSkippedInput);
+
+      expect(findings).toEqual(expect.arrayContaining([
+        expect.objectContaining({type: 'GitHub Token', file: largeText, line: 1}),
+      ]));
+      expect(onSkippedInput).not.toHaveBeenCalled();
+    });
   });
 
   describe('scanGitHistory', () => {

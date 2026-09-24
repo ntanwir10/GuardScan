@@ -224,7 +224,7 @@
     "warnings": 0
   },
   "src/core/secrets-detector.ts": {
-    "errors": 3,
+    "errors": 2,
     "warnings": 0
   },
   "src/core/test-runner.ts": {

@@ -102,6 +102,50 @@ export function atomicReplaceText(
   }
 }
 
+/** Prepare an atomic-write target while rejecting symlinked directories inside an untrusted root. */
+export function prepareAtomicOutputTarget(file: string, untrustedRoot: string): string {
+  const requestedPath = path.resolve(file);
+  const requestedParent = path.dirname(requestedPath);
+  const absoluteRoot = path.resolve(untrustedRoot);
+  const relativeParent = path.relative(absoluteRoot, requestedParent);
+  const requestedInsideRoot = relativeParent === '' || (
+    relativeParent !== '..' &&
+    !relativeParent.startsWith(`..${path.sep}`) &&
+    !path.isAbsolute(relativeParent)
+  );
+
+  if (requestedInsideRoot) {
+    let current = absoluteRoot;
+    for (const segment of relativeParent.split(path.sep).filter(Boolean)) {
+      current = path.join(current, segment);
+      try {
+        const stat = fs.lstatSync(current);
+        if (stat.isSymbolicLink()) {
+          throw new Error(`output directory is a symlink: ${current}`);
+        }
+        if (!stat.isDirectory()) {
+          throw new Error(`output parent is not a directory: ${current}`);
+        }
+      } catch (error: unknown) {
+        if (isNodeError(error) && error.code === 'ENOENT') {break;}
+        throw error;
+      }
+    }
+  }
+
+  fs.mkdirSync(requestedParent, {recursive: true});
+  const resolvedParent = fs.realpathSync(requestedParent);
+  if (requestedInsideRoot) {
+    const resolvedRoot = fs.realpathSync(absoluteRoot);
+    const resolvedRelative = path.relative(resolvedRoot, resolvedParent);
+    if (resolvedRelative === '..' || resolvedRelative.startsWith(`..${path.sep}`) ||
+        path.isAbsolute(resolvedRelative)) {
+      throw new Error('output directory resolves outside the repository through a symlink');
+    }
+  }
+  return path.join(resolvedParent, path.basename(requestedPath));
+}
+
 /** Atomically publish a file without replacing an existing identity. */
 export function publishJsonNoReplace(file: string, value: unknown): boolean {
   ensurePrivateDirectory(path.dirname(file));
