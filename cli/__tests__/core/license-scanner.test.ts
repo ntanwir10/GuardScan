@@ -167,6 +167,35 @@ describe('LicenseScanner inventory and SBOM contracts', () => {
     ]));
   });
 
+  it('rates LGPL as weak copyleft rather than critical for proprietary projects', async () => {
+    fs.mkdirSync(path.join(repository, 'node_modules', 'fixture'), { recursive: true });
+    fs.writeFileSync(path.join(repository, 'node_modules', 'fixture', 'package.json'), JSON.stringify({
+      name: 'fixture', version: '1.0.0', license: 'LGPL-2.1',
+    }));
+
+    const report = await new LicenseScanner().scan(repository, 'proprietary', {
+      offline: true,
+      inventory: inventory(repository, [coordinate({direct: true, scope: 'runtime'})]),
+    });
+
+    expect(report.findings[0]).toMatchObject({
+      license: 'LGPL-2.1-only',
+      category: 'weak-copyleft',
+      risk: 'medium',
+    });
+  });
+
+  it.each([
+    ['GPL-1.0-only', 'unknown'],
+    ['MIT AND GPL-3.0-only', 'permissive'],
+  ])('retains critical risk for strong copyleft expression %s', (license, category) => {
+    const scanner = new LicenseScanner() as unknown as {
+      calculateRisk(value: string, classification: string, projectType: string): string;
+    };
+
+    expect(scanner.calculateRisk(license, category, 'proprietary')).toBe('critical');
+  });
+
   it('resolves installed npm metadata relative to an independent project lockfile', async () => {
     fs.mkdirSync(path.join(repository, 'node_modules', 'fixture'), { recursive: true });
     fs.mkdirSync(path.join(repository, 'packages', 'app', 'node_modules', 'fixture'), { recursive: true });

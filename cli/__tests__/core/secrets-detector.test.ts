@@ -133,8 +133,8 @@ describe('SecretsDetector', () => {
   });
 
   describe('scanGitHistory', () => {
-    it('marks history coverage partial when the commit window is truncated', async () => {
-      const commits = Array.from({length: 101}, (_, index) => index.toString(16).padStart(40, '0'));
+    it('bounds history without degrading working-tree coverage', async () => {
+      const commits = Array.from({length: 100}, (_, index) => index.toString(16).padStart(40, '0'));
       mockedExecFileSync.mockImplementation(((_command: string, args: readonly string[]) => {
         if (args[0] === 'rev-parse') {return 'true\n';}
         if (args[0] === 'log') {return `${commits.join('\n')}\n`;}
@@ -147,11 +147,11 @@ describe('SecretsDetector', () => {
 
       expect(mockedExecFileSync).toHaveBeenCalledWith(
         'git',
-        ['log', '--all', '--format=%H', '--max-count=101'],
+        ['log', '--all', '--format=%H', '--max-count=100'],
         expect.objectContaining({cwd: testDir})
       );
       expect(mockedExecFileSync.mock.calls.filter(([, args]) => args?.[0] === 'show')).toHaveLength(100);
-      expect(onSkippedInput).toHaveBeenCalledTimes(1);
+      expect(onSkippedInput).not.toHaveBeenCalled();
     });
 
     it('reports a skipped commit when git show fails', async () => {

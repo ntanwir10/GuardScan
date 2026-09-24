@@ -1499,7 +1499,7 @@ function parseRequirements(
       }
       if (line.startsWith('-')) {continue;}
       const match = line.match(
-        /^([A-Za-z0-9_.-]+)(?:\s*\[\s*[A-Za-z0-9_.-]+(?:\s*,\s*[A-Za-z0-9_.-]+)*\s*\])?\s*==\s*([A-Za-z0-9][A-Za-z0-9._!+-]*)(?:\s|;|$)/
+        /^([A-Za-z0-9_.-]+)(?:\s*\[\s*[A-Za-z0-9_.-]+(?:\s*,\s*[A-Za-z0-9_.-]+)*\s*\])?\s*===?\s*([A-Za-z0-9][A-Za-z0-9._!+-]*)(?:\s|;|$)/
       );
       if (!match) {
         errors.push({

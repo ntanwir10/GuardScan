@@ -1717,6 +1717,19 @@ describe('collectPackageInventory', () => {
     ]);
   });
 
+  it('accepts PEP 440 arbitrary equality pins', () => {
+    fs.writeFileSync(path.join(repository, 'requirements.txt'), 'demo===1.0-custom\n');
+
+    const inventory = collectPackageInventory(repository);
+
+    expect(inventory.coordinates).toEqual([
+      expect.objectContaining({ecosystem: 'pip', name: 'demo', exactVersion: '1.0-custom'}),
+    ]);
+    expect(inventory.errors).toEqual([
+      expect.objectContaining({file: 'requirements.txt', code: 'UNSUPPORTED_FORMAT'}),
+    ]);
+  });
+
   it('reports Cargo and Gemfile manifests without covering locks', () => {
     fs.writeFileSync(path.join(repository, 'Cargo.toml'), '[package]\nname = "fixture"\nversion = "1.0.0"\n');
     fs.writeFileSync(path.join(repository, 'Gemfile'), "source 'https://rubygems.org'\ngem 'rack'\n");

@@ -146,7 +146,7 @@ export async function scanCommand(options: ScanOptions): Promise<void> {
       licenseReport: licenseReportPromise,
     });
     const qualityPromise = runQualityAnalysis(repoInfo.path, options, executionPolicy);
-    const sbomPromise = createSbomSection(licenseReportPromise, inventory);
+    const sbomPromise = createSbomSection(licenseReportPromise, inventory, repoInfo.name);
 
     const [securityResult, quality, sbom] = await Promise.all([
       securityPromise,
@@ -336,9 +336,10 @@ async function runCheck(name: string, operation: () => Promise<unknown>): Promis
   }
 }
 
-async function createSbomSection(
+export async function createSbomSection(
   report: Promise<LicenseReport>,
-  inventory: PackageInventory
+  inventory: PackageInventory,
+  projectName: string
 ): Promise<SbomSection> {
   try {
     const resolved = await report;
@@ -346,7 +347,7 @@ async function createSbomSection(
     return {
       status: incomplete ? 'partial' : 'succeeded',
       format: 'spdx',
-      document: licenseScanner.generateSBOM(resolved.findings, 'spdx', 'repository'),
+      document: licenseScanner.generateSBOM(resolved.findings, 'spdx', projectName),
       error: incomplete
         ? {
           code: 'INVENTORY_INCOMPLETE',

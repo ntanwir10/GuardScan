@@ -87,4 +87,13 @@ describe('testCommand execution policy', () => {
       'Test command'
     );
   });
+
+  it('routes ordinary test runner failures to command error handling', async () => {
+    const failure = new Error('Jest exited 1 without producing a result');
+    jest.mocked(testRunner.runTests).mockRejectedValueOnce(failure);
+
+    await testCommand({});
+
+    expect(handleCommandError).toHaveBeenCalledWith(failure, 'Test command');
+  });
 });

@@ -746,8 +746,9 @@ export class LicenseScanner {
 
     // Critical risks
     if (projectType === 'proprietary') {
-      // GPL/AGPL in proprietary project is critical
-      if (normalized.includes('GPL') || normalized.includes('AGPL')) {
+      // Strong copyleft in a proprietary project is critical.
+      const containsGplFamilyLicense = /(?:^|[^A-Za-z0-9])(?:AGPL|GPL)(?=$|[^A-Za-z0-9])/.test(normalized);
+      if (category === 'strong-copyleft' || containsGplFamilyLicense) {
         return 'critical';
       }
     }

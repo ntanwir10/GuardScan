@@ -133,6 +133,26 @@ const y = 2;`;
       expect(result.fileBreakdown).toHaveLength(2);
     });
 
+    it('discovers source files inside dot-directories', async () => {
+      const actionDirectory = path.join(testDir, '.github', 'actions', 'fixture');
+      const dependencyDirectory = path.join(
+        testDir, 'packages', 'api', '.venv', 'lib', 'site-packages'
+      );
+      fs.mkdirSync(actionDirectory, { recursive: true });
+      fs.mkdirSync(dependencyDirectory, { recursive: true });
+      fs.writeFileSync(path.join(actionDirectory, 'index.js'), 'module.exports = true;');
+      fs.writeFileSync(path.join(dependencyDirectory, 'dependency.py'), 'installed = True');
+
+      const result = await counter.count([`${testDir}/**/*.{js,py}`]);
+
+      expect(result.fileBreakdown).toEqual(expect.arrayContaining([
+        expect.objectContaining({path: expect.stringContaining('.github/actions/fixture/index.js')}),
+      ]));
+      expect(result.fileBreakdown).not.toEqual(expect.arrayContaining([
+        expect.objectContaining({path: expect.stringContaining('.venv/lib/site-packages/dependency.py')}),
+      ]));
+    });
+
     it('should respect ignore patterns', async () => {
       // Create files including ones that should be ignored
       fs.mkdirSync(path.join(testDir, 'node_modules'), { recursive: true });

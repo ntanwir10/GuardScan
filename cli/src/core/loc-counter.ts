@@ -36,11 +36,15 @@ export class LOCCounter {
    */
   private loadIgnorePatterns(): void {
     const defaultIgnores = [
-      'node_modules/**',
-      '.git/**',
-      'dist/**',
-      'build/**',
-      'coverage/**',
+      '**/node_modules/**',
+      '**/.git/**',
+      '**/.venv/**',
+      '**/venv/**',
+      '**/.tox/**',
+      '**/.nox/**',
+      '**/dist/**',
+      '**/build/**',
+      '**/coverage/**',
       '*.min.js',
       '*.min.css',
       '*.map',
@@ -115,8 +119,12 @@ export class LOCCounter {
     const files = await fastGlob(globPatterns, {
       cwd: process.cwd(),
       absolute: true, // Get absolute paths first
+      dot: true,
       followSymbolicLinks: false,
-      ignore: ['node_modules/**', '.git/**', 'dist/**', 'build/**'],
+      ignore: [
+        '**/node_modules/**', '**/.git/**', '**/.venv/**', '**/venv/**',
+        '**/.tox/**', '**/.nox/**', '**/dist/**', '**/build/**',
+      ],
     });
 
     // Convert to relative paths and filter using ignore patterns

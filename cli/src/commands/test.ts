@@ -80,9 +80,9 @@ export async function testCommand(options: TestOptions): Promise<void> {
           progressBar.update(completedSteps, { status: 'No test frameworks detected' });
         }
       } catch (error) {
-        if (isNetworkIsolationError(error)) {throw error;}
         completedSteps++;
         progressBar.update(completedSteps, { status: 'Test execution failed' });
+        throw error;
       }
     }
 

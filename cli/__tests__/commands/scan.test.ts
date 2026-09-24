@@ -2,12 +2,15 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import {
+  createSbomSection,
   evaluateComprehensivePolicy,
   runQualityAnalysis,
 } from '../../src/commands/scan';
 import { codeMetricsAnalyzer } from '../../src/core/code-metrics';
 import { codeSmellDetector } from '../../src/core/code-smells';
 import { linterIntegration } from '../../src/core/linter-integration';
+import { licenseScanner, LicenseReport } from '../../src/core/license-scanner';
+import { PackageInventory } from '../../src/core/package-inventory';
 import { testRunner } from '../../src/core/test-runner';
 import type { ScanEngineResult } from '../../src/core/scan-engine';
 
@@ -90,6 +93,25 @@ describe('runQualityAnalysis partial tool execution', () => {
       exitCode: 1,
       reasons: expect.arrayContaining(['1 test(s) failed', '1 lint error(s) found']),
     });
+  });
+
+  it('uses the repository name for the embedded SBOM root component', async () => {
+    const document = {fixture: true} as unknown as ReturnType<typeof licenseScanner.generateSBOM>;
+    const generate = jest.spyOn(licenseScanner, 'generateSBOM').mockReturnValue(document);
+    const report = Promise.resolve({findings: []} as unknown as LicenseReport);
+    const inventory: PackageInventory = {
+      repository,
+      coordinates: [],
+      manifests: [],
+      errors: [],
+      digest: 'fixture-digest',
+    };
+
+    await expect(createSbomSection(report, inventory, 'fixture-project')).resolves.toMatchObject({
+      status: 'succeeded',
+      document,
+    });
+    expect(generate).toHaveBeenCalledWith([], 'spdx', 'fixture-project');
   });
 
   it('does not advertise unsupported Vitest execution as a configured test adapter', async () => {
