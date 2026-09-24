@@ -92,6 +92,27 @@ describe('runQualityAnalysis partial tool execution', () => {
     });
   });
 
+  it('does not advertise unsupported Vitest execution as a configured test adapter', async () => {
+    fs.writeFileSync(path.join(repository, 'package.json'), JSON.stringify({
+      scripts: {test: 'vitest'},
+      devDependencies: {vitest: '^3.0.0'},
+    }));
+    jest.spyOn(testRunner, 'runTests').mockResolvedValue([]);
+    jest.spyOn(linterIntegration, 'runAll').mockResolvedValue([]);
+    jest.spyOn(codeMetricsAnalyzer, 'analyze').mockResolvedValue([]);
+    jest.spyOn(codeSmellDetector, 'detect').mockResolvedValue([]);
+
+    const quality = await runQualityAnalysis(repository, {}, {
+      offline: false,
+      runProjectCode: true,
+      isolateProjectNetwork: false,
+      includeCve: false,
+      allowPartial: false,
+    });
+
+    expect(quality.checks.tests).toMatchObject({status: 'succeeded', data: []});
+  });
+
   it.each([
     ['Flake8', '.flake8', '[flake8]\nmax-line-length = 100\n'],
     ['Pylint', '.pylintrc', '[MAIN]\n'],

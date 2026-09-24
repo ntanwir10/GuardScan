@@ -27,6 +27,23 @@ describe('collectPackageInventory', () => {
     ]);
   });
 
+  it('discovers conventional non-default Python requirement files', () => {
+    fs.writeFileSync(path.join(repository, 'requirements-prod.txt'), 'requests==2.32.0\n');
+    fs.mkdirSync(path.join(repository, 'requirements'));
+    fs.writeFileSync(path.join(repository, 'requirements/base.txt'), 'flask==3.1.0\n');
+
+    const inventory = collectPackageInventory(repository);
+
+    expect(inventory.coordinates).toEqual(expect.arrayContaining([
+      expect.objectContaining({ecosystem: 'pip', name: 'requests', exactVersion: '2.32.0'}),
+      expect.objectContaining({ecosystem: 'pip', name: 'flask', exactVersion: '3.1.0'}),
+    ]));
+    expect(inventory.manifests).toEqual(expect.arrayContaining([
+      'requirements-prod.txt',
+      'requirements/base.txt',
+    ]));
+  });
+
   it('handles cycles between Python requirement includes once', () => {
     fs.writeFileSync(path.join(repository, 'requirements.txt'), '-r requirements/base.txt\nroot==1.0.0\n');
     fs.mkdirSync(path.join(repository, 'requirements'));
@@ -1234,6 +1251,35 @@ describe('collectPackageInventory', () => {
     expect(inventory.errors).toEqual([]);
   });
 
+  it('preserves legacy pnpm peer-context suffixes during graph traversal', () => {
+    fs.writeFileSync(path.join(repository, 'package.json'), JSON.stringify({
+      dependencies: {parent: '1.0.0'},
+    }));
+    fs.writeFileSync(path.join(repository, 'pnpm-lock.yaml'), [
+      'lockfileVersion: 5.4',
+      'specifiers:',
+      '  parent: 1.0.0',
+      'dependencies:',
+      '  parent: 1.0.0_peer@2.0.0',
+      'packages:',
+      '  /parent/1.0.0_peer@2.0.0:',
+      '    dependencies:',
+      '      child: 3.0.0_peer@2.0.0',
+      '  /child/3.0.0_peer@2.0.0: {}',
+    ].join('\n'));
+
+    const inventory = collectPackageInventory(repository);
+
+    expect(inventory.coordinates).toEqual(expect.arrayContaining([
+      expect.objectContaining({name: 'parent', exactVersion: '1.0.0', direct: true}),
+      expect.objectContaining({
+        name: 'child', exactVersion: '3.0.0',
+        dependencyPaths: ['parent@1.0.0 > child@3.0.0'],
+      }),
+    ]));
+    expect(inventory.errors).toEqual([]);
+  });
+
   it('bounds dependency path enumeration for shared npm DAGs', () => {
     const packages: Record<string, unknown> = {
       '': {
@@ -1363,6 +1409,11 @@ describe('collectPackageInventory', () => {
     fs.writeFileSync(path.join(repository, 'quoted/pyproject.toml'), [
       "'project'.'dependencies' = ['flask>=3']",
     ].join('\n'));
+    fs.mkdirSync(path.join(repository, 'quoted-table'));
+    fs.writeFileSync(path.join(repository, 'quoted-table/pyproject.toml'), [
+      '["project"]',
+      'dependencies = ["django>=5"]',
+    ].join('\n'));
 
     const inventory = collectPackageInventory(repository);
 
@@ -1370,6 +1421,7 @@ describe('collectPackageInventory', () => {
     expect(inventory.errors).toEqual(expect.arrayContaining([
       expect.objectContaining({file: 'pyproject.toml', ecosystem: 'pip', code: 'UNSUPPORTED_FORMAT'}),
       expect.objectContaining({file: 'quoted/pyproject.toml', ecosystem: 'pip', code: 'UNSUPPORTED_FORMAT'}),
+      expect.objectContaining({file: 'quoted-table/pyproject.toml', ecosystem: 'pip', code: 'UNSUPPORTED_FORMAT'}),
     ]));
   });
 
@@ -1706,6 +1758,50 @@ describe('collectPackageInventory', () => {
 
     const inventory = collectPackageInventory(repository);
 
+    expect(inventory.errors).toEqual([]);
+  });
+
+  it('accepts implicit Cargo workspace members reached through path dependencies', () => {
+    fs.writeFileSync(path.join(repository, 'Cargo.toml'), [
+      '[workspace]',
+      '[package]',
+      'name = "root"',
+      'version = "1.0.0"',
+      '[dependencies]',
+      'member = { path = "crates/member" }',
+    ].join('\n'));
+    fs.mkdirSync(path.join(repository, 'crates/member'), {recursive: true});
+    fs.writeFileSync(path.join(repository, 'crates/member/Cargo.toml'), [
+      '[package]',
+      'name = "member"',
+      'version = "1.0.0"',
+      '[dependencies]',
+      'serde = "1.0.0"',
+    ].join('\n'));
+    fs.writeFileSync(path.join(repository, 'Cargo.lock'), [
+      'version = 3',
+      '[[package]]',
+      'name = "root"',
+      'version = "1.0.0"',
+      'dependencies = ["member"]',
+      '[[package]]',
+      'name = "member"',
+      'version = "1.0.0"',
+      'dependencies = ["serde 1.0.0 (registry+https://github.com/rust-lang/crates.io-index)"]',
+      '[[package]]',
+      'name = "serde"',
+      'version = "1.0.0"',
+      'source = "registry+https://github.com/rust-lang/crates.io-index"',
+    ].join('\n'));
+
+    const inventory = collectPackageInventory(repository);
+
+    expect(inventory.coordinates).toEqual([
+      expect.objectContaining({
+        name: 'serde', exactVersion: '1.0.0', direct: true, scope: 'runtime',
+        manifestPath: 'crates/member/Cargo.toml',
+      }),
+    ]);
     expect(inventory.errors).toEqual([]);
   });
 

@@ -1,5 +1,8 @@
 import { Command } from 'commander';
 import { jest } from '@jest/globals';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import { createVulnerabilityCommand } from '../../src/commands/vuln';
 import type { DependencyScanner, DependencyScanResult } from '../../src/core/dependency-scanner';
 import { filterPackageInventory, PackageInventory } from '../../src/core/package-inventory';
@@ -127,6 +130,48 @@ describe('vuln database commands', () => {
     expect(scanner.knownExploitedStatus).toHaveBeenCalledWith();
   });
 
+  it('recognizes broader snapshot coverage for the configured runtime scope', async () => {
+    const inventory: PackageInventory = {
+      repository: '/tmp/repository',
+      coordinates: [
+        {
+          ecosystem: 'npm', osvEcosystem: 'npm', name: 'runtime-package', exactVersion: '1.0.0',
+          scope: 'runtime', direct: true, manifestPath: 'package.json', lockfilePath: 'package-lock.json', dependencyPaths: ['runtime-package'],
+        },
+        {
+          ecosystem: 'npm', osvEcosystem: 'npm', name: 'dev-package', exactVersion: '2.0.0',
+          scope: 'development', direct: true, manifestPath: 'package.json', lockfilePath: 'package-lock.json', dependencyPaths: ['dev-package'],
+        },
+      ], manifests: ['package.json', 'package-lock.json'], errors: [], digest: 'all-digest',
+    };
+    const scanner = {
+      snapshotStatus: jest.fn().mockReturnValue({
+        inventory,
+        status: {
+          exists: true, fresh: true, inventoryMatches: true, sourceMatches: true, ageDays: 0,
+          snapshot: {
+            inventoryDigest: inventory.digest, createdAt: '2026-09-07T00:00:00.000Z',
+            sourceEndpoint: 'https://api.osv.dev',
+            coordinates: inventory.coordinates.map(coordinate => ({
+              ecosystem: coordinate.osvEcosystem,
+              name: coordinate.name,
+              version: coordinate.exactVersion,
+              lockfilePath: coordinate.lockfilePath,
+            })),
+            matches: [], droppedMatches: 0, complete: true,
+            schemaVersion: 'guardscan.vulnerability-snapshot.v1',
+          },
+        },
+      }),
+      knownExploitedStatus: jest.fn().mockReturnValue({ exists: false, fresh: false }),
+    } as unknown as DependencyScanner;
+
+    const db = getSubcommand(createVulnerabilityCommand(scanner), 'db');
+    await getSubcommand(db, 'status').parseAsync(['/tmp/repository'], { from: 'user' });
+
+    expect(JSON.parse(getOutput(logSpy))).toMatchObject({inventoryMatches: true, packages: 1});
+  });
+
   it('uses a sanitized repository identifier in JSON output', async () => {
     const scanner = {
       scan: jest.fn<DependencyScanner['scan']>().mockResolvedValue([scanResult()]),
@@ -138,6 +183,31 @@ describe('vuln database commands', () => {
     const output = JSON.parse(getOutput(logSpy));
     expect(output.run.repository).toBe('.');
     expect(JSON.stringify(output)).not.toContain('/private/user-sensitive/repository');
+  });
+
+  (process.platform === 'win32' ? it.skip : it)('replaces an output symlink without overwriting its target', async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'guardscan-vuln-output-'));
+    const external = path.join(directory, 'external.json');
+    const output = path.join(directory, 'vuln-report.json');
+    fs.writeFileSync(external, 'preserve me');
+    fs.symlinkSync(external, output);
+    const scanner = {
+      scan: jest.fn<DependencyScanner['scan']>().mockResolvedValue([scanResult()]),
+    } as unknown as DependencyScanner;
+
+    try {
+      await createVulnerabilityCommand(scanner).parseAsync([
+        '/tmp/repository', '--format', 'json', '--output', output,
+      ], {from: 'user'});
+
+      expect(fs.lstatSync(output).isSymbolicLink()).toBe(false);
+      expect(JSON.parse(fs.readFileSync(output, 'utf8'))).toMatchObject({
+        schemaVersion: 'guardscan.vulnerability.v1',
+      });
+      expect(fs.readFileSync(external, 'utf8')).toBe('preserve me');
+    } finally {
+      fs.rmSync(directory, {recursive: true, force: true});
+    }
   });
 
   it('fails a partial vulnerability result unless partial coverage is allowed', async () => {

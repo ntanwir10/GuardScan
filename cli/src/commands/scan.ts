@@ -245,7 +245,7 @@ export async function runQualityAnalysis(
   const tests = requireConfiguredToolOutput(
     'tests',
     markRetainedExecutionErrors('tests', rawTests),
-    hasConfiguredNodeTool(repoPath, ['jest', 'vitest', 'mocha'])
+    hasConfiguredNodeTool(repoPath, ['jest'])
   );
   const lint = requireConfiguredToolOutput(
     'lint',

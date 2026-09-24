@@ -119,6 +119,27 @@ describe('LicenseScanner inventory and SBOM contracts', () => {
     ]);
   });
 
+  it('bounds compatibility analysis by distinct license combinations', () => {
+    const scanner = new LicenseScanner();
+    const findings = Array.from({length: 200}, (_, index) => finding({
+      package: `package-${index}`,
+      license: index < 100 ? 'GPL-2.0' : 'Apache-2.0',
+      category: index < 100 ? 'strong-copyleft' : 'permissive',
+    }));
+    const issues = (scanner as unknown as {
+      checkCompatibility(values: LicenseFinding[], projectType: string): Array<{
+        license1: string;
+        license2: string;
+      }>;
+    }).checkCompatibility(findings, 'proprietary');
+
+    expect(issues).toHaveLength(1);
+    expect(issues[0]).toMatchObject({
+      license1: 'GPL-2.0',
+      license2: 'Apache-2.0',
+    });
+  });
+
   it('uses only exact installed npm metadata and resolves nested lockfile-v1 packages', async () => {
     fs.mkdirSync(path.join(repository, 'node_modules', 'child'), { recursive: true });
     fs.mkdirSync(path.join(repository, 'node_modules', 'parent', 'node_modules', 'child'), { recursive: true });

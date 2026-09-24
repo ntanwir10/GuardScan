@@ -70,6 +70,16 @@ const IGNORED_DIRS = new Set([
 
 const MAX_DEPENDENCY_PATHS_PER_COORDINATE = 64;
 
+function isRequirementsInventoryFile(file: string): boolean {
+  const basename = path.basename(file).toLowerCase();
+  return /^requirements(?:[-_.][a-z0-9_.-]+)?\.txt$/.test(basename) ||
+    (path.basename(path.dirname(file)).toLowerCase() === 'requirements' && basename.endsWith('.txt'));
+}
+
+function isTargetInventoryFile(file: string): boolean {
+  return TARGET_FILES.has(path.basename(file)) || isRequirementsInventoryFile(file);
+}
+
 function recordDependencyPath<Key>(
   pathsByKey: Map<Key, Set<string>>,
   key: Key,
@@ -131,7 +141,7 @@ function findInventoryFiles(root: string, errors: PackageInventoryError[]): stri
       if (entry.isSymbolicLink()) {continue;}
       if (entry.isDirectory()) {
         visit(absolute);
-      } else if (entry.isFile() && TARGET_FILES.has(entry.name)) {
+      } else if (entry.isFile() && isTargetInventoryFile(absolute)) {
         files.push(absolute);
       }
     }
@@ -979,19 +989,29 @@ function parsePnpmLock(root: string, file: string, coordinates: DependencyCoordi
       const importerDirectory = path.resolve(path.dirname(file), importerPath === '.' ? '' : importerPath);
       return validatedWorkspaceTarget(importerDirectory, dependencyName, resolution);
     };
+    const parseVersion = (rawLocator: string): string | undefined => {
+      const withoutPeerGroup = rawLocator.replace(/^\//, '').split('(')[0];
+      const legacyPeerSeparator = withoutPeerGroup.indexOf('_');
+      const candidate = legacyPeerSeparator < 0
+        ? withoutPeerGroup
+        : withoutPeerGroup.slice(0, legacyPeerSeparator);
+      return semver.valid(candidate, {loose: true}) || undefined;
+    };
     const parseNodeKey = (rawKey: string): {name: string; version: string} | undefined => {
       const key = rawKey.replace(/^\//, '').split('(')[0];
       const match = key.match(/^(@[^/]+\/[^@/]+)@([^/]+)$/) || key.match(/^(@[^/]+\/[^/]+)\/([^/]+)$/)
-        || key.match(/^([^@/][^@]*?)@([^/]+)$/) || key.match(/^([^@/][^/]*)\/([^/]+)$/);
-      if (!match || !semver.valid(match[2], {loose: true})) {return undefined;}
-      return {name: match[1], version: semver.valid(match[2], {loose: true})!};
+        || key.match(/^([^@/][^/]*)\/([^/]+)$/) || key.match(/^([^@/][^@]*?)@([^/]+)$/);
+      const version = match ? parseVersion(match[2]) : undefined;
+      return match && version ? {name: match[1], version} : undefined;
     };
-    const peerContext = (locator: string): string => {
-      const start = locator.indexOf('(');
-      return start < 0 ? '' : locator.slice(start);
+    const peerContext = (locator: string, version: string): string => {
+      const versionStart = locator.lastIndexOf(version);
+      if (versionStart < 0) {return '';}
+      const suffix = locator.slice(versionStart + version.length);
+      return suffix.startsWith('(') || suffix.startsWith('_') ? suffix : '';
     };
     const nodeIdentity = (name: string, version: string, locator: string): string =>
-      `${name}\0${version}\0${peerContext(locator)}`;
+      `${name}\0${version}\0${peerContext(locator, version)}`;
     type PnpmDirectDependency = {
       scope: DependencyScope;
       manifestPath: string;
@@ -1026,15 +1046,15 @@ function parsePnpmLock(root: string, file: string, coordinates: DependencyCoordi
             : typeof resolutionRecord?.version === 'string'
               ? resolutionRecord.version
               : '';
-          const normalizedVersion = rawVersion.replace(/^\//, '').split('(')[0];
-          const parsedLocator = parseNodeKey(normalizedVersion);
+          const parsedLocator = parseNodeKey(rawVersion);
           const dependencyName = aliasTarget?.name || name;
           if (validatedWorkspaceLink(rawImporterPath, dependencyName, specifier, rawVersion)) {continue;}
           const version = aliasTarget
             ? parsedLocator?.name === dependencyName
               ? parsedLocator.version
-              : semver.valid(normalizedVersion, {loose: true}) || undefined
-            : semver.valid(normalizedVersion, {loose: true}) || undefined;
+              : parseVersion(rawVersion)
+            : parseVersion(rawVersion) ||
+              (parsedLocator?.name === dependencyName ? parsedLocator.version : undefined);
           if (!version || (aliasTarget && parsedLocator && parsedLocator.name !== dependencyName)) {
             if (rawVersion) {
               errors.push({
@@ -1081,11 +1101,10 @@ function parsePnpmLock(root: string, file: string, coordinates: DependencyCoordi
       const record = asRecord(value);
       const raw = typeof value === 'string' ? value : typeof record?.version === 'string' ? record.version : undefined;
       if (!raw) {return undefined;}
-      const normalized = raw.replace(/^\//, '').split('(')[0];
-      const version = semver.valid(normalized, {loose: true});
-      if (version) {return {name, version, peerContext: peerContext(raw)};}
-      const parsed = parseNodeKey(normalized);
-      return parsed ? {...parsed, peerContext: peerContext(raw)} : undefined;
+      const version = parseVersion(raw);
+      if (version) {return {name, version, peerContext: peerContext(raw, version)};}
+      const parsed = parseNodeKey(raw);
+      return parsed ? {...parsed, peerContext: peerContext(raw, parsed.version)} : undefined;
     };
     for (const [rawKey, rawValue] of Object.entries(records)) {
       const parsed = parseNodeKey(rawKey);
@@ -1800,6 +1819,9 @@ function parseCargoLock(root: string, file: string, coordinates: DependencyCoord
       };
       visitManifests(lockDirectory);
     }
+    for (const manifest of cargoImplicitWorkspaceManifests(rootManifest, lockDirectory, excluded)) {
+      manifests.add(manifest);
+    }
 
     const requirementMatches = (requested: string | undefined, version: string): boolean => {
       if (!requested || requested === '*') {return true;}
@@ -2334,6 +2356,7 @@ function inventoryDigest(coordinates: DependencyCoordinate[]): string {
 }
 
 function ecosystemForInventoryFile(file: string): PackageEcosystem | undefined {
+  if (isRequirementsInventoryFile(file)) {return 'pip';}
   switch (path.basename(file)) {
     case 'package-lock.json':
     case 'npm-shrinkwrap.json':
@@ -2341,7 +2364,6 @@ function ecosystemForInventoryFile(file: string): PackageEcosystem | undefined {
     case 'pnpm-lock.yaml':
     case 'yarn.lock':
       return 'npm';
-    case 'requirements.txt':
     case 'pyproject.toml':
     case 'poetry.lock':
     case 'Pipfile':
@@ -2363,6 +2385,40 @@ function ecosystemForInventoryFile(file: string): PackageEcosystem | undefined {
   }
 }
 
+function requirementsInventoryCoversDirectory(
+  directory: string,
+  inventoryFiles: ReadonlySet<string>
+): boolean {
+  for (const file of inventoryFiles) {
+    if (!isRequirementsInventoryFile(file)) {continue;}
+    const relativeFile = path.relative(directory, file);
+    if (relativeFile.startsWith(`..${path.sep}`) || relativeFile === '..' || path.isAbsolute(relativeFile)) {
+      continue;
+    }
+    const segments = relativeFile.split(path.sep);
+    if (segments.length === 1 || segments[0].toLowerCase() === 'requirements') {return true;}
+  }
+  return false;
+}
+
+function normalizeTomlTablePath(value: string): string {
+  return value.split('.').map(rawSegment => {
+    const segment = rawSegment.trim();
+    if (segment.startsWith("'") && segment.endsWith("'")) {
+      return segment.slice(1, -1);
+    }
+    if (segment.startsWith('"') && segment.endsWith('"')) {
+      try {
+        const parsed = JSON.parse(segment) as unknown;
+        return typeof parsed === 'string' ? parsed : segment;
+      } catch {
+        return segment;
+      }
+    }
+    return segment;
+  }).join('.').toLowerCase();
+}
+
 function pyprojectDeclaresDependencies(file: string): boolean {
   let section = '';
   for (const rawLine of fs.readFileSync(file, 'utf8').split(/\r?\n/)) {
@@ -2370,7 +2426,7 @@ function pyprojectDeclaresDependencies(file: string): boolean {
     if (!line) {continue;}
     const sectionMatch = line.match(/^\[([^\]]+)]$/);
     if (sectionMatch) {
-      section = sectionMatch[1].trim().toLowerCase();
+      section = normalizeTomlTablePath(sectionMatch[1]);
       if (section === 'project.optional-dependencies' || section === 'dependency-groups' ||
         /^tool\.(?:poetry|pdm)(?:\..+)?\.dependencies$/.test(section)) {
         return true;
@@ -2437,6 +2493,69 @@ function cargoWorkspacePatterns(manifest: string, key: 'members' | 'exclude'): s
   }
 }
 
+function cargoManifestHasWorkspace(manifest: string): boolean {
+  try {
+    return /(?:^|\n)\s*\[workspace]\s*(?:\n|$)/.test(stripTomlComments(fs.readFileSync(manifest, 'utf8')));
+  } catch {
+    return false;
+  }
+}
+
+function cargoPathDependencies(manifest: string): string[] {
+  const paths: string[] = [];
+  let section = '';
+  try {
+    for (const rawLine of stripTomlComments(fs.readFileSync(manifest, 'utf8')).split(/\r?\n/)) {
+      const line = rawLine.trim();
+      const sectionMatch = line.match(/^\[([^\]]+)]$/);
+      if (sectionMatch) {
+        section = sectionMatch[1].trim();
+        continue;
+      }
+      if (!section || section.startsWith('workspace.')) {continue;}
+      const dependencySection = section.match(/^(?:.+\.)?(?:dependencies|dev-dependencies|build-dependencies)(?:\..+)?$/);
+      if (!dependencySection) {continue;}
+      const pathValue = line.match(/\bpath\s*=\s*["']([^"']+)["']/)?.[1];
+      if (pathValue) {paths.push(pathValue);}
+    }
+  } catch {
+    return [];
+  }
+  return paths;
+}
+
+function cargoImplicitWorkspaceManifests(
+  workspaceManifest: string,
+  workspaceDirectory: string,
+  excluded: string[]
+): Set<string> {
+  const manifests = new Set<string>();
+  if (!cargoManifestHasWorkspace(workspaceManifest)) {return manifests;}
+  const pending = [workspaceManifest];
+  const visited = new Set<string>();
+  while (pending.length > 0) {
+    const manifest = pending.pop()!;
+    if (visited.has(manifest)) {continue;}
+    visited.add(manifest);
+    for (const requestedPath of cargoPathDependencies(manifest)) {
+      let candidateDirectory: string;
+      try {
+        candidateDirectory = fs.realpathSync(path.resolve(path.dirname(manifest), requestedPath));
+      } catch {
+        continue;
+      }
+      if (!isWithinRoot(workspaceDirectory, candidateDirectory)) {continue;}
+      const relativeDirectory = relative(workspaceDirectory, candidateDirectory);
+      if (excluded.some(pattern => yarnWorkspacePatternMatches(pattern, relativeDirectory))) {continue;}
+      const candidate = path.join(candidateDirectory, 'Cargo.toml');
+      if (!fs.existsSync(candidate)) {continue;}
+      manifests.add(candidate);
+      pending.push(candidate);
+    }
+  }
+  return manifests;
+}
+
 function hasCoveringCargoLock(root: string, manifest: string, inventoryFiles: ReadonlySet<string>): boolean {
   const manifestDirectory = path.dirname(manifest);
   let directory = path.dirname(manifest);
@@ -2449,6 +2568,9 @@ function hasCoveringCargoLock(root: string, manifest: string, inventoryFiles: Re
       const excluded = cargoWorkspacePatterns(workspaceManifest, 'exclude');
       if (members.some(pattern => yarnWorkspacePatternMatches(pattern, relativeDirectory)) &&
         !excluded.some(pattern => yarnWorkspacePatternMatches(pattern, relativeDirectory))) {
+        return true;
+      }
+      if (cargoImplicitWorkspaceManifests(workspaceManifest, directory, excluded).has(manifest)) {
         return true;
       }
     }
@@ -2491,6 +2613,39 @@ export function collectPackageInventory(repoPath: string = process.cwd()): Packa
   });
   const names = new Set(files.map(file => relative(root, file)));
   const inventoryFiles = new Set(files);
+  const requirementFiles = files.filter(isRequirementsInventoryFile);
+  const requirementFileSet = new Set(requirementFiles);
+  const requirementIncludes = new Map<string, Set<string>>();
+  const includedRequirementFiles = new Set<string>();
+  for (const file of requirementFiles) {
+    try {
+      for (const rawLine of fs.readFileSync(file, 'utf8').split(/\r?\n/)) {
+        const include = rawLine.trim().match(/^(?:-r|--requirement)(?:=|\s+)(.+)$/);
+        if (!include) {continue;}
+        const included = fs.realpathSync(path.resolve(path.dirname(file), include[1].trim()));
+        if (!isWithinRoot(root, included) || !requirementFileSet.has(included)) {continue;}
+        includedRequirementFiles.add(included);
+        const includes = requirementIncludes.get(file) || new Set<string>();
+        includes.add(included);
+        requirementIncludes.set(file, includes);
+      }
+    } catch {
+      // parseRequirements reports unreadable or unresolved includes with context.
+    }
+  }
+  const requirementRoots = new Set(requirementFiles.filter(file => !includedRequirementFiles.has(file)));
+  const coveredRequirements = new Set<string>();
+  const markRequirementTree = (file: string): void => {
+    if (coveredRequirements.has(file)) {return;}
+    coveredRequirements.add(file);
+    for (const included of requirementIncludes.get(file) || []) {markRequirementTree(included);}
+  };
+  for (const file of requirementRoots) {markRequirementTree(file);}
+  for (const file of requirementFiles) {
+    if (coveredRequirements.has(file)) {continue;}
+    requirementRoots.add(file);
+    markRequirementTree(file);
+  }
   const workspacePackagesByLock = new Map<string, Map<string, string | undefined>>();
 
   for (const file of files) {
@@ -2498,10 +2653,10 @@ export function collectPackageInventory(repoPath: string = process.cwd()): Packa
     if (name === 'package-lock.json' || name === 'npm-shrinkwrap.json') {parseNpmLock(root, file, coordinates, errors);}
     else if (name === 'pnpm-lock.yaml') {parsePnpmLock(root, file, coordinates, errors);}
     else if (name === 'yarn.lock') {parseYarnLock(root, file, coordinates, errors);}
-    else if (name === 'requirements.txt') {parseRequirements(root, file, coordinates, errors);}
+    else if (requirementRoots.has(file)) {parseRequirements(root, file, coordinates, errors);}
     else if (name === 'pyproject.toml') {
       const directory = path.dirname(file);
-      const covered = inventoryFiles.has(path.join(directory, 'requirements.txt')) ||
+      const covered = requirementsInventoryCoversDirectory(directory, inventoryFiles) ||
         inventoryFiles.has(path.join(directory, 'poetry.lock'));
       if (!covered) {
         try {
@@ -2533,7 +2688,7 @@ export function collectPackageInventory(repoPath: string = process.cwd()): Packa
     }
     else if (name === 'Pipfile' &&
       !inventoryFiles.has(path.join(path.dirname(file), 'Pipfile.lock')) &&
-      !inventoryFiles.has(path.join(path.dirname(file), 'requirements.txt'))) {
+      !requirementsInventoryCoversDirectory(path.dirname(file), inventoryFiles)) {
       errors.push({
         file: relative(root, file), ecosystem: 'pip', code: 'UNSUPPORTED_FORMAT',
         message: 'Pipfile has no supported adjacent dependency inventory; Python dependency coverage is incomplete',

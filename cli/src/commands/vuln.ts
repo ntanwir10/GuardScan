@@ -1,6 +1,5 @@
 import { Command } from 'commander';
 import chalk from 'chalk';
-import * as fs from 'fs';
 import * as path from 'path';
 import {
   dependencyScanner,
@@ -10,7 +9,9 @@ import {
 } from '../core/dependency-scanner';
 import { configManager } from '../core/config';
 import { filterPackageInventory, PackageEcosystem } from '../core/package-inventory';
+import { snapshotCoversInventory } from '../core/vulnerability-cache';
 import { resolveExecutionPolicy } from '../utils/execution-policy';
+import { atomicReplaceText } from '../utils/private-state';
 
 type VulnerabilityFormat = 'table' | 'json' | 'sarif';
 type FailureSeverity = 'critical' | 'high' | 'medium' | 'low';
@@ -98,7 +99,7 @@ export function createVulnerabilityCommand(scanner: DependencyScanner = dependen
             : renderTable(results);
 
         if (options.output) {
-          fs.writeFileSync(path.resolve(options.output), `${rendered}\n`, 'utf8');
+          atomicReplaceText(path.resolve(options.output), `${rendered}\n`, {privateParent: false});
           if (parsed.format === 'table') {console.log(chalk.green(`Vulnerability report written to ${path.resolve(options.output)}`));}
         } else {
           console.log(rendered);
@@ -158,7 +159,8 @@ export function createVulnerabilityCommand(scanner: DependencyScanner = dependen
             config.vulnerabilities?.endpoint
           );
           const inventory = filterPackageInventory(rawInventory, { scope });
-          const inventoryMatches = status.snapshot?.inventoryDigest === inventory.digest;
+          const inventoryMatches = status.snapshot !== undefined &&
+            snapshotCoversInventory(status.snapshot, inventory);
           if (!status.exists || !status.fresh || !status.snapshot || !inventoryMatches || status.sourceMatches === false) {
             throw new Error('Vulnerability snapshot was not saved with usable coverage for the current inventory and source');
           }
@@ -184,7 +186,8 @@ export function createVulnerabilityCommand(scanner: DependencyScanner = dependen
           config.vulnerabilities?.endpoint
         );
         const inventory = filterPackageInventory(rawInventory, { scope });
-        const inventoryMatches = status.snapshot?.inventoryDigest === inventory.digest;
+        const inventoryMatches = status.snapshot !== undefined &&
+          snapshotCoversInventory(status.snapshot, inventory);
         const kevStatus = scanner.knownExploitedStatus();
         console.log(JSON.stringify({
           schemaVersion: 'guardscan.vulnerability-snapshot-status.v1',

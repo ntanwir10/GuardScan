@@ -59,6 +59,17 @@ describe('TestRunner discovery and empty-suite behavior', () => {
     expect(mockedRunProcess).not.toHaveBeenCalled();
   });
 
+  it.each(['vitest', 'mocha'])('does not run %s suites through the Jest adapter', async framework => {
+    fs.writeFileSync(path.join(repository, 'package.json'), JSON.stringify({
+      scripts: {test: framework},
+      devDependencies: {[framework]: '^1.0.0'},
+    }));
+    fs.writeFileSync(path.join(repository, 'fixture.test.ts'), 'export {};');
+
+    await expect(new TestRunner().runTests(repository)).resolves.toEqual([]);
+    expect(mockedRunProcess).not.toHaveBeenCalled();
+  });
+
   it.each([false, true])('treats pytest exit 5 as an empty suite (json report: %s)', async withReport => {
     fs.writeFileSync(path.join(repository, 'pytest.ini'), '[pytest]\n');
     mockedRunProcess.mockImplementation((_command, args) => {

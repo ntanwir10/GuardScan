@@ -163,27 +163,22 @@ export class TestRunner {
       ? rawTestScript.trim()
       : '';
     if (!testScript || /no test specified/i.test(testScript)) {return false;}
+    if (/\b(?:vitest|mocha)\b/i.test(testScript) && !/\bjest\b/i.test(testScript)) {
+      return false;
+    }
+    if (/\bjest\b/i.test(testScript)) {return true;}
     if (packageJson.devDependencies?.jest || packageJson.dependencies?.jest) {
       return true;
     }
-
-    // Check for Jest test file patterns
-    const testPatterns = [
-      /\.test\.(js|jsx|ts|tsx)$/,
-      /\.spec\.(js|jsx|ts|tsx)$/,
-    ];
-
-    const hasTestFiles = testPatterns.some(pattern =>
-      this.findFiles(repoPath, pattern).length > 0
-    );
-
-    if (hasTestFiles) {
+    if (packageJson.devDependencies?.vitest || packageJson.dependencies?.vitest ||
+        packageJson.devDependencies?.mocha || packageJson.dependencies?.mocha) {
+      return false;
+    }
+    if (['jest.config.js', 'jest.config.cjs', 'jest.config.mjs', 'jest.config.ts']
+      .some(file => fs.existsSync(path.join(repoPath, file)))) {
       return true;
     }
-
-    // Check for __tests__ directory
-    const testDirs = ['__tests__', 'tests', 'test'];
-    return testDirs.some(dir => fs.existsSync(path.join(repoPath, dir)));
+    return false;
   }
 
   /**

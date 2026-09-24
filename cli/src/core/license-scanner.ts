@@ -776,11 +776,23 @@ export class LicenseScanner {
   private checkCompatibility(findings: LicenseFinding[], projectType: string): CompatibilityIssue[] {
     const issues: CompatibilityIssue[] = [];
 
-    // Check each pair of licenses
-    for (let i = 0; i < findings.length; i++) {
-      for (let j = i + 1; j < findings.length; j++) {
-        const f1 = findings[i];
-        const f2 = findings[j];
+    // Compatibility depends on license combinations, not package count. Group
+    // known licenses so large lock inventories cannot create quadratic work or
+    // an unbounded duplicate issue list.
+    const byLicense = new Map<string, LicenseFinding[]>();
+    for (const finding of findings) {
+      const license = this.normalizeLicense(finding.license);
+      if (!this.COMPATIBILITY_MATRIX[license]) {continue;}
+      const values = byLicense.get(license) || [];
+      if (values.length < 2) {values.push(finding);}
+      byLicense.set(license, values);
+    }
+    const groups = [...byLicense.values()];
+    for (let i = 0; i < groups.length; i++) {
+      for (let j = i; j < groups.length; j++) {
+        if (i === j && groups[i].length < 2) {continue;}
+        const f1 = groups[i][0];
+        const f2 = groups[j][i === j ? 1 : 0];
 
         const conflict = this.checkLicenseConflict(f1.license, f2.license);
         if (conflict) {
