@@ -133,6 +133,30 @@ const y = 2;`;
       expect(result.fileBreakdown).toHaveLength(2);
     });
 
+    it('discovers source files inside dot-directories', async () => {
+      const actionDirectory = path.join(testDir, '.github', 'actions', 'fixture');
+      const virtualEnvironment = path.join(testDir, 'packages', 'api', '.venv');
+      const dependencyDirectory = path.join(virtualEnvironment, 'lib', 'site-packages');
+      const firstPartyDirectory = path.join(testDir, 'src', 'venv');
+      fs.mkdirSync(actionDirectory, { recursive: true });
+      fs.mkdirSync(dependencyDirectory, { recursive: true });
+      fs.mkdirSync(firstPartyDirectory, { recursive: true });
+      fs.writeFileSync(path.join(actionDirectory, 'index.js'), 'module.exports = true;');
+      fs.writeFileSync(path.join(virtualEnvironment, 'pyvenv.cfg'), 'home = /usr/bin');
+      fs.writeFileSync(path.join(dependencyDirectory, 'dependency.py'), 'installed = True');
+      fs.writeFileSync(path.join(firstPartyDirectory, 'security.py'), 'first_party = True');
+
+      const result = await counter.count([`${testDir}/**/*.{js,py}`]);
+
+      expect(result.fileBreakdown).toEqual(expect.arrayContaining([
+        expect.objectContaining({path: expect.stringContaining('.github/actions/fixture/index.js')}),
+        expect.objectContaining({path: expect.stringContaining('src/venv/security.py')}),
+      ]));
+      expect(result.fileBreakdown).not.toEqual(expect.arrayContaining([
+        expect.objectContaining({path: expect.stringContaining('.venv/lib/site-packages/dependency.py')}),
+      ]));
+    });
+
     it('should respect ignore patterns', async () => {
       // Create files including ones that should be ignored
       fs.mkdirSync(path.join(testDir, 'node_modules'), { recursive: true });
@@ -145,6 +169,30 @@ const y = 2;`;
       // but our test pattern includes the full path which bypasses the ignore
       expect(result.fileCount).toBeGreaterThanOrEqual(1);
       expect(result.fileBreakdown.some(f => f.path.includes('file1.js'))).toBe(true);
+    });
+
+    it('reports files that were discovered but could not be read', async () => {
+      const unreadable = path.join(testDir, 'unreadable.rs');
+      fs.writeFileSync(unreadable, 'fn main() {}');
+      const countFile = jest.spyOn(counter as any, 'countFile').mockReturnValue(null);
+
+      const result = await counter.count([unreadable]);
+
+      expect(result.fileBreakdown).toEqual([]);
+      expect(result.skippedFiles).toEqual([expect.stringContaining('unreadable.rs')]);
+      countFile.mockRestore();
+    });
+
+    it('excludes a targeted file inside a confirmed virtual environment', async () => {
+      const virtualEnvironment = path.join(testDir, 'targeted-venv');
+      const target = path.join(virtualEnvironment, 'lib', 'target.py');
+      fs.mkdirSync(path.dirname(target), {recursive: true});
+      fs.writeFileSync(path.join(virtualEnvironment, 'pyvenv.cfg'), 'home = /usr/bin');
+      fs.writeFileSync(target, 'installed = True');
+
+      const result = await counter.count([target]);
+
+      expect(result.fileBreakdown).toEqual([]);
     });
   });
 

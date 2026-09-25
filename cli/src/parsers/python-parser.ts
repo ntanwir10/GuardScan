@@ -7,12 +7,13 @@
  * Phase 6: Multi-Language Support
  */
 
-import { exec } from 'child_process';
+import { execFile } from 'child_process';
 import { promisify } from 'util';
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 /**
  * Python Function
@@ -122,8 +123,9 @@ export class PythonParser {
    * Parse using Python's ast module (most accurate)
    */
   private async parseWithPythonAST(code: string, filePath: string): Promise<ParsedPythonFile> {
-    // Write code to temp file
-    const tempFile = path.join(process.cwd(), '.tmp-parse.py');
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'guardscan-python-'));
+    const tempFile = path.join(tempDir, 'input.py');
+    const scriptFile = path.join(tempDir, 'parser.py');
     fs.writeFileSync(tempFile, code);
 
     try {
@@ -203,23 +205,17 @@ except Exception as e:
     sys.exit(1)
 `;
 
-      // Write parser script
-      const scriptFile = path.join(process.cwd(), '.tmp-parser.py');
       fs.writeFileSync(scriptFile, parserScript);
 
       // Execute Python parser
-      const { stdout } = await execAsync(`python3 ${scriptFile} ${tempFile}`);
+      const { stdout } = await execFileAsync('python3', [scriptFile, tempFile]);
       const result = JSON.parse(stdout);
-
-      // Clean up temp files
-      fs.unlinkSync(tempFile);
-      fs.unlinkSync(scriptFile);
 
       return this.formatPythonASTResult(result, filePath, code);
     } catch (error) {
-      // Clean up on error
-      if (fs.existsSync(tempFile)) {fs.unlinkSync(tempFile);}
       throw error;
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
     }
   }
 
@@ -619,7 +615,7 @@ except Exception as e:
    */
   async isPythonAvailable(): Promise<boolean> {
     try {
-      await execAsync('python3 --version');
+      await execFileAsync('python3', ['--version']);
       return true;
     } catch {
       return false;

@@ -1,7 +1,23 @@
 import * as fs from 'fs';
 import * as crypto from 'crypto';
-import { execSync } from 'child_process';
+import * as path from 'path';
+import { execFileSync } from 'child_process';
+import { StringDecoder } from 'string_decoder';
+import fastGlob from 'fast-glob';
 import { SECURITY_CONSTANTS } from '../constants/security-constants';
+
+const MAX_SECRET_FILE_BYTES = 2 * 1024 * 1024;
+const MAX_SECRET_LINE_FRAGMENT_CHARS = 256 * 1024;
+const SECRET_LINE_OVERLAP_CHARS = 1024;
+const SECRET_DISCOVERY_IGNORES = [
+  '**/.git/**', '**/.guardscan/**', '**/node_modules/**', '**/vendor/**', '**/dist/**',
+  '**/build/**', '**/coverage/**', '**/.venv/**', '**/venv/**', '**/target/**',
+];
+
+function isWithinRoot(root: string, candidate: string): boolean {
+  const relative = path.relative(root, candidate);
+  return relative === '' || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative));
+}
 
 export interface SecretFinding {
   type: string;
@@ -14,19 +30,67 @@ export interface SecretFinding {
 }
 
 export class SecretsDetector {
+  /** Discover bounded working-tree inputs independently from language/LOC discovery. */
+  async discoverFiles(
+    repoPath: string = process.cwd(),
+    onSkippedInput: () => void = () => {}
+  ): Promise<string[]> {
+    let root: string;
+    try {
+      root = fs.realpathSync(repoPath);
+      if (!fs.statSync(root).isDirectory()) {throw new Error('repository path is not a directory');}
+    } catch {
+      onSkippedInput();
+      return [];
+    }
+
+    try {
+      const candidates = await fastGlob('**/*', {
+        cwd: root,
+        absolute: true,
+        dot: true,
+        onlyFiles: true,
+        followSymbolicLinks: false,
+        ignore: SECRET_DISCOVERY_IGNORES,
+      });
+      const files: string[] = [];
+      for (const candidate of candidates.sort()) {
+        try {
+          if (fs.lstatSync(candidate).isSymbolicLink()) {continue;}
+          const real = fs.realpathSync(candidate);
+          if (isWithinRoot(root, real) && fs.statSync(real).isFile()) {files.push(real);}
+        } catch {
+          onSkippedInput();
+        }
+      }
+      return files;
+    } catch {
+      onSkippedInput();
+      return [];
+    }
+  }
+
   /**
    * Detect secrets in files
    */
-  async detectInFiles(files: string[]): Promise<SecretFinding[]> {
+  async detectInFiles(files: string[], onSkippedInput: () => void = () => {}): Promise<SecretFinding[]> {
     const findings: SecretFinding[] = [];
 
     for (const file of files) {
       try {
-        const content = fs.readFileSync(file, 'utf-8');
+        const stat = fs.statSync(file);
+        if (!stat.isFile()) {continue;}
+        if (stat.size > MAX_SECRET_FILE_BYTES) {
+          findings.push(...await this.scanLargeFile(file));
+          continue;
+        }
+        const raw = fs.readFileSync(file);
+        if (raw.includes(0)) {continue;}
+        const content = raw.toString('utf-8');
         const fileFindings = this.scanContent(file, content);
         findings.push(...fileFindings);
       } catch {
-        // Skip files that can't be read
+        onSkippedInput();
       }
     }
 
@@ -36,32 +100,59 @@ export class SecretsDetector {
   /**
    * Scan git history for secrets
    */
-  async scanGitHistory(repoPath: string = process.cwd()): Promise<SecretFinding[]> {
+  async scanGitHistory(
+    repoPath: string = process.cwd(),
+    onSkippedInput: () => void = () => {}
+  ): Promise<SecretFinding[]> {
     const findings: SecretFinding[] = [];
 
     try {
-      // Get all commits
-      const commits = execSync('git log --all --format=%H', {
+      const insideWorkTree = execFileSync('git', ['rev-parse', '--is-inside-work-tree'], {
         cwd: repoPath,
         encoding: 'utf-8',
-      }).split('\n').filter(Boolean).slice(0, SECURITY_CONSTANTS.GIT_HISTORY_COMMIT_LIMIT);
+      }).trim();
+      if (insideWorkTree !== 'true') {return findings;}
+    } catch (error: unknown) {
+      const rawStderr = error && typeof error === 'object' && 'stderr' in error
+        ? (error as {stderr?: unknown}).stderr
+        : undefined;
+      const stderr = typeof rawStderr === 'string'
+        ? rawStderr
+        : Buffer.isBuffer(rawStderr) ? rawStderr.toString('utf8') : '';
+      if (!/not a git repository/i.test(stderr)) {onSkippedInput();}
+      return findings;
+    }
+
+    try {
+      // Git history is an optional bounded tier; scanning the configured window
+      // is complete coverage for this tier and must not degrade the working-tree scan.
+      const commits = execFileSync('git', [
+        'log',
+        '--all',
+        '--format=%H',
+        `--max-count=${SECURITY_CONSTANTS.GIT_HISTORY_COMMIT_LIMIT}`,
+      ], {
+        cwd: repoPath,
+        encoding: 'utf-8',
+      }).split('\n').filter(Boolean);
 
       for (const commit of commits) {
         try {
           // Get diff for commit
-          const diff = execSync(`git show ${commit}`, {
+          const diff = execFileSync('git', ['show', '--end-of-options', commit], {
             cwd: repoPath,
             encoding: 'utf-8',
+            maxBuffer: SECURITY_CONSTANTS.GIT_HISTORY_DIFF_MAX_BYTES,
           });
 
           const commitFindings = this.scanContent(`commit:${commit.substring(0, 8)}`, diff);
           findings.push(...commitFindings);
         } catch {
-          // Skip commits that error
+          onSkippedInput();
         }
       }
     } catch {
-      // Git not available or not a git repo
+      onSkippedInput();
     }
 
     return findings;
@@ -75,16 +166,67 @@ export class SecretsDetector {
     const lines = content.split('\n');
 
     for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
-
-      // Check specific patterns first
-      findings.push(...this.checkPatterns(file, line, i + 1));
-
-      // Check for high-entropy strings
-      findings.push(...this.checkEntropy(file, line, i + 1));
+      findings.push(...this.scanLine(file, lines[i], i + 1));
     }
 
     return findings;
+  }
+
+  private scanLine(file: string, line: string, lineNum: number): SecretFinding[] {
+    return [
+      ...this.checkPatterns(file, line, lineNum),
+      ...this.checkEntropy(file, line, lineNum),
+    ];
+  }
+
+  /** Stream readable oversized text while bounding memory for minified single-line inputs. */
+  private async scanLargeFile(file: string): Promise<SecretFinding[]> {
+    const findings: SecretFinding[] = [];
+    const seen = new Set<string>();
+    const decoder = new StringDecoder('utf8');
+    const stream = fs.createReadStream(file, {highWaterMark: 64 * 1024});
+    let pending = '';
+    let lineNumber = 1;
+    const record = (fragment: string): void => {
+      for (const finding of this.scanLine(file, fragment.replace(/\r$/, ''), lineNumber)) {
+        const key = [finding.type, finding.line, finding.secret, finding.severity].join('\0');
+        if (seen.has(key)) {continue;}
+        seen.add(key);
+        findings.push(finding);
+      }
+    };
+    const drain = (): void => {
+      for (;;) {
+        const newline = pending.indexOf('\n');
+        if (newline >= 0 && newline <= MAX_SECRET_LINE_FRAGMENT_CHARS) {
+          record(pending.slice(0, newline));
+          pending = pending.slice(newline + 1);
+          lineNumber += 1;
+          continue;
+        }
+        if (pending.length > MAX_SECRET_LINE_FRAGMENT_CHARS) {
+          record(pending.slice(0, MAX_SECRET_LINE_FRAGMENT_CHARS));
+          pending = pending.slice(MAX_SECRET_LINE_FRAGMENT_CHARS - SECRET_LINE_OVERLAP_CHARS);
+          continue;
+        }
+        break;
+      }
+    };
+
+    try {
+      for await (const rawChunk of stream) {
+        const chunk = Buffer.isBuffer(rawChunk) ? rawChunk : Buffer.from(rawChunk);
+        if (chunk.includes(0)) {return [];}
+        pending += decoder.write(chunk);
+        drain();
+      }
+      pending += decoder.end();
+      drain();
+      if (pending) {record(pending);}
+      return findings;
+    } finally {
+      stream.destroy();
+    }
   }
 
   /**

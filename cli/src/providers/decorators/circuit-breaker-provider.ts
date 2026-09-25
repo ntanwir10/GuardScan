@@ -9,7 +9,7 @@ import { AIProviderDecorator } from './base-decorator';
 import { AIProvider, AIMessage, AIResponse, ChatOptions } from '../base';
 import * as fs from 'fs';
 import * as path from 'path';
-import * as os from 'os';
+import { getGuardScanDir } from '../../utils/path-helper';
 
 export enum CircuitState {
   CLOSED = 'CLOSED',      // Normal operation
@@ -63,8 +63,7 @@ export class CircuitBreakerProvider extends AIProviderDecorator {
     super(wrapped);
     this.config = { ...DEFAULT_CIRCUIT_BREAKER_CONFIG, ...config };
     this.statePath = path.join(
-      os.homedir(),
-      '.guardscan',
+      getGuardScanDir(),
       'circuit-breaker',
       `${wrapped.getName()}-state.json`
     );

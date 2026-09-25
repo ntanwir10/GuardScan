@@ -3,21 +3,37 @@ import * as path from 'path';
 import yaml from 'js-yaml';
 import { Finding } from '../utils/reporter';
 
+function looksLikeKubernetesManifest(content: string): boolean {
+  return content.split(/^---(?:\s+#.*)?\s*$/m).some(document => {
+    const lines = document.split(/\r?\n/).filter(line => line.trim() && !line.trimStart().startsWith('#'));
+    if (lines.length === 0) {return false;}
+    const minimumIndent = Math.min(...lines.map(line => line.match(/^[ \t]*/)?.[0].length || 0));
+    const topLevelLines = lines.filter(line => (line.match(/^[ \t]*/)?.[0].length || 0) === minimumIndent);
+    const topLevelKey = (key: string): boolean => topLevelLines.some(line =>
+      new RegExp(`^\\s*(?:${key}|"${key}"|'${key}')\\s*:`).test(line)
+    );
+    const flowKey = (key: string): boolean =>
+      new RegExp(`(?:^|[,{])\\s*(?:${key}|"${key}"|'${key}')\\s*:`, 'm').test(document);
+    return (topLevelKey('apiVersion') && topLevelKey('kind')) ||
+      (flowKey('apiVersion') && flowKey('kind'));
+  });
+}
+
 export class IaCScanner {
   /**
    * Scan Infrastructure as Code files
    */
-  async scan(repoPath: string = process.cwd()): Promise<Finding[]> {
+  async scan(repoPath: string = process.cwd(), onSkippedInput: () => void = () => {}): Promise<Finding[]> {
     const findings: Finding[] = [];
 
     // Scan Terraform files
-    findings.push(...await this.scanTerraform(repoPath));
+    findings.push(...await this.scanTerraform(repoPath, onSkippedInput));
 
     // Scan Kubernetes YAML files
-    findings.push(...await this.scanKubernetes(repoPath));
+    findings.push(...await this.scanKubernetes(repoPath, onSkippedInput));
 
     // Scan Docker Compose files
-    findings.push(...await this.scanDockerCompose(repoPath));
+    findings.push(...await this.scanDockerCompose(repoPath, onSkippedInput));
 
     return findings;
   }
@@ -25,9 +41,9 @@ export class IaCScanner {
   /**
    * Scan Terraform files for security issues
    */
-  private async scanTerraform(repoPath: string): Promise<Finding[]> {
+  private async scanTerraform(repoPath: string, onSkippedInput: () => void): Promise<Finding[]> {
     const findings: Finding[] = [];
-    const tfFiles = this.findFiles(repoPath, /\.tf$/);
+    const tfFiles = this.findFiles(repoPath, /\.tf$/, onSkippedInput);
 
     for (const file of tfFiles) {
       try {
@@ -112,7 +128,7 @@ export class IaCScanner {
           }
         }
       } catch {
-        // Skip files that can't be read
+        onSkippedInput();
       }
     }
 
@@ -122,25 +138,32 @@ export class IaCScanner {
   /**
    * Scan Kubernetes YAML files
    */
-  private async scanKubernetes(repoPath: string): Promise<Finding[]> {
+  private async scanKubernetes(repoPath: string, onSkippedInput: () => void): Promise<Finding[]> {
     const findings: Finding[] = [];
-    const k8sFiles = this.findFiles(repoPath, /\.ya?ml$/);
+    const k8sFiles = this.findFiles(repoPath, /\.ya?ml$/, onSkippedInput);
 
     for (const file of k8sFiles) {
+      let content: string;
       try {
-        const content = fs.readFileSync(file, 'utf-8');
-        const docs = yaml.loadAll(content) as any[];
-
-        for (const doc of docs) {
-          if (!doc || typeof doc !== 'object') {continue;}
-
-          // Check if it's a Kubernetes resource
-          if (doc.apiVersion && doc.kind) {
-            findings.push(...this.checkK8sResource(doc, file));
-          }
-        }
+        content = fs.readFileSync(file, 'utf-8');
       } catch {
-        // Skip files that can't be parsed
+        onSkippedInput();
+        continue;
+      }
+      let docs: any[];
+      try {
+        docs = yaml.loadAll(content);
+      } catch {
+        if (looksLikeKubernetesManifest(content)) {onSkippedInput();}
+        continue;
+      }
+      for (const doc of docs) {
+        if (!doc || typeof doc !== 'object') {continue;}
+
+        // Check if it's a Kubernetes resource
+        if (doc.apiVersion && doc.kind) {
+          findings.push(...this.checkK8sResource(doc, file));
+        }
       }
     }
 
@@ -264,9 +287,9 @@ export class IaCScanner {
   /**
    * Scan Docker Compose files
    */
-  private async scanDockerCompose(repoPath: string): Promise<Finding[]> {
+  private async scanDockerCompose(repoPath: string, onSkippedInput: () => void): Promise<Finding[]> {
     const findings: Finding[] = [];
-    const composeFiles = this.findFiles(repoPath, /docker-compose.*\.ya?ml$/);
+    const composeFiles = this.findFiles(repoPath, /docker-compose.*\.ya?ml$/, onSkippedInput);
 
     for (const file of composeFiles) {
       try {
@@ -315,8 +338,18 @@ export class IaCScanner {
             }
 
             // Check for environment variables with secrets
-            if (service.environment) {
-              for (const env of service.environment) {
+            const environment = service.environment as unknown;
+            if (environment) {
+              const environmentEntries: unknown[] = Array.isArray(environment)
+                ? environment
+                : typeof environment === 'object' && environment !== null
+                  ? Object.entries(environment).map(([name, value]) =>
+                      value === null || value === undefined
+                        ? name
+                        : `${name}=${typeof value === 'string' ? value : JSON.stringify(value)}`
+                    )
+                  : [];
+              for (const env of environmentEntries) {
                 const envStr = typeof env === 'string' ? env : JSON.stringify(env);
                 if (/password|secret|token|key/i.test(envStr) && /=/.test(envStr)) {
                   findings.push({
@@ -332,7 +365,7 @@ export class IaCScanner {
           }
         }
       } catch {
-        // Skip files that can't be parsed
+        onSkippedInput();
       }
     }
 
@@ -342,12 +375,14 @@ export class IaCScanner {
   /**
    * Find files matching pattern recursively
    */
-  private findFiles(dir: string, pattern: RegExp, maxDepth: number = 5): string[] {
+  private findFiles(
+    dir: string,
+    pattern: RegExp,
+    onSkippedInput: () => void
+  ): string[] {
     const files: string[] = [];
 
     const search = (currentDir: string, depth: number) => {
-      if (depth > maxDepth) {return;}
-
       try {
         const items = fs.readdirSync(currentDir);
 
@@ -356,7 +391,9 @@ export class IaCScanner {
           if (item === 'node_modules' || item === '.git' || item === 'vendor') {continue;}
 
           const fullPath = path.join(currentDir, item);
-          const stat = fs.statSync(fullPath);
+          const stat = fs.lstatSync(fullPath);
+
+          if (stat.isSymbolicLink()) {continue;}
 
           if (stat.isDirectory()) {
             search(fullPath, depth + 1);
@@ -365,7 +402,7 @@ export class IaCScanner {
           }
         }
       } catch {
-        // Skip directories that can't be read
+        onSkippedInput();
       }
     };
 

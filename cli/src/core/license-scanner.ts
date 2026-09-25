@@ -1,10 +1,22 @@
-import { execSync } from 'child_process';
+import { createHash, randomUUID } from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
+import packageManifest from '../../package.json';
+import {
+  collectPackageInventory,
+  DependencyCoordinate,
+  PackageInventory,
+  PackageInventoryError,
+} from './package-inventory';
+import { runProcess } from '../utils/process-runner';
 
 export interface LicenseFinding {
   package: string;
   version: string;
+  scope?: DependencyCoordinate['scope'];
+  direct?: boolean;
+  dependencyPaths?: string[];
+  dependencyParents?: string[];
   license: string; // SPDX identifier
   category: 'permissive' | 'weak-copyleft' | 'strong-copyleft' | 'proprietary' | 'unknown';
   risk: 'critical' | 'high' | 'medium' | 'low' | 'info';
@@ -40,23 +52,118 @@ export interface LicenseReport {
     proprietary: number;
     unknown: number;
   };
+  inventoryErrors: PackageInventoryError[];
   sbom?: SBOMDocument;
 }
 
-export interface SBOMDocument {
-  format: 'spdx' | 'cyclonedx';
-  version: string;
-  name: string;
-  packages: SBOMPackage[];
-  timestamp: string;
+export interface LicenseScanOptions {
+  offline?: boolean;
+  /** Explicit capability for installed ecosystem tools that may execute repository code. */
+  runProjectCode?: boolean;
+  networkIsolation?: boolean;
+  /** Reuse a caller-owned inventory when vulnerability and SBOM work share a run. */
+  inventory?: PackageInventory;
 }
 
-export interface SBOMPackage {
+export type SBOMDocument = Spdx23Document | CycloneDx17Document;
+
+export interface Spdx23Document {
+  spdxVersion: 'SPDX-2.3';
+  dataLicense: 'CC0-1.0';
+  SPDXID: 'SPDXRef-DOCUMENT';
+  name: string;
+  documentNamespace: string;
+  creationInfo: { created: string; creators: string[] };
+  packages: Spdx23Package[];
+  relationships: Array<{
+    spdxElementId: string;
+    relationshipType: 'DESCRIBES' | 'DEPENDS_ON';
+    relatedSpdxElement: string;
+  }>;
+}
+
+export interface Spdx23Package {
+  name: string;
+  SPDXID: string;
+  versionInfo: string;
+  downloadLocation: 'NOASSERTION';
+  filesAnalyzed: false;
+  licenseConcluded: string;
+  licenseDeclared: string;
+  copyrightText: 'NOASSERTION';
+  externalRefs: Array<{
+    referenceCategory: 'PACKAGE-MANAGER';
+    referenceType: 'purl';
+    referenceLocator: string;
+  }>;
+}
+
+export interface CycloneDx17Document {
+  $schema: 'https://cyclonedx.org/schema/bom-1.7.schema.json';
+  bomFormat: 'CycloneDX';
+  specVersion: '1.7';
+  serialNumber: string;
+  version: 1;
+  metadata: {
+    timestamp: string;
+    tools: { components: Array<{ type: 'application'; name: 'GuardScan'; version: string }> };
+    component: { type: 'application'; name: string; 'bom-ref': string };
+  };
+  components: CycloneDx17Component[];
+  dependencies: Array<{ ref: string; dependsOn: string[] }>;
+}
+
+export interface CycloneDx17Component {
+  type: 'library';
+  'bom-ref': string;
   name: string;
   version: string;
-  license: string;
-  purl?: string; // Package URL
-  cpe?: string;  // Common Platform Enumeration
+  purl: string;
+  scope?: 'required' | 'optional' | 'excluded';
+  licenses: Array<
+    | { license: { id?: string; name?: string } }
+    | { expression: string }
+  >;
+}
+
+const PACKAGE_VERSION = packageManifest.version;
+const SPDX_IDENTIFIERS = loadSpdxIdentifierRegistry();
+
+export function parseNpmLicenseKey(value: string): {name: string; version: string} {
+  const separator = value.lastIndexOf('@');
+  if (separator <= 0 || separator === value.length - 1) {
+    return {name: value, version: 'unknown'};
+  }
+  return {name: value.slice(0, separator), version: value.slice(separator + 1)};
+}
+
+function normalizedLicenseCoordinate(source: LicenseFinding['source'], name: string, version: string): string {
+  const normalizedName = source === 'pip' ? name.toLowerCase().replace(/[-_.]+/g, '-') : name;
+  return `${source}\0${normalizedName}\0${version}`;
+}
+
+export function filterLicenseEnrichment(
+  findings: LicenseFinding[],
+  inventory: PackageInventory
+): LicenseFinding[] {
+  const allowed = new Map<string, DependencyCoordinate>();
+  for (const coordinate of inventory.coordinates) {
+    allowed.set(normalizedLicenseCoordinate(
+      coordinate.ecosystem === 'ruby' ? 'rubygems' : coordinate.ecosystem,
+      coordinate.name,
+      coordinate.exactVersion
+    ), coordinate);
+  }
+  return findings.flatMap(finding => {
+    const coordinate = allowed.get(normalizedLicenseCoordinate(
+      finding.source,
+      finding.package,
+      finding.version
+    ));
+    return coordinate
+      ? [{...finding, package: coordinate.name, version: coordinate.exactVersion}]
+      : [];
+  });
 }
 
 export class LicenseScanner {
@@ -86,16 +193,32 @@ export class LicenseScanner {
   /**
    * Scan repository for license compliance
    */
-  async scan(repoPath: string = process.cwd(), projectType: 'proprietary' | 'open-source' = 'proprietary'): Promise<LicenseReport> {
-    const findings: LicenseFinding[] = [];
+  async scan(
+    repoPath: string = process.cwd(),
+    projectType: 'proprietary' | 'open-source' = 'proprietary',
+    options: LicenseScanOptions = {}
+  ): Promise<LicenseReport> {
+    const inventory = options.inventory || collectPackageInventory(repoPath);
+    const localFindings = inventory.coordinates.map(coordinate =>
+      this.findingFromCoordinate(repoPath, coordinate)
+    );
+    let findings = this.mergeFindings(localFindings);
 
-    // Scan different ecosystems
-    findings.push(...await this.scanNpm(repoPath));
-    findings.push(...await this.scanPip(repoPath));
-    findings.push(...await this.scanGo(repoPath));
-    findings.push(...await this.scanCargo(repoPath));
-    findings.push(...await this.scanMaven(repoPath));
-    findings.push(...await this.scanRubygems(repoPath));
+    if (!options.offline && options.runProjectCode === true) {
+      // Scan different ecosystems
+      const enrichment = filterLicenseEnrichment([
+        ...await this.scanNpm(repoPath, options.networkIsolation),
+        ...await this.scanPip(repoPath, options.networkIsolation),
+        ...await this.scanGo(repoPath, options.networkIsolation),
+        ...await this.scanCargo(repoPath, options.networkIsolation),
+        ...await this.scanMaven(repoPath),
+        ...await this.scanRubygems(repoPath, options.networkIsolation),
+      ], inventory);
+      findings = this.mergeFindings([
+        ...findings,
+        ...enrichment,
+      ]);
+    }
 
     // Calculate risk for each finding
     findings.forEach(finding => {
@@ -128,13 +251,161 @@ export class LicenseScanner {
       compatibilityIssues,
       riskSummary,
       categorySummary,
+      inventoryErrors: inventory.errors.map(error => ({ ...error })),
     };
+  }
+
+  /**
+   * Build an SBOM-safe entry from repository data only. Network access is never
+   * required; npm license metadata is read from an installed package when it is
+   * available and otherwise remains explicitly unknown.
+   */
+  private findingFromCoordinate(repoPath: string, coordinate: DependencyCoordinate): LicenseFinding {
+    const source = coordinate.ecosystem === 'ruby' ? 'rubygems' : coordinate.ecosystem;
+    const discoveredLicense = coordinate.ecosystem === 'npm'
+      ? this.readInstalledNpmLicense(repoPath, coordinate)
+      : 'Unknown';
+    const license = this.normalizeLicense(discoveredLicense);
+
+    return {
+      package: coordinate.name,
+      version: coordinate.exactVersion,
+      scope: coordinate.scope,
+      direct: coordinate.direct,
+      dependencyPaths: [...coordinate.dependencyPaths],
+      ...(coordinate.dependencyParents !== undefined
+        ? {dependencyParents: [...coordinate.dependencyParents]}
+        : {}),
+      license,
+      category: this.categorizeLicense(license),
+      risk: 'info',
+      description: `${source} package from ${coordinate.lockfilePath}`,
+      source,
+    };
+  }
+
+  private readInstalledNpmLicense(repoPath: string, coordinate: DependencyCoordinate): string {
+    let resolvedRepoPath: string;
+    try {
+      resolvedRepoPath = fs.realpathSync(repoPath);
+    } catch {
+      return 'Unknown';
+    }
+    const lockfileDirectory = path.dirname(path.resolve(resolvedRepoPath, coordinate.lockfilePath));
+    const candidates: string[] = [];
+    for (const dependencyPath of coordinate.dependencyPaths) {
+      const normalized = dependencyPath.replace(/\\/g, '/');
+      if (/(?:^|\/)node_modules\//.test(normalized)) {
+        candidates.push(path.resolve(lockfileDirectory, normalized, 'package.json'));
+        continue;
+      }
+      if (normalized.includes(' > ')) {
+        const names = normalized.split(' > ')
+          .map(value => versionedDependencyIdentity(value.trim()).name)
+          .filter(Boolean);
+        const packagePath = names.reduce(
+          (current, name) => path.join(current, 'node_modules', name),
+          lockfileDirectory
+        );
+        candidates.push(path.join(packagePath, 'package.json'));
+      }
+    }
+
+    // Lockfile v1 dependency paths do not necessarily name a filesystem path.
+    candidates.push(path.resolve(lockfileDirectory, 'node_modules', coordinate.name, 'package.json'));
+
+    for (const candidate of [...new Set(candidates)]) {
+      try {
+        const resolvedCandidate = fs.realpathSync(candidate);
+        const relative = path.relative(resolvedRepoPath, resolvedCandidate);
+        if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+          continue;
+        }
+        const manifest = JSON.parse(fs.readFileSync(resolvedCandidate, 'utf8')) as {
+          name?: string;
+          version?: string;
+          license?: string | { type?: string };
+          licenses?: Array<string | { type?: string }>;
+        };
+        if (manifest.name !== coordinate.name || manifest.version !== coordinate.exactVersion) {continue;}
+        if (typeof manifest.license === 'string') {return manifest.license;}
+        if (manifest.license && typeof manifest.license.type === 'string') {return manifest.license.type;}
+        if (Array.isArray(manifest.licenses)) {
+          const values = manifest.licenses
+            .map(value => typeof value === 'string' ? value : value?.type)
+            .filter((value): value is string => Boolean(value));
+          if (values.length > 0) {return values.join(' OR ');}
+        }
+      } catch {
+        // Missing and malformed installed metadata falls back to Unknown.
+      }
+    }
+    return 'Unknown';
+  }
+
+  private mergeFindings(values: LicenseFinding[]): LicenseFinding[] {
+    const findings = new Map<string, LicenseFinding>();
+    const scopeRank: Record<DependencyCoordinate['scope'], number> = {
+      unknown: 0,
+      development: 1,
+      optional: 2,
+      runtime: 3,
+    };
+    for (const value of values) {
+      const key = `${value.source}\u0000${value.package}\u0000${value.version}`;
+      const existing = findings.get(key);
+      if (!existing) {
+        findings.set(key, {
+          ...value,
+          dependencyPaths: [...new Set(value.dependencyPaths || [])].sort(),
+          ...(value.dependencyParents !== undefined
+            ? {dependencyParents: [...new Set(value.dependencyParents)].sort()}
+            : {}),
+        });
+        continue;
+      }
+      const preferred = existing.license === 'Unknown' && value.license !== 'Unknown'
+        ? value
+        : existing;
+      const scopes = [existing.scope, value.scope].filter(
+        (scope): scope is DependencyCoordinate['scope'] => scope !== undefined
+      );
+      const scope = scopes.sort((left, right) => scopeRank[right] - scopeRank[left])[0];
+      const direct = existing.direct === true || value.direct === true
+        ? true
+        : existing.direct === false || value.direct === false
+          ? false
+          : undefined;
+      findings.set(key, {
+        ...preferred,
+        scope,
+        direct,
+        dependencyPaths: [...new Set([
+          ...(existing.dependencyPaths || []),
+          ...(value.dependencyPaths || []),
+        ])].sort(),
+        ...(existing.dependencyParents !== undefined || value.dependencyParents !== undefined
+          ? {dependencyParents: [...new Set([
+              ...(existing.dependencyParents || []),
+              ...(value.dependencyParents || []),
+            ])].sort()}
+          : {}),
+      });
+    }
+    return [...findings.values()].sort((left, right) =>
+      left.source.localeCompare(right.source) ||
+      left.package.localeCompare(right.package) ||
+      left.version.localeCompare(right.version)
+    );
   }
 
   /**
    * Scan npm packages
    */
-  private async scanNpm(repoPath: string): Promise<LicenseFinding[]> {
+  private async scanNpm(
+    repoPath: string,
+    networkIsolation?: boolean
+  ): Promise<LicenseFinding[]> {
     const findings: LicenseFinding[] = [];
     const packageJsonPath = path.join(repoPath, 'package.json');
 
@@ -144,22 +415,22 @@ export class LicenseScanner {
 
     try {
       // Try using license-checker if available
-      const output = execSync('npx license-checker --json', {
-        cwd: repoPath,
-        encoding: 'utf-8',
-        stdio: ['pipe', 'pipe', 'ignore'],
-        timeout: 30000,
-      });
+      const output = runLicenseTool(
+        'npx',
+        ['--no-install', 'license-checker', '--json'],
+        repoPath,
+        networkIsolation
+      );
 
       const licenses = JSON.parse(output);
 
       for (const [pkg, data] of Object.entries(licenses)) {
-        const [name, version] = pkg.split('@').filter(Boolean);
+        const {name, version} = parseNpmLicenseKey(pkg);
         const license = (data as any).licenses || 'Unknown';
 
         findings.push({
-          package: name || pkg,
-          version: version || 'unknown',
+          package: name,
+          version,
           license: this.normalizeLicense(license),
           category: this.categorizeLicense(license),
           risk: 'info', // Will be calculated later
@@ -198,7 +469,10 @@ export class LicenseScanner {
   /**
    * Scan pip packages
    */
-  private async scanPip(repoPath: string): Promise<LicenseFinding[]> {
+  private async scanPip(
+    repoPath: string,
+    networkIsolation?: boolean
+  ): Promise<LicenseFinding[]> {
     const findings: LicenseFinding[] = [];
     const requirementsPath = path.join(repoPath, 'requirements.txt');
 
@@ -208,12 +482,12 @@ export class LicenseScanner {
 
     try {
       // Try using pip-licenses if available
-      const output = execSync('pip-licenses --format=json', {
-        cwd: repoPath,
-        encoding: 'utf-8',
-        stdio: ['pipe', 'pipe', 'ignore'],
-        timeout: 30000,
-      });
+      const output = runLicenseTool(
+        'pip-licenses',
+        ['--format=json'],
+        repoPath,
+        networkIsolation
+      );
 
       const licenses = JSON.parse(output);
 
@@ -262,7 +536,10 @@ export class LicenseScanner {
   /**
    * Scan Go modules
    */
-  private async scanGo(repoPath: string): Promise<LicenseFinding[]> {
+  private async scanGo(
+    repoPath: string,
+    networkIsolation?: boolean
+  ): Promise<LicenseFinding[]> {
     const findings: LicenseFinding[] = [];
     const goModPath = path.join(repoPath, 'go.mod');
 
@@ -271,12 +548,12 @@ export class LicenseScanner {
     }
 
     try {
-      const output = execSync('go list -m -json all', {
-        cwd: repoPath,
-        encoding: 'utf-8',
-        stdio: ['pipe', 'pipe', 'ignore'],
-        timeout: 30000,
-      });
+      const output = runLicenseTool(
+        'go',
+        ['list', '-m', '-json', 'all'],
+        repoPath,
+        networkIsolation
+      );
 
       // Parse NDJSON
       const lines = output.split('\n').filter(l => l.trim());
@@ -308,7 +585,10 @@ export class LicenseScanner {
   /**
    * Scan Cargo packages
    */
-  private async scanCargo(repoPath: string): Promise<LicenseFinding[]> {
+  private async scanCargo(
+    repoPath: string,
+    networkIsolation?: boolean
+  ): Promise<LicenseFinding[]> {
     const findings: LicenseFinding[] = [];
     const cargoTomlPath = path.join(repoPath, 'Cargo.toml');
 
@@ -317,12 +597,12 @@ export class LicenseScanner {
     }
 
     try {
-      const output = execSync('cargo metadata --format-version 1', {
-        cwd: repoPath,
-        encoding: 'utf-8',
-        stdio: ['pipe', 'pipe', 'ignore'],
-        timeout: 30000,
-      });
+      const output = runLicenseTool(
+        'cargo',
+        ['metadata', '--format-version', '1'],
+        repoPath,
+        networkIsolation
+      );
 
       const metadata = JSON.parse(output);
 
@@ -364,7 +644,10 @@ export class LicenseScanner {
   /**
    * Scan Ruby gems
    */
-  private async scanRubygems(repoPath: string): Promise<LicenseFinding[]> {
+  private async scanRubygems(
+    repoPath: string,
+    networkIsolation?: boolean
+  ): Promise<LicenseFinding[]> {
     const findings: LicenseFinding[] = [];
     const gemfilePath = path.join(repoPath, 'Gemfile');
 
@@ -373,12 +656,12 @@ export class LicenseScanner {
     }
 
     try {
-      const output = execSync('bundle exec gem list --local', {
-        cwd: repoPath,
-        encoding: 'utf-8',
-        stdio: ['pipe', 'pipe', 'ignore'],
-        timeout: 30000,
-      });
+      const output = runLicenseTool(
+        'bundle',
+        ['exec', 'gem', 'list', '--local'],
+        repoPath,
+        networkIsolation
+      );
 
       // Parse gem list output
       const lines = output.split('\n');
@@ -463,8 +746,9 @@ export class LicenseScanner {
 
     // Critical risks
     if (projectType === 'proprietary') {
-      // GPL/AGPL in proprietary project is critical
-      if (normalized.includes('GPL') || normalized.includes('AGPL')) {
+      // Strong copyleft in a proprietary project is critical.
+      const containsGplFamilyLicense = /(?:^|[^A-Za-z0-9])(?:AGPL|GPL)(?=$|[^A-Za-z0-9])/.test(normalized);
+      if (category === 'strong-copyleft' || containsGplFamilyLicense) {
         return 'critical';
       }
     }
@@ -493,11 +777,23 @@ export class LicenseScanner {
   private checkCompatibility(findings: LicenseFinding[], projectType: string): CompatibilityIssue[] {
     const issues: CompatibilityIssue[] = [];
 
-    // Check each pair of licenses
-    for (let i = 0; i < findings.length; i++) {
-      for (let j = i + 1; j < findings.length; j++) {
-        const f1 = findings[i];
-        const f2 = findings[j];
+    // Compatibility depends on license combinations, not package count. Group
+    // known licenses so large lock inventories cannot create quadratic work or
+    // an unbounded duplicate issue list.
+    const byLicense = new Map<string, LicenseFinding[]>();
+    for (const finding of findings) {
+      const license = this.normalizeLicense(finding.license);
+      if (!this.COMPATIBILITY_MATRIX[license]) {continue;}
+      const values = byLicense.get(license) || [];
+      if (values.length < 2) {values.push(finding);}
+      byLicense.set(license, values);
+    }
+    const groups = [...byLicense.values()];
+    for (let i = 0; i < groups.length; i++) {
+      for (let j = i; j < groups.length; j++) {
+        if (i === j && groups[i].length < 2) {continue;}
+        const f1 = groups[i][0];
+        const f2 = groups[j][i === j ? 1 : 0];
 
         const conflict = this.checkLicenseConflict(f1.license, f2.license);
         if (conflict) {
@@ -561,20 +857,94 @@ export class LicenseScanner {
   /**
    * Generate SBOM (Software Bill of Materials)
    */
-  generateSBOM(findings: LicenseFinding[], format: 'spdx' | 'cyclonedx' = 'spdx', projectName: string = 'unknown'): SBOMDocument {
-    const packages: SBOMPackage[] = findings.map(f => ({
-      name: f.package,
-      version: f.version,
-      license: f.license,
-      purl: this.generatePURL(f),
-    }));
+  generateSBOM(findings: LicenseFinding[], format: 'spdx', projectName?: string): Spdx23Document;
+  generateSBOM(findings: LicenseFinding[], format: 'cyclonedx', projectName?: string): CycloneDx17Document;
+  generateSBOM(findings: LicenseFinding[], format?: 'spdx' | 'cyclonedx', projectName?: string): SBOMDocument;
+  generateSBOM(
+    findings: LicenseFinding[],
+    format: 'spdx' | 'cyclonedx' = 'spdx',
+    projectName: string = 'unknown'
+  ): SBOMDocument {
+    const ordered = [...findings].sort((left, right) =>
+      `${left.source}\0${left.package}\0${left.version}`.localeCompare(
+        `${right.source}\0${right.package}\0${right.version}`
+      )
+    );
+    const created = new Date().toISOString();
+    const rootReference = `urn:guardscan:project:${stableIdentifier(projectName)}`;
 
-    return {
-      format,
-      version: format === 'spdx' ? '2.3' : '1.4',
+    if (format === 'cyclonedx') {
+      const components: CycloneDx17Component[] = ordered.map(finding => {
+        const purl = this.generatePURL(finding);
+        return {
+          type: 'library',
+          'bom-ref': purl,
+          name: finding.package,
+          version: finding.version,
+          purl,
+          scope: cycloneDxScope(finding.scope),
+          licenses: [cycloneDxLicense(finding.license)],
+        };
+      });
+      return {
+        $schema: 'https://cyclonedx.org/schema/bom-1.7.schema.json',
+        bomFormat: 'CycloneDX',
+        specVersion: '1.7',
+        serialNumber: `urn:uuid:${randomUUID()}`,
+        version: 1,
+        metadata: {
+          timestamp: created,
+          tools: { components: [{ type: 'application', name: 'GuardScan', version: PACKAGE_VERSION }] },
+          component: { type: 'application', name: projectName, 'bom-ref': rootReference },
+        },
+        components,
+        dependencies: cycloneDxDependencies(ordered, components, rootReference),
+      };
+    }
+
+    const dependencyPackages: Spdx23Package[] = ordered.map(finding => {
+      const purl = this.generatePURL(finding);
+      const license = isSpdxExpression(finding.license) ? finding.license : 'NOASSERTION';
+      return {
+        name: finding.package,
+        SPDXID: `SPDXRef-Package-${stableIdentifier(purl)}`,
+        versionInfo: finding.version,
+        downloadLocation: 'NOASSERTION',
+        filesAnalyzed: false,
+        licenseConcluded: license,
+        licenseDeclared: license,
+        copyrightText: 'NOASSERTION',
+        externalRefs: [{
+          referenceCategory: 'PACKAGE-MANAGER',
+          referenceType: 'purl',
+          referenceLocator: purl,
+        }],
+      };
+    });
+    const rootPackage: Spdx23Package = {
       name: projectName,
-      packages,
-      timestamp: new Date().toISOString(),
+      SPDXID: `SPDXRef-RootPackage-${stableIdentifier(projectName)}`,
+      versionInfo: 'NOASSERTION',
+      downloadLocation: 'NOASSERTION',
+      filesAnalyzed: false,
+      licenseConcluded: 'NOASSERTION',
+      licenseDeclared: 'NOASSERTION',
+      copyrightText: 'NOASSERTION',
+      externalRefs: [],
+    };
+    return {
+      spdxVersion: 'SPDX-2.3',
+      dataLicense: 'CC0-1.0',
+      SPDXID: 'SPDXRef-DOCUMENT',
+      name: projectName,
+      documentNamespace: `https://guardscancli.com/spdx/${encodeURIComponent(projectName)}/${randomUUID()}`,
+      creationInfo: { created, creators: [`Tool: GuardScan-${PACKAGE_VERSION}`] },
+      packages: [...dependencyPackages, rootPackage],
+      relationships: [{
+        spdxElementId: 'SPDXRef-DOCUMENT',
+        relationshipType: 'DESCRIBES',
+        relatedSpdxElement: rootPackage.SPDXID,
+      }, ...spdxDependencyRelationships(ordered, dependencyPackages, rootPackage.SPDXID)],
     };
   }
 
@@ -582,12 +952,325 @@ export class LicenseScanner {
    * Generate Package URL (PURL)
    */
   private generatePURL(finding: LicenseFinding): string {
-    const type = finding.source;
-    const name = finding.package;
-    const version = finding.version;
+    const type = finding.source === 'rubygems'
+      ? 'gem'
+      : finding.source === 'pip'
+        ? 'pypi'
+        : finding.source === 'go'
+          ? 'golang'
+          : finding.source;
+    const version = encodeURIComponent(finding.version);
+
+    if (type === 'maven') {
+      const separator = finding.package.indexOf(':');
+      if (separator > 0 && separator < finding.package.length - 1) {
+        const namespace = encodeURIComponent(finding.package.slice(0, separator));
+        const artifact = encodeURIComponent(finding.package.slice(separator + 1));
+        return `pkg:maven/${namespace}/${artifact}@${version}`;
+      }
+    }
+
+    const name = finding.package.split('/').map(segment => encodeURIComponent(segment)).join('/');
 
     return `pkg:${type}/${name}@${version}`;
   }
+}
+
+function runLicenseTool(
+  command: string,
+  args: string[],
+  repoPath: string,
+  networkIsolation?: boolean
+): string {
+  const result = runProcess(command, args, {
+    cwd: repoPath,
+    timeoutMs: 30_000,
+    maxBuffer: 10 * 1024 * 1024,
+    networkIsolation: networkIsolation === true,
+  });
+  if (result.timedOut) {throw new Error(`${command} timed out`);}
+  if (result.status !== 0) {
+    throw new Error(`${command} exited ${result.status} without usable license metadata`);
+  }
+  return result.stdout;
+}
+
+function cycloneDxScope(
+  scope: DependencyCoordinate['scope'] | undefined
+): CycloneDx17Component['scope'] {
+  if (scope === 'development') {return 'excluded';}
+  if (scope === 'optional') {return 'optional';}
+  if (scope === 'unknown') {return undefined;}
+  return 'required';
+}
+
+function isDirectInstallDependency(finding: LicenseFinding): boolean {
+  return finding.direct === true && finding.scope !== 'development';
+}
+
+interface DependencyIdentity {
+  name: string;
+  version?: string;
+}
+
+function versionedDependencyIdentity(value: string): DependencyIdentity {
+  const separator = value.lastIndexOf('@');
+  if (separator > 0 && separator < value.length - 1) {
+    return {name: value.slice(0, separator), version: value.slice(separator + 1)};
+  }
+  return {name: value};
+}
+
+function dependencyIdentities(dependencyPath: string): DependencyIdentity[] {
+  if (dependencyPath.includes(' > ')) {
+    return dependencyPath.split(' > ')
+      .map(value => value.trim())
+      .filter(Boolean)
+      .map(versionedDependencyIdentity);
+  }
+  const segments = dependencyPath.replace(/\\/g, '/').split('/').filter(Boolean);
+  const names: string[] = [];
+  for (let index = 0; index < segments.length; index++) {
+    if (segments[index] !== 'node_modules' || !segments[index + 1]) {continue;}
+    const first = segments[index + 1];
+    if (first.startsWith('@') && segments[index + 2]) {
+      names.push(`${first}/${segments[index + 2]}`);
+      index += 2;
+    } else {
+      names.push(first);
+      index += 1;
+    }
+  }
+  return names.map(name => ({name}));
+}
+
+function dependencyParentIdentities(finding: LicenseFinding): DependencyIdentity[] {
+  if (finding.dependencyParents !== undefined) {
+    return finding.dependencyParents.map(versionedDependencyIdentity);
+  }
+  const parents = new Map<string, DependencyIdentity>();
+  for (const dependencyPath of finding.dependencyPaths || []) {
+    const identities = dependencyIdentities(dependencyPath);
+    const child = identities[identities.length - 1];
+    if (identities.length < 2 || child.name !== finding.package ||
+      (child.version !== undefined && child.version !== finding.version)) {continue;}
+    const parent = identities[identities.length - 2];
+    parents.set(`${parent.name}\0${parent.version || ''}`, parent);
+  }
+  return [...parents.values()];
+}
+
+function cycloneDxDependencies(
+  findings: LicenseFinding[],
+  components: CycloneDx17Component[],
+  rootReference: string
+): Array<{ ref: string; dependsOn: string[] }> {
+  const referencesByPackage = new Map<string, string[]>();
+  const referencesByCoordinate = new Map<string, string[]>();
+  for (let index = 0; index < findings.length; index++) {
+    const finding = findings[index];
+    const key = `${finding.source}\u0000${finding.package}`;
+    const references = referencesByPackage.get(key) || [];
+    references.push(components[index]['bom-ref']);
+    referencesByPackage.set(key, references);
+    referencesByCoordinate.set(
+      `${key}\u0000${finding.version}`,
+      [...(referencesByCoordinate.get(`${key}\u0000${finding.version}`) || []), components[index]['bom-ref']]
+    );
+  }
+
+  const outgoing = new Map<string, Set<string>>();
+  for (let index = 0; index < findings.length; index++) {
+    const finding = findings[index];
+    if (!['npm', 'cargo', 'rubygems'].includes(finding.source)) {continue;}
+    for (const parent of dependencyParentIdentities(finding)) {
+      const parentReferences = parent.version
+        ? referencesByCoordinate.get(`${finding.source}\u0000${parent.name}\u0000${parent.version}`) || []
+        : referencesByPackage.get(`${finding.source}\u0000${parent.name}`) || [];
+      if (parentReferences.length !== 1) {continue;}
+      const children = outgoing.get(parentReferences[0]) || new Set<string>();
+      children.add(components[index]['bom-ref']);
+      outgoing.set(parentReferences[0], children);
+    }
+  }
+
+  const dependencies: Array<{ ref: string; dependsOn: string[] }> = [{
+    ref: rootReference,
+    dependsOn: components.flatMap((component, index) =>
+      isDirectInstallDependency(findings[index]) ? [component['bom-ref']] : []
+    ),
+  }];
+  for (const component of components) {
+    const dependsOn = outgoing.get(component['bom-ref']);
+    if (dependsOn && dependsOn.size > 0) {
+      dependencies.push({ ref: component['bom-ref'], dependsOn: [...dependsOn].sort() });
+    }
+  }
+  return dependencies;
+}
+
+function spdxDependencyRelationships(
+  findings: LicenseFinding[],
+  packages: Spdx23Package[],
+  rootReference: string
+): Spdx23Document['relationships'] {
+  const referencesByPackage = new Map<string, string[]>();
+  const referencesByCoordinate = new Map<string, string[]>();
+  for (let index = 0; index < findings.length; index++) {
+    const finding = findings[index];
+    const key = `${finding.source}\u0000${finding.package}`;
+    referencesByPackage.set(key, [...(referencesByPackage.get(key) || []), packages[index].SPDXID]);
+    const coordinateKey = `${key}\u0000${finding.version}`;
+    referencesByCoordinate.set(coordinateKey, [
+      ...(referencesByCoordinate.get(coordinateKey) || []),
+      packages[index].SPDXID,
+    ]);
+  }
+
+  const relationships: Spdx23Document['relationships'] = packages.flatMap((value, index) =>
+    findings[index].direct === true ? [{
+      spdxElementId: rootReference,
+      relationshipType: 'DEPENDS_ON' as const,
+      relatedSpdxElement: value.SPDXID,
+    }] : []
+  );
+  const edges = new Set<string>();
+  for (let index = 0; index < findings.length; index++) {
+    const finding = findings[index];
+    if (!['npm', 'cargo', 'rubygems'].includes(finding.source)) {continue;}
+    for (const parent of dependencyParentIdentities(finding)) {
+      const parentReferences = parent.version
+        ? referencesByCoordinate.get(`${finding.source}\u0000${parent.name}\u0000${parent.version}`) || []
+        : referencesByPackage.get(`${finding.source}\u0000${parent.name}`) || [];
+      if (parentReferences.length !== 1) {continue;}
+      const edge = `${parentReferences[0]}\u0000${packages[index].SPDXID}`;
+      if (edges.has(edge)) {continue;}
+      edges.add(edge);
+      relationships.push({
+        spdxElementId: parentReferences[0],
+        relationshipType: 'DEPENDS_ON',
+        relatedSpdxElement: packages[index].SPDXID,
+      });
+    }
+  }
+  return relationships;
+}
+
+function stableIdentifier(value: string): string {
+  return createHash('sha256').update(value).digest('hex').slice(0, 32);
+}
+
+function isSimpleSpdxIdentifier(value: string): boolean {
+  return SPDX_IDENTIFIERS.licenses.has(value);
+}
+
+function loadSpdxIdentifierRegistry(): {
+  licenses: ReadonlySet<string>;
+  exceptions: ReadonlySet<string>;
+} {
+  try {
+    const schema = JSON.parse(fs.readFileSync(path.resolve(__dirname, '../../schemas/spdx.schema.json'), 'utf8')) as {
+      enum?: unknown;
+    };
+    if (Array.isArray(schema.enum)) {
+      const identifiers = schema.enum.filter((value): value is string => typeof value === 'string');
+      // CycloneDX appends the alphabetized SPDX exception registry after the
+      // alphabetized license registry in this bundled schema.
+      const firstException = identifiers.indexOf('389-exception');
+      if (firstException > 0) {
+        return {
+          licenses: new Set(identifiers.slice(0, firstException)),
+          exceptions: new Set(identifiers.slice(firstException)),
+        };
+      }
+    }
+  } catch {
+    // Fall back to common identifiers if an installation omits the bundled schema.
+  }
+  return {
+    licenses: new Set(['Apache-2.0', 'BSD-2-Clause', 'BSD-3-Clause', 'ISC', 'MIT', 'MPL-2.0']),
+    exceptions: new Set(['Classpath-exception-2.0', 'LLVM-exception']),
+  };
+}
+
+function cycloneDxLicense(value: string): { license: { id?: string; name?: string } } | { expression: string } {
+  if (isSimpleSpdxIdentifier(value)) {return { license: { id: value } };}
+  if (isCompoundSpdxExpression(value)) {return { expression: value };}
+  return { license: { name: value || 'Unknown' } };
+}
+
+function isCompoundSpdxExpression(value: string): boolean {
+  return isSpdxExpression(value) && (/[()]/.test(value) || /(?:^|\s)(?:AND|OR|WITH)(?:\s|$)/.test(value));
+}
+
+function isSpdxExpression(value: string): boolean {
+  if (value === 'Unknown' || value.length > 4096) {return false;}
+  const tokens: string[] = [];
+  let cursor = 0;
+  while (cursor < value.length) {
+    const whitespace = value.slice(cursor).match(/^\s+/)?.[0];
+    if (whitespace) {
+      cursor += whitespace.length;
+      continue;
+    }
+    const character = value[cursor];
+    if (character === '(' || character === ')') {
+      tokens.push(character);
+      cursor += 1;
+      continue;
+    }
+    const identifier = value.slice(cursor).match(/^[A-Za-z0-9][A-Za-z0-9.+:-]*/)?.[0];
+    if (!identifier) {return false;}
+    tokens.push(identifier);
+    if (tokens.length > 256) {return false;}
+    cursor += identifier.length;
+  }
+  if (tokens.length === 0) {return false;}
+
+  let index = 0;
+  const isLicenseIdentifier = (token: string | undefined): boolean =>
+    token !== undefined && (
+      SPDX_IDENTIFIERS.licenses.has(token) ||
+      /^(?:DocumentRef-[A-Za-z0-9.-]+:)?LicenseRef-[A-Za-z0-9.-]+$/.test(token)
+    );
+  const isExceptionIdentifier = (token: string | undefined): boolean =>
+    token !== undefined && SPDX_IDENTIFIERS.exceptions.has(token);
+  const parseLicense = (): boolean => {
+    if (!isLicenseIdentifier(tokens[index])) {return false;}
+    index += 1;
+    if (tokens[index] === 'WITH') {
+      index += 1;
+      if (!isExceptionIdentifier(tokens[index])) {return false;}
+      index += 1;
+    }
+    return true;
+  };
+  const parsePrimary = (depth: number): boolean => {
+    if (tokens[index] !== '(') {return parseLicense();}
+    if (depth >= 64) {return false;}
+    index += 1;
+    if (!parseOr(depth + 1) || tokens[index] !== ')') {return false;}
+    index += 1;
+    return true;
+  };
+  const parseAnd = (depth: number): boolean => {
+    if (!parsePrimary(depth)) {return false;}
+    while (tokens[index] === 'AND') {
+      index += 1;
+      if (!parsePrimary(depth)) {return false;}
+    }
+    return true;
+  };
+  const parseOr = (depth: number): boolean => {
+    if (!parseAnd(depth)) {return false;}
+    while (tokens[index] === 'OR') {
+      index += 1;
+      if (!parseAnd(depth)) {return false;}
+    }
+    return true;
+  };
+
+  return parseOr(0) && index === tokens.length;
 }
 
 export const licenseScanner = new LicenseScanner();

@@ -357,9 +357,16 @@ describe('Load Testing Framework', () => {
       const scanner = new DependencyScanner();
 
       generator.generatePackageJson(tempDir, 50);
+      const manifestPath = path.join(tempDir, 'package.json');
+      const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+      manifest.dependencies = Object.fromEntries(
+        Object.entries(manifest.dependencies).map(([name, version]) => [name, String(version).replace(/^\^/, '')])
+      );
+      fs.writeFileSync(manifestPath, JSON.stringify(manifest));
 
       monitor.start();
-      const results = await scanner.scan(tempDir);
+      // Exercise local inventory performance without making this test depend on OSV availability.
+      const results = await scanner.scan(tempDir, { offline: true, allowPartial: true });
       monitor.updatePeakMemory();
 
       const metrics = monitor.getMetrics(1, 50);

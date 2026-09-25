@@ -2,12 +2,22 @@ import { SecretsDetector } from '../../src/core/secrets-detector';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import {execFileSync} from 'child_process';
+import {SECURITY_CONSTANTS} from '../../src/constants/security-constants';
+
+jest.mock('child_process', () => ({
+  ...jest.requireActual<typeof import('child_process')>('child_process'),
+  execFileSync: jest.fn(),
+}));
+
+const mockedExecFileSync = execFileSync as jest.MockedFunction<typeof execFileSync>;
 
 describe('SecretsDetector', () => {
   let detector: SecretsDetector;
   let testDir: string;
 
   beforeEach(() => {
+    mockedExecFileSync.mockReset();
     detector = new SecretsDetector();
     testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'secrets-test-'));
   });
@@ -94,6 +104,96 @@ describe('SecretsDetector', () => {
       const findings = await detector.detectInFiles([testFile]);
 
       expect(findings).toEqual([]);
+    });
+
+    it('skips a large binary without degrading secret coverage', async () => {
+      const binary = path.join(testDir, 'large-image.bin');
+      fs.writeFileSync(binary, Buffer.alloc(2 * 1024 * 1024 + 1));
+      const onSkippedInput = jest.fn();
+
+      await expect(detector.detectInFiles([binary], onSkippedInput)).resolves.toEqual([]);
+
+      expect(onSkippedInput).not.toHaveBeenCalled();
+    });
+
+    it('scans oversized single-line text without degrading secret coverage', async () => {
+      const largeText = path.join(testDir, 'large-lock.json');
+      fs.writeFileSync(
+        largeText,
+        `${'a'.repeat(2 * 1024 * 1024 + 1)} GITHUB_TOKEN=ghp_1234567890abcdefghijklmnopqrstuvwxyz`
+      );
+      const onSkippedInput = jest.fn();
+
+      const findings = await detector.detectInFiles([largeText], onSkippedInput);
+
+      expect(findings).toEqual(expect.arrayContaining([
+        expect.objectContaining({type: 'GitHub Token', file: largeText, line: 1}),
+      ]));
+      expect(onSkippedInput).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('scanGitHistory', () => {
+    it('bounds history without degrading working-tree coverage', async () => {
+      const commits = Array.from({length: 100}, (_, index) => index.toString(16).padStart(40, '0'));
+      mockedExecFileSync.mockImplementation(((_command: string, args: readonly string[]) => {
+        if (args[0] === 'rev-parse') {return 'true\n';}
+        if (args[0] === 'log') {return `${commits.join('\n')}\n`;}
+        if (args[0] === 'show') {return '';}
+        throw new Error(`unexpected git invocation: ${args.join(' ')}`);
+      }) as typeof execFileSync);
+      const onSkippedInput = jest.fn();
+
+      await expect(detector.scanGitHistory(testDir, onSkippedInput)).resolves.toEqual([]);
+
+      expect(mockedExecFileSync).toHaveBeenCalledWith(
+        'git',
+        ['log', '--all', '--format=%H', '--max-count=100'],
+        expect.objectContaining({cwd: testDir})
+      );
+      expect(mockedExecFileSync.mock.calls.filter(([, args]) => args?.[0] === 'show')).toHaveLength(100);
+      expect(mockedExecFileSync).toHaveBeenCalledWith(
+        'git',
+        ['show', '--end-of-options', commits[0]],
+        expect.objectContaining({maxBuffer: SECURITY_CONSTANTS.GIT_HISTORY_DIFF_MAX_BYTES})
+      );
+      expect(onSkippedInput).not.toHaveBeenCalled();
+    });
+
+    it('reports a skipped commit when git show fails', async () => {
+      const commit = 'a'.repeat(40);
+      mockedExecFileSync.mockImplementation(((_command: string, args: readonly string[]) => {
+        if (args[0] === 'rev-parse') {return 'true\n';}
+        if (args[0] === 'log') {return `${commit}\n`;}
+        throw new Error('git object unavailable');
+      }) as typeof execFileSync);
+      const onSkippedInput = jest.fn();
+
+      await expect(detector.scanGitHistory(testDir, onSkippedInput)).resolves.toEqual([]);
+
+      expect(onSkippedInput).toHaveBeenCalledTimes(1);
+    });
+
+    it('reports skipped coverage when git history enumeration fails', async () => {
+      mockedExecFileSync.mockImplementation(((_command: string, args: readonly string[]) => {
+        if (args[0] === 'rev-parse') {return 'true\n';}
+        throw new Error('git log failed');
+      }) as typeof execFileSync);
+      const onSkippedInput = jest.fn();
+
+      await expect(detector.scanGitHistory(testDir, onSkippedInput)).resolves.toEqual([]);
+
+      expect(onSkippedInput).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not report skipped coverage for a path outside a git repository', async () => {
+      const error = Object.assign(new Error('not a repository'), {stderr: 'fatal: not a git repository'});
+      mockedExecFileSync.mockImplementation(() => {throw error;});
+      const onSkippedInput = jest.fn();
+
+      await expect(detector.scanGitHistory(testDir, onSkippedInput)).resolves.toEqual([]);
+
+      expect(onSkippedInput).not.toHaveBeenCalled();
     });
   });
 

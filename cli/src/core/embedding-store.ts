@@ -7,7 +7,7 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import * as os from 'os';
+import { getGuardScanCacheDir } from '../utils/path-helper';
 import {
   CodeEmbedding,
   EmbeddingIndex,
@@ -28,6 +28,8 @@ export interface StoreStats {
 export class FileBasedEmbeddingStore implements EmbeddingStore {
   private storageDir: string;
   private indexPath: string;
+  private readonly persistent: boolean;
+  private memoryIndex: EmbeddingIndex | null = null;
   private cache: Map<string, CodeEmbedding> = new Map();
   private cacheLoaded: boolean = false;
 
@@ -36,16 +38,20 @@ export class FileBasedEmbeddingStore implements EmbeddingStore {
     private basePath?: string
   ) {
     // Default to ~/.guardscan/cache/<repo-id>/embeddings
-    const base =
-      basePath || path.join(os.homedir(), '.guardscan', 'cache', repoId);
+    if (!/^[a-zA-Z0-9._-]+$/.test(repoId)) {
+      throw new Error('Invalid repository embedding identifier');
+    }
+    const base = basePath || path.join(getGuardScanCacheDir(), repoId);
     this.storageDir = path.join(base, 'embeddings');
     this.indexPath = path.join(this.storageDir, 'index.json');
+    this.persistent = process.env.GUARDSCAN_NO_CACHE !== 'true';
   }
 
   /**
    * Initialize storage (create directories)
    */
   async initialize(): Promise<void> {
+    if (!this.persistent) {return;}
     try {
       await fs.promises.mkdir(this.storageDir, { recursive: true });
     } catch (error: any) {
@@ -193,9 +199,10 @@ export class FileBasedEmbeddingStore implements EmbeddingStore {
    */
   async clear(): Promise<void> {
     try {
-      if (fs.existsSync(this.indexPath)) {
+      if (this.persistent && fs.existsSync(this.indexPath)) {
         await fs.promises.unlink(this.indexPath);
       }
+      this.memoryIndex = null;
       this.cache.clear();
       this.cacheLoaded = false;
     } catch (error: any) {
@@ -215,7 +222,7 @@ export class FileBasedEmbeddingStore implements EmbeddingStore {
    * Check if embeddings exist
    */
   async exists(): Promise<boolean> {
-    return fs.existsSync(this.indexPath);
+    return this.persistent ? fs.existsSync(this.indexPath) : this.memoryIndex !== null;
   }
 
   /**
@@ -235,8 +242,12 @@ export class FileBasedEmbeddingStore implements EmbeddingStore {
 
     let totalSize = 0;
     try {
-      const stats = await fs.promises.stat(this.indexPath);
-      totalSize = stats.size;
+      if (!this.persistent) {
+        totalSize = Buffer.byteLength(JSON.stringify(index), 'utf8');
+      } else {
+        const stats = await fs.promises.stat(this.indexPath);
+        totalSize = stats.size;
+      }
     } catch (error) {
       // Ignore
     }
@@ -308,6 +319,7 @@ export class FileBasedEmbeddingStore implements EmbeddingStore {
    * Load index from disk (public method for compatibility checking)
    */
   async loadIndex(): Promise<EmbeddingIndex | null> {
+    if (!this.persistent) {return this.memoryIndex;}
     try {
       if (!fs.existsSync(this.indexPath)) {
         return null;
@@ -332,6 +344,10 @@ export class FileBasedEmbeddingStore implements EmbeddingStore {
    * Save index to disk
    */
   private async saveIndex(index: EmbeddingIndex): Promise<void> {
+    if (!this.persistent) {
+      this.memoryIndex = index;
+      return;
+    }
     try {
       await this.initialize();
 

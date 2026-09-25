@@ -1,11 +1,11 @@
-import { exec } from 'child_process';
+import { execFile } from 'child_process';
 import { promisify } from 'util';
 import * as fs from 'fs';
 import * as path from 'path';
 import { AIProvider } from '../providers/base';
 import { AICache } from '../core/ai-cache';
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 /**
  * Git change information
@@ -127,17 +127,17 @@ export class CommitMessageGenerator {
   private async getStagedChanges(): Promise<GitChange[]> {
     try {
       // Get diff stat for staged changes
-      const { stdout: statOutput } = await execAsync('git diff --cached --numstat', {
+      const { stdout: statOutput } = await execFileAsync('git', ['diff', '--cached', '--numstat'], {
         cwd: this.repoRoot,
       });
 
       // Get actual diff
-      const { stdout: diffOutput } = await execAsync('git diff --cached', {
+      const { stdout: diffOutput } = await execFileAsync('git', ['diff', '--cached'], {
         cwd: this.repoRoot,
       });
 
       // Get status
-      const { stdout: statusOutput } = await execAsync('git diff --cached --name-status', {
+      const { stdout: statusOutput } = await execFileAsync('git', ['diff', '--cached', '--name-status'], {
         cwd: this.repoRoot,
       });
 
@@ -152,16 +152,18 @@ export class CommitMessageGenerator {
    * Get changes between base branch and current branch
    */
   private async getBranchChanges(baseBranch: string): Promise<GitChange[]> {
+    const range = `${baseBranch}...HEAD`;
+
     try {
-      const { stdout: statOutput } = await execAsync(`git diff ${baseBranch}...HEAD --numstat`, {
+      const { stdout: statOutput } = await execFileAsync('git', ['diff', '--numstat', '--end-of-options', range], {
         cwd: this.repoRoot,
       });
 
-      const { stdout: diffOutput } = await execAsync(`git diff ${baseBranch}...HEAD`, {
+      const { stdout: diffOutput } = await execFileAsync('git', ['diff', '--end-of-options', range], {
         cwd: this.repoRoot,
       });
 
-      const { stdout: statusOutput } = await execAsync(`git diff ${baseBranch}...HEAD --name-status`, {
+      const { stdout: statusOutput } = await execFileAsync('git', ['diff', '--name-status', '--end-of-options', range], {
         cwd: this.repoRoot,
       });
 
@@ -177,7 +179,7 @@ export class CommitMessageGenerator {
    */
   private async getBranchCommits(baseBranch: string): Promise<string[]> {
     try {
-      const { stdout } = await execAsync(`git log ${baseBranch}..HEAD --oneline`, {
+      const { stdout } = await execFileAsync('git', ['log', '--oneline', '--end-of-options', `${baseBranch}..HEAD`], {
         cwd: this.repoRoot,
       });
 
@@ -193,7 +195,8 @@ export class CommitMessageGenerator {
    */
   private async getRecentCommits(count: number): Promise<string[]> {
     try {
-      const { stdout } = await execAsync(`git log -${count} --pretty=format:"%s"`, {
+      const maxCount = Number.isFinite(count) && count > 0 ? Math.floor(count) : 5;
+      const { stdout } = await execFileAsync('git', ['log', `--max-count=${maxCount}`, '--pretty=format:%s'], {
         cwd: this.repoRoot,
       });
 

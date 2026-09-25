@@ -3,7 +3,7 @@ import * as path from 'path';
 import { marked } from 'marked';
 import { LOCResult } from '../core/loc-counter';
 import { RepositoryInfo } from '../core/repository';
-import { chartGenerator, SeveritySummary, ComplexityData } from './chart-generator';
+import type { SeveritySummary } from './chart-generator';
 
 export interface ReviewResult {
   summary: string;
@@ -28,6 +28,18 @@ export interface ReviewMetadata {
   provider: string;
   model: string;
   durationMs: number;
+  executionMode?: 'static-analysis' | 'project-code-executed';
+  operationalFailure?: boolean;
+  scannerCoverage?: {
+    status: 'complete' | 'partial' | 'failed';
+    scanners: Array<{
+      name: string;
+      status: 'succeeded' | 'failed' | 'skipped';
+      required: boolean;
+      detail?: string;
+    }>;
+    errors: Array<{scanner: string; code: string; message: string}>;
+  };
 }
 
 export class Reporter {
@@ -48,7 +60,28 @@ export class Reporter {
     markdown += `- **Timestamp:** ${new Date(metadata.timestamp).toLocaleString()}\n`;
     markdown += `- **AI Provider:** ${metadata.provider}\n`;
     markdown += `- **Model:** ${metadata.model}\n`;
+    if (metadata.executionMode) {
+      markdown += `- **Execution mode:** ${metadata.executionMode}\n`;
+    }
+    if (metadata.scannerCoverage) {
+      markdown += `- **Scanner coverage:** ${metadata.scannerCoverage.status}\n`;
+      markdown += `- **Operational status:** ${metadata.operationalFailure ? 'failed' : 'satisfied'}\n`;
+    }
     markdown += `- **Duration:** ${(metadata.durationMs / 1000).toFixed(2)}s\n\n`;
+
+    if (metadata.scannerCoverage) {
+      markdown += '## Scanner Coverage\n\n';
+      for (const scanner of metadata.scannerCoverage.scanners) {
+        const required = scanner.required ? 'required' : 'optional';
+        markdown += `- **${scanner.name}:** ${scanner.status} (${required})`;
+        if (scanner.detail) {markdown += ` - ${scanner.detail}`;}
+        markdown += '\n';
+      }
+      for (const error of metadata.scannerCoverage.errors) {
+        markdown += `- **${error.scanner} error (${error.code}):** ${error.message}\n`;
+      }
+      markdown += '\n';
+    }
 
     // LOC Stats
     markdown += '## Code Statistics\n\n';
@@ -133,6 +166,10 @@ export class Reporter {
 
       // Only generate chart if there are findings
       if (result.findings.length > 0) {
+        // chartjs-node-canvas has a native binding. Keep it off the CLI startup
+        // path so help/version/static reports work even when optional native
+        // chart support is unavailable or install scripts are disabled.
+        const { chartGenerator } = await import('./chart-generator');
         const severityChart = await chartGenerator.generateSeverityChart(severitySummary);
         const severityChartPath = path.join(imagesDir, 'severity-distribution.png');
         fs.writeFileSync(severityChartPath, severityChart);
@@ -141,6 +178,7 @@ export class Reporter {
 
       // Generate category distribution chart if there are findings
       if (result.findings.length > 0) {
+        const { chartGenerator } = await import('./chart-generator');
         const categoryData = this.calculateCategoryDistribution(result.findings);
         if (Object.keys(categoryData).length > 0) {
           const categoryChart = await chartGenerator.generateCategoryChart(categoryData);
@@ -230,26 +268,20 @@ export class Reporter {
       height: auto;
       border-radius: 4px;
     }
-    .upgrade-notice {
-      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-      color: white;
+    .configuration-notice {
+      background: #f8fafc;
+      color: #1f2937;
       padding: 20px 30px;
+      border: 1px solid #dbe3ef;
       border-radius: 8px;
       margin-top: 40px;
-      text-align: center;
     }
-    .upgrade-notice h3 {
+    .configuration-notice h3 {
       margin-top: 0;
-      color: white;
+      color: #1f2937;
     }
-    .upgrade-notice p {
+    .configuration-notice p {
       margin: 10px 0;
-      opacity: 0.95;
-    }
-    .upgrade-notice a {
-      color: #ffd700;
-      text-decoration: none;
-      font-weight: bold;
     }
   </style>
 </head>
@@ -258,16 +290,9 @@ export class Reporter {
     ${htmlContent}
     ${visualsSection}
     ${result.metadata.provider === 'static-analysis' ? `
-    <div class="upgrade-notice">
-      <h3>💡 Want More Insights?</h3>
-      <p>Upgrade to Pro for:</p>
-      <ul style="list-style: none; padding: 0;">
-        <li>🤖 AI-powered code analysis</li>
-        <li>🎯 Context-aware understanding</li>
-        <li>📋 PRD alignment checking</li>
-        <li>📊 Interactive dashboards</li>
-      </ul>
-      <p style="margin-top: 15px;">Configure with <code style="background: rgba(255,255,255,0.2); padding: 4px 8px; border-radius: 4px;">guardscan config</code></p>
+    <div class="configuration-notice">
+      <h3>AI Review Not Configured</h3>
+      <p>This report was generated with local static analysis only. Configure a BYOK cloud provider or a local model with <code>guardscan config</code> to add AI-assisted review.</p>
     </div>
     ` : ''}
   </div>
@@ -281,12 +306,12 @@ export class Reporter {
   /**
    * Save report to file
    */
-  saveReport(
+  async saveReport(
     result: ReviewResult,
     format: 'markdown' | 'html' = 'markdown',
     outputPath?: string,
     reportType?: string
-  ): string {
+  ): Promise<string> {
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
 
     // Generate command-specific filename
@@ -298,7 +323,7 @@ export class Reporter {
     if (format === 'markdown') {
       content = this.generateMarkdown(result);
     } else {
-      content = this.generateHTML(result) as any; // Will be resolved
+      content = await this.generateHTML(result, path.dirname(filepath));
     }
 
     fs.writeFileSync(filepath, content, 'utf-8');

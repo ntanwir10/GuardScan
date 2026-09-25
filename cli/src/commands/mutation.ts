@@ -17,6 +17,7 @@ interface MutationOptions {
   threshold?: number;
   files?: string;
   testCommand?: string;
+  allowUnsafeTestCommand?: boolean;
   timeout?: number;
 }
 
@@ -42,8 +43,20 @@ export async function mutationCommand(options: MutationOptions): Promise<void> {
       framework: options.framework,
       threshold: options.threshold,
       testCommand: options.testCommand,
+      allowUnsafeTestCommand: options.allowUnsafeTestCommand,
       timeout: options.timeout,
     };
+
+    if (options.testCommand && options.allowUnsafeTestCommand) {
+      // eslint-disable-next-line no-console
+      console.log(
+        chalk.yellow(
+          'Warning: custom test command execution is enabled. Only use --allow-unsafe-test-command with trusted input.'
+        )
+      );
+      // eslint-disable-next-line no-console
+      console.log();
+    }
 
     if (options.files) {
       config.files = options.files.split(',').map(f => f.trim());

@@ -6,12 +6,12 @@ export class DockerfileScanner {
   /**
    * Scan all Dockerfiles in repository
    */
-  async scan(repoPath: string = process.cwd()): Promise<Finding[]> {
+  async scan(repoPath: string = process.cwd(), onSkippedInput: () => void = () => {}): Promise<Finding[]> {
     const findings: Finding[] = [];
-    const dockerfiles = this.findDockerfiles(repoPath);
+    const dockerfiles = this.findDockerfiles(repoPath, onSkippedInput);
 
     for (const dockerfile of dockerfiles) {
-      findings.push(...this.scanDockerfile(dockerfile));
+      findings.push(...this.scanDockerfile(dockerfile, onSkippedInput));
     }
 
     return findings;
@@ -20,19 +20,19 @@ export class DockerfileScanner {
   /**
    * Find all Dockerfiles in repository
    */
-  private findDockerfiles(dir: string): string[] {
+  private findDockerfiles(dir: string, onSkippedInput: () => void): string[] {
     const dockerfiles: string[] = [];
 
     const search = (currentDir: string, depth: number) => {
-      if (depth > 5) {return;}
-
       try {
         const items = fs.readdirSync(currentDir);
         for (const item of items) {
           if (item === 'node_modules' || item === '.git' || item === 'vendor') {continue;}
 
           const fullPath = path.join(currentDir, item);
-          const stat = fs.statSync(fullPath);
+          const stat = fs.lstatSync(fullPath);
+
+          if (stat.isSymbolicLink()) {continue;}
 
           if (stat.isDirectory()) {
             search(fullPath, depth + 1);
@@ -41,7 +41,7 @@ export class DockerfileScanner {
           }
         }
       } catch {
-        // Skip
+        onSkippedInput();
       }
     };
 
@@ -52,7 +52,7 @@ export class DockerfileScanner {
   /**
    * Scan Dockerfile for security issues
    */
-  scanDockerfile(dockerfilePath: string): Finding[] {
+  scanDockerfile(dockerfilePath: string, onSkippedInput: () => void = () => {}): Finding[] {
     const findings: Finding[] = [];
 
     try {
@@ -75,7 +75,7 @@ export class DockerfileScanner {
       findings.push(...this.checkHealthcheck(lines, dockerfilePath));
       findings.push(...this.checkUserDirective(lines, dockerfilePath));
     } catch (error) {
-      // File doesn't exist or can't be read
+      onSkippedInput();
     }
 
     return findings;

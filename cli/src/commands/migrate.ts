@@ -65,7 +65,7 @@ export async function migrateCommand(options: MigrateCommandOptions): Promise<vo
     logger.debug('Config loaded', { provider: config.provider });
 
     // Check AI provider
-    if (!config.provider || config.provider === 'none' || !config.apiKey) {
+    if (!ProviderFactory.isConfigured(config)) {
       spinner.fail('No AI provider configured');
       console.log(chalk.yellow('\nMigration features require an AI provider.'));
       console.log(chalk.gray('Configure with: guardscan config\n'));
@@ -79,7 +79,7 @@ export async function migrateCommand(options: MigrateCommandOptions): Promise<vo
     // Initialize components
     const provider = ProviderFactory.createForCli(config, { task: 'code-generation' });
     const indexer = new CodebaseIndexer(repoInfo.path, repoInfo.repoId);
-    const cache = new AICache(repoInfo.repoId);
+    const cache = new AICache(repoInfo.repoId, config.cache || 100);
     const engine = new MigrationAssistantEngine(provider, indexer, cache, repoInfo.path);
 
     // Use --from and --to if provided, otherwise use --target

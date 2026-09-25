@@ -30,6 +30,12 @@ export interface CacheStats {
   hitRate: number;    // Percentage
 }
 
+export interface AICacheOptions {
+  enabled?: boolean;
+  maxSizeMB?: number;
+  ttlSeconds?: number;
+}
+
 /**
  * AI Response Cache
  *
@@ -42,13 +48,23 @@ export class AICache {
   private currentSizeBytes: number;
   private repoId: string;
   private stats: CacheStats;
+  private enabled: boolean;
+  private ttlSeconds?: number;
 
-  constructor(repoId: string, maxSizeMB: number = 100) {
+  constructor(repoId: string, maxSizeOrOptions: number | AICacheOptions = 100) {
+    const options: AICacheOptions =
+      typeof maxSizeOrOptions === 'number'
+        ? { maxSizeMB: maxSizeOrOptions }
+        : maxSizeOrOptions;
+
     this.cache = new Map();
     this.accessOrder = [];
-    this.maxSizeBytes = maxSizeMB * 1024 * 1024; // Convert MB to bytes
+    this.maxSizeBytes = (options.maxSizeMB ?? 100) * 1024 * 1024; // Convert MB to bytes
     this.currentSizeBytes = 0;
     this.repoId = repoId;
+    this.enabled =
+      options.enabled !== false && process.env.GUARDSCAN_NO_CACHE !== 'true';
+    this.ttlSeconds = options.ttlSeconds;
     this.stats = {
       hits: 0,
       misses: 0,
@@ -58,13 +74,22 @@ export class AICache {
     };
 
     // Load existing cache from disk
-    this.loadFromDisk();
+    if (this.enabled) {
+      this.loadFromDisk();
+      if (this.pruneExpiredEntries() > 0) {
+        void this.saveToDisk();
+      }
+    }
   }
 
   /**
    * Get cached response
    */
   async get(prompt: string, model: string, files?: string[]): Promise<string | null> {
+    if (!this.enabled) {
+      return null;
+    }
+
     const key = this.generateKey(prompt, model);
     const entry = this.cache.get(key);
 
@@ -74,14 +99,20 @@ export class AICache {
       return null;
     }
 
+    if (this.isExpired(entry)) {
+      this.removeEntry(key);
+      this.stats.misses++;
+      this.updateHitRate();
+      await this.saveToDisk();
+      return null;
+    }
+
     // Check if any files have changed
     if (files && files.length > 0) {
       const hasChanged = await this.hasFilesChanged(files, entry.fileHashes);
       if (hasChanged) {
         // Invalidate this entry
-        this.cache.delete(key);
-        this.removeFromAccessOrder(key);
-        this.currentSizeBytes -= entry.size;
+        this.removeEntry(key);
         this.stats.misses++;
         this.updateHitRate();
         return null;
@@ -107,6 +138,10 @@ export class AICache {
     response: string,
     files?: string[]
   ): Promise<void> {
+    if (!this.enabled) {
+      return;
+    }
+
     const key = this.generateKey(prompt, model);
 
     // Calculate entry size first
@@ -142,6 +177,8 @@ export class AICache {
       size,
     };
 
+    this.pruneExpiredEntries();
+
     // Check if we need to evict
     while (this.currentSizeBytes + size > this.maxSizeBytes && this.accessOrder.length > 0) {
       this.evictLRU();
@@ -150,8 +187,7 @@ export class AICache {
     // Remove old entry if exists
     const oldEntry = this.cache.get(key);
     if (oldEntry) {
-      this.currentSizeBytes -= oldEntry.size;
-      this.removeFromAccessOrder(key);
+      this.removeEntry(key);
     }
 
     // Add new entry
@@ -169,6 +205,10 @@ export class AICache {
    * Invalidate cache entries for changed files
    */
   async invalidate(changedFiles: string[]): Promise<void> {
+    if (!this.enabled) {
+      return;
+    }
+
     const keysToRemove: string[] = [];
 
     for (const [key, entry] of this.cache) {
@@ -188,12 +228,7 @@ export class AICache {
 
     // Remove invalidated entries
     for (const key of keysToRemove) {
-      const entry = this.cache.get(key);
-      if (entry) {
-        this.cache.delete(key);
-        this.removeFromAccessOrder(key);
-        this.currentSizeBytes -= entry.size;
-      }
+      this.removeEntry(key);
     }
 
     this.stats.totalEntries = this.cache.size;
@@ -242,9 +277,48 @@ export class AICache {
     const entry = this.cache.get(lruKey);
 
     if (entry) {
-      this.cache.delete(lruKey);
-      this.currentSizeBytes -= entry.size;
+      this.removeEntry(lruKey);
     }
+  }
+
+  private removeEntry(key: string): void {
+    const entry = this.cache.get(key);
+    if (!entry) {
+      return;
+    }
+
+    this.cache.delete(key);
+    this.removeFromAccessOrder(key);
+    this.currentSizeBytes -= entry.size;
+    this.stats.totalEntries = this.cache.size;
+    this.stats.totalSize = this.currentSizeBytes;
+  }
+
+  private isExpired(entry: CacheEntry): boolean {
+    if (!this.ttlSeconds || this.ttlSeconds <= 0) {
+      return false;
+    }
+
+    const ageMs = Date.now() - entry.timestamp.getTime();
+    return ageMs > this.ttlSeconds * 1000;
+  }
+
+  private pruneExpiredEntries(): number {
+    if (!this.ttlSeconds || this.ttlSeconds <= 0) {
+      return 0;
+    }
+
+    const expiredKeys: string[] = [];
+    for (const [key, entry] of this.cache) {
+      if (this.isExpired(entry)) {
+        expiredKeys.push(key);
+      }
+    }
+
+    for (const key of expiredKeys) {
+      this.removeEntry(key);
+    }
+    return expiredKeys.length;
   }
 
   /**
@@ -315,7 +389,14 @@ export class AICache {
    */
   private getCacheDir(): string {
     const baseCacheDir = configManager.getCacheDir();
-    const aiCacheDir = path.join(baseCacheDir, this.repoId, 'ai-cache');
+    if (!/^[a-zA-Z0-9._-]+$/.test(this.repoId)) {
+      throw new Error('Invalid repository cache identifier');
+    }
+    const aiCacheDir = path.resolve(baseCacheDir, this.repoId, 'ai-cache');
+    const resolvedBase = path.resolve(baseCacheDir) + path.sep;
+    if (!aiCacheDir.startsWith(resolvedBase)) {
+      throw new Error('Repository cache path escapes the GuardScan cache directory');
+    }
     return aiCacheDir;
   }
 
@@ -323,6 +404,10 @@ export class AICache {
    * Save cache to disk
    */
   private async saveToDisk(): Promise<void> {
+    if (!this.enabled) {
+      return;
+    }
+
     const cacheDir = this.getCacheDir();
 
     // Ensure directory and all parent directories exist
@@ -395,6 +480,11 @@ export class AICache {
       this.stats.totalSize = this.currentSizeBytes;
     } catch (error) {
       console.warn('Failed to load cache from disk:', error);
+      try {
+        fs.renameSync(cachePath, `${cachePath}.corrupt-${Date.now()}`);
+      } catch {
+        // Leave the malformed file in place if quarantine is not possible.
+      }
       // Reset cache on error
       this.cache.clear();
       this.accessOrder = [];
@@ -428,5 +518,9 @@ export class AICache {
    */
   getUtilization(): number {
     return (this.currentSizeBytes / this.maxSizeBytes) * 100;
+  }
+
+  isEnabled(): boolean {
+    return this.enabled;
   }
 }

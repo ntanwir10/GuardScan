@@ -1,5 +1,6 @@
-import { execSync } from 'child_process';
+import { execFileSync } from 'child_process';
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import * as yaml from 'js-yaml';
 
@@ -279,8 +280,8 @@ export class RuleEngine {
   private async runSemgrepRules(rules: Rule[], files: string[]): Promise<RuleViolation[]> {
     const violations: RuleViolation[] = [];
 
-    // Generate temporary semgrep config
-    const configPath = '/tmp/semgrep-rules.yml';
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'guardscan-semgrep-'));
+    const configPath = path.join(tempDir, 'rules.yml');
     const config = {
       rules: rules.map(rule => this.convertToSemgrepConfig(rule)),
     };
@@ -289,7 +290,7 @@ export class RuleEngine {
 
     try {
       // Run semgrep
-      const output = execSync(`semgrep --config ${configPath} --json ${files.join(' ')}`, {
+      const output = execFileSync('semgrep', ['--config', configPath, '--json', ...files], {
         encoding: 'utf-8',
         maxBuffer: 10 * 1024 * 1024,  // 10MB
       });
@@ -318,14 +319,10 @@ export class RuleEngine {
           } : undefined,
         });
       }
-
-      // Clean up
-      fs.unlinkSync(configPath);
     } catch (error: any) {
       // Semgrep might fail, but we still have regex rules
-      if (fs.existsSync(configPath)) {
-        fs.unlinkSync(configPath);
-      }
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
     }
 
     return violations;
@@ -508,7 +505,7 @@ export class RuleEngine {
    */
   private isSemgrepAvailable(): boolean {
     try {
-      execSync('semgrep --version', { stdio: 'ignore' });
+      execFileSync('semgrep', ['--version'], { stdio: 'ignore' });
       return true;
     } catch {
       return false;
