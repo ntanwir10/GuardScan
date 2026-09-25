@@ -135,18 +135,22 @@ const y = 2;`;
 
     it('discovers source files inside dot-directories', async () => {
       const actionDirectory = path.join(testDir, '.github', 'actions', 'fixture');
-      const dependencyDirectory = path.join(
-        testDir, 'packages', 'api', '.venv', 'lib', 'site-packages'
-      );
+      const virtualEnvironment = path.join(testDir, 'packages', 'api', '.venv');
+      const dependencyDirectory = path.join(virtualEnvironment, 'lib', 'site-packages');
+      const firstPartyDirectory = path.join(testDir, 'src', 'venv');
       fs.mkdirSync(actionDirectory, { recursive: true });
       fs.mkdirSync(dependencyDirectory, { recursive: true });
+      fs.mkdirSync(firstPartyDirectory, { recursive: true });
       fs.writeFileSync(path.join(actionDirectory, 'index.js'), 'module.exports = true;');
+      fs.writeFileSync(path.join(virtualEnvironment, 'pyvenv.cfg'), 'home = /usr/bin');
       fs.writeFileSync(path.join(dependencyDirectory, 'dependency.py'), 'installed = True');
+      fs.writeFileSync(path.join(firstPartyDirectory, 'security.py'), 'first_party = True');
 
       const result = await counter.count([`${testDir}/**/*.{js,py}`]);
 
       expect(result.fileBreakdown).toEqual(expect.arrayContaining([
         expect.objectContaining({path: expect.stringContaining('.github/actions/fixture/index.js')}),
+        expect.objectContaining({path: expect.stringContaining('src/venv/security.py')}),
       ]));
       expect(result.fileBreakdown).not.toEqual(expect.arrayContaining([
         expect.objectContaining({path: expect.stringContaining('.venv/lib/site-packages/dependency.py')}),
@@ -177,6 +181,18 @@ const y = 2;`;
       expect(result.fileBreakdown).toEqual([]);
       expect(result.skippedFiles).toEqual([expect.stringContaining('unreadable.rs')]);
       countFile.mockRestore();
+    });
+
+    it('excludes a targeted file inside a confirmed virtual environment', async () => {
+      const virtualEnvironment = path.join(testDir, 'targeted-venv');
+      const target = path.join(virtualEnvironment, 'lib', 'target.py');
+      fs.mkdirSync(path.dirname(target), {recursive: true});
+      fs.writeFileSync(path.join(virtualEnvironment, 'pyvenv.cfg'), 'home = /usr/bin');
+      fs.writeFileSync(target, 'installed = True');
+
+      const result = await counter.count([target]);
+
+      expect(result.fileBreakdown).toEqual([]);
     });
   });
 

@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import {execFileSync} from 'child_process';
+import {SECURITY_CONSTANTS} from '../../src/constants/security-constants';
 
 jest.mock('child_process', () => ({
   ...jest.requireActual<typeof import('child_process')>('child_process'),
@@ -151,6 +152,11 @@ describe('SecretsDetector', () => {
         expect.objectContaining({cwd: testDir})
       );
       expect(mockedExecFileSync.mock.calls.filter(([, args]) => args?.[0] === 'show')).toHaveLength(100);
+      expect(mockedExecFileSync).toHaveBeenCalledWith(
+        'git',
+        ['show', '--end-of-options', commits[0]],
+        expect.objectContaining({maxBuffer: SECURITY_CONSTANTS.GIT_HISTORY_DIFF_MAX_BYTES})
+      );
       expect(onSkippedInput).not.toHaveBeenCalled();
     });
 

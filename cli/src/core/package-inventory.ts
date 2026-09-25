@@ -139,7 +139,26 @@ function findInventoryFiles(root: string, errors: PackageInventoryError[]): stri
     for (const entry of entries) {
       if (IGNORED_DIRS.has(entry.name)) {continue;}
       const absolute = path.join(directory, entry.name);
-      if (entry.isSymbolicLink()) {continue;}
+      if (entry.isSymbolicLink()) {
+        if (!isTargetInventoryFile(absolute)) {continue;}
+        try {
+          const target = fs.realpathSync(absolute);
+          if (!isWithinRoot(root, target)) {
+            throw new Error('resolved target is outside the repository');
+          }
+          if (!fs.statSync(target).isFile()) {
+            throw new Error('resolved target is not a file');
+          }
+          files.push(absolute);
+        } catch (error: unknown) {
+          errors.push({
+            file: relative(root, absolute),
+            code: 'INVALID_MANIFEST',
+            message: `Unable to resolve symlinked inventory file safely: ${errorMessage(error)}`,
+          });
+        }
+        continue;
+      }
       if (entry.isDirectory()) {
         visit(absolute);
       } else if (entry.isFile() && isTargetInventoryFile(absolute)) {

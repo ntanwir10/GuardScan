@@ -142,6 +142,7 @@ export class SecretsDetector {
           const diff = execFileSync('git', ['show', '--end-of-options', commit], {
             cwd: repoPath,
             encoding: 'utf-8',
+            maxBuffer: SECURITY_CONSTANTS.GIT_HISTORY_DIFF_MAX_BYTES,
           });
 
           const commitFindings = this.scanContent(`commit:${commit.substring(0, 8)}`, diff);

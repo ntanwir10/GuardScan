@@ -112,6 +112,44 @@ describe('collectPackageInventory', () => {
     ]));
   });
 
+  (process.platform === 'win32' ? it.skip : it)('follows an in-repository symlinked package lock', () => {
+    fs.mkdirSync(path.join(repository, 'locks'));
+    fs.writeFileSync(path.join(repository, 'package.json'), JSON.stringify({
+      name: 'fixture', dependencies: {demo: '^1.0.0'},
+    }));
+    fs.writeFileSync(path.join(repository, 'locks', 'npm.lock'), JSON.stringify({
+      name: 'fixture', lockfileVersion: 3,
+      packages: {
+        '': {name: 'fixture', dependencies: {demo: '^1.0.0'}},
+        'node_modules/demo': {name: 'demo', version: '1.2.3'},
+      },
+    }));
+    fs.symlinkSync('locks/npm.lock', path.join(repository, 'package-lock.json'));
+
+    const inventory = collectPackageInventory(repository);
+
+    expect(inventory.manifests).toContain('package-lock.json');
+    expect(inventory.coordinates).toEqual([
+      expect.objectContaining({ecosystem: 'npm', name: 'demo', exactVersion: '1.2.3'}),
+    ]);
+    expect(inventory.errors).toEqual([]);
+  });
+
+  (process.platform === 'win32' ? it.skip : it)('reports a package lock symlink that escapes the repository', () => {
+    fs.symlinkSync('/etc/hosts', path.join(repository, 'package-lock.json'));
+
+    const inventory = collectPackageInventory(repository);
+
+    expect(inventory.coordinates).toEqual([]);
+    expect(inventory.errors).toEqual([
+      expect.objectContaining({
+        file: 'package-lock.json',
+        code: 'INVALID_MANIFEST',
+        message: expect.stringMatching(/symlinked inventory file|outside the repository/i),
+      }),
+    ]);
+  });
+
   it('does not mark nested npm lock entries as direct', () => {
     fs.writeFileSync(path.join(repository, 'package.json'), JSON.stringify({
       dependencies: {foo: '^1.0.0'},

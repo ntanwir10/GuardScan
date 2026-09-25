@@ -3,6 +3,73 @@ import * as path from 'path';
 import fastGlob from 'fast-glob';
 import ignore from 'ignore';
 
+const LOC_IGNORED_DIRECTORIES = new Set([
+  'node_modules', '.git', 'dist', 'build', 'coverage',
+]);
+const LOC_DISCOVERY_IGNORES = [...LOC_IGNORED_DIRECTORIES].map(name => `**/${name}/**`);
+
+function isWithinDirectory(root: string, candidate: string): boolean {
+  const relative = path.relative(root, candidate);
+  return relative === '' ||
+    (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative));
+}
+
+function hasVirtualEnvironmentMarker(directory: string): boolean {
+  try {
+    return fs.statSync(path.join(directory, 'pyvenv.cfg')).isFile();
+  } catch {
+    return false;
+  }
+}
+
+function discoverVirtualEnvironmentRoots(cwd: string, patterns: string[]): string[] {
+  const roots = new Set<string>();
+  const targeted = patterns.every(pattern => !fastGlob.isDynamicPattern(pattern));
+  const bases = new Set(fastGlob.generateTasks(patterns, {cwd}).map(task =>
+    path.resolve(cwd, task.base)
+  ));
+
+  const findAncestor = (start: string): string | undefined => {
+    let current = start;
+    while (isWithinDirectory(cwd, current)) {
+      if (hasVirtualEnvironmentMarker(current)) {return current;}
+      if (current === cwd) {break;}
+      const parent = path.dirname(current);
+      if (parent === current) {break;}
+      current = parent;
+    }
+    return undefined;
+  };
+
+  const visit = (directory: string): void => {
+    if (hasVirtualEnvironmentMarker(directory)) {
+      roots.add(directory);
+      return;
+    }
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(directory, {withFileTypes: true});
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (!entry.isDirectory() || LOC_IGNORED_DIRECTORIES.has(entry.name)) {continue;}
+      visit(path.join(directory, entry.name));
+    }
+  };
+
+  for (const base of bases) {
+    if (!isWithinDirectory(cwd, base)) {continue;}
+    const ancestor = findAncestor(base);
+    if (ancestor) {
+      roots.add(ancestor);
+    } else if (!targeted) {
+      visit(base);
+    }
+  }
+  return [...roots];
+}
+
 export interface LOCResult {
   totalLines: number;
   codeLines: number;
@@ -36,15 +103,7 @@ export class LOCCounter {
    */
   private loadIgnorePatterns(): void {
     const defaultIgnores = [
-      '**/node_modules/**',
-      '**/.git/**',
-      '**/.venv/**',
-      '**/venv/**',
-      '**/.tox/**',
-      '**/.nox/**',
-      '**/dist/**',
-      '**/build/**',
-      '**/coverage/**',
+      ...LOC_DISCOVERY_IGNORES,
       '*.min.js',
       '*.min.css',
       '*.map',
@@ -115,21 +174,26 @@ export class LOCCounter {
       '**/*.{js,jsx,ts,tsx,py,java,go,rs,c,cpp,h,hpp,cs,rb,php,swift,kt,scala,sh,bash}',
     ];
 
+    const cwd = process.cwd();
     const globPatterns = patterns || defaultPatterns;
+    const virtualEnvironmentRoots = discoverVirtualEnvironmentRoots(cwd, globPatterns);
+    const virtualEnvironmentIgnores = virtualEnvironmentRoots.map(environment => {
+      const directory = path.relative(cwd, environment).split(path.sep).join('/');
+      return directory === '' ? '**/*' : `${directory}/**`;
+    });
     const files = await fastGlob(globPatterns, {
-      cwd: process.cwd(),
+      cwd,
       absolute: true, // Get absolute paths first
       dot: true,
       followSymbolicLinks: false,
-      ignore: [
-        '**/node_modules/**', '**/.git/**', '**/.venv/**', '**/venv/**',
-        '**/.tox/**', '**/.nox/**', '**/dist/**', '**/build/**',
-      ],
+      ignore: [...LOC_DISCOVERY_IGNORES, ...virtualEnvironmentIgnores],
     });
 
     // Convert to relative paths and filter using ignore patterns
-    const cwd = process.cwd();
     return files
+      .filter(file => !virtualEnvironmentRoots.some(environment => {
+        return isWithinDirectory(environment, file);
+      }))
       .map(file => path.relative(cwd, file))
       .filter(file => !this.ignoreMatcher.ignores(file));
   }
