@@ -193,6 +193,27 @@ describe('ConfigManager', () => {
       expect(() => configManager.load()).toThrow(`configuration.${field} must be a boolean`);
     });
 
+    it.each([
+      ['anthropic', 'claude'],
+      ['google', 'gemini'],
+    ])('loads and safely updates legacy %s provider configuration', (legacy, canonical) => {
+      configManager.init();
+      const configPath = path.join(configManager.getConfigDir(), 'config.yml');
+      const content = `provider: ${legacy}\napiKey: legacy-test-key\ntelemetryEnabled: false\nofflineMode: true\n`;
+      fs.writeFileSync(configPath, content);
+
+      expect(configManager.load()).toMatchObject({
+        provider: canonical,
+        apiKey: 'legacy-test-key',
+        telemetryEnabled: false,
+        offlineMode: true,
+      });
+      expect(fs.readFileSync(configPath, 'utf8')).toBe(content);
+      configManager.update({model: 'updated-model'});
+      expect(configManager.load()).toMatchObject({provider: canonical, model: 'updated-model'});
+      expect(fs.readFileSync(configPath, 'utf8')).toContain(`provider: ${canonical}`);
+    });
+
     it('rejects invalid provider and nested configuration values', () => {
       configManager.init();
       const configPath = path.join(configManager.getConfigDir(), 'config.yml');

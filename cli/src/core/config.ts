@@ -526,7 +526,10 @@ export function parseConfig(value: unknown): Config {
   const input = requireRecord(value, 'configuration');
   rejectUnknownKeys(input, TOP_LEVEL_KEYS, 'configuration');
   const now = new Date().toISOString();
-  const provider = input.provider === undefined ? 'none' : input.provider;
+  // Normalize historical CLI names without relaxing validation of other values.
+  const provider = input.provider === 'anthropic' ? 'claude'
+    : input.provider === 'google' ? 'gemini'
+      : input.provider === undefined ? 'none' : input.provider;
   if (!isOneOf(provider, PROVIDERS)) {
     throw new Error('configuration.provider must be a supported provider');
   }
