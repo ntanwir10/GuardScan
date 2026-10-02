@@ -559,7 +559,9 @@ async function knownExploitedData(options: DependencyScanOptions): Promise<{
     return { cves: 'unknown', metadata: kevMetadata('disabled') };
   }
   const store = options.kevStore || new CisaKevCatalogStore();
-  const maxAgeDays = options.kevMaxCacheAgeDays ?? 1;
+  const maxAgeDays = options.kevMaxCacheAgeDays ?? (
+    options.offline ? options.maxSnapshotAgeDays ?? 7 : 1
+  );
   if (!Number.isFinite(maxAgeDays) || maxAgeDays < 0) {
     throw new DependencyScanError('INVALID_OPTIONS', 'CISA KEV cache age must be a non-negative number of days');
   }

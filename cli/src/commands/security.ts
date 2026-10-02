@@ -126,7 +126,8 @@ export async function securityCommand(options: SecurityOptions): Promise<void> {
         securityReview(scanResult, policyResult, repoInfo, locResult, Date.now() - startedAt),
         'markdown',
         options.output,
-        'security'
+        'security',
+        repoInfo.path
       );
     } else {
       reportPath = writeScanResult(

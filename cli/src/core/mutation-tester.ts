@@ -1,5 +1,5 @@
 import { execFileSync } from 'child_process';
-import { resolveExecutable } from '../utils/process-runner';
+import { resolveExecutable, resolveMavenVersionInvocation } from '../utils/process-runner';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -564,7 +564,8 @@ export class MutationTester {
         case 'pitest':
           // PITest is a Maven/Gradle plugin, check if build tool exists
           try {
-            execFileSync('mvn', ['--version'], { stdio: 'ignore', cwd: repoPath });
+            const maven = resolveMavenVersionInvocation();
+            execFileSync(maven.command, maven.args, { stdio: 'ignore', cwd: repoPath });
             return true;
           } catch {
             const gradleWrapper = path.join(repoPath, 'gradlew');

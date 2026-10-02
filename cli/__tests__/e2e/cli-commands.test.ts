@@ -359,7 +359,7 @@ describe('CLI end-to-end contracts', () => {
     ]));
   }, 90_000);
 
-  it('fails standalone SBOM generation when package inventory is incomplete', () => {
+  it('warns but generates a standalone SBOM when supported inventory coverage is incomplete', () => {
     const requirements = path.join(project, 'requirements.txt');
     const output = path.join(project, 'incomplete-sbom.json');
     fs.writeFileSync(requirements, 'unpinned-package>=1\n');
@@ -375,12 +375,38 @@ describe('CLI end-to-end contracts', () => {
         output,
       ]);
 
-      expect(result.status).not.toBe(0);
-      expect(result.stderr).toMatch(/inventory.*incomplete/i);
-      expect(fs.existsSync(output)).toBe(false);
+      expect(result.status).toBe(0);
+      expect(result.stderr).toMatch(/warning.*inventory.*incomplete coverage/i);
+      expect(fs.existsSync(output)).toBe(true);
     } finally {
       fs.rmSync(requirements, { force: true });
       fs.rmSync(output, { force: true });
+    }
+  }, 90_000);
+
+  it('fails standalone SBOM generation for an invalid manifest', () => {
+    const fixture = path.join(project, 'invalid-manifest');
+    const output = path.join(project, 'invalid-sbom.json');
+    fs.mkdirSync(fixture);
+    fs.writeFileSync(path.join(fixture, 'package.json'), '{not-json');
+
+    try {
+      const result = runCli([
+        '--no-telemetry',
+        '--offline',
+        'sbom',
+        '--format',
+        'spdx',
+        '--output',
+        output,
+      ]);
+
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toMatch(/invalid manifest/i);
+      expect(fs.existsSync(output)).toBe(false);
+    } finally {
+      fs.rmSync(fixture, {recursive: true, force: true});
+      fs.rmSync(output, {force: true});
     }
   }, 90_000);
 

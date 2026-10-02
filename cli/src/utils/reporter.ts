@@ -4,6 +4,7 @@ import { marked } from 'marked';
 import { LOCResult } from '../core/loc-counter';
 import { RepositoryInfo } from '../core/repository';
 import type { SeveritySummary } from './chart-generator';
+import { atomicReplaceText, prepareAtomicOutputTarget } from './private-state';
 
 export interface ReviewResult {
   summary: string;
@@ -310,7 +311,8 @@ export class Reporter {
     result: ReviewResult,
     format: 'markdown' | 'html' = 'markdown',
     outputPath?: string,
-    reportType?: string
+    reportType?: string,
+    untrustedRoot?: string
   ): Promise<string> {
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
 
@@ -326,7 +328,12 @@ export class Reporter {
       content = await this.generateHTML(result, path.dirname(filepath));
     }
 
-    fs.writeFileSync(filepath, content, 'utf-8');
+    if (untrustedRoot) {
+      const target = prepareAtomicOutputTarget(filepath, untrustedRoot);
+      atomicReplaceText(target, content, {privateParent: false});
+    } else {
+      fs.writeFileSync(filepath, content, 'utf-8');
+    }
     return filepath;
   }
 

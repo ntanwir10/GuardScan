@@ -788,8 +788,20 @@ function validateOptionalEnumAt(
 }
 
 function validateOptionalEndpoint(input: UnknownRecord, key: string, pathName: string): void {
-  if (input[key] !== undefined && !isAllowedNetworkEndpoint(input[key])) {
+  if (input[key] !== undefined && !isValidApiEndpointShape(input[key])) {
     throw new Error(`${pathName} has an invalid value`);
+  }
+}
+
+function isValidApiEndpointShape(value: unknown): value is string {
+  if (typeof value !== 'string') {return false;}
+  try {
+    const endpoint = new URL(value);
+    return (endpoint.protocol === 'http:' || endpoint.protocol === 'https:') &&
+      endpoint.hostname.length > 0 &&
+      !endpoint.username && !endpoint.password && !endpoint.search && !endpoint.hash;
+  } catch {
+    return false;
   }
 }
 

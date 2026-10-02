@@ -76,7 +76,7 @@ export class LinterIntegration {
     repoPath: string = process.cwd(),
     policy?: EffectiveExecutionPolicy
   ): Promise<LinterReport[]> {
-    if (policy && (policy.offline || !policy.runProjectCode)) {
+    if (policy && !policy.runProjectCode) {
       return [];
     }
     const reports: LinterReport[] = [];

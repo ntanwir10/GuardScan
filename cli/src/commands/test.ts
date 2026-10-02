@@ -34,7 +34,10 @@ export async function testCommand(options: TestOptions): Promise<void> {
   console.log(chalk.cyan.bold('\n🧪 Test & Quality Analysis\n'));
 
   try {
-    const executionPolicy = resolveExecutionPolicy({ runProjectCode: true });
+    const executionPolicy = resolveExecutionPolicy({
+      runProjectCode: true,
+      allowProjectCodeOffline: true,
+    });
     perfTracker.start('detect-repository');
     const repoInfo = repositoryManager.getRepoInfo();
     perfTracker.end('detect-repository');

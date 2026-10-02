@@ -5,21 +5,22 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const {spawnSync} = require('child_process');
+const {resolveToolInvocation} = require('./process-invocation');
 
 const SUPPORTED_MANAGERS = new Set(['npm', 'pnpm', 'yarn', 'bun']);
 
-function commandFor(manager) {
-  if (manager === 'npm' && process.platform === 'win32') return 'npm.cmd';
-  if (manager === 'pnpm' && process.platform === 'win32') return 'pnpm.cmd';
-  if (manager === 'yarn' && process.platform === 'win32') return 'yarn.cmd';
-  if (manager === 'bun' && process.platform === 'win32') return 'bun.exe';
-  return manager;
+function commandFor(manager, args = [], env = process.env) {
+  return resolveToolInvocation(manager, args, env);
 }
 
-function installArgs(manager, tarball) {
+function installArgs(manager, tarball, managerVersion) {
   if (manager === 'npm') return ['install', '--ignore-scripts', '--no-audit', '--no-fund', tarball];
   if (manager === 'pnpm') return ['add', '--ignore-scripts', tarball];
-  if (manager === 'yarn') return ['add', tarball];
+  if (manager === 'yarn') {
+    return /^1\./.test(managerVersion || '')
+      ? ['add', '--ignore-scripts', tarball]
+      : ['add', tarball];
+  }
   if (manager === 'bun') return ['add', '--ignore-scripts', tarball];
   throw new Error(`Unsupported package manager: ${manager}`);
 }
@@ -68,7 +69,7 @@ function main(argv = process.argv.slice(2)) {
     const suppliedTarball = parseTarball(argv);
     let tarball = suppliedTarball;
     if (!tarball) {
-      const pack = run(commandFor('npm'), ['pack', '--json', '--pack-destination', tempRoot], packageRoot, npmEnv);
+      const pack = runCommand('npm', ['pack', '--json', '--pack-destination', tempRoot], packageRoot, npmEnv);
       const packed = JSON.parse(pack.stdout)[0];
       tarball = path.join(tempRoot, packed.filename);
     }
@@ -93,7 +94,10 @@ function main(argv = process.argv.slice(2)) {
       GUARDSCAN_NO_TELEMETRY: 'true',
       YARN_ENABLE_SCRIPTS: 'false',
     };
-    run(commandFor(manager), installArgs(manager, tarball), project, env);
+    const managerVersion = manager === 'yarn'
+      ? runCommand(manager, ['--version'], project, env).stdout.trim()
+      : undefined;
+    runCommand(manager, installArgs(manager, tarball, managerVersion), project, env);
 
     const version = runCli(manager, ['--version'], project, env);
     const versionLines = version.stdout.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
@@ -132,7 +136,12 @@ function main(argv = process.argv.slice(2)) {
 }
 
 function runCli(manager, args, cwd, env) {
-  return run(commandFor(manager), execArgs(manager, args), cwd, env);
+  return runCommand(manager, execArgs(manager, args), cwd, env);
+}
+
+function runCommand(manager, args, cwd, env) {
+  const invocation = commandFor(manager, args, env);
+  return run(invocation.command, invocation.args, cwd, env);
 }
 
 function run(command, args, cwd, env) {

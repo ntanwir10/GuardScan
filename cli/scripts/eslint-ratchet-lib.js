@@ -27,4 +27,15 @@ function evaluateBaseline(current, baseline, fileExists) {
   return {regressions, improvements};
 }
 
-module.exports = {evaluateBaseline};
+function parseEslintReport(result) {
+  if (result.status !== 0 && result.status !== 1) {
+    throw new Error(result.stderr || `ESLint exited with status ${String(result.status)}`);
+  }
+  try {
+    return JSON.parse(result.stdout);
+  } catch {
+    throw new Error('Failed to parse ESLint JSON output.');
+  }
+}
+
+module.exports = {evaluateBaseline, parseEslintReport};

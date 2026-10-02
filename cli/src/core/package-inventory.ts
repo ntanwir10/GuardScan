@@ -43,6 +43,32 @@ export interface PackageInventoryFilter {
   scope?: 'all' | 'runtime';
 }
 
+interface PackageInventoryCache {
+  parsedLockData: Map<string, {data?: Record<string, unknown>; error?: unknown}>;
+  yarnWorkspaceDirectories: Map<string, Set<string>>;
+}
+
+function readParsedLockData(file: string, cache: PackageInventoryCache): Record<string, unknown> {
+  const cached = cache.parsedLockData.get(file);
+  if (cached) {
+    if (cached.error !== undefined) {
+      throw cached.error instanceof Error ? cached.error : new Error(errorMessage(cached.error));
+    }
+    return cached.data!;
+  }
+  try {
+    const parsed = path.basename(file) === 'pnpm-lock.yaml'
+      ? asRecord(yaml.load(fs.readFileSync(file, 'utf8')))
+      : asRecord(readJson(file));
+    if (!parsed) {throw new Error(`${path.basename(file)} root must be an object`);}
+    cache.parsedLockData.set(file, {data: parsed});
+    return parsed;
+  } catch (error: unknown) {
+    cache.parsedLockData.set(file, {error});
+    throw error;
+  }
+}
+
 const TARGET_FILES = new Set([
   'package-lock.json',
   'npm-shrinkwrap.json',
@@ -292,12 +318,23 @@ function yarnWorkspacePatternMatches(pattern: string, directory: string): boolea
   return new RegExp(`^${expression}$`).test(normalizedDirectory);
 }
 
-function yarnWorkspaceManifestDirectories(root: string, lockDirectory: string): Set<string> {
+function yarnWorkspaceManifestDirectories(
+  root: string,
+  lockDirectory: string,
+  cache?: PackageInventoryCache
+): Set<string> {
+  const lockPath = path.join(lockDirectory, 'yarn.lock');
+  const cached = cache?.yarnWorkspaceDirectories.get(lockPath);
+  if (cached) {return cached;}
+  const remember = (directories: Set<string>): Set<string> => {
+    cache?.yarnWorkspaceDirectories.set(lockPath, directories);
+    return directories;
+  };
   const manifest = path.join(lockDirectory, 'package.json');
-  if (!fs.existsSync(manifest)) {return new Set();}
+  if (!fs.existsSync(manifest)) {return remember(new Set());}
   try {
     const data = asRecord(readJson(manifest));
-    if (!data) {return new Set();}
+    if (!data) {return remember(new Set());}
     const patterns = yarnWorkspacePatterns(data);
     const directories = new Set<string>();
     for (const file of findInventoryFiles(root, []).filter(candidate => path.basename(candidate) === 'package.json')) {
@@ -306,17 +343,18 @@ function yarnWorkspaceManifestDirectories(root: string, lockDirectory: string): 
         directories.add(directory);
       }
     }
-    return directories;
+    return remember(directories);
   } catch {
-    return new Set();
+    return remember(new Set());
   }
 }
 
 function yarnWorkspaceDirectDependencies(
   root: string,
-  lockDirectory: string
+  lockDirectory: string,
+  cache?: PackageInventoryCache
 ): Array<{name: string; scope: DependencyScope; requested: string; manifestPath: string}> {
-  const workspaceDirectories = yarnWorkspaceManifestDirectories(root, lockDirectory);
+  const workspaceDirectories = yarnWorkspaceManifestDirectories(root, lockDirectory, cache);
   const result: Array<{name: string; scope: DependencyScope; requested: string; manifestPath: string}> = [];
   for (const directory of workspaceDirectories) {
     const manifest = path.join(lockDirectory, directory, 'package.json');
@@ -415,13 +453,13 @@ function parseNpmLock(
   root: string,
   file: string,
   coordinates: DependencyCoordinate[],
-  errors: PackageInventoryError[]
+  errors: PackageInventoryError[],
+  cache: PackageInventoryCache
 ): void {
   const rel = relative(root, file);
   const manifest = relative(root, path.join(path.dirname(file), 'package.json'));
   try {
-    const data = asRecord(readJson(file));
-    if (!data) {throw new Error('npm lockfile root must be a JSON object');}
+    const data = readParsedLockData(file, cache);
     const direct = npmDirectDependencyRequirements(path.dirname(file));
     const rootManifest = relative(root, path.join(path.dirname(file), 'package.json'));
     type DirectDependency = {scope: DependencyScope; manifestPath: string; requested: string};
@@ -789,19 +827,21 @@ function parseNpmLock(
   }
 }
 
-function firstPartyWorkspacePackages(root: string, lockPath: string): Map<string, string | undefined> {
+function firstPartyWorkspacePackages(
+  root: string,
+  lockPath: string,
+  cache: PackageInventoryCache
+): Map<string, string | undefined> {
   const lockDirectory = path.dirname(lockPath);
   const lockName = path.basename(lockPath);
   const manifestDirectories = new Set<string>();
   try {
     if (lockName === 'yarn.lock') {
-      for (const directory of yarnWorkspaceManifestDirectories(root, lockDirectory)) {
+      for (const directory of yarnWorkspaceManifestDirectories(root, lockDirectory, cache)) {
         manifestDirectories.add(directory);
       }
     } else {
-      const data = lockName === 'pnpm-lock.yaml'
-        ? asRecord(yaml.load(fs.readFileSync(lockPath, 'utf8')))
-        : asRecord(readJson(lockPath));
+      const data = readParsedLockData(lockPath, cache);
       if (lockName === 'pnpm-lock.yaml') {
         for (const importer of Object.keys(asRecord(data?.importers) || {})) {
           manifestDirectories.add(importer === '.' ? '' : importer);
@@ -838,14 +878,15 @@ function parseExactPackageJson(
   file: string,
   coordinates: DependencyCoordinate[],
   errors: PackageInventoryError[],
-  workspacePackagesByLock: Map<string, Map<string, string | undefined>>
+  workspacePackagesByLock: Map<string, Map<string, string | undefined>>,
+  cache: PackageInventoryCache
 ): void {
   const directory = path.dirname(file);
   let lockDirectory = directory;
   let coveringLock: string | undefined;
   while (isWithinRoot(root, lockDirectory)) {
     const lockNames = ['package-lock.json', 'npm-shrinkwrap.json', 'pnpm-lock.yaml', 'yarn.lock'];
-    const lockName = lockNames.find(name => isManifestCoveredByLock(directory, lockDirectory, name));
+    const lockName = lockNames.find(name => isManifestCoveredByLock(directory, lockDirectory, name, cache));
     if (lockName) {
       coveringLock = path.join(lockDirectory, lockName);
       break;
@@ -866,7 +907,7 @@ function parseExactPackageJson(
       const lockfilePath = relative(root, coveringLock);
       let workspacePackages = workspacePackagesByLock.get(coveringLock);
       if (!workspacePackages) {
-        workspacePackages = firstPartyWorkspacePackages(root, coveringLock);
+        workspacePackages = firstPartyWorkspacePackages(root, coveringLock, cache);
         workspacePackagesByLock.set(coveringLock, workspacePackages);
       }
       for (const [dependencies, scope] of groups) {
@@ -943,7 +984,8 @@ function parseExactPackageJson(
 function isManifestCoveredByLock(
   manifestDirectory: string,
   lockDirectory: string,
-  lockName: string
+  lockName: string,
+  cache: PackageInventoryCache
 ): boolean {
   const lockPath = path.join(lockDirectory, lockName);
   if (!fs.existsSync(lockPath)) {return false;}
@@ -951,12 +993,10 @@ function isManifestCoveredByLock(
   const relativeDirectory = relative(lockDirectory, manifestDirectory);
   if (!relativeDirectory || relativeDirectory.startsWith('..')) {return false;}
   if (lockName === 'yarn.lock') {
-    return yarnWorkspaceManifestDirectories(lockDirectory, lockDirectory).has(relativeDirectory);
+    return yarnWorkspaceManifestDirectories(lockDirectory, lockDirectory, cache).has(relativeDirectory);
   }
   try {
-    const data: Record<string, unknown> | undefined = lockName === 'pnpm-lock.yaml'
-      ? asRecord(yaml.load(fs.readFileSync(lockPath, 'utf8')))
-      : asRecord(readJson(lockPath));
+    const data = readParsedLockData(lockPath, cache);
     const importers = asRecord(data?.importers);
     if (importers && Object.prototype.hasOwnProperty.call(importers, relativeDirectory)) {return true;}
     const packages = asRecord(data?.packages);
@@ -966,10 +1006,16 @@ function isManifestCoveredByLock(
   }
 }
 
-function parsePnpmLock(root: string, file: string, coordinates: DependencyCoordinate[], errors: PackageInventoryError[]): void {
+function parsePnpmLock(
+  root: string,
+  file: string,
+  coordinates: DependencyCoordinate[],
+  errors: PackageInventoryError[],
+  cache: PackageInventoryCache
+): void {
   const rel = relative(root, file);
   try {
-    const data = asRecord(yaml.load(fs.readFileSync(file, 'utf8')));
+    const data = readParsedLockData(file, cache);
     const parsedImporters = asRecord(data?.importers);
     const legacyRootImporter = Object.fromEntries(
       ['dependencies', 'devDependencies', 'optionalDependencies']
@@ -1244,11 +1290,17 @@ function parsePnpmLock(root: string, file: string, coordinates: DependencyCoordi
   }
 }
 
-function parseYarnLock(root: string, file: string, coordinates: DependencyCoordinate[], errors: PackageInventoryError[]): void {
+function parseYarnLock(
+  root: string,
+  file: string,
+  coordinates: DependencyCoordinate[],
+  errors: PackageInventoryError[],
+  cache: PackageInventoryCache
+): void {
   const rel = relative(root, file);
   try {
     const directDependencies = npmDirectDependencyRequirements(path.dirname(file));
-    const workspaceDependencies = yarnWorkspaceDirectDependencies(root, path.dirname(file));
+    const workspaceDependencies = yarnWorkspaceDirectDependencies(root, path.dirname(file), cache);
     const scopeRank: Record<DependencyScope, number> = {unknown: 0, development: 1, optional: 2, runtime: 3};
     const lines = fs.readFileSync(file, 'utf8').split(/\r?\n/);
     let descriptor: string | undefined;
@@ -1264,6 +1316,7 @@ function parseYarnLock(root: string, file: string, coordinates: DependencyCoordi
       name: string;
       version: string;
       descriptors: string[];
+      lookupNames: string[];
       dependencies: Array<{name: string; requested: string; optional: boolean}>;
     }> = [];
     const finishRecord = (): void => {
@@ -1279,7 +1332,18 @@ function parseYarnLock(root: string, file: string, coordinates: DependencyCoordi
             .map(npmAliasTarget)
             .find((candidate): candidate is {name: string; range: string} => candidate !== undefined)
             ?.name;
-          records.push({name: registryName || packageName, version: exactVersion, descriptors: [...descriptors], dependencies: [...dependencies]});
+          const lookupNames = descriptors.map(candidate => {
+            const scoped = candidate.match(/^(@[^/]+\/[^@]+)@/);
+            const plain = candidate.match(/^([^@]+)@/);
+            return scoped?.[1] || plain?.[1];
+          }).filter((candidate): candidate is string => candidate !== undefined);
+          records.push({
+            name: registryName || packageName,
+            version: exactVersion,
+            descriptors: [...descriptors],
+            lookupNames,
+            dependencies: [...dependencies],
+          });
         }
       } else if (descriptor && descriptor !== '__metadata' && !resolved) {
         errors.push({
@@ -1346,6 +1410,14 @@ function parseYarnLock(root: string, file: string, coordinates: DependencyCoordi
       }
     }
     finishRecord();
+    const recordsByLookupName = new Map<string, typeof records>();
+    for (const record of records) {
+      for (const name of new Set(record.lookupNames)) {
+        const candidates = recordsByLookupName.get(name) || [];
+        candidates.push(record);
+        recordsByLookupName.set(name, candidates);
+      }
+    }
     const directsForRecord = (record: typeof records[number]): Array<{scope: DependencyScope; manifestPath: string}> => {
       const candidates = workspaceDependencies.filter(candidate =>
         npmRequestMatchesVersion(candidate.requested, record.version) && record.descriptors.some(candidateDescriptor =>
@@ -1380,7 +1452,7 @@ function parseYarnLock(root: string, file: string, coordinates: DependencyCoordi
       if (stack.has(record)) {return;}
       const nextStack = new Set(stack).add(record);
       for (const dependency of [...record.dependencies].sort((left, right) => `${left.name}\0${left.requested}`.localeCompare(`${right.name}\0${right.requested}`))) {
-        const child = records.find(candidate =>
+        const child = (recordsByLookupName.get(dependency.name) || []).find(candidate =>
           npmRequestMatchesVersion(dependency.requested, candidate.version) &&
           candidate.descriptors.some(descriptor => yarnDescriptorMatchesRequest(descriptor, dependency.name, dependency.requested))
         );
@@ -2635,6 +2707,10 @@ export function collectPackageInventory(repoPath: string = process.cwd()): Packa
   if (!fs.statSync(root).isDirectory()) {throw new Error(`Repository path is not a directory: ${repoPath}`);}
   const coordinates: DependencyCoordinate[] = [];
   const errors: PackageInventoryError[] = [];
+  const cache: PackageInventoryCache = {
+    parsedLockData: new Map(),
+    yarnWorkspaceDirectories: new Map(),
+  };
   const files = findInventoryFiles(root, errors).filter(file => {
     try {
       return isWithinRoot(root, fs.realpathSync(file));
@@ -2686,9 +2762,9 @@ export function collectPackageInventory(repoPath: string = process.cwd()): Packa
 
   for (const file of files) {
     const name = path.basename(file);
-    if (name === 'package-lock.json' || name === 'npm-shrinkwrap.json') {parseNpmLock(root, file, coordinates, errors);}
-    else if (name === 'pnpm-lock.yaml') {parsePnpmLock(root, file, coordinates, errors);}
-    else if (name === 'yarn.lock') {parseYarnLock(root, file, coordinates, errors);}
+    if (name === 'package-lock.json' || name === 'npm-shrinkwrap.json') {parseNpmLock(root, file, coordinates, errors, cache);}
+    else if (name === 'pnpm-lock.yaml') {parsePnpmLock(root, file, coordinates, errors, cache);}
+    else if (name === 'yarn.lock') {parseYarnLock(root, file, coordinates, errors, cache);}
     else if (requirementRoots.has(file)) {parseRequirements(root, file, coordinates, errors);}
     else if (name === 'pyproject.toml') {
       const directory = path.dirname(file);
@@ -2748,7 +2824,7 @@ export function collectPackageInventory(repoPath: string = process.cwd()): Packa
     else if (name === 'pom.xml') {parsePom(root, file, coordinates, errors);}
   }
   for (const file of files.filter(file => path.basename(file) === 'package.json')) {
-    parseExactPackageJson(root, file, coordinates, errors, workspacePackagesByLock);
+    parseExactPackageJson(root, file, coordinates, errors, workspacePackagesByLock, cache);
   }
 
   const normalized = mergeCoordinates(coordinates);

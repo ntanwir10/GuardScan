@@ -7,6 +7,7 @@ const path = require('path');
 const { spawnSync } = require('child_process');
 const Ajv = require('ajv');
 const addFormats = require('ajv-formats');
+const {resolveToolInvocation} = require('./process-invocation');
 
 const packageRoot = path.resolve(__dirname, '..');
 const expectedVersion = require(path.join(packageRoot, 'package.json')).version;
@@ -27,8 +28,8 @@ try {
     name: 'guardscan-package-smoke', version: '1.0.0', private: true,
   }));
   fs.writeFileSync(path.join(project, 'index.js'), 'module.exports = () => 42;\n');
-  run(
-    npmCommand(),
+  runTool(
+    'npm',
     [
       'install',
       '--global',
@@ -81,24 +82,25 @@ try {
     USERPROFILE: home,
     GUARDSCAN_NO_TELEMETRY: 'true',
   };
-  const version = run(cli, ['--version'], project, env);
+  const installedEntryPoint = path.join(installedPackage, 'dist', 'index.js');
+  const version = run(process.execPath, [installedEntryPoint, '--version'], project, env);
   const versionLines = version.stdout.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
   const reportedVersion = versionLines.at(-1);
   assert(
     reportedVersion === expectedVersion,
     `installed CLI reported ${JSON.stringify(reportedVersion)}; expected ${expectedVersion}`
   );
-  const help = run(cli, ['--help'], project, env);
+  const help = run(process.execPath, [installedEntryPoint, '--help'], project, env);
   for (const command of ['scan', 'security', 'vuln|cve', 'telemetry', 'cache']) {
     assert(help.stdout.includes(command), `installed CLI help is missing ${command}`);
   }
-  run(cli, ['--no-telemetry', 'init'], project, env);
+  run(process.execPath, [installedEntryPoint, '--no-telemetry', 'init'], project, env);
   const config = parseJsonLikeYaml(path.join(home, '.guardscan', 'config.yml'));
   assert(config.telemetryEnabled === false, 'installed CLI did not default telemetry off');
   assert(config.offlineMode === true, 'installed CLI did not default offline mode on');
 
   const output = path.join(project, 'scan.json');
-  run(cli, [
+  run(process.execPath, [installedEntryPoint,
     '--no-telemetry',
     'scan',
     '--offline',
@@ -123,10 +125,10 @@ try {
 
   const spdxOutput = path.join(project, 'sbom-spdx.json');
   const cycloneDxOutput = path.join(project, 'sbom-cyclonedx.json');
-  run(cli, [
+  run(process.execPath, [installedEntryPoint,
     '--no-telemetry', '--offline', 'sbom', '--format', 'spdx', '--output', spdxOutput,
   ], project, env);
-  run(cli, [
+  run(process.execPath, [installedEntryPoint,
     '--no-telemetry', '--offline', 'sbom', '--format', 'cyclonedx', '--output', cycloneDxOutput,
   ], project, env);
   validateSboms(
@@ -134,16 +136,12 @@ try {
     JSON.parse(fs.readFileSync(cycloneDxOutput, 'utf8'))
   );
 
-  const telemetry = run(cli, ['--no-telemetry', 'telemetry', 'status'], project, env);
+  const telemetry = run(process.execPath, [installedEntryPoint, '--no-telemetry', 'telemetry', 'status'], project, env);
   assert(telemetry.stdout.includes('Consent: disabled'), 'installed telemetry consent default is wrong');
   assert(telemetry.stdout.includes('Pending events: 0'), 'installed telemetry outbox is not empty');
   process.stdout.write(`Package smoke passed: ${path.basename(tarball)}\n`);
 } finally {
   fs.rmSync(tempRoot, { recursive: true, force: true });
-}
-
-function npmCommand() {
-  return process.platform === 'win32' ? 'npm.cmd' : 'npm';
 }
 
 function resolveTarball(argv, destination, env) {
@@ -160,14 +158,19 @@ function resolveTarball(argv, destination, env) {
     assert(stat.isFile() && resolved.endsWith('.tgz'), `invalid package tarball: ${resolved}`);
     return resolved;
   }
-  const packed = run(
-    npmCommand(),
+  const packed = runTool(
+    'npm',
     ['pack', '--json', '--pack-destination', destination],
     packageRoot,
     env
   );
   const packResult = JSON.parse(packed.stdout)[0];
   return path.join(destination, packResult.filename);
+}
+
+function runTool(tool, args, cwd, env) {
+  const invocation = resolveToolInvocation(tool, args, env);
+  return run(invocation.command, invocation.args, cwd, env);
 }
 
 function listPackageFiles(root) {

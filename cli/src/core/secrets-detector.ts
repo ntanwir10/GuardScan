@@ -119,7 +119,9 @@ export class SecretsDetector {
       const stderr = typeof rawStderr === 'string'
         ? rawStderr
         : Buffer.isBuffer(rawStderr) ? rawStderr.toString('utf8') : '';
-      if (!/not a git repository/i.test(stderr)) {onSkippedInput();}
+      if (!isOptionalHistoryUnavailable(error, stderr) && !/not a git repository/i.test(stderr)) {
+        onSkippedInput();
+      }
       return findings;
     }
 
@@ -470,6 +472,13 @@ export class SecretsDetector {
     if (secret.length <= 8) {return '***';}
     return secret.substring(0, SECURITY_CONSTANTS.SECRET_MASK_PREFIX_LENGTH) + '***' + secret.substring(secret.length - SECURITY_CONSTANTS.SECRET_MASK_SUFFIX_LENGTH);
   }
+}
+
+function isOptionalHistoryUnavailable(error: unknown, stderr: string): boolean {
+  const code = error && typeof error === 'object' && 'code' in error
+    ? String((error as {code?: unknown}).code)
+    : '';
+  return code === 'ENOENT' || /dubious ownership|safe\.directory/i.test(stderr);
 }
 
 export const secretsDetector = new SecretsDetector();

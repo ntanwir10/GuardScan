@@ -90,5 +90,6 @@ describe('MetricsCollector local history erasure', () => {
 
     await collector.recordSpan(racing);
     expect(collector.getSpans()).toEqual([racing]);
+    expect(collector.getSpans(0)).toEqual([]);
   });
 });

@@ -615,11 +615,11 @@ export class ScanEngine {
         dot: true,
         unique: true,
         ignore: [
-          'node_modules/**',
-          '.git/**',
-          'dist/**',
-          'build/**',
-          'coverage/**',
+          '**/node_modules/**',
+          '**/.git/**',
+          '**/dist/**',
+          '**/build/**',
+          '**/coverage/**',
           '**/.venv/**',
           'venv/**',
           '**/.tox/**',
@@ -681,7 +681,10 @@ export function evaluateScanPolicy(
     }
   }
 
-  if (scanResult && scanResult.status !== 'complete' && !policy.allowPartial) {
+  if (scanResult && (
+    scanResult.status === 'failed' ||
+    (scanResult.status !== 'complete' && !policy.allowPartial)
+  )) {
     const failedRequired = scanResult.scannerResults
       .filter(scanner => scanner.required && scanner.status === 'failed')
       .map(scanner => scanner.scanner)

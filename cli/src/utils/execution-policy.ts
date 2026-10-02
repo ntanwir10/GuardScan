@@ -3,6 +3,7 @@ export interface ExecutionPolicyInput {
   offline?: boolean;
   cloud?: boolean;
   runProjectCode?: boolean;
+  allowProjectCodeOffline?: boolean;
   isolateProjectNetwork?: boolean;
   cve?: boolean;
   allowPartial?: boolean;
@@ -38,12 +39,17 @@ export function resolveExecutionPolicy(input: ExecutionPolicyInput = {}): Effect
     input.cloud === false ||
     environmentOffline;
   const includeCve = input.cve === true;
-  const runProjectCode = !offline && input.runProjectCode === true;
+  const runProjectCode = input.runProjectCode === true && (
+    !offline || input.allowProjectCodeOffline === true
+  );
 
   return {
     offline,
     runProjectCode,
-    isolateProjectNetwork: runProjectCode && input.isolateProjectNetwork === true,
+    isolateProjectNetwork: runProjectCode && (
+      input.isolateProjectNetwork === true ||
+      (offline && input.allowProjectCodeOffline === true)
+    ),
     includeCve,
     allowPartial: input.allowPartial === true,
   };

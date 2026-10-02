@@ -181,6 +181,7 @@ export class MetricsCollector {
       if (!Number.isSafeInteger(limit) || limit < 0) {
         throw new Error('span limit must be a non-negative safe integer');
       }
+      if (limit === 0) {return [];}
       return this.spans.slice(-limit);
     }
     return [...this.spans];

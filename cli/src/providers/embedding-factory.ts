@@ -48,11 +48,14 @@ export class EmbeddingProviderFactory {
         : usesConfiguredProvider || provider === 'claude'
           ? config.embeddingFallback
           : undefined;
+    const localFallback = fallback === 'ollama' || fallback === 'lmstudio';
+    const configuredEndpointApplies = usesConfiguredProvider && provider !== 'claude' &&
+      (!localFallback || fallback === provider);
 
     return this.create(
       provider,
       usesConfiguredProvider ? config.apiKey : undefined,
-      options.endpoint ?? (usesConfiguredProvider ? config.apiEndpoint : undefined),
+      options.endpoint ?? (configuredEndpointApplies ? config.apiEndpoint : undefined),
       fallback,
       config.offlineMode || options.offline === true,
       config.allowRemoteSelfHosted === true

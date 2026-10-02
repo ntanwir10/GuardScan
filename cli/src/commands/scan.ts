@@ -180,7 +180,13 @@ export async function scanCommand(options: ScanOptions): Promise<void> {
         Date.now() - startedAt,
         executionPolicy.runProjectCode
       );
-      reportPath = await reporter.saveReport(review, 'markdown', options.output, 'comprehensive');
+      reportPath = await reporter.saveReport(
+        review,
+        'markdown',
+        options.output,
+        'comprehensive',
+        repoInfo.path
+      );
     } else {
       reportPath = writeScanResult(
         securityResult,

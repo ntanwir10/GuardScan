@@ -156,6 +156,17 @@ export function resolveProcessInvocation(
   throw new Error(`Required ${command} Node CLI entry point not found on PATH`);
 }
 
+export function resolveMavenVersionInvocation(
+  environment: NodeJS.ProcessEnv = process.env,
+  platform = process.platform
+): ProcessInvocation {
+  if (platform !== 'win32') {return {command: 'mvn', args: ['--version']};}
+  return {
+    command: environment.ComSpec || environment.COMSPEC || 'cmd.exe',
+    args: ['/d', '/s', '/c', 'mvn.cmd', '--version'],
+  };
+}
+
 export function resolveNetworkIsolatedInvocation(
   command: string,
   args: string[],

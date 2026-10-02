@@ -8,6 +8,7 @@ import { EmbeddingProviderFactory } from "../../src/providers/embedding-factory"
 import { LMStudioEmbeddingProvider } from "../../src/providers/embedding-lmstudio";
 import { ClaudeEmbeddingProvider } from "../../src/providers/embedding-claude";
 import { OpenAIEmbeddingProvider } from "../../src/providers/embedding-openai";
+import { OllamaEmbeddingProvider } from "../../src/providers/embedding-ollama";
 import { validateOfflineLocalEndpoint } from "../../src/commands/init";
 import { configManager } from "../../src/core/config";
 
@@ -192,25 +193,28 @@ describe("ProviderFactory", () => {
     });
 
     it('keeps the AI provider usable when local metrics initialization fails', () => {
-      jest.spyOn(configManager, 'getCacheDir').mockImplementation(() => {
+      const cacheDirectory = jest.spyOn(configManager, 'getCacheDir').mockImplementation(() => {
         throw new Error('metrics path fixture is unwritable');
       });
       const warnings: string[] = [];
+      try {
+        const created = ProviderFactory.createEnhanced('ollama', {
+          endpoint: 'http://127.0.0.1:11434',
+          config: makeConfig({provider: 'ollama', observability: {enabled: true}}),
+          enableRetry: false,
+          enableCache: false,
+          enableCircuitBreaker: false,
+          enableRateLimit: false,
+          onWarning: message => warnings.push(message),
+        });
 
-      const created = ProviderFactory.createEnhanced('ollama', {
-        endpoint: 'http://127.0.0.1:11434',
-        config: makeConfig({provider: 'ollama', observability: {enabled: true}}),
-        enableRetry: false,
-        enableCache: false,
-        enableCircuitBreaker: false,
-        enableRateLimit: false,
-        onWarning: message => warnings.push(message),
-      });
-
-      expect(created.getName()).toBe('Ollama');
-      expect(warnings).toEqual([
-        expect.stringMatching(/metrics disabled.*metrics path fixture is unwritable/i),
-      ]);
+        expect(created.getName()).toBe('Ollama');
+        expect(warnings).toEqual([
+          expect.stringMatching(/metrics disabled.*metrics path fixture is unwritable/i),
+        ]);
+      } finally {
+        cacheDirectory.mockRestore();
+      }
     });
   });
 
@@ -352,6 +356,49 @@ describe("ProviderFactory", () => {
           { provider: "openai" }
         )
       ).toThrow(expect.objectContaining({ code: "OFFLINE_PROVIDER_BLOCKED" }));
+    });
+
+    it("does not forward the configured chat endpoint to a local embedding fallback", () => {
+      const result = EmbeddingProviderFactory.createForCli(
+        makeConfig({
+          provider: "claude",
+          apiEndpoint: "https://chat.example.test/v1",
+          embeddingFallback: "ollama",
+          offlineMode: true,
+        })
+      );
+
+      expect(result.provider).toBeInstanceOf(OllamaEmbeddingProvider);
+      expect(result.fallbackProvider).toBe("ollama");
+    });
+
+    it("preserves an explicit embedding endpoint for a local fallback", () => {
+      expect(() => EmbeddingProviderFactory.createForCli(
+        makeConfig({
+          provider: "claude",
+          apiEndpoint: "https://chat.example.test/v1",
+          embeddingFallback: "ollama",
+          offlineMode: true,
+        }),
+        {endpoint: "https://embedding.example.test/v1"}
+      )).toThrow(expect.objectContaining({code: "INVALID_ENDPOINT"}));
+    });
+
+    it("retains the configured endpoint when embeddings use the same local provider", () => {
+      const create = jest.spyOn(EmbeddingProviderFactory, 'create');
+      try {
+        EmbeddingProviderFactory.createForCli(makeConfig({
+          provider: 'ollama',
+          apiEndpoint: 'http://127.0.0.1:12345',
+          embeddingFallback: 'ollama',
+          offlineMode: true,
+        }));
+        expect(create).toHaveBeenCalledWith(
+          'ollama', undefined, 'http://127.0.0.1:12345', 'ollama', true, false
+        );
+      } finally {
+        create.mockRestore();
+      }
     });
   });
 

@@ -68,6 +68,7 @@ cli/scripts/*
 !cli/scripts/clean-dist.js
 !cli/scripts/package-smoke.js
 !cli/scripts/package-manager-smoke.js
+!cli/scripts/process-invocation.js
 !cli/scripts/release/
 !cli/scripts/release/**
 cli/scripts/update-act-cache.sh

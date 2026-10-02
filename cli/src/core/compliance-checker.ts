@@ -87,7 +87,10 @@ export class ComplianceChecker {
           const fullPath = path.join(currentDir, item);
           const stat = fs.lstatSync(fullPath);
 
-          if (stat.isSymbolicLink()) {continue;}
+          if (stat.isSymbolicLink()) {
+            onSkippedInput();
+            continue;
+          }
 
           if (stat.isDirectory()) {
             search(fullPath, depth + 1);

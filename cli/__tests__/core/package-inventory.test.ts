@@ -731,6 +731,35 @@ describe('collectPackageInventory', () => {
     expect(inventory.errors).toEqual([]);
   });
 
+  it('reuses one npm lock across multiple workspace manifest coverage checks', () => {
+    fs.writeFileSync(path.join(repository, 'package.json'), JSON.stringify({
+      name: 'root', workspaces: ['packages/*'],
+    }));
+    for (const workspace of ['app', 'worker']) {
+      const directory = path.join(repository, 'packages', workspace);
+      fs.mkdirSync(directory, {recursive: true});
+      fs.writeFileSync(path.join(directory, 'package.json'), JSON.stringify({
+        name: workspace, dependencies: {shared: '^1.0.0'},
+      }));
+    }
+    const lockfile = path.join(repository, 'package-lock.json');
+    fs.writeFileSync(lockfile, JSON.stringify({
+      lockfileVersion: 3,
+      packages: {
+        '': {name: 'root', workspaces: ['packages/*']},
+        'packages/app': {name: 'app', dependencies: {shared: '^1.0.0'}},
+        'packages/worker': {name: 'worker', dependencies: {shared: '^1.0.0'}},
+        'node_modules/shared': {name: 'shared', version: '1.2.0'},
+      },
+    }));
+    const inventory = collectPackageInventory(repository);
+
+    expect(inventory.errors).toEqual([]);
+    expect(inventory.coordinates.filter(coordinate => coordinate.name === 'shared')).toEqual([
+      expect.objectContaining({direct: true}),
+    ]);
+  });
+
   it('does not require registry coordinates for first-party workspace dependencies', () => {
     fs.writeFileSync(path.join(repository, 'package.json'), JSON.stringify({
       name: 'root', workspaces: ['packages/*'],

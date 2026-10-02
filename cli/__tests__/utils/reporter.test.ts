@@ -2,7 +2,12 @@ import { Reporter, ReviewResult, Finding } from "../../src/utils/reporter";
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
-import { resolveProcessInvocation, runProcess, sanitizeChildEnvironment } from "../../src/utils/process-runner";
+import {
+  resolveMavenVersionInvocation,
+  resolveProcessInvocation,
+  runProcess,
+  sanitizeChildEnvironment,
+} from "../../src/utils/process-runner";
 import {
   APIClient,
   TelemetryDeliveryError,
@@ -211,6 +216,51 @@ describe("Reporter", () => {
       expect(content).not.toContain("[object Promise]");
       expect(content).not.toContain("Upgrade to Pro");
     });
+
+    (process.platform === "win32" ? it.skip : it)(
+      "atomically replaces a report symlink without overwriting its target",
+      async () => {
+        const external = path.join(testDir, "external.md");
+        const outputPath = path.join(testDir, "report.md");
+        fs.writeFileSync(external, "preserve me");
+        fs.symlinkSync(external, outputPath);
+
+        const savedPath = await reporter.saveReport(
+          mockResult,
+          "markdown",
+          outputPath,
+          "security",
+          testDir
+        );
+
+        expect(savedPath).toBe(outputPath);
+        expect(fs.lstatSync(outputPath).isSymbolicLink()).toBe(false);
+        expect(fs.readFileSync(outputPath, "utf8")).toContain("# GuardScan Report");
+        expect(fs.readFileSync(external, "utf8")).toBe("preserve me");
+      }
+    );
+
+    (process.platform === "win32" ? it.skip : it)(
+      "rejects report paths through repository symlink directories",
+      async () => {
+        const external = fs.mkdtempSync(path.join(os.tmpdir(), "reporter-target-"));
+        const linkedDirectory = path.join(testDir, "reports");
+        fs.symlinkSync(external, linkedDirectory);
+
+        try {
+          await expect(reporter.saveReport(
+            mockResult,
+            "markdown",
+            path.join(linkedDirectory, "report.md"),
+            "security",
+            testDir
+          )).rejects.toThrow(/symlink/i);
+          expect(fs.existsSync(path.join(external, "report.md"))).toBe(false);
+        } finally {
+          fs.rmSync(external, {recursive: true, force: true});
+        }
+      }
+    );
   });
 
   describe("groupFindingsBySeverity", () => {
@@ -355,6 +405,13 @@ describe("isolated tool discovery", () => {
     } finally {
       fs.rmSync(directory, {recursive: true, force: true});
     }
+  });
+
+  it("checks Maven through cmd.exe on Windows without resolving an untrusted command", () => {
+    expect(resolveMavenVersionInvocation({ComSpec: "C:\\Windows\\System32\\cmd.exe"}, "win32")).toEqual({
+      command: "C:\\Windows\\System32\\cmd.exe",
+      args: ["/d", "/s", "/c", "mvn.cmd", "--version"],
+    });
   });
 
   it("preserves the rustup toolchain home only for Cargo execution", () => {

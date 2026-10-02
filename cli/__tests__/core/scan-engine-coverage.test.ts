@@ -3,6 +3,7 @@ import * as os from 'os';
 import * as path from 'path';
 import {
   createScanEnvelope,
+  evaluateScanPolicy,
   ScanEngine,
   ScanEngineOptions,
   ScanFile,
@@ -133,6 +134,24 @@ describe('ScanEngine built-in coverage adapters', () => {
       expect.objectContaining({file: expect.stringContaining('src/venv/security.py')}),
     ]));
   });
+
+  it.each(['node_modules', 'dist', 'build', 'coverage'])(
+    'excludes nested generated or dependency directory %s from required pattern coverage',
+    async directory => {
+      const generatedDirectory = path.join(repository, 'packages', 'app', directory);
+      fs.mkdirSync(generatedDirectory, {recursive: true});
+      fs.writeFileSync(path.join(generatedDirectory, 'third-party.js'), 'execute = new Function(untrusted_input)\n');
+
+      const result = await new ScanEngine().runSecurityScan({
+        repoPath: repository,
+        includeVulnerabilities: false,
+        includeGitHistory: false,
+      });
+
+      const patternResult = result.scannerResults.find(scanner => scanner.scanner === 'patterns');
+      expect(patternResult?.findings.some(finding => finding.file.includes(directory))).toBe(false);
+    }
+  );
 
   (process.platform === 'win32' ? it.skip : it)('replaces a report symlink without overwriting its target', async () => {
     const external = path.join(os.tmpdir(), `guardscan-report-target-${process.pid}-${Date.now()}.json`);
@@ -292,5 +311,54 @@ describe('ScanEngine built-in coverage adapters', () => {
 
     expect(output.length).toBeGreaterThan(0);
     expect(onSkippedInput).not.toHaveBeenCalled();
+  });
+
+  (process.platform === 'win32' ? it.skip.each : it.each)([
+    ['api', apiScanner, 'scan', 'route.ts', 'console.log("password", password);'],
+    ['owasp', owaspScanner, 'scan', 'code.ts', 'eval(userInput);'],
+    ['compliance', complianceChecker, 'check', 'config.ts', 'const password = "secret";'],
+    ['dockerfile', dockerfileScanner, 'scan', 'Dockerfile', 'FROM ubuntu:latest'],
+    ['iac', iacScanner, 'scan', 'main.tf', 'storage_encrypted = false'],
+  ] as const)('reports a skipped input for a symlinked %s source', async (
+    _name, scanner, method, filename, content
+  ) => {
+    const targetDirectory = path.join(repository, 'targets');
+    fs.mkdirSync(targetDirectory);
+    const target = path.join(targetDirectory, filename);
+    fs.writeFileSync(target, content);
+    fs.symlinkSync(target, path.join(repository, filename));
+    const onSkippedInput = jest.fn();
+
+    await ((scanner as unknown as Record<string, (root: string, skipped: () => void) => Promise<unknown[]>>)[method])(
+      repository,
+      onSkippedInput
+    );
+
+    expect(onSkippedInput).toHaveBeenCalled();
+  });
+
+  it('keeps total required-scanner failure fatal when partial coverage is allowed', () => {
+    const result = {
+      runId: 'fixture',
+      startedAt: '2026-01-01T00:00:00.000Z',
+      completedAt: '2026-01-01T00:00:01.000Z',
+      status: 'failed' as const,
+      findings: [],
+      scannerResults: [{
+        scanner: 'secrets', required: true, status: 'failed' as const, findings: [],
+        rawCount: 0, findingCount: 0, deduplicatedCount: 0, durationMs: 1,
+        error: {code: 'SCANNER_FAILED', message: 'scanner unavailable', retryable: true},
+      }],
+      errors: [{scanner: 'secrets', code: 'SCANNER_FAILED', message: 'scanner unavailable', retryable: true}],
+      durationMs: 1_000,
+      offline: true,
+      repository,
+    };
+
+    expect(evaluateScanPolicy(result, {allowPartial: true})).toMatchObject({
+      operationalFailure: true,
+      outcome: 'operational-failed',
+      exitCode: 2,
+    });
   });
 });

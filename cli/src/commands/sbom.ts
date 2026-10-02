@@ -10,6 +10,7 @@ import { createDebugLogger } from '../utils/debug-logger';
 import { createPerformanceTracker } from '../utils/performance-tracker';
 import { handleCommandError } from '../utils/error-handler';
 import { resolveExecutionPolicy } from '../utils/execution-policy';
+import type {PackageInventoryError} from '../core/package-inventory';
 
 const logger = createDebugLogger('sbom');
 const perfTracker = createPerformanceTracker('guardscan sbom');
@@ -52,12 +53,18 @@ export async function sbomCommand(options: SBOMOptions): Promise<void> {
 
     const licenseReport = await licenseScanner.scan(repoPath, 'proprietary', { offline: executionPolicy.offline });
 
-    if (licenseReport.inventoryErrors.length > 0) {
-      const first = licenseReport.inventoryErrors[0];
+    const inventoryErrors = classifySbomInventoryErrors(licenseReport.inventoryErrors);
+    if (inventoryErrors.fatal.length > 0) {
+      const first = inventoryErrors.fatal[0];
       throw new Error(
-        `SBOM inventory is incomplete (${licenseReport.inventoryErrors.length} package metadata error(s)); ` +
+        `SBOM inventory contains ${inventoryErrors.fatal.length} invalid manifest(s); ` +
         `${first.file}: ${first.message}`
       );
+    }
+    if (inventoryErrors.warnings.length > 0) {
+      console.warn(chalk.yellow(
+        `Warning: SBOM inventory has ${inventoryErrors.warnings.length} incomplete coverage warning(s).`
+      ));
     }
 
     progressBar.update(1, { status: `Found ${licenseReport.totalDependencies} dependencies` });
@@ -136,6 +143,16 @@ export async function sbomCommand(options: SBOMOptions): Promise<void> {
   } catch (error) {
     handleCommandError(error, 'SBOM generation');
   }
+}
+
+export function classifySbomInventoryErrors(errors: PackageInventoryError[]): {
+  fatal: PackageInventoryError[];
+  warnings: PackageInventoryError[];
+} {
+  return {
+    fatal: errors.filter(error => error.code === 'INVALID_MANIFEST'),
+    warnings: errors.filter(error => error.code !== 'INVALID_MANIFEST'),
+  };
 }
 
 interface SbomSummary {

@@ -579,6 +579,18 @@ describe('DependencyScanner OSV integration', () => {
 
     const kevCacheFile = path.join(cache, 'kev', 'catalog.json');
     const cachedKev = JSON.parse(fs.readFileSync(kevCacheFile, 'utf8'));
+    cachedKev.retrievedAt = new Date(Date.now() - 3 * 86_400_000).toISOString();
+    fs.writeFileSync(kevCacheFile, JSON.stringify(cachedKev), 'utf8');
+    const alignedOffline = await scanner.scan(repository, {
+      offline: true, snapshotStore: store, kevStore, maxSnapshotAgeDays: 4,
+      kevEndpoint: 'https://example.test/kev.json',
+    });
+    expect(alignedOffline[0].status).toBe('complete');
+    expect(alignedOffline[0].knownExploitedEnrichment.status).toBe('fresh-cache');
+    await expect(scanner.scan(repository, {
+      offline: true, snapshotStore: store, kevStore, maxSnapshotAgeDays: 4,
+      kevMaxCacheAgeDays: 1, kevEndpoint: 'https://example.test/kev.json',
+    })).rejects.toMatchObject({code: 'KEV_COVERAGE_UNAVAILABLE'});
     cachedKev.retrievedAt = '2000-01-01T00:00:00.000Z';
     fs.writeFileSync(kevCacheFile, JSON.stringify(cachedKev), 'utf8');
     await expect(scanner.scan(repository, {

@@ -3,13 +3,17 @@
 const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
-const { evaluateBaseline } = require('./eslint-ratchet-lib');
+const { evaluateBaseline, parseEslintReport } = require('./eslint-ratchet-lib');
+const {resolveToolInvocation} = require('./process-invocation');
 
 const BASELINE_FILE = path.join(__dirname, 'eslint-baseline.json');
-const npx = process.platform === 'win32' ? 'npx.cmd' : 'npx';
+const invocation = resolveToolInvocation(
+  'npx',
+  ['--no-install', 'eslint', 'src', '--ext', '.ts', '--format', 'json']
+);
 const result = spawnSync(
-  npx,
-  ['--no-install', 'eslint', 'src', '--ext', '.ts', '--format', 'json'],
+  invocation.command,
+  invocation.args,
   {
     cwd: process.cwd(),
     encoding: 'utf-8',
@@ -24,10 +28,9 @@ if (result.error) {
 
 let report;
 try {
-  report = JSON.parse(result.stdout || '[]');
-} catch {
-  console.error('Failed to parse ESLint JSON output.');
-  if (result.stderr) console.error(result.stderr);
+  report = parseEslintReport(result);
+} catch (error) {
+  console.error(error instanceof Error ? error.message : String(error));
   process.exit(1);
 }
 

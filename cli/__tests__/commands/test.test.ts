@@ -59,12 +59,13 @@ describe('testCommand execution policy', () => {
     else {process.env.GUARDSCAN_OFFLINE = originalOffline;}
   });
 
-  it('passes the offline project-execution policy to tests and linters', async () => {
+  it('runs explicitly requested local tests and linters offline with network isolation', async () => {
     await testCommand({ all: true });
 
     const expectedPolicy = expect.objectContaining({
       offline: true,
-      runProjectCode: false,
+      runProjectCode: true,
+      isolateProjectNetwork: true,
     });
     expect(testRunner.runTests).toHaveBeenCalledWith(process.cwd(), false, expectedPolicy);
     expect(linterIntegration.runAll).toHaveBeenCalledWith(process.cwd(), expectedPolicy);

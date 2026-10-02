@@ -113,7 +113,7 @@ export class TestRunner {
     withCoverage: boolean = false,
     policy?: EffectiveExecutionPolicy
   ): Promise<TestResult[]> {
-    if (policy && (policy.offline || !policy.runProjectCode)) {
+    if (policy && !policy.runProjectCode) {
       return [];
     }
     const results: TestResult[] = [];

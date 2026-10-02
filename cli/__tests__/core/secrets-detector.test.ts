@@ -195,6 +195,32 @@ describe('SecretsDetector', () => {
 
       expect(onSkippedInput).not.toHaveBeenCalled();
     });
+
+    it.each([
+      [Object.assign(new Error('spawn git ENOENT'), {code: 'ENOENT'}), 'missing Git'],
+      [Object.assign(new Error('dubious ownership'), {stderr: 'fatal: detected dubious ownership in repository'}), 'safe.directory'],
+    ])('does not degrade coverage when history is unavailable due to %s', async (error, _reason) => {
+      mockedExecFileSync.mockImplementation(() => {throw error;});
+      const onSkippedInput = jest.fn();
+
+      await expect(detector.scanGitHistory(testDir, onSkippedInput)).resolves.toEqual([]);
+
+      expect(onSkippedInput).not.toHaveBeenCalled();
+    });
+
+    it('reports incomplete coverage when a history diff exceeds maxBuffer', async () => {
+      const commit = 'b'.repeat(40);
+      mockedExecFileSync.mockImplementation(((_command: string, args: readonly string[]) => {
+        if (args[0] === 'rev-parse') {return 'true\n';}
+        if (args[0] === 'log') {return `${commit}\n`;}
+        throw Object.assign(new Error('stdout maxBuffer length exceeded'), {code: 'ENOBUFS'});
+      }) as typeof execFileSync);
+      const onSkippedInput = jest.fn();
+
+      await expect(detector.scanGitHistory(testDir, onSkippedInput)).resolves.toEqual([]);
+
+      expect(onSkippedInput).toHaveBeenCalledTimes(1);
+    });
   });
 
   describe('entropy detection', () => {

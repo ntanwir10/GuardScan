@@ -485,18 +485,20 @@ describe('parseConfig', () => {
 
   it.each([
     'https://api.example.test/v1',
+    'http://api.example.test/v1',
+    'http://192.168.1.20:11434/v1',
     'http://localhost:11434',
     'http://127.0.0.2:11434/',
     'http://[::1]:1234',
-  ])('accepts a secure or loopback API endpoint: %s', apiEndpoint => {
+  ])('accepts a credential-free HTTP or HTTPS API endpoint: %s', apiEndpoint => {
     expect(parseConfig({ provider: 'none', apiEndpoint }).apiEndpoint).toBe(apiEndpoint);
   });
 
   it.each([
-    'http://example.test',
     'https://user:pass@example.test',
     'https://example.test/path?token=secret',
     'https://example.test/path#fragment',
+    'ftp://example.test/model',
     'not-a-url',
   ])('rejects an unsafe API endpoint: %s', apiEndpoint => {
     expect(() => parseConfig({ provider: 'none', apiEndpoint })).toThrow(

@@ -32,4 +32,22 @@ describe('early CLI environment policy', () => {
       else {process.env.GUARDSCAN_OFFLINE = originalOffline;}
     }
   });
+
+  it('allows explicit local quality execution offline only with network isolation', () => {
+    const originalOffline = process.env.GUARDSCAN_OFFLINE;
+    process.env.GUARDSCAN_OFFLINE = 'true';
+    try {
+      expect(resolveExecutionPolicy({
+        runProjectCode: true,
+        allowProjectCodeOffline: true,
+      })).toMatchObject({
+        offline: true,
+        runProjectCode: true,
+        isolateProjectNetwork: true,
+      });
+    } finally {
+      if (originalOffline === undefined) {delete process.env.GUARDSCAN_OFFLINE;}
+      else {process.env.GUARDSCAN_OFFLINE = originalOffline;}
+    }
+  });
 });
