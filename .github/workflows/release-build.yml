@@ -290,6 +290,7 @@ jobs:
         run: |
           ARGS=(--kind artifact-sbom --output-dir ../standalone-sbom \
             --executable "../standalone/${{ matrix.executable }}" \
+            --prototype-metadata "../standalone/standalone-prototype.json" \
             --platform-os "${{ matrix.os }}" --platform-arch "${{ matrix.arch }}" \
             --timestamp "$(git show -s --format=%cI "${{ inputs.ref }}")")
           if [ -n "${{ matrix.libc }}" ]; then ARGS+=(--platform-libc "${{ matrix.libc }}"); fi

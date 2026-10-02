@@ -118,7 +118,18 @@ jobs:
       - name: Verify and classify registry state
         id: preflight
         working-directory: cli
-        run: npm run release:npm-preflight -- --artifact-dir ../npm-artifact --github-output "$GITHUB_OUTPUT"
+        run: |
+          DIST_TAG=latest
+          if [ "${{ inputs.channel }}" = rc ]; then DIST_TAG=next; fi
+          npm run release:npm-preflight -- \
+            --artifact-dir ../npm-artifact \
+            --expected-dist-tag "$DIST_TAG" \
+            --github-output "$GITHUB_OUTPUT"
+      - name: Refuse existing-version dist-tag drift outside trusted-publishing authority
+        if: steps.preflight.outputs.dist-tag-repair-required == 'true'
+        run: |
+          echo 'The expected npm dist-tag points to another version; trusted publishing cannot repair it.' >&2
+          exit 1
       - name: Publish exact tested tarball
         if: steps.preflight.outputs.publish-required == 'true'
         working-directory: cli
@@ -129,7 +140,14 @@ jobs:
             --access public --provenance --tag "$DIST_TAG"
       - name: Verify public registry integrity
         working-directory: cli
-        run: npm run release:npm-preflight -- --artifact-dir ../npm-artifact
+        run: |
+          DIST_TAG=latest
+          if [ "${{ inputs.channel }}" = rc ]; then DIST_TAG=next; fi
+          npm run release:npm-preflight -- \
+            --artifact-dir ../npm-artifact \
+            --expected-dist-tag "$DIST_TAG" \
+            --github-output "$RUNNER_TEMP/npm-preflight-output"
+          grep -Fx 'dist-tag-repair-required=false' "$RUNNER_TEMP/npm-preflight-output"
 
   pypi-test:
     name: TestPyPI trusted publication and lifecycle
@@ -236,16 +254,57 @@ jobs:
                   raise
               remote = {"urls": []}
           remote_files = {item["filename"]: item["digests"]["sha256"] for item in remote["urls"]}
-          for wheel in pathlib.Path("dist").glob("*.whl"):
-              digest = hashlib.sha256(wheel.read_bytes()).hexdigest()
-              if wheel.name in remote_files and remote_files[wheel.name] != digest:
-                  raise SystemExit(f"PyPI integrity conflict for {wheel.name}")
+          local_files = {
+              wheel.name: hashlib.sha256(wheel.read_bytes()).hexdigest()
+              for wheel in pathlib.Path("dist").glob("*.whl")
+          }
+          unexpected = sorted(set(remote_files) - set(local_files))
+          if unexpected:
+              raise SystemExit(f"PyPI has unexpected files for this version: {unexpected}")
+          for filename, digest in local_files.items():
+              if filename in remote_files and remote_files[filename] != digest:
+                  raise SystemExit(f"PyPI integrity conflict for {filename}")
           PY
       - uses: pypa/gh-action-pypi-publish@ba38be9e461d3875417946c167d0b5f3d385a247 # v1.14.1
         with:
           packages-dir: dist
           skip-existing: true
           print-hash: true
+      - name: Verify exact PyPI file set after publication
+        env:
+          REGISTRY_JSON_BASE: https://pypi.org/pypi/guardscan-cli
+          RELEASE_VERSION: ${{ inputs.tag }}
+        run: |
+          python - <<'PY'
+          import hashlib, json, os, pathlib, time, urllib.error, urllib.request
+
+          version = os.environ["RELEASE_VERSION"].removeprefix("v").replace("-rc.", "rc")
+          url = f'{os.environ["REGISTRY_JSON_BASE"]}/{version}/json'
+          local = {
+              wheel.name: hashlib.sha256(wheel.read_bytes()).hexdigest()
+              for wheel in pathlib.Path("dist").glob("*.whl")
+          }
+          for attempt in range(30):
+              try:
+                  with urllib.request.urlopen(url, timeout=30) as response:
+                      remote = {
+                          item["filename"]: item["digests"]["sha256"]
+                          for item in json.load(response)["urls"]
+                      }
+              except urllib.error.HTTPError as error:
+                  if error.code != 404:
+                      raise
+                  remote = {}
+              if remote == local:
+                  break
+              if set(remote) - set(local):
+                  raise SystemExit("PyPI returned unexpected files for this version")
+              if any(local.get(name) != digest for name, digest in remote.items()):
+                  raise SystemExit("PyPI returned a conflicting wheel digest")
+              if attempt == 29:
+                  raise SystemExit("PyPI did not converge to the complete release wheel set")
+              time.sleep(10)
+          PY
 
   adapters:
     name: Homebrew and Scoop bot PRs
@@ -277,13 +336,13 @@ jobs:
       - working-directory: cli
         run: npm run release:render -- --manifest ../payload/release-manifest.json --output-dir ../adapters
       - name: Push deterministic adapter branches and open PRs
-        env:
-          GH_TOKEN: ${{ steps.app.outputs.token }}
         run: |
           BRANCH="guardscan/${{ inputs.tag }}"
-          for SPEC in "homebrew-tap:adapters/homebrew/Formula/guardscan.rb:Formula/guardscan.rb" \
-                      "scoop-bucket:adapters/scoop/bucket/guardscan.json:bucket/guardscan.json"; do
-            IFS=: read -r REPO SOURCE TARGET <<< "$SPEC"
+          export BRANCH
+          mkdir -p release-evidence
+          for SPEC in "homebrew-tap:adapters/homebrew/Formula/guardscan.rb:Formula/guardscan.rb:homebrew" \
+                      "scoop-bucket:adapters/scoop/bucket/guardscan.json:bucket/guardscan.json:scoop"; do
+            IFS=: read -r REPO SOURCE TARGET CHANNEL <<< "$SPEC"
             gh repo clone "ntanwir10/$REPO" "$REPO"
             (
               cd "$REPO"
@@ -303,6 +362,7 @@ jobs:
                 git commit -m "guardscan ${{ inputs.tag }}"
                 git push origin "$BRANCH"
               fi
+              EXPECTED_HEAD="$(git rev-parse HEAD)"
               PR_NUMBER="$(gh pr list --repo "ntanwir10/$REPO" \
                 --head "$BRANCH" --state all --limit 1 --json number --jq '.[0].number')"
               if [ -z "$PR_NUMBER" ]; then
@@ -313,12 +373,90 @@ jobs:
                 PR_NUMBER="$(gh pr list --repo "ntanwir10/$REPO" \
                   --head "$BRANCH" --state all --limit 1 --json number --jq '.[0].number')"
               fi
-              PR_STATE="$(gh pr view --repo "ntanwir10/$REPO" "$PR_NUMBER" --json state --jq .state)"
+              PR_DETAILS="$(gh pr view --repo "ntanwir10/$REPO" "$PR_NUMBER" \
+                --json state,headRefOid,baseRefName,headRepository,mergeCommit)"
+              export EXPECTED_HEAD PR_DETAILS REPO
+              node - <<'NODE'
+          const pr = JSON.parse(process.env.PR_DETAILS);
+          if (pr.baseRefName !== 'main' || pr.headRefOid !== process.env.EXPECTED_HEAD
+              || pr.headRepository?.nameWithOwner?.toLowerCase() !== `ntanwir10/${process.env.REPO}`.toLowerCase()) {
+            throw new Error('adapter pull request is not bound to the expected repository head');
+          }
+          if (pr.state === 'CLOSED' && !pr.mergeCommit?.oid) {
+            throw new Error('adapter pull request is closed without a merge commit');
+          }
+          NODE
+              PR_STATE="$(node -p 'JSON.parse(process.env.PR_DETAILS).state')"
+              MERGE_SHA="$(node -p 'JSON.parse(process.env.PR_DETAILS).mergeCommit?.oid || ""')"
               if [ "${{ inputs.channel }}" = stable ] && [ "$PR_STATE" != MERGED ]; then
                 gh pr merge --repo "ntanwir10/$REPO" "$PR_NUMBER" --auto --squash
+                for ATTEMPT in $(seq 1 60); do
+                  PR_DETAILS="$(gh pr view --repo "ntanwir10/$REPO" "$PR_NUMBER" \
+                    --json state,headRefOid,baseRefName,headRepository,mergeCommit)"
+                  export PR_DETAILS
+                  PR_STATE="$(node -p 'JSON.parse(process.env.PR_DETAILS).state')"
+                  if [ "$PR_STATE" = MERGED ]; then break; fi
+                  if [ "$PR_STATE" = CLOSED ]; then
+                    echo "adapter PR #$PR_NUMBER closed without merging" >&2
+                    exit 1
+                  fi
+                  sleep 10
+                done
+                test "$PR_STATE" = MERGED
+                MERGE_SHA="$(node -p 'JSON.parse(process.env.PR_DETAILS).mergeCommit?.oid || ""')"
+                test "$(node -p 'JSON.parse(process.env.PR_DETAILS).headRefOid')" = "$EXPECTED_HEAD"
               fi
+              if [ "$PR_STATE" = MERGED ]; then
+                test "$(node -p 'JSON.parse(process.env.PR_DETAILS).headRefOid')" = "$EXPECTED_HEAD"
+                test "$PR_STATE" = MERGED
+                case "$MERGE_SHA" in
+                  [a-f0-9][a-f0-9][a-f0-9][a-f0-9]*) ;;
+                  *) echo 'merged adapter PR has no actual merge commit' >&2; exit 1 ;;
+                esac
+                test "${#MERGE_SHA}" -eq 40
+                git fetch origin "$MERGE_SHA"
+                git show "$MERGE_SHA:$TARGET" > merged-adapter-file
+                cmp --silent "../$SOURCE" merged-adapter-file || {
+                  echo 'merged adapter bytes differ from the release projection' >&2
+                  exit 1
+                }
+              fi
+              if [ "$PR_STATE" != MERGED ] && [ "$PR_STATE" != OPEN ]; then
+                echo "unexpected adapter PR state: $PR_STATE" >&2
+                exit 1
+              fi
+              FILE_SHA256="$(sha256sum "../$SOURCE" | cut -d ' ' -f 1)"
+              export CHANNEL EXPECTED_HEAD MERGE_SHA FILE_SHA256 PR_NUMBER PR_STATE TARGET
+              node - <<'NODE'
+          const fs = require('fs');
+          const file = '../release-evidence/catalog-publication-evidence.json';
+          const evidence = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : {
+            schemaVersion: 'guardscan.catalog-publication-evidence.v1',
+            version: process.env.RELEASE_TAG,
+            channels: {},
+          };
+          evidence.channels[process.env.CHANNEL] = {
+            repository: `ntanwir10/${process.env.REPO}`,
+            branch: process.env.BRANCH,
+            pullRequest: Number(process.env.PR_NUMBER),
+            state: process.env.PR_STATE,
+            headCommit: process.env.EXPECTED_HEAD,
+            mergeCommit: process.env.MERGE_SHA || null,
+            path: process.env.TARGET,
+            fileSha256: process.env.FILE_SHA256,
+          };
+          fs.writeFileSync(file, `${JSON.stringify(evidence, null, 2)}\n`);
+          NODE
             )
           done
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+      - uses: actions/upload-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-catalog-publication-${{ inputs.tag }}
+          path: release-evidence/catalog-publication-evidence.json
+          if-no-files-found: error
 
   winget:
     name: WinGet submission

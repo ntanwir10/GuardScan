@@ -8,6 +8,7 @@ const {spawnSync} = require('child_process');
 const {builtinModules} = require('module');
 const esbuild = require('esbuild');
 const {inject} = require('postject');
+const compareUtf8 = (left, right) => (left < right ? -1 : left > right ? 1 : 0);
 
 const PROTOTYPE_SCHEMA = 'guardscan.standalone-prototype.v1';
 const SEA_FUSE = 'NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2';
@@ -79,6 +80,65 @@ function assertExternalAllowlist(metafile) {
     throw new Error(`standalone bundle contains undeclared runtime packages: ${unexpected.join(', ')}`);
   }
   return packages;
+}
+
+function npmPurl(name, version) {
+  if (name.startsWith('@')) {
+    const parts = name.split('/');
+    if (parts.length !== 2 || parts.some(part => part.length < 1)) return undefined;
+    return `pkg:npm/${encodeURIComponent(parts[0])}/${encodeURIComponent(parts[1])}@${encodeURIComponent(version)}`;
+  }
+  if (name.includes('/')) return undefined;
+  return `pkg:npm/${encodeURIComponent(name)}@${encodeURIComponent(version)}`;
+}
+
+function npmPackageName(lockPath) {
+  const marker = 'node_modules/';
+  const index = lockPath.lastIndexOf(marker);
+  const name = lockPath.slice(index + marker.length);
+  if (!name || name.startsWith('/') || name.split('/').some(part => !part)) {
+    throw new Error(`bundled package lock path is invalid: ${lockPath}`);
+  }
+  if (name.startsWith('@')) {
+    const [scope, packageName, ...rest] = name.split('/');
+    if (!packageName || rest.length > 0) throw new Error(`bundled package lock path is invalid: ${lockPath}`);
+    return `${scope}/${packageName}`;
+  }
+  return name.split('/')[0];
+}
+
+function bundledComponents(metafile, packageLock) {
+  const packages = packageLock?.packages;
+  if (!packages || typeof packages !== 'object' || Array.isArray(packages)) {
+    throw new Error('standalone component inventory requires package-lock packages');
+  }
+  const lockPaths = Object.keys(packages)
+    .filter(lockPath => lockPath.includes('node_modules/'))
+    .sort((left, right) => right.length - left.length || compareUtf8(left, right));
+  const components = new Map();
+  for (const rawInputPath of Object.keys(metafile?.inputs || {})) {
+    const inputPath = rawInputPath.replace(/\\/g, '/');
+    const marker = inputPath.indexOf('node_modules/');
+    if (marker < 0) continue;
+    const packagePath = inputPath.slice(marker);
+    const lockPath = lockPaths.find(candidate => (
+      packagePath === candidate || packagePath.startsWith(`${candidate}/`)
+    ));
+    if (!lockPath) throw new Error(`bundled package input is missing from package-lock: ${rawInputPath}`);
+    const version = packages[lockPath]?.version;
+    if (typeof version !== 'string' || version.length < 1) {
+      throw new Error(`bundled package has no locked version: ${lockPath}`);
+    }
+    const name = npmPackageName(lockPath);
+    const purl = npmPurl(name, version);
+    if (!purl) throw new Error(`bundled package has an invalid npm identity: ${lockPath}`);
+    components.set(purl, {name, version, type: 'library', purl});
+  }
+  const result = [...components.values()].sort((left, right) => (
+    compareUtf8(`${left.name}@${left.version}`, `${right.name}@${right.version}`)
+  ));
+  if (result.length < 1) throw new Error('standalone bundle contains no locked third-party components');
+  return result;
 }
 
 function hashRegularFile(file, maxBytes, label) {
@@ -256,6 +316,10 @@ async function buildHostPrototype(source, outputDir) {
     const executable = path.join(stage, executableName);
     const build = await esbuild.build(bundleOptions(entryPoint, bundleFile));
     const externals = assertExternalAllowlist(build.metafile);
+    const components = bundledComponents(
+      build.metafile,
+      JSON.parse(fs.readFileSync(path.join(source.packageRoot, 'package-lock.json'), 'utf8')),
+    );
     const bundle = hashRegularFile(bundleFile, MAX_BUNDLE_BYTES, 'standalone bundle');
     await prepareExecutable(bundleFile, blobFile, executable);
     const smoke = smokeStandalone(executable, source.version);
@@ -280,6 +344,7 @@ async function buildHostPrototype(source, outputDir) {
         accurateTokenCounting: false,
       },
       optionalExternalPackages: externals,
+      bundledComponents: components,
       bundle,
       executable: {filename: executableName, ...binary},
       smoke,
@@ -311,6 +376,7 @@ module.exports = {
   assertExternalAllowlist,
   buildHostPrototype,
   bundleOptions,
+  bundledComponents,
   externalPackages,
   hostPlatform,
   smokeStandalone,

@@ -360,7 +360,7 @@ jobs:
             brew install ntanwir10/tap/guardscan
             brew test ntanwir10/tap/guardscan
             brew upgrade --dry-run ntanwir10/tap/guardscan
-            guardscan --version
+            test "$(guardscan --version | tr -d '\r')" = "$VERSION"
             brew uninstall guardscan
           else
             git clone --branch "guardscan/v$VERSION" \
@@ -368,7 +368,7 @@ jobs:
             brew style preview-tap/Formula/guardscan.rb
             brew audit --strict preview-tap/Formula/guardscan.rb
             brew install --formula preview-tap/Formula/guardscan.rb
-            guardscan --version
+            test "$(guardscan --version | tr -d '\r')" = "$VERSION"
             brew uninstall guardscan
           fi
           node -e '
@@ -392,7 +392,10 @@ jobs:
             scoop bucket add guardscan-preview (Resolve-Path preview-bucket)
           }
           scoop install guardscan
-          guardscan --version
+          $installedVersion = (& guardscan --version | Out-String).Trim()
+          if ($LASTEXITCODE -ne 0 -or $installedVersion -ne $env:VERSION) {
+            throw 'Scoop installed version does not match the release train'
+          }
           scoop update guardscan
           scoop uninstall guardscan
           node -e '
@@ -515,7 +518,7 @@ jobs:
           const fs = require('fs');
           const path = require('path');
           const cp = require('child_process');
-          const {appendEvent, readEvents} = require('./cli/scripts/release/events');
+          const {appendEvent, monotonicLedgerTimestamp, readEvents} = require('./cli/scripts/release/events');
           const files = [];
           const walk = dir => fs.readdirSync(dir, {withFileTypes: true}).forEach(entry => {
             const file = path.join(dir, entry.name);
@@ -547,11 +550,16 @@ jobs:
               const suffix = `${process.env.GITHUB_RUN_ID}:${process.env.GITHUB_RUN_ATTEMPT}:${report.channel}:${report.target}:${path.basename(path.dirname(file))}`;
               appendEvent(ledger, {
                 version, tag, commit,
-                timestamp: report.checkedAt,
+                timestamp: monotonicLedgerTimestamp(readEvents(ledger), report.checkedAt, `canary:${suffix}`),
                 type: 'canary_recorded',
                 channel: report.channel,
                 idempotencyKey: `canary:${suffix}`,
-                payload: {status: report.status, evidenceUrl: report.evidenceUrl},
+                payload: {
+                  status: report.status,
+                  checkedAt: report.checkedAt,
+                  target: report.target,
+                  evidenceUrl: report.evidenceUrl,
+                },
               });
               if (report.status === 'passed') {
                 const types = ['winget', 'chocolatey'].includes(report.channel)
@@ -560,7 +568,7 @@ jobs:
                 for (const type of types) {
                   appendEvent(ledger, {
                     version, tag, commit,
-                    timestamp: report.checkedAt,
+                    timestamp: monotonicLedgerTimestamp(readEvents(ledger), report.checkedAt, `${type}:${suffix}`),
                     type,
                     channel: report.channel,
                     idempotencyKey: `${type}:${suffix}`,

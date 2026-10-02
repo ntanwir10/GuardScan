@@ -25,7 +25,7 @@ const {
   writeStateTransition,
 } = require('./ledger');
 const {validateAdapters} = require('./validators');
-const {buildHostPrototype} = require('./standalone');
+const {PROTOTYPE_SCHEMA, buildHostPrototype} = require('./standalone');
 const {
   appendEvent,
   materializeReleaseState,
@@ -230,6 +230,24 @@ async function handleBuild(source, options) {
     ).metadata;
   }
   if (options.kind === 'artifact-sbom') {
+    requireOptions('artifact SBOM', options, ['prototypeMetadata']);
+    let prototype;
+    try {
+      prototype = JSON.parse(fs.readFileSync(path.resolve(options.prototypeMetadata), 'utf8'));
+    } catch (error) {
+      throw new Error(`standalone prototype metadata is invalid: ${error.message}`);
+    }
+    if (prototype.schemaVersion !== PROTOTYPE_SCHEMA
+        || prototype.version !== source.version
+        || prototype.tag !== source.tag
+        || prototype.commit !== source.commit
+        || prototype.platform?.os !== platform.os
+        || prototype.platform?.arch !== platform.arch) {
+      throw new Error('standalone prototype component inventory does not match the release source');
+    }
+    if (!Array.isArray(prototype.bundledComponents) || prototype.bundledComponents.length === 0) {
+      throw new Error('standalone prototype has no bundled component inventory');
+    }
     const executable = hashExecutable(options.executable);
     return writeArtifactSboms({
       version: source.version,
@@ -239,6 +257,7 @@ async function handleBuild(source, options) {
       platformId: [platform.os, platform.arch, platform.libc].filter(Boolean).join('-'),
       nodeVersion: process.version.slice(1),
       executable,
+      components: prototype.bundledComponents,
     }, options.outputDir).metadata;
   }
   throw new Error(`unsupported build kind: ${options.kind}`);
@@ -498,7 +517,9 @@ async function main(argv) {
   if (command === 'verify-npm-artifact' || command === 'npm-preflight') {
     requireOptions(command, options, ['artifactDir']);
     const artifact = verifyNpmArtifact(source, options.artifactDir);
-    const remote = command === 'npm-preflight' ? queryNpmRemote(artifact) : undefined;
+    const remote = command === 'npm-preflight'
+      ? queryNpmRemote(artifact, {expectedDistTag: options.expectedDistTag})
+      : undefined;
     const output = {
       valid: true,
       filename: artifact.filename,
@@ -512,6 +533,7 @@ async function main(argv) {
         `filename=${artifact.filename}`,
         `publish-required=${remote?.publishRequired === true}`,
         `matching=${remote?.matching === true}`,
+        `dist-tag-repair-required=${remote?.distTagRepairRequired === true}`,
         '',
       ].join('\n'), {encoding: 'utf8'});
     }
