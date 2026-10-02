@@ -563,9 +563,18 @@ describe('zero-touch release workflow contracts', () => {
     expect(canary).toContain('$installedVersion -ne $env:VERSION');
     expect(canary).toContain('const expectedTargetCounts = {');
     expect(canary).toContain('resolved.length === expectedCount');
-    expect(canary).toContain("type: 'channel_failed'");
+    expect(canary).toContain("type === 'channel_failed'");
     expect(canary).toContain("error: 'one or more current public canary targets failed'");
     expect(canary).toContain('const versionAggregateTimestamp = versionReports');
+    expect(canary).toContain('canaryChannelEventType(state, channel, passed, complete)');
+    expect(canary).not.toContain("? ['channel_accepted', 'channel_verified']");
+    const train = workflowSource('release-train.yml');
+    expect(train).toContain('catalogReconciliationAllowed(');
+    expect(train).toContain('shouldPublishCatalogChannel(');
+    expect(train).toContain("['published', 'submitted', 'accepted', 'verified', 'failed']");
+    expect(train.indexOf('if [ "$INTEGRITY_INCIDENT" = true ]'))
+      .toBeLessThan(train.indexOf('if [ "$CATALOG_RECONCILE" != true ]'));
+    expect(train).toContain('if [ "$CATALOG_RECONCILE" != true ] && [ "$CATALOG_CLASSIFICATION" != exact ]; then');
     expect(canary).not.toContain('{remoteIdentity: `${channel}:${version}`}');
     expect(canary).toContain("if: inputs.version == '' || vars.RELEASE_AUTOMATION_ENABLED == 'true'");
     expect(canary).toMatch(

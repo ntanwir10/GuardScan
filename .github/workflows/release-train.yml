@@ -1099,6 +1099,19 @@ jobs:
             echo "::error::Release-integrity incident: catalog classification is $CATALOG_CLASSIFICATION"
             exit 1
           fi
+          CATALOG_RECONCILE="$(node - <<'NODE'
+          const {materializeReleaseState, readEvents} = require('./cli/scripts/release/events');
+          const {catalogReconciliationAllowed} = require('./cli/scripts/release/distribution-guards');
+          process.stdout.write(String(catalogReconciliationAllowed(
+            materializeReleaseState(readEvents('release-events.jsonl'))
+          )));
+          NODE
+          )"
+          if [ "$CATALOG_RECONCILE" != true ] && [ "$CATALOG_CLASSIFICATION" != exact ]; then
+            echo "exact=false" >> "$GITHUB_OUTPUT"
+            echo "Catalog reconciliation stopped for a terminal channel state."
+            exit 0
+          fi
           if [ "$CATALOG_CLASSIFICATION" != exact ]; then
             if [ "$AUTOMATION_ENABLED" != true ]; then
               echo "exact=false" >> "$GITHUB_OUTPUT"
@@ -1203,7 +1216,8 @@ jobs:
         run: |
           node - <<'NODE'
           const fs = require('fs');
-          const {appendEvent, readEvents} = require('./cli/scripts/release/events');
+          const {appendEvent, materializeReleaseState, readEvents} = require('./cli/scripts/release/events');
+          const {shouldPublishCatalogChannel} = require('./cli/scripts/release/distribution-guards');
           const evidence = require('./catalog-verification/evidence.json');
           const tag = `v${process.env.RELEASE_VERSION}`;
           const events = readEvents('release-events.jsonl');
@@ -1214,6 +1228,9 @@ jobs:
             ['homebrew', 'Formula/guardscan.rb'],
             ['scoop', 'bucket/guardscan.json'],
           ]) {
+            if (!shouldPublishCatalogChannel(materializeReleaseState(readEvents('release-events.jsonl')), channel)) {
+              continue;
+            }
             const remoteDigest = evidence.files?.[catalogPath]?.sha256;
             if (!/^[a-f0-9]{64}$/.test(remoteDigest || '')) {
               throw new Error(`catalog evidence has no valid digest for ${catalogPath}`);
@@ -1867,7 +1884,7 @@ jobs:
           const refreshed = readEvents('release-events.jsonl');
           for (const [channel, channelState] of Object.entries(state.channels)) {
             if (!['github', 'pnpm', 'yarn', 'bun', 'homebrew', 'scoop'].includes(channel)
-                || !['published', 'submitted', 'accepted', 'verified'].includes(channelState.status)) {
+                || !['published', 'submitted', 'accepted', 'verified', 'failed'].includes(channelState.status)) {
               continue;
             }
             const key = `rollback-superseded:${channel}:${process.env.DEFECTIVE_VERSION}`;

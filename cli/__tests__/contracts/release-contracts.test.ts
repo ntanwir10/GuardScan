@@ -416,6 +416,38 @@ describe('release contract schemas', () => {
     })).toBe(true);
   });
 
+  it('requires provider evidence on every moderated acceptance event', () => {
+    const submission = {
+      schemaVersion: 'guardscan.moderated-submission.v1',
+      channel: 'chocolatey', version: '1.2.3', tag: 'v1.2.3',
+      state: 'accepted', packageIdentity: 'guardscan@1.2.3',
+      remoteIdentity: 'chocolatey:guardscan@1.2.3', remoteDigest: 'd'.repeat(64),
+      packageFilename: 'guardscan.1.2.3.nupkg',
+      provider: {url: 'https://community.chocolatey.org/api/v2/package/guardscan/1.2.3',
+        publicBytesVerified: false, pendingStateQuery: 'moderation accepted'},
+    };
+    const base = {
+      schemaVersion: 'guardscan.release-event.v1', version: '1.2.3', tag: 'v1.2.3',
+      commit, sequence: 2, previousHash: 'c'.repeat(64), timestamp,
+      type: 'channel_accepted', channel: 'chocolatey', idempotencyKey: 'accepted:chocolatey',
+      eventHash: 'd'.repeat(64),
+    };
+    const payload = {
+      artifactIds: ['standalone:windows-x64'],
+      remoteIdentity: submission.remoteIdentity,
+      remoteDigest: submission.remoteDigest,
+      submission,
+    };
+    expect(validateEvent({...base, payload})).toBe(true);
+    for (const field of ['artifactIds', 'remoteIdentity', 'remoteDigest', 'submission'] as const) {
+      const incomplete = {...payload};
+      delete (incomplete as Record<string, unknown>)[field];
+      expect(validateEvent({...base, payload: incomplete})).toBe(false);
+    }
+    expect(validateEvent({...base, payload: {...payload, artifactIds: []}})).toBe(false);
+    expect(validateEvent({...base, payload: {...payload, submission: {}}})).toBe(false);
+  });
+
   it('validates both rollback modes and exact first-release repository evidence', () => {
     const base = {
       schemaVersion: 'guardscan.release-event.v1',

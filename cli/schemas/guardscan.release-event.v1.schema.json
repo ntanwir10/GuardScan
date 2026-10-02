@@ -87,6 +87,20 @@
   "allOf": [
     {
       "if": {
+        "properties": {
+          "type": { "const": "channel_accepted" },
+          "channel": { "enum": ["winget", "chocolatey"] }
+        },
+        "required": ["type", "channel"]
+      },
+      "then": {
+        "properties": {
+          "payload": { "$ref": "#/definitions/moderatedAcceptancePayload" }
+        }
+      }
+    },
+    {
+      "if": {
         "properties": { "type": { "const": "train_started" } },
         "required": ["type"]
       },
@@ -136,6 +150,41 @@
     }
   ],
   "definitions": {
+    "moderatedAcceptancePayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["artifactIds", "remoteIdentity", "remoteDigest", "submission"],
+      "properties": {
+        "artifactIds": {
+          "type": "array", "minItems": 1, "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1, "maxLength": 200 }
+        },
+        "remoteIdentity": { "type": "string", "minLength": 1 },
+        "remoteDigest": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "submission": { "$ref": "#/definitions/moderatedAcceptanceSubmission" }
+      }
+    },
+    "moderatedAcceptanceSubmission": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion", "channel", "version", "tag", "state", "packageIdentity",
+        "remoteIdentity", "remoteDigest", "provider"
+      ],
+      "properties": {
+        "schemaVersion": { "const": "guardscan.moderated-submission.v1" },
+        "channel": { "enum": ["winget", "chocolatey"] },
+        "version": { "type": "string", "minLength": 1 },
+        "tag": { "type": "string", "minLength": 1 },
+        "state": { "enum": ["accepted", "public-exact"] },
+        "packageIdentity": { "type": "string", "minLength": 1 },
+        "remoteIdentity": { "type": "string", "minLength": 1 },
+        "remoteDigest": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "provider": { "type": "object", "minProperties": 1 },
+        "files": { "type": "object", "minProperties": 1 },
+        "packageFilename": { "type": "string", "minLength": 1 }
+      }
+    },
     "releaseChannels": {
       "type": "array",
       "minItems": 1,

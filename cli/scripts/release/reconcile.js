@@ -83,9 +83,11 @@ function planRollback(state, knownGoodVersion, knownGoodCommit) {
     winget: 'winget-maintainer',
     chocolatey: 'chocolatey-maintainer',
   };
+  const repositoryOwned = new Set(['github', 'pnpm', 'yarn', 'bun', 'homebrew', 'scoop']);
   const actions = [];
   for (const [channel, channelState] of Object.entries(state.channels || {})) {
-    if (!['published', 'submitted', 'accepted', 'verified'].includes(channelState.status)) continue;
+    if (!['published', 'submitted', 'accepted', 'verified'].includes(channelState.status)
+        && !(channelState.status === 'failed' && repositoryOwned.has(channel))) continue;
     const action = {
       channel,
       currentStatus: channelState.status,
