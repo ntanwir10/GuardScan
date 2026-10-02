@@ -5,6 +5,7 @@ const {
   PROTOTYPE_SCHEMA,
   assertExternalAllowlist,
   bundleOptions,
+  bundledComponents,
   externalPackages,
   hostPlatform,
 } = require('../../scripts/release/standalone') as {
@@ -12,6 +13,7 @@ const {
   PROTOTYPE_SCHEMA: string;
   assertExternalAllowlist: (metafile: Record<string, any>) => string[];
   bundleOptions: (entryPoint: string, outputFile: string) => Record<string, any>;
+  bundledComponents: (metafile: Record<string, any>, lock: Record<string, any>) => Array<Record<string, string>>;
   externalPackages: (metafile: Record<string, any>) => string[];
   hostPlatform: () => {os: string; arch: string};
 };
@@ -60,6 +62,32 @@ describe('standalone executable builder contract', () => {
     expect(() => assertExternalAllowlist(metafile([
       {path: 'unexpected-runtime-package', external: true},
     ]))).toThrow(/undeclared runtime packages: unexpected-runtime-package/);
+  });
+
+  it('records the locked identities of packages present in the standalone bundle', () => {
+    const components = bundledComponents({
+      inputs: {
+        'node_modules/axios/index.js': {},
+        'node_modules/@scope/pkg/index.js': {},
+        'node_modules/axios/lib/extra.js': {},
+      },
+    }, {
+      packages: {
+        'node_modules/axios': {version: '1.2.3'},
+        'node_modules/@scope/pkg': {version: '4.5.6'},
+      },
+    });
+
+    expect(components).toEqual([
+      {name: '@scope/pkg', version: '4.5.6', type: 'library', purl: 'pkg:npm/%40scope/pkg@4.5.6'},
+      {name: 'axios', version: '1.2.3', type: 'library', purl: 'pkg:npm/axios@1.2.3'},
+    ]);
+  });
+
+  it('rejects bundled packages that cannot be matched to locked versions', () => {
+    expect(() => bundledComponents({inputs: {'node_modules/unknown/index.js': {}}}, {
+      packages: {'node_modules/axios': {version: '1.2.3'}},
+    })).toThrow(/missing from package-lock/);
   });
 
   it('maps the current host to a supported immutable platform identity', () => {

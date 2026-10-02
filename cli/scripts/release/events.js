@@ -149,6 +149,18 @@ function readEvents(ledgerFile) {
   return parseLedgerText(readBounded(resolved, 'release ledger'));
 }
 
+function monotonicLedgerTimestamp(events, proposedTimestamp, idempotencyKey) {
+  assertCanonicalTimestamp(proposedTimestamp, 'proposed release event timestamp');
+  const existing = idempotencyKey
+    ? events.find(event => event.idempotencyKey === idempotencyKey)
+    : undefined;
+  if (existing) return existing.timestamp;
+  const previousTimestamp = events.at(-1)?.timestamp;
+  return previousTimestamp && proposedTimestamp < previousTimestamp
+    ? previousTimestamp
+    : proposedTimestamp;
+}
+
 function createEvent(input, previous) {
   const sequence = previous ? previous.sequence + 1 : 1;
   const event = {
@@ -284,7 +296,7 @@ function materializeReleaseState(events) {
       const samples = state.canaries[event.channel] || [];
       state.canaries[event.channel] = [...samples, {
         status: event.payload.status,
-        checkedAt: event.timestamp,
+        checkedAt: event.payload.checkedAt || event.timestamp,
         evidenceUrl: event.payload.evidenceUrl,
       }];
     }
@@ -321,6 +333,7 @@ module.exports = {
   createEvent,
   eventDigest,
   materializeReleaseState,
+  monotonicLedgerTimestamp,
   parseLedgerText,
   readEvents,
   validateEvent,

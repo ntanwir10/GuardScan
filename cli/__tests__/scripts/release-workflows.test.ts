@@ -96,6 +96,34 @@ describe('zero-touch release workflow contracts', () => {
     expect(publish).toContain('choco push');
   });
 
+  it('binds release automation decisions to complete provider evidence', () => {
+    const build = workflowSource('release-build.yml');
+    const publish = workflowSource('release-publish.yml');
+    const canary = workflowSource('release-canary.yml');
+    const train = workflowSource('release-train.yml');
+
+    expect(build).toContain('--prototype-metadata "../standalone/standalone-prototype.json"');
+    expect(publish).toContain('remote == local');
+    expect(publish).toContain('PyPI has unexpected files for this version');
+    expect(publish).toContain('--expected-dist-tag "$DIST_TAG"');
+    expect(publish).toContain("steps.preflight.outputs.dist-tag-repair-required == 'true'");
+    expect(publish).toContain('for ATTEMPT in $(seq 1 60)');
+    expect(publish).toContain('headRefOid');
+    expect(publish).toContain('mergeCommit');
+    expect(publish).toContain('git show "$MERGE_SHA:$TARGET"');
+    expect(publish).toContain('release-catalog-publication-${{ inputs.tag }}');
+    expect(train).toContain('release-catalog-publication-${{ needs.prepare.outputs.tag }}');
+    expect(train).toContain('catalog.state !== \'MERGED\'');
+    expect(train).toContain('active.trains = (active.trains || []).filter');
+    expect(canary).toContain('monotonicLedgerTimestamp(readEvents(ledger), report.checkedAt, `canary:${suffix}`)');
+    expect(canary).toContain('checkedAt: report.checkedAt');
+    expect(train).toContain('Refuse a denied promotion after persistence');
+    expect(train).toContain('DIFF_STATUS=$?');
+    expect(train).not.toContain('git commit -m "release ledger: ${RELEASE_TAG}" || exit 0');
+    expect(canary).toContain('test "$(guardscan --version | tr -d \'\\r\')" = "$VERSION"');
+    expect(canary).toContain('$installedVersion -ne $env:VERSION');
+  });
+
   it('exposes every required maintainer release interface', () => {
     const source = fs.readFileSync(
       path.join(repositoryRoot, 'cli/scripts/release/index.js'),

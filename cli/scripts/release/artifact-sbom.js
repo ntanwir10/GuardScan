@@ -3,6 +3,7 @@
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
+const compareUtf8 = (left, right) => (left < right ? -1 : left > right ? 1 : 0);
 
 const SBOM_SCHEMA = 'guardscan.artifact-sbom.v1';
 
@@ -19,6 +20,16 @@ function componentPurl(name, version) {
   return `pkg:generic/${encodeURIComponent(name)}@${encodeURIComponent(version)}`;
 }
 
+function npmPurl(name, version) {
+  if (name.startsWith('@')) {
+    const parts = name.split('/');
+    if (parts.length !== 2 || parts.some(part => part.length < 1)) return undefined;
+    return `pkg:npm/${encodeURIComponent(parts[0])}/${encodeURIComponent(parts[1])}@${encodeURIComponent(version)}`;
+  }
+  if (name.includes('/')) return undefined;
+  return `pkg:npm/${encodeURIComponent(name)}@${encodeURIComponent(version)}`;
+}
+
 function createArtifactSboms(input) {
   const timestamp = new Date(input.createdAt);
   if (!Number.isFinite(timestamp.getTime()) || timestamp.toISOString() !== input.createdAt) {
@@ -26,6 +37,9 @@ function createArtifactSboms(input) {
   }
   if (!/^[a-f0-9]{64}$/.test(input.executable.sha256 || '')) {
     throw new Error('artifact SBOM executable digest is invalid');
+  }
+  if (!Array.isArray(input.components) || input.components.length < 1) {
+    throw new Error('artifact SBOM requires the bundled third-party component inventory');
   }
   const components = [
     {
@@ -40,8 +54,22 @@ function createArtifactSboms(input) {
       type: 'application',
       purl: `pkg:npm/guardscan@${encodeURIComponent(input.version)}`,
     },
-    ...(input.components || []),
-  ].sort((a, b) => `${a.name}@${a.version}`.localeCompare(`${b.name}@${b.version}`));
+    ...input.components,
+  ];
+  const componentPurls = new Set(components.slice(0, 2).map(component => component.purl));
+  for (const component of input.components) {
+    if (!component || typeof component !== 'object' || Array.isArray(component)
+        || Object.keys(component).sort(compareUtf8).join('\n') !== ['name', 'purl', 'type', 'version'].join('\n')
+        || typeof component.name !== 'string' || component.name.length < 1
+        || typeof component.version !== 'string' || component.version.length < 1
+        || component.type !== 'library'
+        || component.purl !== npmPurl(component.name, component.version)
+        || componentPurls.has(component.purl)) {
+      throw new Error('artifact SBOM bundled component inventory is invalid');
+    }
+    componentPurls.add(component.purl);
+  }
+  components.sort((a, b) => compareUtf8(`${a.name}@${a.version}`, `${b.name}@${b.version}`));
   const namespaceSeed = `${input.commit}\0${input.platformId}\0${input.executable.sha256}`;
   const spdxPackages = components.map(component => ({
     name: component.name,

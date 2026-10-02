@@ -6,10 +6,16 @@ import zlib from 'zlib';
 const {
   appendEvent,
   materializeReleaseState,
+  monotonicLedgerTimestamp,
   readEvents,
 } = require('../../scripts/release/events') as {
   appendEvent: (file: string, input: Record<string, any>) => Record<string, any>;
   materializeReleaseState: (events: Array<Record<string, any>>) => Record<string, any>;
+  monotonicLedgerTimestamp: (
+    events: Array<Record<string, any>>,
+    proposed: string,
+    idempotencyKey?: string
+  ) => string;
   readEvents: (file: string) => Array<Record<string, any>>;
 };
 const {
@@ -167,6 +173,53 @@ function wheel(native: Record<string, any>, digest: string): Record<string, any>
 }
 
 describe('append-only release train', () => {
+  it('clamps a stale observation timestamp while preserving its checkedAt evidence', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'guardscan-monotonic-ledger-'));
+    const ledger = path.join(root, 'ledger.jsonl');
+    const checkedAt = '2026-07-20T00:00:00.000Z';
+    const laterLedgerTime = '2026-07-20T00:05:00.000Z';
+    try {
+      appendEvent(ledger, eventInput('train_started', 0));
+      appendEvent(ledger, eventInput('channel_published', 1, {
+        timestamp: laterLedgerTime,
+        channel: 'github', idempotencyKey: 'published:github',
+      }));
+      const events = readEvents(ledger);
+      const idempotencyKey = 'canary:stale-observation';
+      const eventTimestamp = monotonicLedgerTimestamp(events, checkedAt, idempotencyKey);
+      expect(eventTimestamp).toBe(laterLedgerTime);
+
+      const canary = eventInput('canary_recorded', 2, {
+        timestamp: eventTimestamp,
+        channel: 'github',
+        idempotencyKey,
+        payload: {
+          status: 'passed', target: 'Linux', checkedAt,
+          evidenceUrl: 'https://example.com/canary.json',
+        },
+      });
+      expect(appendEvent(ledger, canary).changed).toBe(true);
+      appendEvent(ledger, eventInput('channel_verified', 3, {
+        timestamp: '2026-07-20T00:06:00.000Z',
+        channel: 'winget', idempotencyKey: 'verified:winget',
+      }));
+
+      const replayTimestamp = monotonicLedgerTimestamp(readEvents(ledger), checkedAt, idempotencyKey);
+      expect(replayTimestamp).toBe(eventTimestamp);
+      expect(appendEvent(ledger, {...canary, timestamp: replayTimestamp}).changed).toBe(false);
+      expect(() => appendEvent(ledger, {
+        ...canary,
+        timestamp: replayTimestamp,
+        payload: {...canary.payload, evidenceUrl: 'https://example.com/changed.json'},
+      })).toThrow(/idempotency key conflicts/);
+
+      expect(materializeReleaseState(readEvents(ledger)).canaries.github[0].checkedAt).toBe(checkedAt);
+      expect(() => monotonicLedgerTimestamp(events, 'invalid')).toThrow(/canonical ISO timestamp/);
+    } finally {
+      fs.rmSync(root, {recursive: true, force: true});
+    }
+  });
+
   it('appends, replays, retries idempotently, and models rollback without backward mutation', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'guardscan-ledger-'));
     const ledger = path.join(root, 'v1.2.0-rc.1.jsonl');

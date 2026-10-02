@@ -40,7 +40,8 @@ const {
 } = require('../../scripts/release/npm-artifact') as {
   classifyNpmRemote: (
     artifact: Record<string, unknown>,
-    remoteIntegrity?: string
+    remoteIntegrity?: string,
+    options?: Record<string, string>
   ) => Record<string, boolean>;
   verifyNpmArtifact: (
     source: Record<string, string>,
@@ -217,6 +218,12 @@ describe('release planning and state summaries', () => {
       matching: true,
       publishRequired: false,
     });
+    expect(classifyNpmRemote(metadata, integrity, {
+      expectedDistTag: 'latest', taggedVersion: source.version,
+    })).toMatchObject({distTagMatches: true, distTagRepairRequired: false});
+    expect(classifyNpmRemote(metadata, integrity, {
+      expectedDistTag: 'latest', taggedVersion: '1.0.0',
+    })).toMatchObject({distTagMatches: false, distTagRepairRequired: true});
     expect(() => classifyNpmRemote(metadata, `sha512-${'x'.repeat(86)}==`))
       .toThrow(/different integrity/);
 

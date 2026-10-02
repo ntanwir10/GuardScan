@@ -163,14 +163,25 @@ function buildNpmArtifact(source, outputDir, options = {}) {
   return {created: true, ...verifyNpmArtifact(source, resolved)};
 }
 
-function classifyNpmRemote(localArtifact, remoteIntegrity) {
+function classifyNpmRemote(localArtifact, remoteIntegrity, options = {}) {
   if (remoteIntegrity === undefined) {
     return {exists: false, matching: false, publishRequired: true};
   }
   if (remoteIntegrity !== localArtifact.integrity) {
     throw new Error(`npm already contains ${localArtifact.packageName}@${localArtifact.version} with different integrity`);
   }
-  return {exists: true, matching: true, publishRequired: false};
+  if (!options.expectedDistTag) return {exists: true, matching: true, publishRequired: false};
+  const taggedVersion = options.taggedVersion;
+  const distTagMatches = taggedVersion === localArtifact.version;
+  return {
+    exists: true,
+    matching: true,
+    publishRequired: false,
+    expectedDistTag: options.expectedDistTag,
+    taggedVersion: typeof taggedVersion === 'string' ? taggedVersion : null,
+    distTagMatches,
+    distTagRepairRequired: !distTagMatches,
+  };
 }
 
 function queryNpmRemote(localArtifact, options = {}) {
@@ -196,7 +207,35 @@ function queryNpmRemote(localArtifact, options = {}) {
     throw new Error('npm registry returned invalid integrity JSON');
   }
   if (typeof integrity !== 'string') throw new Error('npm registry returned no integrity for an existing version');
-  return classifyNpmRemote(localArtifact, integrity);
+  if (!options.expectedDistTag) return classifyNpmRemote(localArtifact, integrity);
+  if (!/^[a-z][a-z0-9._-]{0,63}$/.test(options.expectedDistTag)) {
+    throw new Error('npm expected dist-tag is invalid');
+  }
+  const tags = spawnSync(options.npmCommand || npmCommand(), [
+    'view', localArtifact.packageName, 'dist-tags', '--json',
+    '--registry', 'https://registry.npmjs.org',
+  ], {
+    encoding: 'utf8',
+    shell: false,
+    windowsHide: true,
+    timeout: 60000,
+    maxBuffer: 1024 * 1024,
+  });
+  if (tags.error) throw tags.error;
+  if (tags.status !== 0) throw new Error(`npm dist-tag preflight failed: ${tags.stderr.trim()}`);
+  let distTags;
+  try {
+    distTags = JSON.parse(tags.stdout);
+  } catch {
+    throw new Error('npm registry returned invalid dist-tag JSON');
+  }
+  if (!distTags || typeof distTags !== 'object' || Array.isArray(distTags)) {
+    throw new Error('npm registry returned no dist-tag map for an existing package');
+  }
+  return classifyNpmRemote(localArtifact, integrity, {
+    expectedDistTag: options.expectedDistTag,
+    taggedVersion: distTags[options.expectedDistTag],
+  });
 }
 
 module.exports = {
