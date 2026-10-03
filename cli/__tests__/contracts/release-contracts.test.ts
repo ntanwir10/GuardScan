@@ -220,6 +220,7 @@ function makeApproval(): JsonDocument {
 
 describe('release contract schemas', () => {
   const validateApproval = loadValidator('guardscan.release-approval.v1.schema.json');
+  const validateEvent = loadValidator('guardscan.release-event.v1.schema.json');
   const validateManifest = loadValidator('guardscan.release-manifest.v1.schema.json');
   const validateState = loadValidator('guardscan.release-state.v1.schema.json');
 
@@ -233,6 +234,26 @@ describe('release contract schemas', () => {
     expect(validateState.errors).toBeNull();
     expect(validateApproval(makeApproval())).toBe(true);
     expect(validateApproval.errors).toBeNull();
+  });
+
+  it('allows legacy canary events without checkedAt but validates it when present', () => {
+    const event = {
+      schemaVersion: 'guardscan.release-event.v1',
+      version: '1.2.0-rc.1',
+      tag: 'v1.2.0-rc.1',
+      commit,
+      sequence: 2,
+      previousHash: digest,
+      timestamp,
+      type: 'canary_recorded',
+      idempotencyKey: 'canary:release:run:1',
+      payload: {status: 'passed'},
+      eventHash: digest,
+    };
+    expect(validateEvent(event)).toBe(true);
+    expect(validateEvent({...event, payload: {status: 'passed', checkedAt: timestamp}})).toBe(true);
+    expect(validateEvent({...event, payload: {status: 'passed', checkedAt: 'not-a-date'}})).toBe(false);
+    expect(validateEvent({...event, payload: {status: 'passed', checkedAt: 123}})).toBe(false);
   });
 
   it('rejects broad, malformed, and untrusted promotion approvals', () => {

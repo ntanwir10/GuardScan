@@ -65,7 +65,17 @@
       ]
     },
     "idempotencyKey": { "type": "string", "minLength": 1, "maxLength": 200 },
-    "payload": { "type": "object", "maxProperties": 30 },
+    "payload": {
+      "type": "object",
+      "maxProperties": 30,
+      "properties": {
+        "checkedAt": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+        }
+      }
+    },
     "eventHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
   }
 }

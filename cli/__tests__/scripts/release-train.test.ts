@@ -212,6 +212,16 @@ describe('append-only release train', () => {
         timestamp: replayTimestamp,
         payload: {...canary.payload, evidenceUrl: 'https://example.com/changed.json'},
       })).toThrow(/idempotency key conflicts/);
+      expect(() => appendEvent(ledger, eventInput('canary_recorded', 4, {
+        channel: 'github',
+        idempotencyKey: 'canary:invalid-checked-at',
+        payload: {status: 'passed', checkedAt: 'not-a-date'},
+      }))).toThrow(/canary checkedAt must be a canonical ISO timestamp/);
+      expect(() => appendEvent(ledger, eventInput('canary_recorded', 4, {
+        channel: 'github',
+        idempotencyKey: 'canary:numeric-checked-at',
+        payload: {status: 'passed', checkedAt: 123},
+      }))).toThrow(/canary checkedAt must be a canonical ISO timestamp/);
 
       expect(materializeReleaseState(readEvents(ledger)).canaries.github[0].checkedAt).toBe(checkedAt);
       expect(() => monotonicLedgerTimestamp(events, 'invalid')).toThrow(/canonical ISO timestamp/);
