@@ -252,7 +252,7 @@ describe('CISA KEV enrichment', () => {
       .toEqual(expect.arrayContaining([expect.stringMatching(/^snapshot\.json\.corrupt-/)]));
   });
 
-  it('rejects invalid snapshot endpoints and timestamps before exposing persisted data', () => {
+  it('rejects invalid endpoints, drops malformed advisories, and quarantines invalid stored timestamps', () => {
     const repository = path.join(cache, 'repository');
     const snapshots = path.join(cache, 'snapshots');
     fs.mkdirSync(repository);
@@ -266,10 +266,12 @@ describe('CISA KEV enrichment', () => {
 
     expect(() => store.save(firstInventory, matches, 'file:///tmp/advisories.json'))
       .toThrow(/HTTP\(S\).*URL/i);
-    expect(() => store.save(firstInventory, [{
+    const malformedAdvisorySnapshot = store.save(firstInventory, [{
       coordinate: dependency,
       vulnerability: { id: 'OSV-2026-1234', modified: 'not-a-date' },
-    }], 'https://api.osv.dev')).toThrow(/RFC3339 timestamp/i);
+    }], 'https://api.osv.dev');
+    expect(malformedAdvisorySnapshot.matches).toHaveLength(0);
+    expect(malformedAdvisorySnapshot.droppedMatches).toBe(1);
 
     store.save(firstInventory, matches, 'https://api.osv.dev');
     const repositoryDirectory = path.join(snapshots, fs.readdirSync(snapshots)[0]);
