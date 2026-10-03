@@ -137,18 +137,21 @@ describe('comprehensive scan quality policy', () => {
     );
 
     expect(evaluation.result).toMatchObject({
-      operationalFailure: true,
-      outcome: 'operational-failed',
-      exitCode: 2,
+      operationalFailure: false,
+      outcome: 'policy-failed',
+      exitCode: 1,
       reasons: [
-        'Quality check failed to execute: tests',
         '1 finding(s) at or above high severity',
         '1 lint error(s) found',
       ],
     });
+    expect(evaluation.executionStatus).toBe('partial');
+    expect(evaluation.errors).toEqual(expect.arrayContaining([
+      expect.objectContaining({ scanner: 'quality.tests', code: 'CHECK_FAILED' }),
+    ]));
   });
 
-  it('does not let allow-partial hide local scanner failures', () => {
+  it('allows partial metrics failure while retaining its diagnostic', () => {
     const failedQuality = quality({
       metrics: {
         status: 'failed',
@@ -166,11 +169,55 @@ describe('comprehensive scan quality policy', () => {
     );
 
     expect(evaluation.result).toMatchObject({
+      operationalFailure: false,
+      outcome: 'passed',
+      exitCode: 0,
+      reasons: [],
+    });
+    expect(evaluation.executionStatus).toBe('partial');
+    expect(evaluation.errors).toEqual(expect.arrayContaining([
+      expect.objectContaining({ scanner: 'quality.metrics', code: 'CHECK_FAILED' }),
+    ]));
+  });
+
+  it('keeps complete quality failure fatal even when partial coverage is allowed', () => {
+    const failedCheck = {
+      status: 'failed' as const,
+      durationMs: 1,
+      error: { code: 'CHECK_FAILED', message: 'quality check failed', retryable: false },
+    };
+    const failedQuality = quality({
+      tests: failedCheck,
+      metrics: failedCheck,
+      smells: failedCheck,
+      lint: failedCheck,
+      performance: failedCheck,
+      mutation: failedCheck,
+    });
+    failedQuality.status = 'failed';
+
+    const evaluation = evaluateComprehensivePolicy(
+      securityResult(),
+      failedQuality,
+      sbom,
+      { allowPartial: true }
+    );
+
+    expect(evaluation.result).toMatchObject({
       operationalFailure: true,
       outcome: 'operational-failed',
       exitCode: 2,
-      reasons: ['Quality check failed to execute: metrics'],
+      reasons: expect.arrayContaining([
+        'Quality check failed to execute: tests',
+        'Quality check failed to execute: metrics',
+        'Quality check failed to execute: smells',
+        'Quality check failed to execute: lint',
+        'Quality check failed to execute: performance',
+        'Quality check failed to execute: mutation',
+      ]),
     });
+    expect(evaluation.executionStatus).toBe('partial');
+    expect(evaluation.errors).toHaveLength(6);
   });
 
   it('does not execute a malicious repository test script in the default scan mode', async () => {
