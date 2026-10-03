@@ -52,6 +52,21 @@ describe('zero-touch release workflow contracts', () => {
     }
   });
 
+  it('registers every npm script invoked by release workflows and pins artifact upload correctly', () => {
+    const packageJson = JSON.parse(fs.readFileSync(path.join(repositoryRoot, 'cli/package.json'), 'utf8'));
+    const scripts = packageJson.scripts as Record<string, string>;
+    for (const filename of ['ci.yml', ...releaseWorkflows]) {
+      const source = workflowSource(filename);
+      for (const match of source.matchAll(/\bnpm run ([a-z][a-z0-9:_-]*)/g)) {
+        expect(scripts[match[1]]).toEqual(expect.any(String));
+      }
+    }
+
+    const publish = workflowSource('release-publish.yml');
+    expect(publish).toContain('uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02');
+    expect(publish).not.toContain('uses: actions/upload-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093');
+  });
+
   it('runs one concurrency-safe RC soak and machine-only promotion train', () => {
     const train = workflowSource('release-train.yml');
     const canary = workflowSource('release-canary.yml');
@@ -111,6 +126,10 @@ describe('zero-touch release workflow contracts', () => {
     expect(publish).toContain('headRefOid');
     expect(publish).toContain('mergeCommit');
     expect(publish).toContain('git show "$MERGE_SHA:$TARGET"');
+    const mergePolling = publish.slice(publish.indexOf('for ATTEMPT in $(seq 1 60)'), publish.indexOf('FILE_SHA256='));
+    expect(mergePolling).toContain("pr.state !== 'MERGED' || pr.baseRefName !== 'main'");
+    expect(mergePolling).toContain('pr.headRefOid !== process.env.EXPECTED_HEAD');
+    expect(mergePolling).toContain('process.env.REPO}`.toLowerCase()');
     expect(publish).toContain('release-catalog-publication-${{ inputs.tag }}');
     expect(train).toContain('release-catalog-publication-${{ needs.prepare.outputs.tag }}');
     expect(train).toContain('catalog.state !== \'MERGED\'');

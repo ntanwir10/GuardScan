@@ -407,6 +407,15 @@ jobs:
                 test "$(node -p 'JSON.parse(process.env.PR_DETAILS).headRefOid')" = "$EXPECTED_HEAD"
               fi
               if [ "$PR_STATE" = MERGED ]; then
+                export PR_DETAILS EXPECTED_HEAD REPO
+                node - <<'NODE'
+          const pr = JSON.parse(process.env.PR_DETAILS);
+          if (pr.state !== 'MERGED' || pr.baseRefName !== 'main'
+              || pr.headRefOid !== process.env.EXPECTED_HEAD
+              || pr.headRepository?.nameWithOwner?.toLowerCase() !== `ntanwir10/${process.env.REPO}`.toLowerCase()) {
+            throw new Error('merged adapter pull request no longer matches the expected repository head and base');
+          }
+          NODE
                 test "$(node -p 'JSON.parse(process.env.PR_DETAILS).headRefOid')" = "$EXPECTED_HEAD"
                 test "$PR_STATE" = MERGED
                 case "$MERGE_SHA" in
@@ -452,7 +461,7 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
           RELEASE_TAG: ${{ inputs.tag }}
-      - uses: actions/upload-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: release-catalog-publication-${{ inputs.tag }}
           path: release-evidence/catalog-publication-evidence.json

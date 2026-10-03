@@ -99,6 +99,10 @@ function validateEvent(event, previous) {
     throw new Error('release event payload must be an object');
   }
   assertCanonicalTimestamp(event.timestamp, 'release event timestamp');
+  if (event.type === 'canary_recorded'
+      && Object.prototype.hasOwnProperty.call(event.payload, 'checkedAt')) {
+    assertCanonicalTimestamp(event.payload.checkedAt, 'canary checkedAt');
+  }
   if (!/^[a-f0-9]{64}$/.test(event.eventHash || '')
       || event.eventHash !== eventDigest(event)) {
     throw new Error('release event hash is invalid');
