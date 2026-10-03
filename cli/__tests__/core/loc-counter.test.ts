@@ -1,6 +1,8 @@
 import { LOCCounter } from '../../src/core/loc-counter';
 import * as fs from 'fs';
 import * as path from 'path';
+import * as braceExpansion from '@isaacs/brace-expansion';
+import tinyglobby = require('tinyglobby');
 
 describe('LOCCounter', () => {
   let counter: LOCCounter;
@@ -155,6 +157,108 @@ const y = 2;`;
       expect(result.fileBreakdown).not.toEqual(expect.arrayContaining([
         expect.objectContaining({path: expect.stringContaining('.venv/lib/site-packages/dependency.py')}),
       ]));
+    });
+
+    it('keeps brace-expanded directory roots bounded while excluding virtual environments', async () => {
+      const dependencyEnvironment = path.join(testDir, 'src', '.venv');
+      const dependencyFile = path.join(dependencyEnvironment, 'lib', 'dependency.py');
+      const firstPartyFile = path.join(testDir, 'src', 'venv', 'security.py');
+      const testFile = path.join(testDir, 'tests', 'security.py');
+      fs.mkdirSync(path.dirname(dependencyFile), {recursive: true});
+      fs.mkdirSync(path.dirname(firstPartyFile), {recursive: true});
+      fs.mkdirSync(path.dirname(testFile), {recursive: true});
+      fs.writeFileSync(path.join(dependencyEnvironment, 'pyvenv.cfg'), 'home = /usr/bin');
+      fs.writeFileSync(dependencyFile, 'installed = True');
+      fs.writeFileSync(firstPartyFile, 'first_party = True');
+      fs.writeFileSync(testFile, 'test_source = True');
+
+      const result = await counter.count([
+        `${testDir}/{src,tests}/**/*.py`,
+        `!${testDir}/tests/**`,
+      ]);
+
+      expect(result.fileBreakdown.map(file => file.path)).toEqual([
+        expect.stringContaining('src/venv/security.py'),
+      ]);
+      expect(result.fileBreakdown.map(file => file.path)).not.toEqual(expect.arrayContaining([
+        expect.stringContaining('src/.venv/lib/dependency.py'),
+        expect.stringContaining('tests/security.py'),
+      ]));
+    });
+
+    it('rejects brace patterns that exceed the bounded expansion limit', async () => {
+      const oversizedPattern = `${testDir}/${'{a,b}'.repeat(14)}/**/*.py`;
+
+      await expect(counter.count([oversizedPattern])).rejects.toThrow(/expansion/i);
+    });
+
+    it('rejects excessively nested braces before recursive expansion', async () => {
+      const deeplyNestedPattern = `${testDir}/${'{'.repeat(65)}source${'}'.repeat(65)}/**/*.py`;
+
+      await expect(counter.count([deeplyNestedPattern])).rejects.toThrow(/nesting depth/i);
+    });
+
+    it.each([
+      ['zero numeric step', '{1..10..0}', /sequence step/i],
+      ['zero alphabetic step', '{a..z..0}', /sequence step/i],
+      ['unbounded numeric range', '{1..1000000000}', /range expansion/i],
+      ['unsafe numeric endpoint', '{9007199254740992..9007199254740993}', /safe integer/i],
+      ['recursive sibling braces', '{a}'.repeat(65), /brace count/i],
+      ['overlong pattern', 'a'.repeat(16_385), /pattern length/i],
+      ['negative zero-step pattern', '!{1..10..0}', /sequence step/i],
+    ])('rejects %s before invoking third-party parsers', async (_name, pattern, expectedError) => {
+      // Avoid hanging the RED run in a parser whose range loop is unbounded.
+      const expandSpy = jest.spyOn(braceExpansion, 'expand').mockImplementation(value => [value]);
+      const globSpy = jest.spyOn(tinyglobby, 'glob').mockResolvedValue([]);
+      try {
+        await expect(counter.count([pattern as string])).rejects.toThrow(expectedError as RegExp);
+        expect(expandSpy).not.toHaveBeenCalled();
+        expect(globSpy).not.toHaveBeenCalled();
+      } finally {
+        expandSpy.mockRestore();
+        globSpy.mockRestore();
+      }
+    });
+
+    it('preserves bounded forward, reverse and padded sequence patterns', async () => {
+      for (const name of ['file01.py', 'file03.py', 'file05.py']) {
+        fs.writeFileSync(path.join(testDir, name), 'safe = True');
+      }
+      const forward = await counter.count([`${testDir}/file{01..05..2}.py`]);
+      const reverse = await counter.count([`${testDir}/file{05..01..-2}.py`]);
+      expect(forward.fileBreakdown.map(file => file.path).sort()).toEqual(
+        reverse.fileBreakdown.map(file => file.path).sort()
+      );
+      expect(forward.fileCount).toBe(3);
+    });
+
+    it('preserves literal escaped braces alongside sequence exclusions', async () => {
+      const literalDirectory = path.join(testDir, '{fixture,source}');
+      fs.mkdirSync(literalDirectory, {recursive: true});
+      for (const name of ['file01.py', 'file03.py', 'file05.py']) {
+        fs.writeFileSync(path.join(literalDirectory, name), 'safe = True');
+      }
+      const prefix = `${testDir}/\\{fixture,source\\}`;
+      const result = await counter.count([
+        `${prefix}/file{01..05..2}.py`,
+        `!${prefix}/file{03..05..2}.py`,
+      ]);
+      expect(result.fileBreakdown.map(file => file.path)).toEqual([
+        expect.stringContaining('{fixture,source}/file01.py'),
+      ]);
+    });
+
+    it('matches escaped literal metacharacters in targeted paths', async () => {
+      const literalDirectory = path.join(testDir, '[fixture]');
+      const sourceFile = path.join(literalDirectory, 'security.py');
+      fs.mkdirSync(literalDirectory, {recursive: true});
+      fs.writeFileSync(sourceFile, 'safe = True');
+
+      const result = await counter.count([`${testDir}/\\[fixture\\]/**/*.py`]);
+
+      expect(result.fileBreakdown.map(file => file.path)).toEqual([
+        expect.stringContaining('[fixture]/security.py'),
+      ]);
     });
 
     it('should respect ignore patterns', async () => {

@@ -3,7 +3,7 @@ import * as crypto from 'crypto';
 import * as path from 'path';
 import { execFileSync } from 'child_process';
 import { StringDecoder } from 'string_decoder';
-import fastGlob from 'fast-glob';
+import {glob} from 'tinyglobby';
 import { SECURITY_CONSTANTS } from '../constants/security-constants';
 
 const MAX_SECRET_FILE_BYTES = 2 * 1024 * 1024;
@@ -45,10 +45,11 @@ export class SecretsDetector {
     }
 
     try {
-      const candidates = await fastGlob('**/*', {
+      const candidates = await glob('**/*', {
         cwd: root,
         absolute: true,
         dot: true,
+        expandDirectories: false,
         onlyFiles: true,
         followSymbolicLinks: false,
         ignore: SECRET_DISCOVERY_IGNORES,

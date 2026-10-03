@@ -35,6 +35,17 @@ describe('IaCScanner', () => {
     ]));
   });
 
+  it('accepts empty and comment-only Compose documents without degrading coverage', async () => {
+    fs.writeFileSync(path.join(repository, 'docker-compose-empty.yml'), '\n');
+    fs.writeFileSync(path.join(repository, 'docker-compose-comments.yaml'), '# services are intentionally omitted\n');
+    const onSkippedInput = jest.fn();
+
+    const findings = await new IaCScanner().scan(repository, onSkippedInput);
+
+    expect(findings).toEqual([]);
+    expect(onSkippedInput).not.toHaveBeenCalled();
+  });
+
   it('does not degrade coverage for malformed non-Kubernetes YAML', async () => {
     fs.writeFileSync(path.join(repository, 'application-config.yaml'), 'features: [unterminated\n');
     const onSkippedInput = jest.fn();

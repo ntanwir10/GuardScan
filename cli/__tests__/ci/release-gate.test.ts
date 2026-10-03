@@ -21,4 +21,13 @@ describe('required GitHub release gate', () => {
     expect(workflow.jobs?.['publish-npm']?.needs).toContain('release-gate');
     expect(workflow.jobs?.['publish-npm']?.if).toContain("needs.release-gate.result == 'success'");
   });
+
+  it('runs every Node CLI workflow job on the package-supported runtime', () => {
+    const workflowText = fs.readFileSync(path.resolve(__dirname, '../../../.github/workflows/ci.yml'), 'utf8');
+    const workflow = yaml.load(workflowText) as {jobs?: Record<string, {strategy?: {matrix?: {'node-version'?: number[]}}}>};
+
+    expect(workflowText.match(/node-version:\s*["']?(?:18|20)["']?/g)).toBeNull();
+    expect(workflowText.match(/node-version:\s*["']?22["']?/g)?.length).toBeGreaterThan(0);
+    expect(workflow.jobs?.['test-cli']?.strategy?.matrix?.['node-version']).toEqual([22]);
+  });
 });

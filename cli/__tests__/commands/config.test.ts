@@ -2,9 +2,6 @@
  * Tests for config command
  */
 
-import { configCommand } from "../../src/commands/config";
-import { configManager } from "../../src/core/config";
-import { TelemetryManager } from "../../src/core/telemetry";
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
@@ -20,6 +17,10 @@ import {
 // Mock dependencies
 jest.mock("inquirer");
 
+let configCommand: typeof import("../../src/commands/config").configCommand;
+let configManager: typeof import("../../src/core/config").configManager;
+let TelemetryManager: typeof import("../../src/core/telemetry").TelemetryManager;
+
 describe("config command", () => {
   let originalEnv: NodeJS.ProcessEnv;
   let testConfigDir: string;
@@ -31,6 +32,13 @@ describe("config command", () => {
     testConfigDir = path.join(os.tmpdir(), `guardscan-test-${Date.now()}`);
     process.env.GUARDSCAN_HOME = testConfigDir;
     process.env.HOME = testConfigDir; // Also set HOME to ensure consistency
+
+    // ConfigManager captures its home directory when the module loads.
+    // Reset and load it only after this test's isolated home is configured.
+    jest.resetModules();
+    ({ configCommand } = require("../../src/commands/config"));
+    ({ configManager } = require("../../src/core/config"));
+    ({ TelemetryManager } = require("../../src/core/telemetry"));
 
     if (fs.existsSync(testConfigDir)) {
       fs.rmSync(testConfigDir, { recursive: true, force: true });

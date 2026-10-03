@@ -7,7 +7,7 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import fastGlob from 'fast-glob';
+import {glob} from 'tinyglobby';
 import { CodebaseIndexer, CodebaseIndex } from './codebase-indexer';
 import { ParsedFunction, ParsedClass } from './ast-parser';
 import { CodeChunk, EmbeddingMetadata, hashContent } from './embeddings';
@@ -256,12 +256,12 @@ export class EmbeddingChunker {
       'docs/**/*.md',
     ];
 
-    const docPaths = await fastGlob(docPatterns, {
+    const docPaths = [...new Set(await glob(docPatterns, {
       cwd: this.repoRoot,
       onlyFiles: true,
       followSymbolicLinks: false,
-      unique: true,
-    });
+      expandDirectories: false,
+    }))];
     const realRepoRoot = await fs.promises.realpath(this.repoRoot);
 
     for (const docPath of docPaths) {

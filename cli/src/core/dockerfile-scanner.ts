@@ -33,13 +33,13 @@ export class DockerfileScanner {
           const stat = fs.lstatSync(fullPath);
 
           if (stat.isSymbolicLink()) {
-            onSkippedInput();
+            if (isDockerfile(item) || isDirectorySymlink(fullPath)) {onSkippedInput();}
             continue;
           }
 
           if (stat.isDirectory()) {
             search(fullPath, depth + 1);
-          } else if (item === 'Dockerfile' || item.startsWith('Dockerfile.')) {
+          } else if (isDockerfile(item)) {
             dockerfiles.push(fullPath);
           }
         }
@@ -274,6 +274,14 @@ export class DockerfileScanner {
 
     return findings;
   }
+}
+
+function isDockerfile(filename: string): boolean {
+  return filename === 'Dockerfile' || filename.startsWith('Dockerfile.');
+}
+
+function isDirectorySymlink(file: string): boolean {
+  try {return fs.statSync(file).isDirectory();} catch {return false;}
 }
 
 export const dockerfileScanner = new DockerfileScanner();

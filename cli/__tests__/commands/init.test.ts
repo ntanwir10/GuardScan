@@ -2,8 +2,6 @@
  * Tests for init command
  */
 
-import { initCommand } from "../../src/commands/init";
-import { configManager } from "../../src/core/config";
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
@@ -15,6 +13,8 @@ import {
   afterEach,
   jest,
 } from "@jest/globals";
+let initCommand: typeof import("../../src/commands/init").initCommand;
+let configManager: typeof import("../../src/core/config").configManager;
 // Mock dependencies
 jest.mock("inquirer");
 jest.mock("../../src/core/repository", () => ({
@@ -42,22 +42,19 @@ jest.mock("../../src/providers/factory", () => ({
 describe("init command", () => {
   let originalEnv: NodeJS.ProcessEnv;
   let testConfigDir: string;
-  let originalHome: string | undefined;
 
   beforeEach(() => {
     // Save original environment
     originalEnv = { ...process.env };
-    originalHome = process.env.HOME;
 
-    // Create a temporary config directory for testing
-    testConfigDir = path.join(os.tmpdir(), `guardscan-test-${Date.now()}`);
+    // ConfigManager captures its home directory when the module loads.
+    testConfigDir = fs.mkdtempSync(path.join(os.tmpdir(), "guardscan-init-test-"));
     process.env.GUARDSCAN_HOME = testConfigDir;
     process.env.HOME = testConfigDir; // Also set HOME to ensure consistency
 
-    // Clean up if exists
-    if (fs.existsSync(testConfigDir)) {
-      fs.rmSync(testConfigDir, { recursive: true, force: true });
-    }
+    jest.resetModules();
+    ({ configManager } = require("../../src/core/config"));
+    ({ initCommand } = require("../../src/commands/init"));
 
     // Clear all mocks
     jest.clearAllMocks();
@@ -65,11 +62,6 @@ describe("init command", () => {
 
   afterEach(() => {
     // Restore original environment
-    if (originalHome) {
-      process.env.HOME = originalHome;
-    } else {
-      delete process.env.HOME;
-    }
     process.env = originalEnv;
 
     // Clean up test directory

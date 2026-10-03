@@ -88,7 +88,7 @@ export class ComplianceChecker {
           const stat = fs.lstatSync(fullPath);
 
           if (stat.isSymbolicLink()) {
-            onSkippedInput();
+            if (this.isCodeFile(item) || isDirectorySymlink(fullPath)) {onSkippedInput();}
             continue;
           }
 
@@ -582,6 +582,10 @@ export class ComplianceChecker {
 
     return violations;
   }
+}
+
+function isDirectorySymlink(file: string): boolean {
+  try {return fs.statSync(file).isDirectory();} catch {return false;}
 }
 
 export const complianceChecker = new ComplianceChecker();

@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'crypto';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import fastGlob from 'fast-glob';
+import {glob} from 'tinyglobby';
 import { Finding } from '../utils/reporter';
 import { atomicReplaceText, prepareAtomicOutputTarget } from '../utils/private-state';
 import { apiScanner } from './api-scanner';
@@ -605,7 +605,7 @@ export class ScanEngine {
   }
 
   private async loadFiles(repoRoot: string): Promise<ScanFile[]> {
-    const files = await fastGlob(
+    const files = [...new Set(await glob(
       ['**/*.{js,jsx,ts,tsx,py,java,go,rs,c,cpp,h,hpp,cs,rb,php,swift,kt,scala,sh,bash}'],
       {
         cwd: repoRoot,
@@ -613,7 +613,7 @@ export class ScanEngine {
         onlyFiles: true,
         followSymbolicLinks: false,
         dot: true,
-        unique: true,
+        expandDirectories: false,
         ignore: [
           '**/node_modules/**',
           '**/.git/**',
@@ -633,7 +633,7 @@ export class ScanEngine {
           '**/*.map',
         ],
       }
-    );
+    ))];
 
     const resolved: ScanFile[] = [];
     for (const file of files) {

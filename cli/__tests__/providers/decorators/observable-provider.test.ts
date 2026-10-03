@@ -2,10 +2,14 @@
  * observable-provider.test.ts - Unit tests for ObservableProvider
  */
 
-import { describe, expect, it, jest, beforeEach } from '@jest/globals';
+import { describe, expect, it, jest, beforeEach, afterEach } from '@jest/globals';
 import { ObservableProvider } from '../../../src/providers/decorators/observable-provider';
-import { MetricsCollector } from '../../../src/core/metrics-collector';
 import { AIProvider, AIMessage, AIResponse } from '../../../src/providers/base';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
+
+let MetricsCollectorClass: typeof import('../../../src/core/metrics-collector').MetricsCollector;
 
 // Mock provider
 class MockProvider extends AIProvider {
@@ -70,12 +74,33 @@ class MockProvider extends AIProvider {
 }
 
 describe('ObservableProvider', () => {
+  let originalEnv: NodeJS.ProcessEnv;
+  let testHomeDir: string;
+
+  beforeEach(() => {
+    originalEnv = { ...process.env };
+    testHomeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'guardscan-observable-home-'));
+    process.env.GUARDSCAN_HOME = testHomeDir;
+    process.env.HOME = testHomeDir;
+
+    // ConfigManager captures its home directory when its module is loaded.
+    jest.resetModules();
+    ({ MetricsCollector: MetricsCollectorClass } = require('../../../src/core/metrics-collector'));
+  });
+
+  afterEach(() => {
+    process.env = originalEnv;
+    if (fs.existsSync(testHomeDir)) {
+      fs.rmSync(testHomeDir, { recursive: true, force: true });
+    }
+  });
+
   const repoId = () => `test-obs-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
   describe('span recording', () => {
     it('should record successful spans', async () => {
       const mock = new MockProvider();
-      const metrics = new MetricsCollector(repoId());
+      const metrics = new MetricsCollectorClass(repoId());
       const observable = new ObservableProvider(mock, metrics);
 
       await observable.chat([{ role: 'user', content: 'test' }]);
@@ -94,7 +119,7 @@ describe('ObservableProvider', () => {
       const mock = new MockProvider();
       mock.setShouldFail(true);
       
-      const metrics = new MetricsCollector(repoId());
+      const metrics = new MetricsCollectorClass(repoId());
       const observable = new ObservableProvider(mock, metrics);
 
       try {
@@ -112,7 +137,7 @@ describe('ObservableProvider', () => {
 
     it('should record latency', async () => {
       const mock = new MockProvider();
-      const metrics = new MetricsCollector(repoId());
+      const metrics = new MetricsCollectorClass(repoId());
       const observable = new ObservableProvider(mock, metrics);
 
       await observable.chat([{ role: 'user', content: 'test' }]);
@@ -132,7 +157,7 @@ describe('ObservableProvider', () => {
         usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
       });
 
-      const metrics = new MetricsCollector(repoId());
+      const metrics = new MetricsCollectorClass(repoId());
       const observable = new ObservableProvider(mock, metrics);
 
       await observable.chat([{ role: 'user', content: 'test' }]);
@@ -145,7 +170,7 @@ describe('ObservableProvider', () => {
 
     it('returns a successful provider response when local metrics persistence fails', async () => {
       const mock = new MockProvider();
-      const metrics = new MetricsCollector(repoId());
+      const metrics = new MetricsCollectorClass(repoId());
       jest.spyOn(metrics, 'recordSpan').mockRejectedValue(new Error('disk full'));
       const observable = new ObservableProvider(mock, metrics);
 
@@ -158,7 +183,7 @@ describe('ObservableProvider', () => {
   describe('metrics aggregation', () => {
     it('should aggregate metrics correctly', async () => {
       const mock = new MockProvider();
-      const metrics = new MetricsCollector(repoId());
+      const metrics = new MetricsCollectorClass(repoId());
       const observable = new ObservableProvider(mock, metrics);
 
       // Make multiple successful calls
@@ -182,7 +207,7 @@ describe('ObservableProvider', () => {
   describe('configuration', () => {
     it('should bypass observability when disabled', async () => {
       const mock = new MockProvider();
-      const metrics = new MetricsCollector(repoId());
+      const metrics = new MetricsCollectorClass(repoId());
       const observable = new ObservableProvider(mock, metrics, {
         enabled: false,
       });

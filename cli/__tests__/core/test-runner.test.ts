@@ -108,6 +108,23 @@ describe('TestRunner discovery and empty-suite behavior', () => {
     await expect(new TestRunner().runTests(repository)).resolves.toEqual([]);
   });
 
+  it('preserves a pytest collection error even when no tests ran', async () => {
+    fs.writeFileSync(path.join(repository, 'pytest.ini'), '[pytest]\n');
+    mockedRunProcess.mockImplementation((_command, args) => {
+      const reportArgument = args.find(argument => argument.startsWith('--json-report-file='));
+      fs.writeFileSync(reportArgument!.slice('--json-report-file='.length), JSON.stringify({
+        summary: {total: 0, passed: 0, failed: 0, skipped: 0},
+        tests: [],
+        collectors: [{outcome: 'failed', longrepr: 'ImportError: fixture could not be imported'}],
+      }));
+      return processResult(2, '', 'ERROR collecting fixture_test.py');
+    });
+
+    await expect(new TestRunner().runTests(repository)).rejects.toThrow(
+      /pytest exited 2.*ImportError: fixture could not be imported/i
+    );
+  });
+
   it('runs ordinary pytest projects without requiring pytest-json-report', async () => {
     fs.writeFileSync(path.join(repository, 'pytest.ini'), '[pytest]\n');
     mockedRunProcess
@@ -154,6 +171,40 @@ describe('TestRunner discovery and empty-suite behavior', () => {
     await expect(new TestRunner().runTests(repository)).rejects.toThrow(
       /exited 1|coverage threshold|unsuccessful/i
     );
+  });
+
+  it('reports a Jest suite failure with no assertion results', async () => {
+    fs.writeFileSync(path.join(repository, 'package.json'), JSON.stringify({
+      scripts: {test: 'jest'},
+      devDependencies: {jest: '^29.0.0'},
+    }));
+    mockedRunProcess.mockImplementation((_command, args) => {
+      const reportIndex = args.indexOf('--outputFile');
+      fs.writeFileSync(args[reportIndex + 1], JSON.stringify({
+        success: false,
+        testResults: [{
+          name: 'broken.test.js',
+          status: 'failed',
+          message: 'SyntaxError: unexpected token',
+          assertionResults: [],
+        }],
+      }));
+      return processResult(1);
+    });
+
+    await expect(new TestRunner().runTests(repository)).resolves.toEqual([
+      expect.objectContaining({
+        framework: 'Jest',
+        totalTests: 1,
+        passed: 0,
+        failed: 1,
+        failures: [{
+          testName: 'broken.test.js',
+          file: 'broken.test.js',
+          error: 'SyntaxError: unexpected token',
+        }],
+      }),
+    ]);
   });
 
   it('preserves later framework reports when partial execution is allowed', async () => {
@@ -220,6 +271,28 @@ describe('TestRunner discovery and empty-suite behavior', () => {
       ['test'],
       expect.objectContaining({ cwd: repository })
     );
+  });
+
+  it('reports a Go package failure without a failed test event', async () => {
+    fs.writeFileSync(path.join(repository, 'go.mod'), 'module example.test/fixture\n\ngo 1.22\n');
+    mockedRunProcess.mockReturnValue(processResult(1, [
+      JSON.stringify({Action: 'output', Package: 'example.test/fixture', Output: '# example.test/fixture\n'}),
+      JSON.stringify({Action: 'output', Package: 'example.test/fixture', Output: 'fixture.go:2: undefined: missing\n'}),
+      JSON.stringify({Action: 'fail', Package: 'example.test/fixture'}),
+    ].join('\n')));
+
+    await expect(new TestRunner().runTests(repository)).resolves.toEqual([
+      expect.objectContaining({
+        framework: 'go test',
+        totalTests: 1,
+        passed: 0,
+        failed: 1,
+        failures: [{
+          testName: 'example.test/fixture',
+          error: expect.stringContaining('fixture.go:2: undefined: missing'),
+        }],
+      }),
+    ]);
   });
 
   it('does not suppress isolation setup failure in partial mode', async () => {

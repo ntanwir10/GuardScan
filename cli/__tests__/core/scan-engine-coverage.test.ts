@@ -18,6 +18,11 @@ import {dockerfileScanner} from '../../src/core/dockerfile-scanner';
 import {iacScanner} from '../../src/core/iac-scanner';
 import {owaspScanner} from '../../src/core/owasp-scanner';
 import {dependencyScanner} from '../../src/core/dependency-scanner';
+import {APIScanner} from '../../src/core/api-scanner';
+import {ComplianceChecker} from '../../src/core/compliance-checker';
+import {DockerfileScanner} from '../../src/core/dockerfile-scanner';
+import {IaCScanner} from '../../src/core/iac-scanner';
+import {OwaspScanner} from '../../src/core/owasp-scanner';
 
 type BuiltInTaskFactory = {
   createBuiltInTasks(
@@ -202,6 +207,42 @@ describe('ScanEngine built-in coverage adapters', () => {
       findings: [],
       error: {code: 'IAC_SCAN_PARTIAL', retryable: true},
     });
+  });
+
+  (process.platform === 'win32' ? it.skip : it)('reports only eligible symlinks as skipped scanner inputs', async () => {
+    const external = fs.mkdtempSync(path.join(os.tmpdir(), 'guardscan-symlink-targets-'));
+    const linkedDirectory = path.join(external, 'linked-directory');
+    fs.mkdirSync(linkedDirectory);
+    fs.writeFileSync(path.join(linkedDirectory, 'service.ts'), 'const endpoint = req.query.id;');
+    const linkedFile = path.join(external, 'linked.ts');
+    fs.writeFileSync(linkedFile, 'const endpoint = req.query.id;');
+
+    const scanners: Array<{name: string; linkName: string; danglingName: string; scan: (root: string, skipped: jest.Mock) => Promise<unknown>}> = [
+      {name: 'api', linkName: 'linked.ts', danglingName: 'dangling.ts', scan: (root, skipped) => new APIScanner().scan(root, skipped)},
+      {name: 'owasp', linkName: 'linked.ts', danglingName: 'dangling.ts', scan: (root, skipped) => new OwaspScanner().scan(root, skipped)},
+      {name: 'compliance', linkName: 'linked.ts', danglingName: 'dangling.ts', scan: (root, skipped) => new ComplianceChecker().check(root, skipped)},
+      {name: 'dockerfile', linkName: 'Dockerfile', danglingName: 'Dockerfile.broken', scan: (root, skipped) => new DockerfileScanner().scan(root, skipped)},
+      {name: 'iac', linkName: 'linked.tf', danglingName: 'dangling.tf', scan: (root, skipped) => new IaCScanner().scan(root, skipped)},
+    ];
+
+    try {
+      for (const scanner of scanners) {
+        const scanRoot = path.join(repository, scanner.name);
+        fs.mkdirSync(scanRoot);
+        fs.symlinkSync(linkedFile, path.join(scanRoot, scanner.linkName));
+        fs.symlinkSync(path.join(external, 'missing.md'), path.join(scanRoot, 'dangling-doc.md'));
+        fs.symlinkSync(path.join(external, 'linked-directory'), path.join(scanRoot, 'linked-directory'));
+        fs.symlinkSync(path.join(external, 'missing-file'), path.join(scanRoot, scanner.danglingName));
+        const skipped = jest.fn();
+
+        const findings = await scanner.scan(scanRoot, skipped);
+
+        expect(skipped).toHaveBeenCalledTimes(scanner.name === 'iac' ? 5 : 3);
+        expect(JSON.stringify(findings)).not.toContain(external);
+      }
+    } finally {
+      fs.rmSync(external, {recursive: true, force: true});
+    }
   });
 
   it('preserves dependency enrichment metadata when no vulnerabilities are found', async () => {

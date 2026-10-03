@@ -4,12 +4,12 @@ import type { CycloneDx17Document, Spdx23Document } from '../core/license-scanne
 import { configManager } from '../core/config';
 import { repositoryManager } from '../core/repository';
 import { createProgressBar } from '../utils/progress';
-import * as fs from 'fs';
 import * as path from 'path';
 import { createDebugLogger } from '../utils/debug-logger';
 import { createPerformanceTracker } from '../utils/performance-tracker';
 import { handleCommandError } from '../utils/error-handler';
 import { resolveExecutionPolicy } from '../utils/execution-policy';
+import { atomicReplaceText, prepareAtomicOutputTarget } from '../utils/private-state';
 import type {PackageInventoryError} from '../core/package-inventory';
 
 const logger = createDebugLogger('sbom');
@@ -131,7 +131,8 @@ export async function sbomCommand(options: SBOMOptions): Promise<void> {
 
     const outputPath = options.output || path.join(repoPath, `sbom-${format}.json`);
 
-    fs.writeFileSync(outputPath, JSON.stringify(sbom, null, 2));
+    const outputTarget = prepareAtomicOutputTarget(outputPath, repoPath);
+    atomicReplaceText(outputTarget, JSON.stringify(sbom, null, 2), {privateParent: false});
 
     progressBar.update(3, { status: 'Complete' });
     progressBar.stop();

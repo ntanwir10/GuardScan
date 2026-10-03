@@ -1,12 +1,84 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import fastGlob from 'fast-glob';
+import {expand} from '@isaacs/brace-expansion';
+import globParent from 'glob-parent';
+import {glob, isDynamicPattern} from 'tinyglobby';
 import ignore from 'ignore';
 
 const LOC_IGNORED_DIRECTORIES = new Set([
   'node_modules', '.git', 'dist', 'build', 'coverage',
 ]);
 const LOC_DISCOVERY_IGNORES = [...LOC_IGNORED_DIRECTORIES].map(name => `**/${name}/**`);
+const MAX_GLOB_PATTERN_EXPANSIONS = 10_000;
+const MAX_GLOB_PATTERN_BRACE_DEPTH = 64;
+const MAX_GLOB_PATTERN_BRACES = 64;
+const MAX_GLOB_PATTERN_LENGTH = 16_384;
+const MAX_GLOB_EXPANSION_WORK_BYTES = 8 * 1024 * 1024;
+
+function expandGlobPattern(pattern: string): string[] {
+  if (pattern.length > MAX_GLOB_PATTERN_LENGTH) {
+    throw new Error(`Glob pattern length exceeds ${MAX_GLOB_PATTERN_LENGTH}`);
+  }
+  const braceStarts: number[] = [];
+  const rangeSizes: number[] = [];
+  let braceCount = 0;
+  for (let index = 0; index < pattern.length; index++) {
+    if (pattern[index] === '\\') {
+      index++;
+      continue;
+    }
+    if (pattern[index] === '{') {
+      braceStarts.push(index);
+      if (braceStarts.length > MAX_GLOB_PATTERN_BRACE_DEPTH) {
+        throw new Error(`Glob pattern exceeds the maximum brace nesting depth of ${MAX_GLOB_PATTERN_BRACE_DEPTH}`);
+      }
+      if (++braceCount > MAX_GLOB_PATTERN_BRACES) {
+        throw new Error(`Glob pattern exceeds the maximum brace count of ${MAX_GLOB_PATTERN_BRACES}`);
+      }
+    } else if (pattern[index] === '}' && braceStarts.length > 0) {
+      const startIndex = braceStarts.pop()!;
+      const range = pattern.slice(startIndex + 1, index)
+        .match(/^(-?\d+|[a-zA-Z])\.\.(-?\d+|[a-zA-Z])(?:\.\.(-?\d+))?$/);
+      if (!range) {continue;}
+      const numeric = /^-?\d+$/.test(range[1]) && /^-?\d+$/.test(range[2]);
+      const alphabetic = /^[a-zA-Z]$/.test(range[1]) && /^[a-zA-Z]$/.test(range[2]);
+      if (!numeric && !alphabetic) {continue;}
+      const start = numeric ? Number(range[1]) : range[1].charCodeAt(0);
+      const end = numeric ? Number(range[2]) : range[2].charCodeAt(0);
+      const step = range[3] === undefined ? 1 : Math.abs(Number(range[3]));
+      if (step === 0) {throw new Error('Glob sequence step must be nonzero');}
+      const distance = Math.abs(end - start);
+      if (![start, end, step, distance].every(Number.isSafeInteger)) {
+        throw new Error('Glob sequence values must be safe integers');
+      }
+      rangeSizes.push(Math.floor(distance / step) + 1);
+    }
+  }
+
+  // Preserve escaped glob syntax: the expansion library otherwise unescapes it
+  // before the glob matcher sees it (for example, a literal \{a,b\} directory).
+  let escapePrefix = '__GUARDSCAN_GLOB_ESCAPE_';
+  while (pattern.includes(escapePrefix)) {escapePrefix += '_';}
+  const escapes: string[] = [];
+  const protectedPattern = pattern.replace(/\\./g, value => {
+    escapes.push(value);
+    return `${escapePrefix}${escapes.length - 1}__`;
+  });
+  // The library's max caps final output only, not range allocations or recursive
+  // intermediate arrays. Bound those paths before invoking it as well.
+  const expansionLimit = Math.max(1, Math.min(MAX_GLOB_PATTERN_EXPANSIONS,
+    Math.floor(MAX_GLOB_EXPANSION_WORK_BYTES /
+      (Math.max(1, protectedPattern.length) * Math.max(1, braceCount) ** 2))));
+  if (rangeSizes.some(size => size > expansionLimit)) {
+    throw new Error(`Glob range expansion exceeds the bounded count of ${expansionLimit}`);
+  }
+  const expansions = expand(protectedPattern, {max: expansionLimit + 1});
+  if (expansions.length > expansionLimit) {
+    throw new Error(`Glob pattern exceeds the bounded expansion count of ${expansionLimit}`);
+  }
+  const escapePattern = new RegExp(`${escapePrefix}(\\d+)__`, 'g');
+  return expansions.map(value => value.replace(escapePattern, (_token, index: string) => escapes[Number(index)]));
+}
 
 function isWithinDirectory(root: string, candidate: string): boolean {
   const relative = path.relative(root, candidate);
@@ -22,12 +94,13 @@ function hasVirtualEnvironmentMarker(directory: string): boolean {
   }
 }
 
-function discoverVirtualEnvironmentRoots(cwd: string, patterns: string[]): string[] {
+function discoverVirtualEnvironmentRoots(cwd: string, patterns: string[], expandedPatterns: string[]): string[] {
   const roots = new Set<string>();
-  const targeted = patterns.every(pattern => !fastGlob.isDynamicPattern(pattern));
-  const bases = new Set(fastGlob.generateTasks(patterns, {cwd}).map(task =>
-    path.resolve(cwd, task.base)
-  ));
+  const positivePatterns = patterns.filter(pattern => !pattern.startsWith('!') || pattern.startsWith('!('));
+  const targeted = positivePatterns.every(pattern => !isDynamicPattern(pattern));
+  const bases = new Set(expandedPatterns
+    .filter(pattern => !pattern.startsWith('!') || pattern.startsWith('!('))
+    .map(pattern => path.resolve(cwd, globParent(pattern))));
 
   const findAncestor = (start: string): string | undefined => {
     let current = start;
@@ -176,15 +249,17 @@ export class LOCCounter {
 
     const cwd = process.cwd();
     const globPatterns = patterns || defaultPatterns;
-    const virtualEnvironmentRoots = discoverVirtualEnvironmentRoots(cwd, globPatterns);
+    const expandedPatterns = globPatterns.flatMap(expandGlobPattern);
+    const virtualEnvironmentRoots = discoverVirtualEnvironmentRoots(cwd, globPatterns, expandedPatterns);
     const virtualEnvironmentIgnores = virtualEnvironmentRoots.map(environment => {
       const directory = path.relative(cwd, environment).split(path.sep).join('/');
       return directory === '' ? '**/*' : `${directory}/**`;
     });
-    const files = await fastGlob(globPatterns, {
+    const files = await glob(expandedPatterns, {
       cwd,
       absolute: true, // Get absolute paths first
       dot: true,
+      expandDirectories: false,
       followSymbolicLinks: false,
       ignore: [...LOC_DISCOVERY_IGNORES, ...virtualEnvironmentIgnores],
     });

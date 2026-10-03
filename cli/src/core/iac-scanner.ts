@@ -294,10 +294,12 @@ export class IaCScanner {
     for (const file of composeFiles) {
       try {
         const content = fs.readFileSync(file, 'utf-8');
-        const compose = yaml.load(content) as any;
+        const compose: unknown = yaml.load(content);
+        if (!compose || typeof compose !== 'object' || Array.isArray(compose)) {continue;}
 
-        if (compose.services) {
-          for (const [serviceName, serviceConfig] of Object.entries(compose.services)) {
+        const services = (compose as Record<string, unknown>).services;
+        if (services && typeof services === 'object' && !Array.isArray(services)) {
+          for (const [serviceName, serviceConfig] of Object.entries(services)) {
             const service = serviceConfig as any;
 
             // Check for privileged containers
@@ -394,7 +396,7 @@ export class IaCScanner {
           const stat = fs.lstatSync(fullPath);
 
           if (stat.isSymbolicLink()) {
-            onSkippedInput();
+            if (pattern.test(item) || isDirectorySymlink(fullPath)) {onSkippedInput();}
             continue;
           }
 
@@ -412,6 +414,10 @@ export class IaCScanner {
     search(dir, 0);
     return files;
   }
+}
+
+function isDirectorySymlink(file: string): boolean {
+  try {return fs.statSync(file).isDirectory();} catch {return false;}
 }
 
 export const iacScanner = new IaCScanner();

@@ -51,7 +51,7 @@ export class APIScanner {
           const stat = fs.lstatSync(fullPath);
 
           if (stat.isSymbolicLink()) {
-            onSkippedInput();
+            if (this.isAPIFile(item) || isDirectorySymlink(fullPath)) {onSkippedInput();}
             continue;
           }
 
@@ -443,6 +443,10 @@ export class APIScanner {
     const contextLines = lines.slice(Math.max(0, index - 10), Math.min(lines.length, index + 3)).join('\n');
     return /(try\s*{|catch\s*\(|except|recover|\.catch\(|error|Error)/i.test(contextLines);
   }
+}
+
+function isDirectorySymlink(file: string): boolean {
+  try {return fs.statSync(file).isDirectory();} catch {return false;}
 }
 
 export const apiScanner = new APIScanner();

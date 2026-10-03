@@ -160,11 +160,32 @@ export function resolveMavenVersionInvocation(
   environment: NodeJS.ProcessEnv = process.env,
   platform = process.platform
 ): ProcessInvocation {
-  if (platform !== 'win32') {return {command: 'mvn', args: ['--version']};}
+  return resolveMavenInvocation(['--version'], environment, platform);
+}
+
+export function resolveMavenInvocation(
+  args: string[],
+  environment: NodeJS.ProcessEnv = process.env,
+  platform = process.platform
+): ProcessInvocation {
+  if (platform !== 'win32') {return {command: 'mvn', args: [...args]};}
   return {
     command: environment.ComSpec || environment.COMSPEC || 'cmd.exe',
-    args: ['/d', '/s', '/c', 'mvn.cmd', '--version'],
+    args: ['/d', '/s', '/c', 'mvn.cmd', ...args],
   };
+}
+
+export function resolveGradleWrapperInvocation(
+  repoPath: string,
+  args: string[],
+  environment: NodeJS.ProcessEnv = process.env,
+  platform = process.platform
+): ProcessInvocation {
+  if (platform === 'win32') {
+    const command = environment.ComSpec || environment.COMSPEC || 'cmd.exe';
+    return {command, args: ['/d', '/s', '/c', 'gradlew.bat', ...args]};
+  }
+  return {command: path.join(repoPath, 'gradlew'), args: [...args]};
 }
 
 export function resolveNetworkIsolatedInvocation(
