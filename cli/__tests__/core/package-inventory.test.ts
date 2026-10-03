@@ -1625,6 +1625,43 @@ describe('collectPackageInventory', () => {
     expect(inventory.errors).toEqual([]);
   });
 
+  it.each([
+    ['1', '1.49.0', true],
+    ['1.28', '1.49.0', true],
+    ['1.28.0', '1.49.0', true],
+    ['1.28.0-alpha.1', '1.49.0', true],
+    ['1.28', '1.49.0-alpha', false],
+    ['1.28.0-alpha.1', '1.28.0-beta.1', true],
+    ['1.28.0-alpha.1', '1.29.0-beta.1', false],
+    ['0.2', '0.2.8', true],
+    ['0.0.2', '0.0.3', false],
+    ['1.28', '2.0.0', false],
+    ['=1.28.0', '1.49.0', false],
+    ['>=1.28, <1.50', '1.49.0', true],
+  ])('matches Cargo requirement %s against locked %s without changing explicit operators', (requested, locked, matches) => {
+    fs.writeFileSync(path.join(repository, 'Cargo.toml'), [
+      '[package]', 'name = "fixture"', 'version = "0.1.0"',
+      '[dependencies]', `runtime-root = "${requested}"`,
+    ].join('\n'));
+    fs.writeFileSync(path.join(repository, 'Cargo.lock'), [
+      'version = 3', '[[package]]', 'name = "fixture"', 'version = "0.1.0"',
+      'dependencies = ["runtime-root"]',
+      '[[package]]', 'name = "runtime-root"', `version = "${locked}"`,
+      'source = "registry+https://github.com/rust-lang/crates.io-index"',
+    ].join('\n'));
+    const inventory = collectPackageInventory(repository);
+    if (matches) {
+      expect(inventory.errors).toEqual([]);
+      expect(inventory.coordinates).toContainEqual(expect.objectContaining({
+        name: 'runtime-root', exactVersion: locked, direct: true, scope: 'runtime',
+      }));
+    } else {
+      expect(inventory.errors).toContainEqual(expect.objectContaining({
+        file: 'Cargo.toml', code: 'UNRESOLVED_VERSION',
+      }));
+    }
+  });
+
   it('preserves optional scope for feature-gated Cargo dependencies', () => {
     fs.writeFileSync(path.join(repository, 'Cargo.toml'), [
       '[package]',

@@ -1934,12 +1934,15 @@ function parseCargoLock(root: string, file: string, coordinates: DependencyCoord
     const requirementMatches = (requested: string | undefined, version: string): boolean => {
       if (!requested || requested === '*') {return true;}
       const normalized = requested.replace(/,/g, ' ').trim();
-      const range = semver.valid(normalized, {loose: true})
-        ? `^${normalized}`
-        : normalized.startsWith('=')
-          ? normalized.slice(1)
+      const bareVersion = /^\d+(?:\.\d+){0,2}(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(normalized);
+      // Loose semver parsing also accepts "=1.2.3"; preserve its exact
+      // comparison before applying Cargo's implicit caret to bare versions.
+      const range = normalized.startsWith('=')
+        ? normalized.slice(1)
+        : bareVersion || semver.valid(normalized, {loose: true})
+          ? `^${normalized}`
           : normalized;
-      return semver.satisfies(version, range, {includePrerelease: true, loose: true});
+      return semver.satisfies(version, range, {loose: true});
     };
     const directByNode = new Map<string, CargoDirect>();
     for (const manifest of manifests) {

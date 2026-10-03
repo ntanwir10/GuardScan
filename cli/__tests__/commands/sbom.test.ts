@@ -65,21 +65,24 @@ describe('SBOM output safety', () => {
   it('replaces an output symlink without modifying its target', async () => {
     const external = path.join(os.tmpdir(), `guardscan-sbom-target-${process.pid}-${Date.now()}.json`);
     const output = path.join(repository, 'sbom-spdx.json');
-    fs.writeFileSync(external, 'preserve me');
-    fs.symlinkSync(external, output);
+    try {
+      fs.writeFileSync(external, 'preserve me');
+      fs.symlinkSync(external, output);
 
-    await sbomCommand({});
+      await sbomCommand({});
 
-    expect(fs.lstatSync(output).isSymbolicLink()).toBe(false);
-    expect(JSON.parse(fs.readFileSync(output, 'utf8'))).toMatchObject({spdxVersion: 'SPDX-2.3'});
-    expect(fs.readFileSync(external, 'utf8')).toBe('preserve me');
-    fs.rmSync(external, {force: true});
+      expect(fs.lstatSync(output).isSymbolicLink()).toBe(false);
+      expect(JSON.parse(fs.readFileSync(output, 'utf8'))).toMatchObject({spdxVersion: 'SPDX-2.3'});
+      expect(fs.readFileSync(external, 'utf8')).toBe('preserve me');
+    } finally {
+      fs.rmSync(external, {force: true});
+    }
   });
 
-  (process.platform === 'win32' ? it.skip : it)('rejects output through a repository symlink directory', async () => {
+  it('rejects output through a repository symlink directory', async () => {
     const external = fs.mkdtempSync(path.join(os.tmpdir(), 'guardscan-sbom-directory-'));
     try {
-      fs.symlinkSync(external, path.join(repository, 'reports'));
+      fs.symlinkSync(external, path.join(repository, 'reports'), process.platform === 'win32' ? 'junction' : 'dir');
       expect(process.cwd()).toBe(repository);
       expect(() => privateState.prepareAtomicOutputTarget(
         path.join(repository, 'reports', 'sbom.json'), process.cwd()
