@@ -54,11 +54,17 @@ describe('required GitHub release gate', () => {
 
   it('runs every Node CLI workflow job on the package-supported runtime', () => {
     const workflowText = fs.readFileSync(path.resolve(__dirname, '../../../.github/workflows/ci.yml'), 'utf8');
-    const workflow = yaml.load(workflowText) as {jobs?: Record<string, {strategy?: {matrix?: {'node-version'?: number[]}}}>};
+    const workflow = yaml.load(workflowText) as {
+      env?: {RELEASE_NODE_VERSION?: string};
+      jobs?: Record<string, {strategy?: {matrix?: {node?: string[]}}}>;
+    };
 
     expect(workflowText.match(/node-version:\s*["']?(?:18|20)["']?/g)).toBeNull();
-    expect(workflowText.match(/node-version:\s*["']?22["']?/g)?.length).toBeGreaterThan(0);
-    expect(workflow.jobs?.['test-cli']?.strategy?.matrix?.['node-version']).toEqual([22]);
+    expect(workflow.env?.RELEASE_NODE_VERSION).toMatch(/^22\.\d+\.\d+$/);
+    const matrixNodes = workflow.jobs?.['test']?.strategy?.matrix?.node || [];
+    expect(matrixNodes).toContain(workflow.env?.RELEASE_NODE_VERSION);
+    expect(matrixNodes).toEqual(['22.23.1', '24.18.0', '26.5.0']);
+    expect(matrixNodes.every(version => Number.parseInt(version.split('.')[0], 10) >= 22)).toBe(true);
   });
 
   it('propagates npm audit failures through the required source contract job', () => {

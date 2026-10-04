@@ -7,7 +7,7 @@ import {MutationTester} from '../../src/core/mutation-tester';
 import {jest} from '@jest/globals';
 
 jest.mock('child_process', () => ({
-  ...jest.requireActual('child_process'),
+  ...jest.requireActual<typeof import('child_process')>('child_process'),
   execFileSync: jest.fn(),
 }));
 
@@ -108,8 +108,8 @@ describe('mutation tester process invocations', () => {
     Object.defineProperty(process, 'platform', {...originalPlatform, value: 'win32'});
     process.env.ComSpec = windowsEnvironment.ComSpec;
     const execute = childProcess.execFileSync as jest.Mock;
-    execute.mockReset().mockImplementation((command: string, args: string[]) => {
-      if (args.includes('mvn.cmd')) {throw new Error('Maven unavailable');}
+    execute.mockReset().mockImplementation((_command, args) => {
+      if (Array.isArray(args) && args.includes('mvn.cmd')) {throw new Error('Maven unavailable');}
       return '';
     });
 
@@ -144,8 +144,8 @@ describe('mutation tester process invocations', () => {
 
   it('passes a custom mutmut runner as an argv value when explicitly allowed', async () => {
     const execFileSyncMock = childProcess.execFileSync as jest.Mock;
-    execFileSyncMock.mockReset().mockImplementation((command: string, args: string[]) => {
-      if (command === 'mutmut' && args[0] === 'results') return 'Killed mutants: 1\nSurvived mutants: 0\n';
+    execFileSyncMock.mockReset().mockImplementation((command, args) => {
+      if (command === 'mutmut' && Array.isArray(args) && args[0] === 'results') return 'Killed mutants: 1\nSurvived mutants: 0\n';
       return '';
     });
     const tester = new MutationTester();
