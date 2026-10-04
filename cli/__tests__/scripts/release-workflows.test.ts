@@ -760,12 +760,16 @@ describe('zero-touch release workflow contracts', () => {
     ]);
   });
 
-  it('validates and readies the exact same-repository main release PR before candidate tagging', () => {
+  it('preflights the draft before readiness mutation and strictly authorizes it before candidate tagging', () => {
     const train = workflowSource('release-train.yml');
     expect(train).toContain('Validate release request before provider access');
     expect(train).toContain("['candidate', 'promote'].includes(action)");
     expect(train).toContain('candidate and promotion require the exact reviewed PR head');
     expect(train).toContain('cli/scripts/release/index.js validate-pr');
+    expect(train).toContain('--readiness-preflight');
+    expect(train).toContain('release-pr-readiness-preflight-authorization.json');
+    expect(train).toContain('release-pr-readiness-authorization.json');
+    expect(train).toContain('release-pr-authorization.json');
     expect(train).toContain('PR_POLICY_ARGS+=(--allow-merged)');
     expect(train).toContain('REQUEST_RELEASE_PR: ${{ inputs.release_pr }}');
     expect(train).toContain('EXPECTED_HEAD: ${{ steps.source.outputs.head_sha }}');
@@ -787,8 +791,19 @@ describe('zero-touch release workflow contracts', () => {
     expect(train).toContain('release PR must be ready after readiness transition');
     expect(train).toContain('expected_head:');
     expect(train).toContain('--match-head-commit "$EXPECTED_HEAD"');
-    expect(train.indexOf('gh pr ready "$REQUEST_RELEASE_PR"'))
-      .toBeLessThan(train.indexOf('cli/scripts/release/index.js validate-pr'));
+    const candidate = train.indexOf('name: Derive bot-owned RC commit');
+    const preflight = train.indexOf('--readiness-preflight');
+    const readinessAppIndex = train.indexOf('id: readiness-app');
+    const refresh = train.indexOf('name: Refresh and revalidate exact release PR readiness authorization');
+    const ready = train.indexOf('gh pr ready "$REQUEST_RELEASE_PR"');
+    const strictAuthorization = train.indexOf('name: Authorize exact release PR after readiness transition');
+    const candidateApp = train.indexOf('id: candidate-app');
+    expect(candidate).toBeLessThan(preflight);
+    expect(preflight).toBeLessThan(readinessAppIndex);
+    expect(readinessAppIndex).toBeLessThan(refresh);
+    expect(refresh).toBeLessThan(ready);
+    expect(ready).toBeLessThan(strictAuthorization);
+    expect(strictAuthorization).toBeLessThan(candidateApp);
   });
 
   it('builds signed artifacts and publishes through isolated provider environments', () => {

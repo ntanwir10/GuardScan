@@ -151,16 +151,34 @@ const timestamp = '2026-07-20T00:00:00.000Z';
 const workflowSha = 'f'.repeat(40);
 
 describe('release-train workflow readiness boundary', () => {
-  it('transitions the exact same-repository draft PR before authorization gates run', () => {
+  it('validates candidate and draft readiness authorization before readiness mutation', () => {
     const repositoryRoot = path.resolve(__dirname, '../../..');
     const workflow = fs.readFileSync(
       path.join(repositoryRoot, '.github/workflows/release-train.yml'),
       'utf8'
     );
+    const checkout = workflow.indexOf('path: source');
+    const candidate = workflow.indexOf('name: Derive bot-owned RC commit');
+    const preflight = workflow.indexOf('--readiness-preflight');
+    const readinessApp = workflow.indexOf('id: readiness-app');
+    const revalidation = workflow.indexOf('name: Refresh and revalidate exact release PR readiness authorization');
     const readiness = workflow.indexOf('gh pr ready "$REQUEST_RELEASE_PR"');
-    const authorization = workflow.indexOf('cli/scripts/release/index.js validate-pr');
-    expect(readiness).toBeGreaterThan(-1);
+    const authorization = workflow.indexOf('name: Authorize exact release PR after readiness transition');
+    const candidateApp = workflow.indexOf('id: candidate-app');
+    const candidatePush = workflow.indexOf('name: Commit and push validated candidate source');
+    const promoteApp = workflow.indexOf('id: promote-app');
+    const promoteMerge = workflow.indexOf('gh pr merge "$REQUEST_RELEASE_PR"');
+    expect(checkout).toBeGreaterThan(-1);
+    expect(candidate).toBeGreaterThan(checkout);
+    expect(preflight).toBeGreaterThan(candidate);
+    expect(readinessApp).toBeGreaterThan(preflight);
+    expect(revalidation).toBeGreaterThan(readinessApp);
+    expect(readiness).toBeGreaterThan(revalidation);
     expect(authorization).toBeGreaterThan(readiness);
+    expect(candidateApp).toBeGreaterThan(authorization);
+    expect(candidatePush).toBeGreaterThan(authorization);
+    expect(promoteApp).toBeGreaterThan(authorization);
+    expect(promoteMerge).toBeGreaterThan(authorization);
     expect(workflow).toContain('repositories: GuardScan');
     expect(workflow).toContain('permission-pull-requests: write');
     expect(workflow).toContain('release PR must be ready after readiness transition');
