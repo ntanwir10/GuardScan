@@ -47,6 +47,13 @@ function authorizePullRequest(input) {
     throw new Error(`pull request authorization input is too large (maximum ${MAX_INPUT_BYTES} bytes)`);
   }
 
+  const readinessPreflight = input.readinessPreflight === true;
+  if (readinessPreflight && input.allowMerged === true) {
+    throw new Error('readiness preflight cannot be combined with merged PR authorization');
+  }
+  if (readinessPreflight && (input.expectedNumber === undefined || input.expectedBase === undefined)) {
+    throw new Error('readiness preflight requires expected PR number and base SHA');
+  }
   const expectedHead = requireSha(input.expectedHead, 'expected head');
   const pullRequest = requireObject(input.pullRequest, 'pull request');
   if (!Number.isSafeInteger(pullRequest.number) || pullRequest.number < 1) {
@@ -59,7 +66,27 @@ function authorizePullRequest(input) {
   if (pullRequest.state !== 'open' && !resumableMerged) {
     throw new Error('pull request must be OPEN or an explicitly allowed merged release');
   }
-  if (pullRequest.draft !== false) throw new Error('pull request must not be draft');
+  if (readinessPreflight) {
+    if (pullRequest.state !== 'open' || pullRequest.draft !== true) {
+      throw new Error('readiness preflight requires an OPEN draft PR');
+    }
+  } else if (pullRequest.draft !== false) {
+    throw new Error('pull request must not be draft');
+  }
+  if (input.expectedNumber !== undefined) {
+    if (!Number.isSafeInteger(input.expectedNumber) || input.expectedNumber < 1) {
+      throw new Error('expected PR number is invalid');
+    }
+    if (pullRequest.number !== input.expectedNumber) {
+      throw new Error('pull request number does not match expected number');
+    }
+  }
+  const expectedBase = input.expectedBase === undefined
+    ? undefined
+    : requireSha(input.expectedBase, 'expected base');
+  if (expectedBase && pullRequest.base?.sha !== expectedBase) {
+    throw new Error('pull request base SHA does not match expected base');
+  }
   if (pullRequest.base?.ref !== BASE) throw new Error('pull request must target main');
   if (pullRequest.base?.repo?.full_name !== REPOSITORY) {
     throw new Error('pull request base repository is not the GuardScan repository');
@@ -107,6 +134,7 @@ function authorizePullRequest(input) {
     repository: REPOSITORY,
     number: pullRequest.number,
     base: BASE,
+    ...(expectedBase ? {baseSha: expectedBase} : {}),
     head,
   };
 }

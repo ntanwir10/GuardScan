@@ -60,6 +60,7 @@ const BOOLEAN_OPTIONS = new Set([
   'check',
   'firstReleaseWithdrawal',
   'native',
+  'readinessPreflight',
   'requireNative',
 ]);
 const COMMANDS = new Set([
@@ -515,6 +516,9 @@ async function main(argv) {
       reviews: JSON.parse(readBounded(path.resolve(options.reviews), 'pull request reviews')),
       expectedHead: options.expectedHead,
       allowMerged: options.allowMerged === true,
+      readinessPreflight: options.readinessPreflight === true,
+      ...(options.expectedNumber === undefined ? {} : {expectedNumber: Number(options.expectedNumber)}),
+      ...(options.expectedBase === undefined ? {} : {expectedBase: options.expectedBase}),
     });
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
     return;
