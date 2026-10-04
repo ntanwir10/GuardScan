@@ -119,8 +119,7 @@ jobs:
 
       - name: Run npm audit (CLI)
         working-directory: ./cli
-        run: npm audit --audit-level=moderate || true
-        continue-on-error: true
+        run: npm audit --audit-level=moderate
 
   integration-test:
     name: Integration Tests

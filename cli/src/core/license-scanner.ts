@@ -1128,7 +1128,7 @@ function spdxDependencyRelationships(
   }
 
   const relationships: Spdx23Document['relationships'] = packages.flatMap((value, index) =>
-    findings[index].direct === true ? [{
+    isDirectInstallDependency(findings[index]) ? [{
       spdxElementId: rootReference,
       relationshipType: 'DEPENDS_ON' as const,
       relatedSpdxElement: value.SPDXID,

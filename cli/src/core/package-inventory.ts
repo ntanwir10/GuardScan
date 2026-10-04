@@ -260,7 +260,7 @@ function npmAliasTarget(requested: string): {name: string; range: string} | unde
 function npmRequestMatchesVersion(requested: string, exactVersion: string): boolean {
   const registryRange = npmAliasTarget(requested)?.range || requested.replace(/^npm:/, '');
   const range = semver.validRange(registryRange, { loose: true });
-  return range !== null && semver.satisfies(exactVersion, range, { includePrerelease: true, loose: true });
+  return range !== null && semver.satisfies(exactVersion, range, { loose: true });
 }
 
 function npmRequestedPackageName(installName: string, requested: string): string {
@@ -1801,7 +1801,13 @@ function parseGoMod(
   }
 }
 
-function parseCargoLock(root: string, file: string, coordinates: DependencyCoordinate[], errors: PackageInventoryError[]): void {
+function parseCargoLock(
+  root: string,
+  file: string,
+  coordinates: DependencyCoordinate[],
+  errors: PackageInventoryError[],
+  inventoryFiles: ReadonlySet<string>
+): void {
   const rel = relative(root, file);
   const lockDirectory = path.dirname(file);
   type CargoDependency = {name: string; version?: string; source?: string};
@@ -1843,6 +1849,7 @@ function parseCargoLock(root: string, file: string, coordinates: DependencyCoord
     }
 
     const rootManifest = path.join(lockDirectory, 'Cargo.toml');
+    const rootManifestIsInventoried = inventoryFiles.has(rootManifest);
     const workspaceDefinitions = new Map<string, {name: string; requested?: string; local: boolean; optional: boolean}>();
     const parseDependencyValue = (installName: string, rawValue: string) => {
       const packageName = rawValue.match(/\bpackage\s*=\s*["']([^"']+)["']/)?.[1] || installName;
@@ -1857,59 +1864,16 @@ function parseCargoLock(root: string, file: string, coordinates: DependencyCoord
         optional: /\boptional\s*=\s*true\b/.test(rawValue) || (workspace && inherited?.optional === true),
       };
     };
-    const manifestLines = (manifest: string): Array<{section: string; name: string; value: string}> => {
-      const records: Array<{section: string; name: string; value: string}> = [];
-      let section = '';
-      for (const rawLine of stripTomlComments(fs.readFileSync(manifest, 'utf8')).split(/\r?\n/)) {
-        const sectionMatch = rawLine.trim().match(/^\[([^\]]+)\]$/);
-        if (sectionMatch) {section = sectionMatch[1].trim(); continue;}
-        const dependency = rawLine.match(/^\s*(?:"([^"]+)"|'([^']+)'|([A-Za-z0-9_.-]+))\s*=\s*(.+)$/);
-        if (dependency) {
-          records.push({section, name: dependency[1] || dependency[2] || dependency[3], value: dependency[4].trim()});
-        }
-      }
-      return records;
-    };
-    const manifestDependencies = (manifest: string): Array<{section: string; name: string; value: string}> => {
-      const records = manifestLines(manifest);
-      const dependencies = records.filter(record =>
-        record.section === 'workspace.dependencies' ||
-        record.section === 'dependencies' ||
-        record.section === 'dev-dependencies' ||
-        record.section === 'build-dependencies' ||
-        record.section.endsWith('.dependencies') ||
-        record.section.endsWith('.dev-dependencies') ||
-        record.section.endsWith('.build-dependencies')
-      );
-      const tableValues = new Map<string, typeof records>();
-      for (const record of records) {
-        const match = record.section.match(/^(?:(.*)\.)?(dependencies|dev-dependencies|build-dependencies)\.([^.]+)$/);
-        if (!match) {continue;}
-        const values = tableValues.get(record.section) || [];
-        values.push(record);
-        tableValues.set(record.section, values);
-      }
-      for (const [section, values] of tableValues) {
-        const match = section.match(/^(?:(.*)\.)?(dependencies|dev-dependencies|build-dependencies)\.([^.]+)$/)!;
-        const prefix = match[1] ? `${match[1]}.` : '';
-        dependencies.push({
-          section: `${prefix}${match[2]}`,
-          name: match[3].replace(/^["']|["']$/g, ''),
-          value: `{ ${values.map(value => `${value.name} = ${value.value}`).join(', ')} }`,
-        });
-      }
-      return dependencies;
-    };
-    if (fs.existsSync(rootManifest)) {
-      for (const record of manifestDependencies(rootManifest).filter(record => record.section === 'workspace.dependencies')) {
+    if (rootManifestIsInventoried) {
+      for (const record of cargoManifestDependencies(rootManifest).filter(record => record.section === 'workspace.dependencies')) {
         workspaceDefinitions.set(record.name, parseDependencyValue(record.name, record.value));
       }
     }
 
     const manifests = new Set<string>();
-    if (fs.existsSync(rootManifest)) {manifests.add(rootManifest);}
-    const members = fs.existsSync(rootManifest) ? cargoWorkspacePatterns(rootManifest, 'members') : [];
-    const excluded = fs.existsSync(rootManifest) ? cargoWorkspacePatterns(rootManifest, 'exclude') : [];
+    if (rootManifestIsInventoried) {manifests.add(rootManifest);}
+    const members = rootManifestIsInventoried ? cargoWorkspacePatterns(rootManifest, 'members') : [];
+    const excluded = rootManifestIsInventoried ? cargoWorkspacePatterns(rootManifest, 'exclude') : [];
     if (members.length > 0) {
       const visitManifests = (directory: string): void => {
         for (const entry of fs.readdirSync(directory, {withFileTypes: true})) {
@@ -1917,7 +1881,7 @@ function parseCargoLock(root: string, file: string, coordinates: DependencyCoord
           const child = path.join(directory, entry.name);
           const candidate = path.join(child, 'Cargo.toml');
           const relativeDirectory = relative(lockDirectory, child);
-          if (fs.existsSync(candidate) &&
+          if (inventoryFiles.has(candidate) &&
             members.some(pattern => yarnWorkspacePatternMatches(pattern, relativeDirectory)) &&
             !excluded.some(pattern => yarnWorkspacePatternMatches(pattern, relativeDirectory))) {
             manifests.add(candidate);
@@ -1927,7 +1891,7 @@ function parseCargoLock(root: string, file: string, coordinates: DependencyCoord
       };
       visitManifests(lockDirectory);
     }
-    for (const manifest of cargoImplicitWorkspaceManifests(rootManifest, lockDirectory, excluded)) {
+    for (const manifest of cargoImplicitWorkspaceManifests(rootManifest, lockDirectory, excluded, inventoryFiles)) {
       manifests.add(manifest);
     }
 
@@ -1946,14 +1910,14 @@ function parseCargoLock(root: string, file: string, coordinates: DependencyCoord
     };
     const directByNode = new Map<string, CargoDirect>();
     for (const manifest of manifests) {
-      const records = manifestLines(manifest);
+      const records = cargoManifestLines(manifest);
       const packageName = records.find(record => record.section === 'package' && record.name === 'name')
         ?.value.match(/^["']([^"']+)["']$/)?.[1];
       const packageVersion = records.find(record => record.section === 'package' && record.name === 'version')
         ?.value.match(/^["']([^"']+)["']$/)?.[1];
       const manifestRoots = nodes.filter(node => !node.source && node.name === packageName &&
         (!packageVersion || node.version === packageVersion));
-      for (const record of manifestDependencies(manifest)) {
+      for (const record of cargoManifestDependencies(manifest)) {
         const development = record.section === 'dev-dependencies' || record.section.endsWith('.dev-dependencies');
         const runtime = record.section === 'dependencies' || record.section === 'build-dependencies' ||
           record.section.endsWith('.dependencies') || record.section.endsWith('.build-dependencies');
@@ -2612,22 +2576,76 @@ function cargoManifestHasWorkspace(manifest: string): boolean {
   }
 }
 
-function cargoPathDependencies(manifest: string): string[] {
-  const paths: string[] = [];
+type CargoManifestRecord = {section: string; name: string; value: string};
+
+function cargoManifestLines(manifest: string): CargoManifestRecord[] {
+  const records: CargoManifestRecord[] = [];
   let section = '';
+  for (const rawLine of stripTomlComments(fs.readFileSync(manifest, 'utf8')).split(/\r?\n/)) {
+    const sectionMatch = rawLine.trim().match(/^\[([^\]]+)\]$/);
+    if (sectionMatch) {section = sectionMatch[1].trim(); continue;}
+    const dependency = rawLine.match(/^\s*(?:"([^"]+)"|'([^']+)'|([A-Za-z0-9_.-]+))\s*=\s*(.+)$/);
+    if (dependency) {
+      records.push({section, name: dependency[1] || dependency[2] || dependency[3], value: dependency[4].trim()});
+    }
+  }
+  return records;
+}
+
+function cargoManifestDependencies(manifest: string): CargoManifestRecord[] {
+  const records = cargoManifestLines(manifest);
+  const dependencies = records.filter(record =>
+    record.section === 'workspace.dependencies' ||
+    record.section === 'dependencies' ||
+    record.section === 'dev-dependencies' ||
+    record.section === 'build-dependencies' ||
+    record.section.endsWith('.dependencies') ||
+    record.section.endsWith('.dev-dependencies') ||
+    record.section.endsWith('.build-dependencies')
+  );
+  const tableValues = new Map<string, CargoManifestRecord[]>();
+  for (const record of records) {
+    const match = record.section.match(/^(?:(.*)\.)?(dependencies|dev-dependencies|build-dependencies)\.([^.]+)$/);
+    if (!match) {continue;}
+    const values = tableValues.get(record.section) || [];
+    values.push(record);
+    tableValues.set(record.section, values);
+  }
+  for (const [section, values] of tableValues) {
+    const match = section.match(/^(?:(.*)\.)?(dependencies|dev-dependencies|build-dependencies)\.([^.]+)$/)!;
+    const prefix = match[1] ? `${match[1]}.` : '';
+    dependencies.push({
+      section: `${prefix}${match[2]}`,
+      name: match[3].replace(/^['"]|['"]$/g, ''),
+      value: `{ ${values.map(value => `${value.name} = ${value.value}`).join(', ')} }`,
+    });
+  }
+  return dependencies;
+}
+
+function cargoPathDependencies(
+  manifest: string,
+  workspaceManifest: string
+): Array<{path: string; baseDirectory: string}> {
+  const paths: Array<{path: string; baseDirectory: string}> = [];
   try {
-    for (const rawLine of stripTomlComments(fs.readFileSync(manifest, 'utf8')).split(/\r?\n/)) {
-      const line = rawLine.trim();
-      const sectionMatch = line.match(/^\[([^\]]+)]$/);
-      if (sectionMatch) {
-        section = sectionMatch[1].trim();
-        continue;
+    const records = cargoManifestDependencies(manifest);
+    const workspacePaths = new Map(cargoManifestDependencies(workspaceManifest)
+      .filter(record => record.section === 'workspace.dependencies')
+      .flatMap(record => {
+        const requestedPath = record.value.match(/\bpath\s*=\s*["']([^"']+)["']/)?.[1];
+        return requestedPath ? [[record.name, requestedPath] as [string, string]] : [];
+      }));
+    for (const record of records) {
+      if (record.section.startsWith('workspace.')) {continue;}
+      const requestedPath = record.value.match(/\bpath\s*=\s*["']([^"']+)["']/)?.[1];
+      if (requestedPath && !/\bworkspace\s*=\s*true\b/.test(record.value)) {
+        paths.push({path: requestedPath, baseDirectory: path.dirname(manifest)});
       }
-      if (!section || section.startsWith('workspace.')) {continue;}
-      const dependencySection = section.match(/^(?:.+\.)?(?:dependencies|dev-dependencies|build-dependencies)(?:\..+)?$/);
-      if (!dependencySection) {continue;}
-      const pathValue = line.match(/\bpath\s*=\s*["']([^"']+)["']/)?.[1];
-      if (pathValue) {paths.push(pathValue);}
+      if (/\bworkspace\s*=\s*true\b/.test(record.value)) {
+        const inheritedPath = workspacePaths.get(record.name);
+        if (inheritedPath) {paths.push({path: inheritedPath, baseDirectory: path.dirname(workspaceManifest)});}
+      }
     }
   } catch {
     return [];
@@ -2638,20 +2656,30 @@ function cargoPathDependencies(manifest: string): string[] {
 function cargoImplicitWorkspaceManifests(
   workspaceManifest: string,
   workspaceDirectory: string,
-  excluded: string[]
+  excluded: string[],
+  inventoryFiles: ReadonlySet<string>
 ): Set<string> {
   const manifests = new Set<string>();
-  if (!cargoManifestHasWorkspace(workspaceManifest)) {return manifests;}
+  if (!inventoryFiles.has(workspaceManifest) || !cargoManifestHasWorkspace(workspaceManifest)) {return manifests;}
   const pending = [workspaceManifest];
+  const members = cargoWorkspacePatterns(workspaceManifest, 'members');
+  for (const candidate of inventoryFiles) {
+    if (path.basename(candidate) !== 'Cargo.toml' || candidate === workspaceManifest) {continue;}
+    const relativeDirectory = relative(workspaceDirectory, path.dirname(candidate));
+    if (members.some(pattern => yarnWorkspacePatternMatches(pattern, relativeDirectory)) &&
+      !excluded.some(pattern => yarnWorkspacePatternMatches(pattern, relativeDirectory))) {
+      pending.push(candidate);
+    }
+  }
   const visited = new Set<string>();
   while (pending.length > 0) {
     const manifest = pending.pop()!;
     if (visited.has(manifest)) {continue;}
     visited.add(manifest);
-    for (const requestedPath of cargoPathDependencies(manifest)) {
+    for (const dependency of cargoPathDependencies(manifest, workspaceManifest)) {
       let candidateDirectory: string;
       try {
-        candidateDirectory = fs.realpathSync(path.resolve(path.dirname(manifest), requestedPath));
+        candidateDirectory = fs.realpathSync(path.resolve(dependency.baseDirectory, dependency.path));
       } catch {
         continue;
       }
@@ -2659,7 +2687,7 @@ function cargoImplicitWorkspaceManifests(
       const relativeDirectory = relative(workspaceDirectory, candidateDirectory);
       if (excluded.some(pattern => yarnWorkspacePatternMatches(pattern, relativeDirectory))) {continue;}
       const candidate = path.join(candidateDirectory, 'Cargo.toml');
-      if (!fs.existsSync(candidate)) {continue;}
+      if (!inventoryFiles.has(candidate)) {continue;}
       manifests.add(candidate);
       pending.push(candidate);
     }
@@ -2675,13 +2703,13 @@ function hasCoveringCargoLock(root: string, manifest: string, inventoryFiles: Re
       if (directory === manifestDirectory) {return true;}
       const workspaceManifest = path.join(directory, 'Cargo.toml');
       const relativeDirectory = relative(directory, manifestDirectory);
-      const members = cargoWorkspacePatterns(workspaceManifest, 'members');
-      const excluded = cargoWorkspacePatterns(workspaceManifest, 'exclude');
+      const members = inventoryFiles.has(workspaceManifest) ? cargoWorkspacePatterns(workspaceManifest, 'members') : [];
+      const excluded = inventoryFiles.has(workspaceManifest) ? cargoWorkspacePatterns(workspaceManifest, 'exclude') : [];
       if (members.some(pattern => yarnWorkspacePatternMatches(pattern, relativeDirectory)) &&
         !excluded.some(pattern => yarnWorkspacePatternMatches(pattern, relativeDirectory))) {
         return true;
       }
-      if (cargoImplicitWorkspaceManifests(workspaceManifest, directory, excluded).has(manifest)) {
+      if (cargoImplicitWorkspaceManifests(workspaceManifest, directory, excluded, inventoryFiles).has(manifest)) {
         return true;
       }
     }
@@ -2716,7 +2744,10 @@ export function collectPackageInventory(repoPath: string = process.cwd()): Packa
   };
   const files = findInventoryFiles(root, errors).filter(file => {
     try {
-      return isWithinRoot(root, fs.realpathSync(file));
+      if (!isWithinRoot(root, fs.realpathSync(file))) {
+        throw new Error('resolved target is outside the repository');
+      }
+      return true;
     } catch (error: unknown) {
       errors.push({
         file: relative(root, file),
@@ -2816,7 +2847,7 @@ export function collectPackageInventory(repoPath: string = process.cwd()): Packa
         message: 'Go workspace resolution is unsupported; go.work use and replace directives make dependency coverage incomplete',
       });
     }
-    else if (name === 'Cargo.lock') {parseCargoLock(root, file, coordinates, errors);}
+    else if (name === 'Cargo.lock') {parseCargoLock(root, file, coordinates, errors, inventoryFiles);}
     else if (name === 'Gemfile.lock') {parseGemfileLock(root, file, coordinates, errors);}
     else if (name === 'Cargo.toml' && !hasCoveringCargoLock(root, file, inventoryFiles)) {
       errors.push({file: relative(root, file), code: 'UNSUPPORTED_FORMAT', message: 'Cargo.toml has no adjacent Cargo.lock or ancestor workspace lock; dependency coverage is incomplete'});

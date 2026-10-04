@@ -624,6 +624,50 @@ describe('collectPackageInventory', () => {
     )));
   });
 
+  it('does not match implicit prereleases for npm and Yarn ranges, but accepts explicit prerelease ranges', () => {
+    for (const fixture of ['npm', 'yarn', 'npm-explicit', 'yarn-explicit']) {
+      fs.mkdirSync(path.join(repository, fixture));
+    }
+    for (const fixture of ['npm', 'yarn']) {
+      fs.writeFileSync(path.join(repository, fixture, 'package.json'), JSON.stringify({
+        dependencies: {demo: '^1.2.3'},
+      }));
+    }
+    for (const fixture of ['npm-explicit', 'yarn-explicit']) {
+      fs.writeFileSync(path.join(repository, fixture, 'package.json'), JSON.stringify({
+        dependencies: {demo: '^1.3.0-beta.0'},
+      }));
+    }
+    for (const fixture of ['npm', 'npm-explicit']) {
+      const requested = fixture === 'npm' ? '^1.2.3' : '^1.3.0-beta.0';
+      fs.writeFileSync(path.join(repository, fixture, 'package-lock.json'), JSON.stringify({
+        lockfileVersion: 3,
+        packages: {
+          '': {dependencies: {demo: requested}},
+          'node_modules/demo': {version: '1.3.0-beta.1'},
+        },
+      }));
+    }
+    for (const fixture of ['yarn', 'yarn-explicit']) {
+      const requested = fixture === 'yarn' ? '^1.2.3' : '^1.3.0-beta.0';
+      fs.writeFileSync(path.join(repository, fixture, 'yarn.lock'), [
+        `demo@${requested}:`,
+        '  version "1.3.0-beta.1"',
+      ].join('\n'));
+    }
+
+    const inventory = collectPackageInventory(repository);
+
+    expect(inventory.errors).toEqual(expect.arrayContaining(['npm', 'yarn'].map(fixture =>
+      expect.objectContaining({
+        file: `${fixture}/package.json`, code: 'UNRESOLVED_VERSION',
+        message: expect.stringMatching(/demo|lock/i),
+      })
+    )));
+    expect(inventory.errors.some(error => error.file === 'npm-explicit/package.json')).toBe(false);
+    expect(inventory.errors.some(error => error.file === 'yarn-explicit/package.json')).toBe(false);
+  });
+
   it('accepts shared hoisted resolutions referenced by multiple npm and pnpm workspaces', () => {
     for (const manager of ['npm', 'pnpm']) {
       const managerRoot = path.join(repository, manager);
@@ -1957,6 +2001,133 @@ describe('collectPackageInventory', () => {
       }),
     ]);
     expect(inventory.errors).toEqual([]);
+  });
+
+  it('accepts only referenced inherited Cargo workspace path dependencies as implicit members', () => {
+    fs.writeFileSync(path.join(repository, 'Cargo.toml'), [
+      '[workspace]',
+      'members = ["crates/app"]',
+      '[workspace.dependencies.member]',
+      'path = "crates/member"',
+      '[workspace.dependencies]',
+      '"quoted-member" = { path = "crates/quoted" }',
+      'unused = { path = "crates/unused" }',
+      '[package]',
+      'name = "root"',
+      'version = "1.0.0"',
+      '[dependencies]',
+      '"quoted-member" = { workspace = true }',
+      '[dependencies.member]',
+      'workspace = true',
+    ].join('\n'));
+    fs.mkdirSync(path.join(repository, 'crates/app'), {recursive: true});
+    fs.writeFileSync(path.join(repository, 'crates/app/Cargo.toml'), [
+      '[package]',
+      'name = "app"',
+      'version = "1.0.0"',
+      '[dependencies]',
+      'member = { workspace = true }',
+    ].join('\n'));
+    fs.mkdirSync(path.join(repository, 'crates/member'), {recursive: true});
+    fs.writeFileSync(path.join(repository, 'crates/member/Cargo.toml'), [
+      '[package]',
+      'name = "member"',
+      'version = "1.0.0"',
+      '[dependencies]',
+      'serde = "1.0.0"',
+    ].join('\n'));
+    fs.mkdirSync(path.join(repository, 'crates/quoted'), {recursive: true});
+    fs.writeFileSync(path.join(repository, 'crates/quoted/Cargo.toml'), [
+      '[package]',
+      'name = "quoted-member"',
+      'version = "1.0.0"',
+      '[dependencies]',
+      'log = "0.4.0"',
+    ].join('\n'));
+    fs.mkdirSync(path.join(repository, 'crates/unused'), {recursive: true});
+    fs.writeFileSync(path.join(repository, 'crates/unused/Cargo.toml'), [
+      '[package]',
+      'name = "unused"',
+      'version = "1.0.0"',
+    ].join('\n'));
+    fs.writeFileSync(path.join(repository, 'Cargo.lock'), [
+      'version = 3',
+      '[[package]]',
+      'name = "root"',
+      'version = "1.0.0"',
+      'dependencies = ["member"]',
+      '[[package]]',
+      'name = "app"',
+      'version = "1.0.0"',
+      'dependencies = ["member", "quoted-member"]',
+      '[[package]]',
+      'name = "member"',
+      'version = "1.0.0"',
+      'dependencies = ["serde 1.0.0 (registry+https://github.com/rust-lang/crates.io-index)"]',
+      '[[package]]',
+      'name = "serde"',
+      'version = "1.0.0"',
+      'source = "registry+https://github.com/rust-lang/crates.io-index"',
+      '[[package]]',
+      'name = "log"',
+      'version = "0.4.0"',
+      'source = "registry+https://github.com/rust-lang/crates.io-index"',
+    ].join('\n'));
+
+    const inventory = collectPackageInventory(repository);
+
+    expect(inventory.errors).toEqual([
+      expect.objectContaining({
+        file: 'crates/unused/Cargo.toml', code: 'UNSUPPORTED_FORMAT',
+        message: expect.stringMatching(/lock|workspace/i),
+      }),
+    ]);
+    expect(inventory.coordinates).toContainEqual(expect.objectContaining({
+      name: 'serde', exactVersion: '1.0.0', direct: true, manifestPath: 'crates/member/Cargo.toml',
+    }));
+    expect(inventory.coordinates).toContainEqual(expect.objectContaining({
+      name: 'log', exactVersion: '0.4.0', direct: true, manifestPath: 'crates/quoted/Cargo.toml',
+    }));
+  });
+
+  it.each(['Cargo.toml', 'member/Cargo.toml'])('never reopens a Cargo manifest rejected by inventory boundaries: %s', unsafePath => {
+    fs.writeFileSync(path.join(repository, 'Cargo.toml'), [
+      '[workspace]',
+      '[package]',
+      'name = "root"',
+      'version = "1.0.0"',
+      '[dependencies]',
+      'member = { path = "member" }',
+    ].join('\n'));
+    fs.mkdirSync(path.join(repository, 'member'));
+    fs.writeFileSync(path.join(repository, 'member/Cargo.toml'), '[package]\nname = "member"\nversion = "1.0.0"\n');
+    fs.writeFileSync(path.join(repository, 'Cargo.lock'), 'version = 3\n');
+
+    // Model a manifest resolving outside the repository without requiring
+    // privileged file-symlink creation on Windows.
+    const fileSystem = require('fs') as typeof fs;
+    const actualRealpath = fileSystem.realpathSync;
+    const canonicalRepository = actualRealpath(repository);
+    const unsafeManifest = path.join(canonicalRepository, unsafePath);
+    const realpath = jest.spyOn(fileSystem, 'realpathSync').mockImplementation(file =>
+      String(file) === unsafeManifest
+        ? path.join(path.dirname(canonicalRepository), 'external-Cargo.toml')
+        : actualRealpath(file)
+    );
+    const readFile = jest.spyOn(fileSystem, 'readFileSync');
+    try {
+      const inventory = collectPackageInventory(repository);
+
+      expect(inventory.manifests).not.toContain(unsafePath);
+      expect(readFile).not.toHaveBeenCalledWith(unsafeManifest, 'utf8');
+      expect(inventory.errors).toContainEqual(expect.objectContaining({
+        file: unsafePath, code: 'INVALID_MANIFEST',
+        message: expect.stringContaining('outside the repository'),
+      }));
+    } finally {
+      readFile.mockRestore();
+      realpath.mockRestore();
+    }
   });
 
   it('does not treat commented Cargo workspace members as active', () => {

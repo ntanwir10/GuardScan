@@ -30,4 +30,20 @@ describe('required GitHub release gate', () => {
     expect(workflowText.match(/node-version:\s*["']?22["']?/g)?.length).toBeGreaterThan(0);
     expect(workflow.jobs?.['test-cli']?.strategy?.matrix?.['node-version']).toEqual([22]);
   });
+
+  it('propagates npm audit failures through the required security job', () => {
+    const workflow = yaml.load(fs.readFileSync(
+      path.resolve(__dirname, '../../../.github/workflows/ci.yml'),
+      'utf8'
+    )) as {jobs?: Record<string, {
+      'continue-on-error'?: boolean;
+      steps?: Array<{name?: string; run?: string; 'continue-on-error'?: boolean}>;
+    }>};
+    const security = workflow.jobs?.['security-scan'];
+    const audit = security?.steps?.find(step => step.name === 'Run npm audit (CLI)');
+
+    expect(audit?.run).toBe('npm audit --audit-level=moderate');
+    expect(audit?.['continue-on-error']).not.toBe(true);
+    expect(security?.['continue-on-error']).not.toBe(true);
+  });
 });

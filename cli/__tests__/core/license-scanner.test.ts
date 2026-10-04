@@ -336,6 +336,35 @@ describe('LicenseScanner inventory and SBOM contracts', () => {
     ]));
   });
 
+  it('omits development packages from SPDX root edges while retaining packages and transitive edges', () => {
+    const document = new LicenseScanner().generateSBOM([
+      finding({source: 'npm', package: 'runtime-parent', version: '1.0.0', direct: true, scope: 'runtime', dependencyPaths: ['runtime-parent@1.0.0']}),
+      finding({source: 'npm', package: 'optional-parent', version: '1.0.0', direct: true, scope: 'optional', dependencyPaths: ['optional-parent@1.0.0']}),
+      finding({source: 'npm', package: 'development-parent', version: '1.0.0', direct: true, scope: 'development', dependencyPaths: ['development-parent@1.0.0']}),
+      finding({source: 'npm', package: 'development-child', version: '2.0.0', direct: false, dependencyPaths: ['development-parent@1.0.0 > development-child@2.0.0']}),
+    ], 'spdx', 'fixture');
+    const root = document.packages.find(value => value.name === 'fixture')!;
+    const runtimeParent = document.packages.find(value => value.name === 'runtime-parent')!;
+    const optionalParent = document.packages.find(value => value.name === 'optional-parent')!;
+    const developmentParent = document.packages.find(value => value.name === 'development-parent')!;
+    const developmentChild = document.packages.find(value => value.name === 'development-child')!;
+
+    expect(document.packages.map(value => value.name)).toEqual(expect.arrayContaining([
+      'development-parent',
+      'development-child',
+    ]));
+    expect(document.relationships).toEqual(expect.arrayContaining([
+      {spdxElementId: root.SPDXID, relationshipType: 'DEPENDS_ON', relatedSpdxElement: runtimeParent.SPDXID},
+      {spdxElementId: root.SPDXID, relationshipType: 'DEPENDS_ON', relatedSpdxElement: optionalParent.SPDXID},
+      {spdxElementId: developmentParent.SPDXID, relationshipType: 'DEPENDS_ON', relatedSpdxElement: developmentChild.SPDXID},
+    ]));
+    expect(document.relationships).not.toContainEqual({
+      spdxElementId: root.SPDXID,
+      relationshipType: 'DEPENDS_ON',
+      relatedSpdxElement: developmentParent.SPDXID,
+    });
+  });
+
   it('emits every retained parent edge when dependency display paths are capped', () => {
     const parents = Array.from({length: 65}, (_, index) => `parent-${index.toString().padStart(2, '0')}@1.0.0`);
     const findings = [

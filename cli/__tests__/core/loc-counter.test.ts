@@ -180,10 +180,6 @@ const y = 2;`;
       expect(result.fileBreakdown.map(file => file.path)).toEqual([
         expect.stringContaining('src/venv/security.py'),
       ]);
-      expect(result.fileBreakdown.map(file => file.path)).not.toEqual(expect.arrayContaining([
-        expect.stringContaining('src/.venv/lib/dependency.py'),
-        expect.stringContaining('tests/security.py'),
-      ]));
     });
 
     it('rejects brace patterns that exceed the bounded expansion limit', async () => {
