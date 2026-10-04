@@ -2584,9 +2584,16 @@ function cargoManifestLines(manifest: string): CargoManifestRecord[] {
   for (const rawLine of stripTomlComments(fs.readFileSync(manifest, 'utf8')).split(/\r?\n/)) {
     const sectionMatch = rawLine.trim().match(/^\[([^\]]+)\]$/);
     if (sectionMatch) {section = sectionMatch[1].trim(); continue;}
-    const dependency = rawLine.match(/^\s*(?:"([^"]+)"|'([^']+)'|([A-Za-z0-9_.-]+))\s*=\s*(.+)$/);
+    const dependency = rawLine.match(/^\s*((?:"[^"]+"|'[^']+'|[A-Za-z0-9_-]+)(?:\s*\.\s*(?:"[^"]+"|'[^']+'|[A-Za-z0-9_-]+))*)\s*=\s*(.+)$/);
     if (dependency) {
-      records.push({section, name: dependency[1] || dependency[2] || dependency[3], value: dependency[4].trim()});
+      const keys = dependency[1].match(/"[^"]+"|'[^']+'|[A-Za-z0-9_-]+/g)!
+        .map(key => key.replace(/^['"]|['"]$/g, ''));
+      const dottedDependency = keys.length > 1 && /(?:^|\.)(?:dependencies|dev-dependencies|build-dependencies)$/.test(section);
+      records.push({
+        section: dottedDependency ? `${section}.${keys[0]}` : section,
+        name: dottedDependency ? keys.slice(1).join('.') : keys[0],
+        value: dependency[2].trim(),
+      });
     }
   }
   return records;

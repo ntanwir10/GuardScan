@@ -92,6 +92,30 @@ describe('TestRunner discovery and empty-suite behavior', () => {
     ]);
   });
 
+  it.each([
+    ['pyproject.toml', '[project]\nname = "fixture"\ndescription = "pytest helpers"\n'],
+    ['setup.cfg', '[metadata]\nname = fixture\n'],
+  ])('does not invoke pytest for an unrelated %s', async (filename, content) => {
+    fs.writeFileSync(path.join(repository, filename), content);
+    await expect(new TestRunner().runTests(repository)).resolves.toEqual([]);
+    expect(mockedRunProcess).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['pyproject.toml', '[tool.pytest.ini_options]\ntestpaths = ["tests"]\n'],
+    ['setup.cfg', '[tool:pytest]\ntestpaths = tests\n'],
+    ['pyproject.toml', '[project.optional-dependencies]\ntest = ["pytest>=8"]\n'],
+    ['pyproject.toml', '[dependency-groups]\ntest = [\n "pytest>=8",\n]\n'],
+    ['pyproject.toml', '[dependency-groups]\ntest = [\n "requests[socks]",\n "pytest>=8",\n]\n'],
+    ['pyproject.toml', '[tool.poetry.group.test.dependencies]\npytest = "^8"\n'],
+    ['test_fixture.py', 'def test_fixture():\n    assert True\n'],
+  ])('preserves execution failures for configured pytest input %s: %s', async (filename, content) => {
+    fs.writeFileSync(path.join(repository, filename), content);
+    mockedRunProcess.mockReturnValue(processResult(1, '', 'No module named pytest'));
+    await expect(new TestRunner().runTests(repository)).rejects.toThrow(/pytest exited 1/i);
+    expect(mockedRunProcess).toHaveBeenCalled();
+  });
+
   it.each([false, true])('treats pytest exit 5 as an empty suite (json report: %s)', async withReport => {
     fs.writeFileSync(path.join(repository, 'pytest.ini'), '[pytest]\n');
     mockedRunProcess.mockImplementation((_command, args) => {

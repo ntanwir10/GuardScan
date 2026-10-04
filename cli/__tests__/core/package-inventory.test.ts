@@ -2003,13 +2003,14 @@ describe('collectPackageInventory', () => {
     expect(inventory.errors).toEqual([]);
   });
 
-  it('accepts only referenced inherited Cargo workspace path dependencies as implicit members', () => {
+  it.each(['table', 'dotted', 'quoted-dotted'])('accepts only referenced inherited Cargo workspace path dependencies as implicit members (%s)', syntax => {
     fs.writeFileSync(path.join(repository, 'Cargo.toml'), [
       '[workspace]',
       'members = ["crates/app"]',
-      '[workspace.dependencies.member]',
-      'path = "crates/member"',
+      ...(syntax === 'table' ? ['[workspace.dependencies.member]', 'path = "crates/member"'] : []),
       '[workspace.dependencies]',
+      ...(syntax === 'table' ? [] :
+        [`${syntax === 'dotted' ? 'member.path' : '"member" . "path"'} = "crates/member"`]),
       '"quoted-member" = { path = "crates/quoted" }',
       'unused = { path = "crates/unused" }',
       '[package]',
@@ -2017,8 +2018,8 @@ describe('collectPackageInventory', () => {
       'version = "1.0.0"',
       '[dependencies]',
       '"quoted-member" = { workspace = true }',
-      '[dependencies.member]',
-      'workspace = true',
+      ...(syntax === 'table' ? ['[dependencies.member]', 'workspace = true'] :
+        [`${syntax === 'dotted' ? 'member.workspace' : '"member" . "workspace"'} = true`]),
     ].join('\n'));
     fs.mkdirSync(path.join(repository, 'crates/app'), {recursive: true});
     fs.writeFileSync(path.join(repository, 'crates/app/Cargo.toml'), [
@@ -2026,7 +2027,8 @@ describe('collectPackageInventory', () => {
       'name = "app"',
       'version = "1.0.0"',
       '[dependencies]',
-      'member = { workspace = true }',
+      ...(syntax === 'table' ? ['member = { workspace = true }'] :
+        [`${syntax === 'dotted' ? 'member.workspace' : '"member" . "workspace"'} = true`]),
     ].join('\n'));
     fs.mkdirSync(path.join(repository, 'crates/member'), {recursive: true});
     fs.writeFileSync(path.join(repository, 'crates/member/Cargo.toml'), [

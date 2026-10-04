@@ -283,10 +283,13 @@ export class TestRunner {
    * Check if pytest is available
    */
   private hasPytest(repoPath: string): boolean {
-    // Check for pytest config files
-    if (fs.existsSync(path.join(repoPath, 'pytest.ini')) ||
-        fs.existsSync(path.join(repoPath, 'setup.cfg')) ||
-        fs.existsSync(path.join(repoPath, 'pyproject.toml'))) {
+    if (fs.existsSync(path.join(repoPath, 'pytest.ini'))) {return true;}
+    const setupConfig = path.join(repoPath, 'setup.cfg');
+    if (fs.existsSync(setupConfig) && /^\s*\[tool:pytest\]\s*(?:#.*)?$/m.test(fs.readFileSync(setupConfig, 'utf8'))) {
+      return true;
+    }
+    const pyproject = path.join(repoPath, 'pyproject.toml');
+    if (fs.existsSync(pyproject) && this.pyprojectUsesPytest(fs.readFileSync(pyproject, 'utf8'))) {
       return true;
     }
 
@@ -299,6 +302,35 @@ export class TestRunner {
     return pythonTestPatterns.some(pattern =>
       this.findFiles(repoPath, pattern).length > 0
     );
+  }
+
+  private pyprojectUsesPytest(content: string): boolean {
+    let section = '';
+    let dependencyArray = false;
+    for (const rawLine of content.split(/\r?\n/)) {
+      const line = rawLine.replace(/\s+#.*$/, '').trim();
+      if (!line || line.startsWith('#')) {continue;}
+      const table = line.match(/^\[([^\]]+)\]$/);
+      if (table) {
+        section = table[1].replace(/['"\s]/g, '');
+        dependencyArray = false;
+        if (section === 'tool.pytest.ini_options') {return true;}
+        continue;
+      }
+      if (/^tool\s*\.\s*pytest\s*\.\s*ini_options\s*\./.test(line)) {return true;}
+      if (/^tool\.poetry(?:\.group\.[^.]+)?\.dependencies$/.test(section) && /^['"]?pytest['"]?\s*=/.test(line)) {
+        return true;
+      }
+      const dependencySection = section === 'project.optional-dependencies' || section === 'dependency-groups';
+      if ((section === 'project' && /^dependencies\s*=\s*\[/.test(line)) ||
+          (dependencySection && /^[^=]+\s*=\s*\[/.test(line))) {
+        dependencyArray = true;
+      }
+      if (dependencyArray && /['"]pytest(?:['"\s[<>=!~;])/.test(line)) {return true;}
+      const unquotedLine = line.replace(/"(?:\\.|[^"\\])*"|'[^']*'/g, '');
+      if (dependencyArray && unquotedLine.includes(']')) {dependencyArray = false;}
+    }
+    return false;
   }
 
   /**
