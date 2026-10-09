@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import yaml from 'js-yaml';
 import { Finding } from '../utils/reporter';
+import { SCAN_IGNORED_DIRECTORY_NAMES } from './scan-ignored-directories';
 
 function looksLikeKubernetesManifest(content: string): boolean {
   return content.split(/^---(?:\s+#.*)?\s*$/m).some(document => {
@@ -389,8 +390,7 @@ export class IaCScanner {
         const items = fs.readdirSync(currentDir);
 
         for (const item of items) {
-          // Skip node_modules, .git, etc.
-          if (item === 'node_modules' || item === '.git' || item === 'vendor') {continue;}
+          if (SCAN_IGNORED_DIRECTORY_NAMES.has(item)) {continue;}
 
           const fullPath = path.join(currentDir, item);
           const stat = fs.lstatSync(fullPath);

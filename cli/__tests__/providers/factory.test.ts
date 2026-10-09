@@ -11,6 +11,10 @@ import { OpenAIEmbeddingProvider } from "../../src/providers/embedding-openai";
 import { OllamaEmbeddingProvider } from "../../src/providers/embedding-ollama";
 import { validateOfflineLocalEndpoint } from "../../src/commands/init";
 import { configManager } from "../../src/core/config";
+import { CachedProvider } from "../../src/providers/decorators/cached-provider";
+import * as fs from "fs";
+import * as os from "os";
+import * as path from "path";
 
 import { afterEach, beforeEach, describe, expect, it } from "@jest/globals";
 
@@ -64,6 +68,32 @@ afterEach(() => {
 });
 
 describe("ProviderFactory", () => {
+  it.each([
+    ['openrouter', false], ['ollama', true],
+  ] as const)('initializes semantic caching only when %s supports embeddings', (provider, supportsEmbeddings) => {
+    const cacheDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'guardscan-factory-cache-'));
+    const cachePath = jest.spyOn(configManager, 'getCacheDir').mockReturnValue(cacheDirectory);
+    const originalNoCache = process.env.GUARDSCAN_NO_CACHE;
+    delete process.env.GUARDSCAN_NO_CACHE;
+    try {
+      const enhanced = ProviderFactory.createEnhanced(provider, {
+        apiKey: 'test-key', endpoint: provider === 'ollama' ? 'http://127.0.0.1:11434' : undefined,
+        config: makeConfig({cache: {enabled: true, semanticThreshold: 0.95, maxSizeMB: 10, ttlSeconds: 60}}),
+        enableRetry: false, enableCircuitBreaker: false, enableRateLimit: false,
+        enableObservability: false, enableCache: true,
+      });
+      expect(enhanced).toBeInstanceOf(CachedProvider);
+      const semanticCache = (enhanced as unknown as {semanticCache?: unknown}).semanticCache;
+      if (supportsEmbeddings) {expect(semanticCache).toBeDefined();}
+      else {expect(semanticCache).toBeUndefined();}
+    } finally {
+      cachePath.mockRestore();
+      if (originalNoCache === undefined) {delete process.env.GUARDSCAN_NO_CACHE;}
+      else {process.env.GUARDSCAN_NO_CACHE = originalNoCache;}
+      fs.rmSync(cacheDirectory, {recursive: true, force: true});
+    }
+  });
+
   describe("create", () => {
     it("should create OpenAI provider", () => {
       const provider = ProviderFactory.create("openai", "test-key");

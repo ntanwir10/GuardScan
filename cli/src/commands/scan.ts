@@ -5,7 +5,7 @@ import { codeSmellDetector } from '../core/code-smells';
 import { licenseScanner, LicenseReport } from '../core/license-scanner';
 import { linterIntegration } from '../core/linter-integration';
 import { locCounter } from '../core/loc-counter';
-import { collectPackageInventory, PackageInventory } from '../core/package-inventory';
+import { collectPackageInventory, PackageInventory, PackageInventoryError } from '../core/package-inventory';
 import { repositoryManager } from '../core/repository';
 import {
   evaluateScanPolicy,
@@ -23,6 +23,7 @@ import { hasConfiguredJestRunner, testRunner } from '../core/test-runner';
 import { handleCommandError } from '../utils/error-handler';
 import { reporter, ReviewResult } from '../utils/reporter';
 import { EffectiveExecutionPolicy, resolveExecutionPolicy } from '../utils/execution-policy';
+import { classifySbomInventoryErrors } from './sbom';
 
 interface ScanOptions {
   skipTests?: boolean;
@@ -74,6 +75,7 @@ export interface SbomSection {
   format?: string;
   document?: unknown;
   error?: { code: string; message: string; retryable: boolean };
+  metadata?: { coverageWarnings: PackageInventoryError[] };
 }
 
 export async function scanCommand(options: ScanOptions): Promise<void> {
@@ -350,7 +352,8 @@ export async function createSbomSection(
 ): Promise<SbomSection> {
   try {
     const resolved = await report;
-    const incomplete = inventory.errors.length > 0;
+    const {fatal, warnings} = classifySbomInventoryErrors(inventory.errors);
+    const incomplete = fatal.length > 0;
     return {
       status: incomplete ? 'partial' : 'succeeded',
       format: 'spdx',
@@ -358,10 +361,11 @@ export async function createSbomSection(
       error: incomplete
         ? {
           code: 'INVENTORY_INCOMPLETE',
-          message: `SBOM inventory is incomplete (${inventory.errors.length} package metadata error(s))`,
+          message: `SBOM inventory is incomplete (${fatal.length} package metadata error(s))`,
           retryable: false,
         }
         : undefined,
+      metadata: warnings.length > 0 ? {coverageWarnings: warnings} : undefined,
     };
   } catch (error) {
     return { status: 'failed', error: safeOperationalError('sbom', error) };

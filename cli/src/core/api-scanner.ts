@@ -1,5 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import { SCAN_IGNORED_DIRECTORY_NAMES } from './scan-ignored-directories';
 
 export interface APIFinding {
   type: string;
@@ -45,7 +46,7 @@ export class APIScanner {
       try {
         const items = fs.readdirSync(currentDir);
         for (const item of items) {
-          if (item === 'node_modules' || item === '.git' || item === 'vendor') {continue;}
+          if (SCAN_IGNORED_DIRECTORY_NAMES.has(item)) {continue;}
 
           const fullPath = path.join(currentDir, item);
           const stat = fs.lstatSync(fullPath);

@@ -388,8 +388,9 @@ export class ProviderFactory {
       cacheConfig?.enabled &&
       !cacheDisabledByEnvironment
     ) {
-      // Use enhanced provider for embeddings so they benefit from decorators
-      enhanced = new CachedProvider(enhanced, repoId, enhanced, cacheConfig);
+      // Preserve decorators for supported embeddings; chat-only providers use exact caching.
+      const embeddingProvider = base.getCapabilities().supportsEmbeddings ? enhanced : undefined;
+      enhanced = new CachedProvider(enhanced, repoId, embeddingProvider, cacheConfig);
     }
 
     // Observability (outermost - tracks everything including cache hits)

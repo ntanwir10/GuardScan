@@ -114,6 +114,39 @@ describe('runQualityAnalysis partial tool execution', () => {
     expect(generate).toHaveBeenCalledWith([], 'spdx', 'fixture-project');
   });
 
+  it.each(['UNRESOLVED_VERSION', 'UNSUPPORTED_FORMAT'] as const)(
+    'retains %s as SBOM coverage metadata instead of an invalid-manifest failure', async code => {
+      jest.spyOn(licenseScanner, 'generateSBOM').mockReturnValue({} as never);
+      const warning = {file: 'requirements.txt', code, message: 'coverage warning'};
+      const inventory: PackageInventory = {
+        repository, coordinates: [], manifests: [], errors: [warning], digest: 'fixture',
+      };
+
+      await expect(createSbomSection(
+        Promise.resolve({findings: []} as unknown as LicenseReport), inventory, 'fixture'
+      )).resolves.toMatchObject({
+        status: 'succeeded', metadata: {coverageWarnings: [warning]},
+      });
+    }
+  );
+
+  it('keeps invalid manifests partial and counts only fatal SBOM errors', async () => {
+    jest.spyOn(licenseScanner, 'generateSBOM').mockReturnValue({} as never);
+    const warning = {file: 'requirements.txt', code: 'UNSUPPORTED_FORMAT' as const, message: 'direct only'};
+    const inventory: PackageInventory = {
+      repository, coordinates: [], manifests: [], digest: 'fixture', errors: [
+        warning, {file: 'package.json', code: 'INVALID_MANIFEST', message: 'malformed'},
+      ],
+    };
+
+    await expect(createSbomSection(
+      Promise.resolve({findings: []} as unknown as LicenseReport), inventory, 'fixture'
+    )).resolves.toMatchObject({
+      status: 'partial', error: {code: 'INVENTORY_INCOMPLETE', message: expect.stringContaining('(1 package')},
+      metadata: {coverageWarnings: [warning]},
+    });
+  });
+
   it('does not advertise unsupported Vitest execution as a configured test adapter', async () => {
     fs.writeFileSync(path.join(repository, 'package.json'), JSON.stringify({
       scripts: {test: 'vitest'},

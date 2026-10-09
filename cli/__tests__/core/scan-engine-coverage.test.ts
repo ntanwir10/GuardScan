@@ -284,6 +284,70 @@ describe('ScanEngine built-in coverage adapters', () => {
     }
   );
 
+  it.each([
+    {name: 'api', source: 'source.ts', scan: (root: string, skipped: jest.Mock) => new APIScanner().scan(root, skipped)},
+    {name: 'owasp', source: 'source.ts', scan: (root: string, skipped: jest.Mock) => new OwaspScanner().scan(root, skipped)},
+    {name: 'compliance', source: 'source.ts', scan: (root: string, skipped: jest.Mock) => new ComplianceChecker().check(root, skipped)},
+    {name: 'dockerfile', source: 'Dockerfile', scan: (root: string, skipped: jest.Mock) => new DockerfileScanner().scan(root, skipped)},
+    {name: 'iac', source: 'main.tf', scan: (root: string, skipped: jest.Mock) => new IaCScanner().scan(root, skipped)},
+  ])('$name scanner excludes generated and dependency directories but scans eligible source and skips symlinks', async scanner => {
+    const ignoredDirectories = [
+      'node_modules', '.git', 'vendor', '.venv', 'venv', 'dist', 'build', 'target', 'coverage', '__pycache__',
+    ];
+    const githubDirectory = path.join(repository, '.github');
+    fs.mkdirSync(githubDirectory);
+    const rootSource = path.join(repository, scanner.source);
+    const githubSource = path.join(githubDirectory, scanner.source);
+    fs.writeFileSync(rootSource, 'fixture source\n');
+    fs.writeFileSync(githubSource, 'hidden first-party source\n');
+
+    for (const directory of ignoredDirectories) {
+      const excludedDirectory = path.join(repository, 'packages', directory, 'nested');
+      fs.mkdirSync(excludedDirectory, {recursive: true});
+      fs.writeFileSync(path.join(excludedDirectory, scanner.source), 'generated dependency source\n');
+    }
+
+    const linkedSource = path.join(repository, scanner.name === 'dockerfile' ? 'Dockerfile.link' : `linked-${scanner.source}`);
+    const supportsSymlinks = process.platform !== 'win32';
+    let external: string | undefined;
+    if (supportsSymlinks) {
+      external = fs.mkdtempSync(path.join(os.tmpdir(), 'guardscan-ignored-link-'));
+      fs.writeFileSync(path.join(external, scanner.source), 'linked source\n');
+      fs.symlinkSync(external, path.join(repository, 'node_modules'));
+      fs.symlinkSync(path.join(external, scanner.source), linkedSource);
+    }
+
+    const readPaths: string[] = [];
+    const nativeFs = require('fs') as typeof fs;
+    const originalReadFileSync = nativeFs.readFileSync;
+    const readSpy = jest.spyOn(nativeFs, 'readFileSync').mockImplementation((function (
+      file: fs.PathOrFileDescriptor,
+      options?: unknown
+    ) {
+      if (typeof file !== 'number') {readPaths.push(path.resolve(String(file)));}
+      return Reflect.apply(originalReadFileSync, nativeFs, [file, options]);
+    }) as typeof nativeFs.readFileSync);
+    const skipped = jest.fn();
+
+    try {
+      await scanner.scan(repository, skipped);
+
+      expect(readPaths).toContain(rootSource);
+      expect(readPaths).toContain(githubSource);
+      expect(readPaths.some(file => ignoredDirectories.some(directory => file.includes(`${path.sep}${directory}${path.sep}`)))).toBe(false);
+      if (supportsSymlinks) {
+        expect(readPaths).not.toContain(linkedSource);
+        expect(readPaths).not.toContain(path.join(external!, scanner.source));
+        expect(skipped).toHaveBeenCalledTimes(1);
+      } else {
+        expect(skipped).not.toHaveBeenCalled();
+      }
+    } finally {
+      readSpy.mockRestore();
+      if (external) {fs.rmSync(external, {recursive: true, force: true});}
+    }
+  });
+
   (process.platform === 'win32' ? it.skip : it)('replaces a report symlink without overwriting its target', async () => {
     const external = path.join(os.tmpdir(), `guardscan-report-target-${process.pid}-${Date.now()}.json`);
     const output = path.join(repository, 'guardscan-scan.json');

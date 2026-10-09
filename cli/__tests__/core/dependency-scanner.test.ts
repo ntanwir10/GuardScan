@@ -189,18 +189,19 @@ describe('DependencyScanner OSV integration', () => {
       fs.writeFileSync(path.join(repository, name), 'fixture');
     }
     const nativeFs = require('fs') as typeof fs;
-    const originalReadFileSync = nativeFs.readFileSync;
-    const readSpy = jest.spyOn(nativeFs, 'readFileSync').mockImplementation((function (
-      file: fs.PathOrFileDescriptor,
-      options?: unknown
+    const originalOpenSync = nativeFs.openSync;
+    const openSpy = jest.spyOn(nativeFs, 'openSync').mockImplementation((function (
+      file: fs.PathLike,
+      flags: string | number,
+      mode?: fs.Mode
     ) {
-      if (typeof file !== 'number' && unreadable.has(path.basename(String(file)))) {
+      if (unreadable.has(path.basename(String(file)))) {
         const error = new Error('permission denied') as NodeJS.ErrnoException;
         error.code = 'EACCES';
         throw error;
       }
-      return Reflect.apply(originalReadFileSync, nativeFs, [file, options]);
-    }) as typeof fs.readFileSync);
+      return Reflect.apply(originalOpenSync, nativeFs, [file, flags, mode]);
+    }) as typeof nativeFs.openSync);
 
     try {
       const inventory = collectPackageInventory(repository);
@@ -211,7 +212,7 @@ describe('DependencyScanner OSV integration', () => {
         [...unreadable].map(file => expect.objectContaining({ file, code: 'INVALID_MANIFEST' }))
       ));
     } finally {
-      readSpy.mockRestore();
+      openSpy.mockRestore();
     }
   });
 
