@@ -83,6 +83,7 @@ export async function securityCommand(options: SecurityOptions): Promise<void> {
     const scanResult = await scanEngine.runSecurityScan({
       repoPath: repoInfo.path,
       files: locResult.fileBreakdown,
+      fileSelection: options.files ? 'explicit' : 'discovered',
       skippedFiles: locResult.skippedFiles,
       offline,
       includeLicenses: options.licenses === true,

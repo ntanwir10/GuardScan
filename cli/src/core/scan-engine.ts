@@ -80,6 +80,8 @@ function coverageAwareOutput(
 export interface ScanEngineOptions {
   repoPath?: string;
   files?: ScanFile[];
+  /** Internal distinction between caller filters and full-repository discovery. */
+  fileSelection?: 'explicit' | 'discovered';
   /** Inputs discovered by the caller but omitted after a read failure. */
   skippedFiles?: string[];
   offline?: boolean;
@@ -223,9 +225,12 @@ export class ScanEngine {
     const files = options.files
       ? resolveScanFiles(options.files, repoPath)
       : await this.loadFiles(repoPath);
+    const fileSelection = options.files !== undefined && options.fileSelection !== 'discovered'
+      ? 'explicit'
+      : 'discovered';
     const tasks = options.scannerTasks
       ? [...options.scannerTasks]
-      : this.createBuiltInTasks(options, repoPath, files, offline);
+      : this.createBuiltInTasks({...options, fileSelection}, repoPath, files, offline);
 
     const scannerResults = await runBounded(
       tasks,
@@ -376,13 +381,15 @@ export class ScanEngine {
         run: async () => {
           let skippedInputs = options.skippedFiles?.length || 0;
           const onSkippedInput = (): void => {skippedInputs += 1;};
-          const discoveredFiles = await secretsDetector.discoverFiles(repoPath, onSkippedInput);
+          const discoveredFiles = options.fileSelection === 'explicit'
+            ? []
+            : await secretsDetector.discoverFiles(repoPath, onSkippedInput);
           const filePaths = [...new Set([
             ...files.map(file => path.isAbsolute(file.path) ? file.path : path.resolve(repoPath, file.path)),
             ...discoveredFiles,
           ])].sort();
           const fileSecrets = await secretsDetector.detectInFiles(filePaths, onSkippedInput);
-          const gitSecrets = options.includeGitHistory === false
+          const gitSecrets = options.includeGitHistory === false || options.fileSelection === 'explicit'
             ? []
             : await secretsDetector.scanGitHistory(repoPath, onSkippedInput);
 

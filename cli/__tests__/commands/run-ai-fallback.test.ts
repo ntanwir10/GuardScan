@@ -96,9 +96,19 @@ describe('run command optional AI fallback', () => {
     expect(process.exitCode).toBeUndefined();
     expect(chat).toHaveBeenCalled();
     expect(scanEngine.runSecurityScan).toHaveBeenCalledWith(expect.objectContaining({
+      fileSelection: 'discovered',
       skippedFiles: ['unreadable.rs'],
     }));
 
     consoleSpy.mockRestore();
+  });
+
+  it('marks user-provided run files as an explicit secret-scan scope', async () => {
+    await runCommand({files: ['src/selected.ts']});
+
+    expect(locCounter.count).toHaveBeenCalledWith(['src/selected.ts']);
+    expect(scanEngine.runSecurityScan).toHaveBeenCalledWith(expect.objectContaining({
+      fileSelection: 'explicit',
+    }));
   });
 });

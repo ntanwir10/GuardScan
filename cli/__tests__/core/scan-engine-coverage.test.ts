@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import {execFileSync} from 'child_process';
 import {
   createScanEnvelope,
   evaluateScanPolicy,
@@ -23,6 +24,7 @@ import {ComplianceChecker} from '../../src/core/compliance-checker';
 import {DockerfileScanner} from '../../src/core/dockerfile-scanner';
 import {IaCScanner} from '../../src/core/iac-scanner';
 import {OwaspScanner} from '../../src/core/owasp-scanner';
+import {secretsDetector} from '../../src/core/secrets-detector';
 
 type BuiltInTaskFactory = {
   createBuiltInTasks(
@@ -90,6 +92,130 @@ describe('ScanEngine built-in coverage adapters', () => {
       expect.objectContaining({file: fs.realpathSync(path.join(repository, '.env'))}),
       expect.objectContaining({file: fs.realpathSync(path.join(repository, 'config.yaml'))}),
     ]));
+  });
+
+  it('keeps explicit secret scans within selected files and skips global history', async () => {
+    const selectedFile = path.join(repository, 'selected.ts');
+    const excludedFile = path.join(repository, '.env');
+    const historicalFile = path.join(repository, 'removed.txt');
+    fs.writeFileSync(selectedFile, 'const ready = true;\n');
+    fs.writeFileSync(excludedFile, 'AWS_ACCESS_KEY_ID=AKIA1234567890123456\n');
+    fs.writeFileSync(historicalFile, 'AWS_ACCESS_KEY_ID=AKIA2345678901234567\n');
+    execFileSync('git', ['init', '-q'], {cwd: repository});
+    execFileSync('git', ['config', 'user.email', 'test@example.invalid'], {cwd: repository});
+    execFileSync('git', ['config', 'user.name', 'GuardScan Test'], {cwd: repository});
+    execFileSync('git', ['add', 'removed.txt'], {cwd: repository});
+    execFileSync('git', ['commit', '-qm', 'add historical fixture secret'], {cwd: repository});
+    fs.unlinkSync(historicalFile);
+
+    const options = {
+      includeVulnerabilities: false,
+      includeGitHistory: true,
+      fileSelection: 'explicit',
+    } as unknown as ScanEngineOptions;
+    const secretsTask = (new ScanEngine() as unknown as BuiltInTaskFactory)
+      .createBuiltInTasks(options, repository, [{path: selectedFile}], true)
+      .find(task => task.scanner === 'secrets')!;
+    const output = await secretsTask.run();
+    const findings = Array.isArray(output) ? output : output.findings;
+
+    expect(findings).toEqual([]);
+  });
+
+  it('treats API file lists as explicit by default', async () => {
+    const selectedFile = path.join(repository, 'selected.ts');
+    const excludedFile = path.join(repository, '.env');
+    fs.writeFileSync(selectedFile, 'const ready = true;\n');
+    fs.writeFileSync(excludedFile, 'AWS_ACCESS_KEY_ID=AKIA1234567890123456\n');
+    const discoverySpy = jest.spyOn(secretsDetector, 'discoverFiles');
+    const historySpy = jest.spyOn(secretsDetector, 'scanGitHistory');
+
+    const result = await new ScanEngine().runSecurityScan({
+      repoPath: repository,
+      files: [{path: selectedFile}],
+      includeVulnerabilities: false,
+      includeGitHistory: true,
+    });
+
+    expect(result.scannerResults.find(scanner => scanner.scanner === 'secrets')?.findings).toEqual([]);
+    expect(discoverySpy).not.toHaveBeenCalled();
+    expect(historySpy).not.toHaveBeenCalled();
+  });
+
+  it('retains discovered-file coverage when LOC inputs are marked discovered', async () => {
+    const selectedFile = path.join(repository, 'selected.ts');
+    const environmentFile = path.join(repository, '.env');
+    fs.writeFileSync(selectedFile, 'const ready = true;\n');
+    fs.writeFileSync(environmentFile, 'AWS_ACCESS_KEY_ID=AKIA1234567890123456\n');
+
+    const options = {
+      includeVulnerabilities: false,
+      includeGitHistory: false,
+      fileSelection: 'discovered',
+    } as unknown as ScanEngineOptions;
+    const secretsTask = (new ScanEngine() as unknown as BuiltInTaskFactory)
+      .createBuiltInTasks(options, repository, [{path: selectedFile}], true)
+      .find(task => task.scanner === 'secrets')!;
+    const output = await secretsTask.run();
+    const findings = Array.isArray(output) ? output : output.findings;
+
+    expect(findings).toEqual(expect.arrayContaining([
+      expect.objectContaining({file: fs.realpathSync(environmentFile)}),
+    ]));
+  });
+
+  it('keeps hidden-file and git-history coverage for default discovered scans', async () => {
+    const environmentFile = path.join(repository, '.env');
+    const historicalFile = path.join(repository, 'removed.txt');
+    fs.writeFileSync(environmentFile, 'AWS_ACCESS_KEY_ID=AKIA1234567890123456\n');
+    fs.writeFileSync(historicalFile, 'AWS_ACCESS_KEY_ID=AKIA2345678901234567\n');
+    execFileSync('git', ['init', '-q'], {cwd: repository});
+    execFileSync('git', ['config', 'user.email', 'test@example.invalid'], {cwd: repository});
+    execFileSync('git', ['config', 'user.name', 'GuardScan Test'], {cwd: repository});
+    execFileSync('git', ['add', 'removed.txt'], {cwd: repository});
+    execFileSync('git', ['commit', '-qm', 'add historical fixture secret'], {cwd: repository});
+    fs.unlinkSync(historicalFile);
+
+    const secretsTask = (new ScanEngine() as unknown as BuiltInTaskFactory)
+      .createBuiltInTasks({includeVulnerabilities: false}, repository, [], true)
+      .find(task => task.scanner === 'secrets')!;
+    const output = await secretsTask.run();
+    const findings = Array.isArray(output) ? output : output.findings;
+
+    expect(findings).toEqual(expect.arrayContaining([
+      expect.objectContaining({file: fs.realpathSync(environmentFile)}),
+      expect.objectContaining({file: expect.stringMatching(/^commit:/)}),
+    ]));
+  });
+
+  it('does not scan git history when explicitly disabled', async () => {
+    const historySpy = jest.spyOn(secretsDetector, 'scanGitHistory');
+    const secretsTask = (new ScanEngine() as unknown as BuiltInTaskFactory)
+      .createBuiltInTasks({includeVulnerabilities: false, includeGitHistory: false}, repository, [], true)
+      .find(task => task.scanner === 'secrets')!;
+
+    await secretsTask.run();
+
+    expect(historySpy).not.toHaveBeenCalled();
+  });
+
+  it('keeps selected symlink skips partial without scanning excluded discovered files', async () => {
+    const excludedFile = path.join(repository, '.env');
+    fs.writeFileSync(excludedFile, 'AWS_ACCESS_KEY_ID=AKIA1234567890123456\n');
+    const secretsTask = (new ScanEngine() as unknown as BuiltInTaskFactory)
+      .createBuiltInTasks({
+        includeVulnerabilities: false,
+        includeGitHistory: false,
+        fileSelection: 'explicit',
+        skippedFiles: ['src/selected-link.ts'],
+      }, repository, [], true)
+      .find(task => task.scanner === 'secrets')!;
+    const output = await secretsTask.run() as ScannerTaskOutput;
+
+    expect(output).toMatchObject({
+      findings: [],
+      error: {code: 'SECRET_SCAN_PARTIAL', retryable: true},
+    });
   });
 
   it('includes executable source beneath dot-directories in required pattern coverage', async () => {

@@ -3,6 +3,11 @@ import * as os from 'os';
 import * as path from 'path';
 import { collectPackageInventory, filterPackageInventory } from '../../src/core/package-inventory';
 
+jest.mock('fs', () => {
+  const actual = jest.requireActual<typeof import('fs')>('fs');
+  return {...actual, readSync: jest.fn(actual.readSync)};
+});
+
 describe('collectPackageInventory', () => {
   let repository: string;
 
@@ -275,6 +280,176 @@ describe('collectPackageInventory', () => {
       direct: true, scope: 'optional',
     });
     expect(inventory.errors).toEqual([]);
+  });
+
+  it.each([
+    ['same exact version', '1.0.0', '1.0.0'],
+    ['different exact versions', '1.0.0', '2.0.0'],
+    ['range overridden by an exact optional version', '^1.0.0', '2.0.0'],
+  ])('applies npm optional overrides to lockless declarations (%s)', (_description, runtime, optional) => {
+    fs.writeFileSync(path.join(repository, 'package.json'), JSON.stringify({
+      dependencies: {demo: runtime},
+      devDependencies: {demo: 'not-a-version'},
+      optionalDependencies: {demo: optional},
+    }));
+
+    const inventory = collectPackageInventory(repository);
+
+    expect(inventory.coordinates).toEqual([
+      expect.objectContaining({name: 'demo', exactVersion: optional, direct: true, scope: 'optional'}),
+    ]);
+    expect(inventory.errors).toEqual([
+      expect.objectContaining({code: 'UNSUPPORTED_FORMAT', message: expect.stringMatching(/lockless/i)}),
+    ]);
+  });
+
+  it('validates only the effective npm declaration when a lock covers an overridden manifest entry', () => {
+    fs.writeFileSync(path.join(repository, 'package.json'), JSON.stringify({
+      dependencies: {demo: '^1.0.0'},
+      optionalDependencies: {demo: '^2.0.0'},
+    }));
+    fs.writeFileSync(path.join(repository, 'package-lock.json'), JSON.stringify({
+      lockfileVersion: 3,
+      packages: {
+        '': {dependencies: {demo: '^1.0.0'}, optionalDependencies: {demo: '^2.0.0'}},
+        'node_modules/demo': {name: 'demo', version: '2.1.0', optional: true},
+      },
+    }));
+
+    const inventory = collectPackageInventory(repository);
+
+    expect(inventory.coordinates).toEqual([
+      expect.objectContaining({name: 'demo', exactVersion: '2.1.0', direct: true, scope: 'optional'}),
+    ]);
+    expect(inventory.errors).toEqual([]);
+  });
+
+  it.each(['setup.py', 'setup.cfg'])('fails closed for classic Python dependency manifest %s', manifest => {
+    fs.writeFileSync(path.join(repository, manifest), manifest === 'setup.cfg'
+      ? '[metadata]\nname = fixture\n[options]\ninstall_requires =\n    requests>=2\n'
+      : 'from setuptools import setup\nsetup(install_requires=["requests>=2"])\n');
+
+    const inventory = collectPackageInventory(repository);
+
+    expect(inventory.manifests).toContain(manifest);
+    expect(inventory.coordinates).toEqual([]);
+    expect(inventory.errors).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        file: manifest,
+        ecosystem: 'pip',
+        code: 'UNSUPPORTED_FORMAT',
+        message: expect.stringMatching(/Python dependency coverage is incomplete/i),
+      }),
+    ]));
+  });
+
+  it('does not treat tooling-only setup.cfg files as dependency manifests', () => {
+    fs.writeFileSync(path.join(repository, 'setup.cfg'), '[tool:pytest]\naddopts = -q\n[flake8]\nmax-line-length = 100\n');
+
+    const inventory = collectPackageInventory(repository);
+
+    expect(inventory.manifests).toContain('setup.cfg');
+    expect(inventory.errors).toEqual([]);
+  });
+
+  it.each([
+    '[options]\ninstall_requires: requests>=2\n',
+    '[options]\nsetup_requires: setuptools\n',
+    '[options.extras_require]\ntest: pytest\n',
+  ])('recognizes colon-delimited classic Python dependency declarations: %s', content => {
+    fs.writeFileSync(path.join(repository, 'setup.cfg'), content);
+    expect(collectPackageInventory(repository).errors).toEqual(expect.arrayContaining([
+      expect.objectContaining({file: 'setup.cfg', ecosystem: 'pip', code: 'UNSUPPORTED_FORMAT'}),
+    ]));
+  });
+
+  it('keeps recognized Python requirements when a setup.py manifest is also present', () => {
+    fs.writeFileSync(path.join(repository, 'setup.py'), 'from setuptools import setup\nsetup()\n');
+    fs.writeFileSync(path.join(repository, 'requirements.txt'), 'requests==2.32.0\n');
+
+    const inventory = collectPackageInventory(repository);
+
+    expect(inventory.coordinates).toEqual([
+      expect.objectContaining({ecosystem: 'pip', name: 'requests', exactVersion: '2.32.0'}),
+    ]);
+    expect(inventory.errors).toEqual(expect.arrayContaining([
+      expect.objectContaining({file: 'setup.py', code: 'UNSUPPORTED_FORMAT'}),
+    ]));
+  });
+
+  (process.platform === 'win32' ? it.skip : it)('reports classic Python manifest symlinks safely', () => {
+    fs.mkdirSync(path.join(repository, 'manifests'));
+    fs.writeFileSync(path.join(repository, 'manifests', 'setup.cfg'), '[options]\nsetup_requires = setuptools\n');
+    fs.symlinkSync('manifests/setup.cfg', path.join(repository, 'setup.cfg'));
+    fs.symlinkSync('/etc/hosts', path.join(repository, 'setup.py'));
+
+    const inventory = collectPackageInventory(repository);
+
+    expect(inventory.manifests).toContain('setup.cfg');
+    expect(inventory.errors).toEqual(expect.arrayContaining([
+      expect.objectContaining({file: 'setup.cfg', ecosystem: 'pip', code: 'UNSUPPORTED_FORMAT'}),
+      expect.objectContaining({
+        file: 'setup.py', code: 'INVALID_MANIFEST',
+        message: expect.stringMatching(/symlinked inventory file|outside the repository/i),
+      }),
+    ]));
+  });
+
+  it.each(['package-lock.json', 'pnpm-lock.yaml'])('rejects oversized %s before parsing its contents', lockfile => {
+    const file = path.join(repository, lockfile);
+    fs.writeFileSync(file, '{');
+    fs.truncateSync(file, 32 * 1024 * 1024 + 1);
+
+    const inventory = collectPackageInventory(repository);
+
+    expect(inventory.errors).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        file: lockfile,
+        code: 'INVALID_MANIFEST',
+        message: expect.stringMatching(/32 MiB|32 megabytes|maximum size/i),
+      }),
+    ]));
+    expect(inventory.errors.some(error => /Unexpected end|unexpected end|bad indentation/i.test(error.message))).toBe(false);
+  });
+
+  it('reads ordinary inventory files below the bounded reader limit', () => {
+    fs.writeFileSync(path.join(repository, 'package.json'), JSON.stringify({dependencies: {demo: '1.2.3'}}));
+
+    const inventory = collectPackageInventory(repository);
+
+    expect(inventory.coordinates).toEqual([
+      expect.objectContaining({name: 'demo', exactVersion: '1.2.3', scope: 'runtime'}),
+    ]);
+  });
+
+  it('stops reading a growing inventory file at the bounded byte limit', () => {
+    fs.writeFileSync(path.join(repository, 'package-lock.json'), '{}');
+    const read = fs.readSync as jest.MockedFunction<typeof fs.readSync>;
+    const originalRead = (jest.requireActual('fs') as typeof fs).readSync;
+    const lockInode = fs.statSync(path.join(repository, 'package-lock.json')).ino;
+    let lockBytesRead = 0;
+    read.mockImplementation((_fd, view, options) => {
+      if (fs.fstatSync(_fd).ino !== lockInode) {
+        return originalRead(_fd, view, options);
+      }
+      const buffer = view as Buffer;
+      const offset = options?.offset || 0;
+      const length = options?.length || 0;
+      buffer.fill(0x20, offset, offset + length);
+      lockBytesRead += length;
+      return length;
+    });
+
+    try {
+      const inventory = collectPackageInventory(repository);
+
+      expect(lockBytesRead).toBeLessThanOrEqual(32 * 1024 * 1024 + 1);
+      expect(inventory.errors).toEqual(expect.arrayContaining([
+        expect.objectContaining({file: 'package-lock.json', message: expect.stringMatching(/32 MiB|maximum size/i)}),
+      ]));
+    } finally {
+      read.mockImplementation(originalRead);
+    }
   });
 
   it('keeps runtime direct scope for duplicate npm workspace declarations', () => {

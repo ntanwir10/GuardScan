@@ -292,7 +292,7 @@ Provide constructive feedback with specific suggestions for improvement.`,
 export async function runStaticAnalysis(
   repoInfo: RepositoryInfo,
   locResult: LOCResult,
-  _filePatterns: string[] | undefined,
+  filePatterns: string[] | undefined,
   executionPolicy: EffectiveExecutionPolicy = resolveExecutionPolicy(),
   vulnerabilitySettings: RunVulnerabilitySettings = {}
 ): Promise<ReviewResult> {
@@ -319,6 +319,7 @@ export async function runStaticAnalysis(
     const scanResult = await scanEngine.runSecurityScan({
       repoPath,
       files: locResult.fileBreakdown,
+      fileSelection: filePatterns ? 'explicit' : 'discovered',
       skippedFiles: locResult.skippedFiles,
       offline: executionPolicy.offline,
       includeLicenses: true,

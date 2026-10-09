@@ -35,7 +35,7 @@ interface JestAssertionReport {
   status: string;
   fullName?: string;
   title: string;
-  failureMessages?: string[];
+  failureMessages?: string[] | null;
 }
 
 interface JestSuiteReport {
@@ -46,10 +46,37 @@ interface JestSuiteReport {
 }
 
 interface JestJsonReport {
-  success?: boolean;
+  success: boolean;
   startTime?: number;
   endTime?: number;
-  testResults?: JestSuiteReport[];
+  testResults: JestSuiteReport[];
+}
+
+/** Validate the fields consumed from repository-produced Jest evidence. */
+function parseJestJsonReport(contents: string): JestJsonReport {
+  const isRecord = (value: unknown): value is Record<string, unknown> =>
+    value !== null && typeof value === 'object' && !Array.isArray(value);
+  let report: unknown;
+  try {report = JSON.parse(contents) as unknown;} catch {
+    throw new Error('Invalid Jest JSON report: malformed JSON');
+  }
+  const suiteStatuses = new Set(['passed', 'failed', 'skipped', 'focused']);
+  const assertionStatuses = new Set(['passed', 'failed', 'skipped', 'pending', 'todo', 'disabled', 'focused']);
+  if (!isRecord(report) || typeof report.success !== 'boolean' || !Array.isArray(report.testResults)
+      || !report.testResults.every(suite => isRecord(suite)
+        && typeof suite.name === 'string'
+        && typeof suite.status === 'string' && suiteStatuses.has(suite.status)
+        && (suite.message === undefined || typeof suite.message === 'string')
+        && Array.isArray(suite.assertionResults)
+        && suite.assertionResults.every(assertion => isRecord(assertion)
+          && typeof assertion.title === 'string'
+          && (assertion.fullName === undefined || typeof assertion.fullName === 'string')
+          && typeof assertion.status === 'string' && assertionStatuses.has(assertion.status)
+          && (assertion.failureMessages === undefined || assertion.failureMessages === null || (Array.isArray(assertion.failureMessages)
+            && assertion.failureMessages.every(message => typeof message === 'string')))))) {
+    throw new Error('Invalid Jest JSON report: missing or malformed result evidence');
+  }
+  return report as unknown as JestJsonReport;
 }
 
 interface PytestJsonReport {
@@ -199,7 +226,7 @@ export class TestRunner {
       if (!fs.existsSync(reportPath)) {
         throw new Error(`Jest exited ${processResult.status} without producing a JSON report`);
       }
-      const result = JSON.parse(fs.readFileSync(reportPath, 'utf8')) as JestJsonReport;
+      const result = parseJestJsonReport(fs.readFileSync(reportPath, 'utf8'));
 
       const failures: TestFailure[] = [];
       let totalTests = 0;
@@ -219,7 +246,7 @@ export class TestRunner {
               error: testCase.failureMessages?.join('\n') || 'Unknown error',
               file: testFile.name,
             });
-          } else if (testCase.status === 'skipped') {skipped++;}
+          } else {skipped++;}
         }
         if (testFile.status === 'failed' && assertionResults.length === 0) {
           totalTests++;

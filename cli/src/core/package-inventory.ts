@@ -48,6 +48,45 @@ interface PackageInventoryCache {
   yarnWorkspaceDirectories: Map<string, Set<string>>;
 }
 
+const MAX_INVENTORY_FILE_BYTES = 32 * 1024 * 1024;
+const INVENTORY_READ_CHUNK_BYTES = 64 * 1024;
+
+function readInventoryText(file: string): string {
+  const descriptor = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK || 0));
+  try {
+    const metadata = fs.fstatSync(descriptor);
+    if (!metadata.isFile()) {
+      throw new Error(`${path.basename(file)} is not a regular inventory file`);
+    }
+    if (metadata.size > MAX_INVENTORY_FILE_BYTES) {
+      throw new Error(`${path.basename(file)} exceeds the maximum inventory input size of 32 MiB`);
+    }
+    const chunks: Buffer[] = [];
+    let totalBytes = 0;
+    while (totalBytes <= MAX_INVENTORY_FILE_BYTES) {
+      const remaining = MAX_INVENTORY_FILE_BYTES + 1 - totalBytes;
+      if (remaining <= 0) {
+        throw new Error(`${path.basename(file)} exceeds the maximum inventory input size of 32 MiB`);
+      }
+      const buffer = Buffer.allocUnsafe(Math.min(INVENTORY_READ_CHUNK_BYTES, remaining));
+      const bytesRead = fs.readSync(descriptor, buffer, {
+        offset: 0,
+        length: buffer.length,
+        position: totalBytes,
+      });
+      if (bytesRead === 0) {break;}
+      chunks.push(bytesRead === buffer.length ? buffer : buffer.subarray(0, bytesRead));
+      totalBytes += bytesRead;
+      if (totalBytes > MAX_INVENTORY_FILE_BYTES) {
+        throw new Error(`${path.basename(file)} exceeds the maximum inventory input size of 32 MiB`);
+      }
+    }
+    return Buffer.concat(chunks, totalBytes).toString('utf8');
+  } finally {
+    fs.closeSync(descriptor);
+  }
+}
+
 function readParsedLockData(file: string, cache: PackageInventoryCache): Record<string, unknown> {
   const cached = cache.parsedLockData.get(file);
   if (cached) {
@@ -58,7 +97,7 @@ function readParsedLockData(file: string, cache: PackageInventoryCache): Record<
   }
   try {
     const parsed = path.basename(file) === 'pnpm-lock.yaml'
-      ? asRecord(yaml.load(fs.readFileSync(file, 'utf8')))
+      ? asRecord(yaml.load(readInventoryText(file)))
       : asRecord(readJson(file));
     if (!parsed) {throw new Error(`${path.basename(file)} root must be an object`);}
     cache.parsedLockData.set(file, {data: parsed});
@@ -80,6 +119,8 @@ const TARGET_FILES = new Set([
   'poetry.lock',
   'Pipfile',
   'Pipfile.lock',
+  'setup.py',
+  'setup.cfg',
   'go.mod',
   'go.work',
   'Cargo.lock',
@@ -209,7 +250,7 @@ function addCoordinate(target: DependencyCoordinate[], coordinate: DependencyCoo
 }
 
 function readJson(file: string): unknown {
-  return JSON.parse(fs.readFileSync(file, 'utf8')) as unknown;
+  return JSON.parse(readInventoryText(file)) as unknown;
 }
 
 function setNpmDirectRequirement<T extends {scope: DependencyScope}>(
@@ -235,19 +276,28 @@ function npmDirectDependencyRequirements(
   try {
     const data = asRecord(readJson(manifest));
     if (!data) {return result;}
-    const groups: Array<[Record<string, unknown>, DependencyScope]> = [
-      [asRecord(data.dependencies) || {}, 'runtime'],
-      [asRecord(data.devDependencies) || {}, 'development'],
-      [asRecord(data.optionalDependencies) || {}, 'optional'],
-    ];
-    for (const [dependencies, scope] of groups) {
-      for (const [name, requested] of Object.entries(dependencies)) {
-        if (typeof requested !== 'string') {continue;}
-        setNpmDirectRequirement(result, name, {scope, requested});
-      }
+    for (const [name, value] of npmManifestDirectRequirements(data)) {
+      if (value.requested !== '') {setNpmDirectRequirement(result, name, value);}
     }
   } catch {
     // The lockfile parser reports the actionable error when it is malformed.
+  }
+  return result;
+}
+
+function npmManifestDirectRequirements(
+  data: Record<string, unknown>
+): Map<string, {scope: DependencyScope; requested: string}> {
+  const result = new Map<string, {scope: DependencyScope; requested: string}>();
+  const groups: Array<[Record<string, unknown>, DependencyScope]> = [
+    [asRecord(data.dependencies) || {}, 'runtime'],
+    [asRecord(data.devDependencies) || {}, 'development'],
+    [asRecord(data.optionalDependencies) || {}, 'optional'],
+  ];
+  for (const [dependencies, scope] of groups) {
+    for (const [name, requested] of Object.entries(dependencies)) {
+      setNpmDirectRequirement(result, name, {scope, requested: typeof requested === 'string' ? requested : ''});
+    }
   }
   return result;
 }
@@ -898,11 +948,7 @@ function parseExactPackageJson(
   try {
     const data = asRecord(readJson(file));
     if (!data) {throw new Error('package.json root must be a JSON object');}
-    const groups: Array<[Record<string, unknown>, DependencyScope]> = [
-      [asRecord(data.dependencies) || {}, 'runtime'],
-      [asRecord(data.devDependencies) || {}, 'development'],
-      [asRecord(data.optionalDependencies) || {}, 'optional'],
-    ];
+    const directRequirements = npmManifestDirectRequirements(data);
     if (coveringLock) {
       const lockfilePath = relative(root, coveringLock);
       let workspacePackages = workspacePackagesByLock.get(coveringLock);
@@ -910,63 +956,58 @@ function parseExactPackageJson(
         workspacePackages = firstPartyWorkspacePackages(root, coveringLock, cache);
         workspacePackagesByLock.set(coveringLock, workspacePackages);
       }
-      for (const [dependencies, scope] of groups) {
-        for (const [installName, requestedValue] of Object.entries(dependencies)) {
-          const requested = typeof requestedValue === 'string' ? requestedValue : '';
-          const packageName = npmRequestedPackageName(installName, requested);
-          const workspaceVersion = workspacePackages.get(installName);
-          const firstPartyWorkspace = !npmAliasTarget(requested) && workspacePackages.has(installName) &&
-            (requested.startsWith('workspace:') ||
-              (workspaceVersion !== undefined && npmRequestMatchesVersion(requested, workspaceVersion)));
-          const covered = requested !== '' && (
-            firstPartyWorkspace ||
-            coordinates.some(coordinate =>
-              coordinate.ecosystem === 'npm' &&
-              coordinate.lockfilePath === lockfilePath &&
-              coordinate.manifestPath === rel &&
-              coordinate.direct &&
-              coordinate.name === packageName &&
-              npmRequestMatchesVersion(requested, coordinate.exactVersion)
-            )
-          );
-          const lockAlreadyReported = errors.some(error =>
-            error.file === lockfilePath && error.message.includes(installName)
-          );
-          if (!covered && !lockAlreadyReported) {
-            errors.push({
-              file: rel,
-              code: 'UNRESOLVED_VERSION',
-              message: `${installName} requirement ${requested || '<invalid>'} is not satisfied by ${path.basename(coveringLock)}`,
-              scope,
-            });
-          }
+      for (const [installName, {scope, requested}] of directRequirements) {
+        const packageName = npmRequestedPackageName(installName, requested);
+        const workspaceVersion = workspacePackages.get(installName);
+        const firstPartyWorkspace = !npmAliasTarget(requested) && workspacePackages.has(installName) &&
+          (requested.startsWith('workspace:') ||
+            (workspaceVersion !== undefined && npmRequestMatchesVersion(requested, workspaceVersion)));
+        const covered = requested !== '' && (
+          firstPartyWorkspace ||
+          coordinates.some(coordinate =>
+            coordinate.ecosystem === 'npm' &&
+            coordinate.lockfilePath === lockfilePath &&
+            coordinate.manifestPath === rel &&
+            coordinate.direct &&
+            coordinate.name === packageName &&
+            npmRequestMatchesVersion(requested, coordinate.exactVersion)
+          )
+        );
+        const lockAlreadyReported = errors.some(error =>
+          error.file === lockfilePath && error.message.includes(installName)
+        );
+        if (!covered && !lockAlreadyReported) {
+          errors.push({
+            file: rel,
+            code: 'UNRESOLVED_VERSION',
+            message: `${installName} requirement ${requested || '<invalid>'} is not satisfied by ${path.basename(coveringLock)}`,
+            scope,
+          });
         }
       }
       return;
     }
     let hasDependencies = false;
     let locklessCoverageScope: DependencyScope = 'development';
-    for (const [dependencies, scope] of groups) {
-      for (const [name, requested] of Object.entries(dependencies)) {
-        hasDependencies = true;
-        if (scope === 'runtime' || (scope === 'optional' && locklessCoverageScope === 'development')) {
-          locklessCoverageScope = scope;
-        }
-        const version = semver.valid(String(requested).replace(/^=/, ''), { loose: true });
-        if (!version) {
-          errors.push({
-            file: rel,
-            code: 'UNRESOLVED_VERSION',
-            message: `${name} is not pinned to an exact npm version`,
-            scope,
-          });
-          continue;
-        }
-        addCoordinate(coordinates, {
-          ecosystem: 'npm', osvEcosystem: 'npm', name, exactVersion: version,
-          scope, direct: true, manifestPath: rel, lockfilePath: rel, dependencyPaths: [name],
-        });
+    for (const [name, {scope, requested}] of directRequirements) {
+      hasDependencies = true;
+      if (scope === 'runtime' || (scope === 'optional' && locklessCoverageScope === 'development')) {
+        locklessCoverageScope = scope;
       }
+      const version = semver.valid(requested.replace(/^=/, ''), { loose: true });
+      if (!version) {
+        errors.push({
+          file: rel,
+          code: 'UNRESOLVED_VERSION',
+          message: `${name} is not pinned to an exact npm version`,
+          scope,
+        });
+        continue;
+      }
+      addCoordinate(coordinates, {
+        ecosystem: 'npm', osvEcosystem: 'npm', name, exactVersion: version,
+        scope, direct: true, manifestPath: rel, lockfilePath: rel, dependencyPaths: [name],
+      });
     }
     if (hasDependencies) {
       errors.push({
@@ -1302,7 +1343,7 @@ function parseYarnLock(
     const directDependencies = npmDirectDependencyRequirements(path.dirname(file));
     const workspaceDependencies = yarnWorkspaceDirectDependencies(root, path.dirname(file), cache);
     const scopeRank: Record<DependencyScope, number> = {unknown: 0, development: 1, optional: 2, runtime: 3};
-    const lines = fs.readFileSync(file, 'utf8').split(/\r?\n/);
+    const lines = readInventoryText(file).split(/\r?\n/);
     let descriptor: string | undefined;
     let descriptors: string[] = [];
     let packageName: string | undefined;
@@ -1538,7 +1579,7 @@ function parseRequirements(
   if (visited.has(canonicalFile)) {return;}
   visited.add(canonicalFile);
   try {
-    for (const raw of fs.readFileSync(file, 'utf8').split(/\r?\n/)) {
+    for (const raw of readInventoryText(file).split(/\r?\n/)) {
       const line = raw.trim();
       if (!line || line.startsWith('#')) {continue;}
       const include = line.match(/^(?:-r|--requirement)(?:=|\s+)(.+)$/);
@@ -1652,7 +1693,7 @@ function parseGoMod(
     let inRequire = false;
     let inReplace = false;
     let inExclude = false;
-    for (const raw of fs.readFileSync(file, 'utf8').split(/\r?\n/)) {
+    for (const raw of readInventoryText(file).split(/\r?\n/)) {
       const line = raw.trim();
       const goDirective = line.match(/^go\s+(\d+)\.(\d+)(?:\.\d+)?$/);
       if (goDirective) {
@@ -1743,7 +1784,7 @@ function parseGoMod(
         try {
           const realTarget = fs.realpathSync(target);
           const targetManifest = fs.realpathSync(path.join(realTarget, 'go.mod'));
-          const moduleName = fs.readFileSync(targetManifest, 'utf8').split(/\r?\n/)
+          const moduleName = readInventoryText(targetManifest).split(/\r?\n/)
             .map(line => line.replace(/\s+\/\/.*$/, '').trim())
             .find(line => line.startsWith('module '))
             ?.match(/^module\s+(\S+)$/)?.[1];
@@ -1822,7 +1863,7 @@ function parseCargoLock(
   const registrySource = /^(?:registry\+https:\/\/(?:github\.com\/rust-lang\/crates\.io-index|index\.crates\.io\/?)|sparse\+https:\/\/index\.crates\.io\/?)$/;
   const scopeRank: Record<DependencyScope, number> = {unknown: 0, development: 1, optional: 2, runtime: 3};
   try {
-    const blocks = fs.readFileSync(file, 'utf8').split(/\[\[package\]\]/).slice(1);
+    const blocks = readInventoryText(file).split(/\[\[package\]\]/).slice(1);
     const nodes: CargoNode[] = [];
     for (const [index, block] of blocks.entries()) {
       const name = block.match(/^\s*name\s*=\s*"([^"]+)"/m)?.[1];
@@ -2084,7 +2125,7 @@ function parseGemfileLock(
 ): void {
   const rel = relative(root, file);
   try {
-    const lines = fs.readFileSync(file, 'utf8').split(/\r?\n/);
+    const lines = readInventoryText(file).split(/\r?\n/);
     const manifest = path.join(path.dirname(file), 'Gemfile');
     const manifestPath = relative(root, manifest);
     type GemRequirement = {name: string; requested?: string; scope: DependencyScope; local: boolean};
@@ -2093,7 +2134,7 @@ function parseGemfileLock(
     const requirements = new Map<string, GemRequirement>();
     if (fs.existsSync(manifest)) {
       const blocks: Array<{groups: string[]}> = [];
-      for (const rawLine of fs.readFileSync(manifest, 'utf8').split(/\r?\n/)) {
+      for (const rawLine of readInventoryText(manifest).split(/\r?\n/)) {
         const line = rawLine.replace(/\s+#.*$/, '').trim();
         const group = line.match(/^group\s*(?:\(\s*)?(.+?)(?:\s*\))?\s+do(?:\s*\|[^|]*\|)?\s*$/);
         if (group) {
@@ -2271,7 +2312,7 @@ function parseGemfileLock(
 function parsePom(root: string, file: string, coordinates: DependencyCoordinate[], errors: PackageInventoryError[]): void {
   const rel = relative(root, file);
   try {
-    let xml = fs.readFileSync(file, 'utf8').replace(/<!--[\s\S]*?-->/g, '');
+    let xml = readInventoryText(file).replace(/<!--[\s\S]*?-->/g, '');
     // Dependency declarations in comments, build plugins, and inactive profiles
     // are not application dependencies of the effective project model.
     const profileSections = xml.match(/<profiles(?:\s[^>]*)?>[\s\S]*?<\/profiles>/gi) || [];
@@ -2443,6 +2484,8 @@ function ecosystemForInventoryFile(file: string): PackageEcosystem | undefined {
     case 'poetry.lock':
     case 'Pipfile':
     case 'Pipfile.lock':
+    case 'setup.py':
+    case 'setup.cfg':
       return 'pip';
     case 'go.mod':
     case 'go.work':
@@ -2496,7 +2539,7 @@ function normalizeTomlTablePath(value: string): string {
 
 function pyprojectDeclaresDependencies(file: string): boolean {
   let section = '';
-  for (const rawLine of fs.readFileSync(file, 'utf8').split(/\r?\n/)) {
+  for (const rawLine of readInventoryText(file).split(/\r?\n/)) {
     const line = rawLine.replace(/\s+#.*$/, '').trim();
     if (!line) {continue;}
     const sectionMatch = line.match(/^\[([^\]]+)]$/);
@@ -2510,6 +2553,25 @@ function pyprojectDeclaresDependencies(file: string): boolean {
     }
     if (section === 'project' && /^dependencies\s*=/.test(line)) {return true;}
     if (!section && /^(?:project|"project"|'project')\s*\.\s*(?:(?:dependencies|"dependencies"|'dependencies')\s*=|(?:optional-dependencies|"optional-dependencies"|'optional-dependencies')\s*\.)/.test(line)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function setupCfgDeclaresDependencies(file: string): boolean {
+  let section = '';
+  for (const rawLine of readInventoryText(file).split(/\r?\n/)) {
+    const line = rawLine.replace(/\s+#.*$/, '').trim();
+    if (!line) {continue;}
+    const sectionMatch = line.match(/^\[([^\]]+)]$/);
+    if (sectionMatch) {
+      section = sectionMatch[1].trim().toLowerCase();
+      continue;
+    }
+    const key = line.match(/^([a-z0-9_-]+)\s*[:=]/i)?.[1]?.toLowerCase();
+    if ((section === 'options' && (key === 'install_requires' || key === 'setup_requires')) ||
+      (section === 'options.extras_require' && key !== undefined)) {
       return true;
     }
   }
@@ -2558,7 +2620,7 @@ function stripTomlComments(content: string): string {
 
 function cargoWorkspacePatterns(manifest: string, key: 'members' | 'exclude'): string[] {
   try {
-    const content = stripTomlComments(fs.readFileSync(manifest, 'utf8'));
+    const content = stripTomlComments(readInventoryText(manifest));
     const section = content.match(/(?:^|\n)\s*\[workspace\]\s*\n([\s\S]*?)(?=\n\s*\[[^\]]+\]|$)/)?.[1];
     const array = section?.match(new RegExp(`(?:^|\\n)\\s*${key}\\s*=\\s*\\[([\\s\\S]*?)\\]`))?.[1];
     if (!array) {return [];}
@@ -2570,7 +2632,7 @@ function cargoWorkspacePatterns(manifest: string, key: 'members' | 'exclude'): s
 
 function cargoManifestHasWorkspace(manifest: string): boolean {
   try {
-    return /(?:^|\n)\s*\[workspace]\s*(?:\n|$)/.test(stripTomlComments(fs.readFileSync(manifest, 'utf8')));
+    return /(?:^|\n)\s*\[workspace]\s*(?:\n|$)/.test(stripTomlComments(readInventoryText(manifest)));
   } catch {
     return false;
   }
@@ -2581,7 +2643,7 @@ type CargoManifestRecord = {section: string; name: string; value: string};
 function cargoManifestLines(manifest: string): CargoManifestRecord[] {
   const records: CargoManifestRecord[] = [];
   let section = '';
-  for (const rawLine of stripTomlComments(fs.readFileSync(manifest, 'utf8')).split(/\r?\n/)) {
+  for (const rawLine of stripTomlComments(readInventoryText(manifest)).split(/\r?\n/)) {
     const sectionMatch = rawLine.trim().match(/^\[([^\]]+)\]$/);
     if (sectionMatch) {section = sectionMatch[1].trim(); continue;}
     const dependency = rawLine.match(/^\s*((?:"[^"]+"|'[^']+'|[A-Za-z0-9_-]+)(?:\s*\.\s*(?:"[^"]+"|'[^']+'|[A-Za-z0-9_-]+))*)\s*=\s*(.+)$/);
@@ -2772,7 +2834,7 @@ export function collectPackageInventory(repoPath: string = process.cwd()): Packa
   const includedRequirementFiles = new Set<string>();
   for (const file of requirementFiles) {
     try {
-      for (const rawLine of fs.readFileSync(file, 'utf8').split(/\r?\n/)) {
+      for (const rawLine of readInventoryText(file).split(/\r?\n/)) {
         const include = rawLine.trim().match(/^(?:-r|--requirement)(?:=|\s+)(.+)$/);
         if (!include) {continue;}
         const included = fs.realpathSync(path.resolve(path.dirname(file), include[1].trim()));
@@ -2846,6 +2908,27 @@ export function collectPackageInventory(repoPath: string = process.cwd()): Packa
         file: relative(root, file), ecosystem: 'pip', code: 'UNSUPPORTED_FORMAT',
         message: 'Pipfile has no supported adjacent dependency inventory; Python dependency coverage is incomplete',
       });
+    }
+    else if (name === 'setup.py') {
+      errors.push({
+        file: relative(root, file), ecosystem: 'pip', code: 'UNSUPPORTED_FORMAT',
+        message: `${name} dependency inventory is not inspected or executed; Python dependency coverage is incomplete`,
+      });
+    }
+    else if (name === 'setup.cfg') {
+      try {
+        if (setupCfgDeclaresDependencies(file)) {
+          errors.push({
+            file: relative(root, file), ecosystem: 'pip', code: 'UNSUPPORTED_FORMAT',
+            message: 'setup.cfg dependency declarations are unsupported; Python dependency coverage is incomplete',
+          });
+        }
+      } catch (error: unknown) {
+        errors.push({
+          file: relative(root, file), ecosystem: 'pip', code: 'INVALID_MANIFEST',
+          message: `Unable to inspect setup.cfg dependency declarations: ${errorMessage(error)}`,
+        });
+      }
     }
     else if (name === 'go.mod') {parseGoMod(root, file, coordinates, errors);}
     else if (name === 'go.work') {

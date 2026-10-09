@@ -174,6 +174,40 @@ describe('TestRunner discovery and empty-suite behavior', () => {
     );
   });
 
+  it.each([
+    {},
+    {testResults: []},
+    {success: true},
+    {success: 'true', testResults: []},
+    {success: true, testResults: {}},
+    {success: true, testResults: [null]},
+    {success: true, testResults: [{name: 'fixture.test.js', status: 'passed'}]},
+    {success: true, testResults: [{name: 'fixture.test.js', status: 'passed', assertionResults: [null]}]},
+    {success: true, testResults: [{name: 'fixture.test.js', status: 'passed', assertionResults: [{status: 'unknown', title: 'fixture'}]}]},
+  ])('rejects malformed status-zero Jest evidence: %j', async report => {
+    fs.writeFileSync(path.join(repository, 'package.json'), JSON.stringify({
+      scripts: {test: 'jest'}, devDependencies: {jest: '^30.0.0'},
+    }));
+    mockedRunProcess.mockImplementation((_command, args) => {
+      fs.writeFileSync(args[args.indexOf('--outputFile') + 1], JSON.stringify(report));
+      return processResult(0);
+    });
+    await expect(new TestRunner().runTests(repository)).rejects.toThrow(/invalid Jest JSON report/i);
+  });
+
+  it('retains valid zero-test Jest evidence', async () => {
+    fs.writeFileSync(path.join(repository, 'package.json'), JSON.stringify({
+      scripts: {test: 'jest'}, devDependencies: {jest: '^30.0.0'},
+    }));
+    mockedRunProcess.mockImplementation((_command, args) => {
+      fs.writeFileSync(args[args.indexOf('--outputFile') + 1], JSON.stringify({success: true, testResults: []}));
+      return processResult(0);
+    });
+    await expect(new TestRunner().runTests(repository)).resolves.toEqual([
+      expect.objectContaining({framework: 'Jest', totalTests: 0, failed: 0}),
+    ]);
+  });
+
   it('preserves a nonzero Jest exit when its JSON contains only passing assertions', async () => {
     fs.writeFileSync(path.join(repository, 'package.json'), JSON.stringify({
       scripts: { test: 'jest' },
