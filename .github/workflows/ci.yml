@@ -33,9 +33,9 @@ jobs:
           npm run test:release
       - name: Reject whitespace and patch corruption
         run: git diff --check
-      - name: Audit production dependency graph
+      - name: Audit locked dependency graph
         working-directory: cli
-        run: npm audit --omit=dev --audit-level=high
+        run: npm audit --audit-level=moderate
 
   lint:
     name: Typecheck and lint ratchet
