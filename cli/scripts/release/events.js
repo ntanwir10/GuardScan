@@ -203,9 +203,11 @@ function appendEvent(ledgerFile, input) {
   fs.mkdirSync(parent, {recursive: true, mode: 0o700});
   const lockFile = `${resolved}.lock`;
   let lockDescriptor;
+  let lockCreated = false;
   try {
     try {
       lockDescriptor = fs.openSync(lockFile, 'wx', 0o600);
+      lockCreated = true;
     } catch (error) {
       if (error?.code === 'EEXIST') throw new Error(`release ledger is locked: ${lockFile}`);
       throw error;
@@ -233,7 +235,7 @@ function appendEvent(ledgerFile, input) {
     return {changed: true, event};
   } finally {
     if (lockDescriptor !== undefined) fs.closeSync(lockDescriptor);
-    fs.rmSync(lockFile, {force: true});
+    if (lockCreated) fs.rmSync(lockFile, {force: true});
   }
 }
 

@@ -2,6 +2,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import zlib from 'zlib';
+import {spawnSync} from 'child_process';
 
 const {
   appendEvent,
@@ -63,6 +64,7 @@ const {
 };
 const {
   buildWheel,
+  launcherSource,
 } = require('../../scripts/release/python-wheel') as {
   buildWheel: (
     source: Record<string, string>,
@@ -71,6 +73,7 @@ const {
     output: string,
     timestamp: string
   ) => Record<string, any>;
+  launcherSource: (binaryName: string, digest: string) => string;
 };
 
 const commit = 'a'.repeat(40);
@@ -173,6 +176,22 @@ function wheel(native: Record<string, any>, digest: string): Record<string, any>
 }
 
 describe('append-only release train', () => {
+  it('preserves a pre-existing lock and ledger when another writer owns the lease', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'guardscan-occupied-ledger-'));
+    const ledger = path.join(root, 'ledger.jsonl');
+    const lock = `${ledger}.lock`;
+    const owner = Buffer.from('active writer lease\n');
+    try {
+      fs.writeFileSync(lock, owner, {mode: 0o600});
+      expect(() => appendEvent(ledger, eventInput('train_started', 0)))
+        .toThrow(/release ledger is locked/);
+      expect(fs.readFileSync(lock)).toEqual(owner);
+      expect(fs.existsSync(ledger)).toBe(false);
+    } finally {
+      fs.rmSync(root, {recursive: true, force: true});
+    }
+  });
+
   it('clamps a stale observation timestamp while preserving its checkedAt evidence', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'guardscan-monotonic-ledger-'));
     const ledger = path.join(root, 'ledger.jsonl');
@@ -358,6 +377,49 @@ describe('promotion policy and remote idempotency', () => {
 });
 
 describe('deterministic artifacts and manifest aggregation', () => {
+  it('runs the generated Python launcher when hashlib.file_digest is unavailable', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'guardscan-python-launcher-'));
+    const packageDir = path.join(root, 'guardscan_cli');
+    const binaryDir = path.join(packageDir, 'bin');
+    const binary = path.join(binaryDir, 'guardscan');
+    const launcher = path.join(root, 'launcher.py');
+    const binaryBytes = Buffer.from('#!/bin/sh\nexit 0\n');
+    const digest = require('crypto').createHash('sha256').update(binaryBytes).digest('hex');
+    try {
+      fs.mkdirSync(binaryDir, {recursive: true});
+      fs.writeFileSync(path.join(packageDir, '__init__.py'), '');
+      fs.writeFileSync(binary, binaryBytes, {mode: 0o700});
+      const launcherText = launcherSource('guardscan', digest);
+      fs.writeFileSync(launcher, launcherText);
+      expect(launcherText).not.toContain('file_digest');
+      expect(launcherText).toContain('hashlib.sha256()');
+      expect(launcherText).toContain('stream.read(1024 * 1024)');
+      const program = [
+        'import hashlib, os, runpy, sys',
+        'hashlib.file_digest = None',
+        'os.execv = lambda executable, argv: print("EXEC:" + " ".join(argv[1:]))',
+        'sys.path.insert(0, sys.argv[1])',
+        'sys.argv = [sys.argv[2], "--version"]',
+        'runpy.run_path(sys.argv[0])["main"]()',
+      ].join(';');
+      const interpreters = process.platform === 'win32'
+        ? [['py', ['-3']], ['python', []], ['python3', []]]
+        : [['python3', []], ['python', []]];
+      let result: any;
+      for (const [command, prefixArgs] of interpreters as Array<[string, string[]]>) {
+        const attempt = spawnSync(command, [...prefixArgs, '-c', program, root, launcher], {encoding: 'utf8'});
+        if ((attempt.error as NodeJS.ErrnoException | undefined)?.code === 'ENOENT') continue;
+        result = attempt;
+        break;
+      }
+      if (!result) return;
+      expect(result.error).toBeUndefined();
+      expect(result.status).toBe(0);
+      expect(result.stdout.trim()).toBe('EXEC:--version');
+    } finally {
+      fs.rmSync(root, {recursive: true, force: true});
+    }
+  });
   it.each(['zip', 'tar.gz'])('creates deterministic bounded %s archives', format => {
     const entries = [{name: 'guardscan', data: Buffer.from('binary'), mode: 0o755}];
     const first = buildArchive(format, entries, timestamp);
