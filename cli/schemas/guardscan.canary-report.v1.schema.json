@@ -11,7 +11,7 @@
       "enum": ["npm", "pnpm", "yarn", "bun", "github", "homebrew", "homebrew-core", "scoop", "winget", "chocolatey", "pypi"]
     },
     "target": { "type": "string", "minLength": 1, "maxLength": 200 },
-    "status": { "enum": ["passed", "failed"] },
+    "status": { "enum": ["passed", "failed", "pending"] },
     "checkedAt": { "type": "string", "format": "date-time" },
     "evidenceUrl": { "type": "string", "format": "uri", "pattern": "^https://" }
   }

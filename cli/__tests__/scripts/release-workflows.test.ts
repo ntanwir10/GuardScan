@@ -731,6 +731,35 @@ describe('zero-touch release workflow contracts', () => {
     expect(source).toContain("scan.get('schemaVersion') != 'guardscan.scan.v1'");
   });
 
+  it('gives release-train dispatchers only explicit dispatch permissions', () => {
+    const train = yaml.load(workflowSource('release-train.yml')) as {
+      jobs: Record<string, {steps?: Array<{uses?: string; with?: Record<string, string>}>}>;
+    };
+    const appTokenStep = (jobName: string) => train.jobs[jobName].steps?.find(step => (
+      step.uses?.startsWith('actions/create-github-app-token@')
+    ));
+    const permissionKeys = (step: {with?: Record<string, string>} | undefined) => (
+      Object.keys(step?.with || {}).filter(key => key.startsWith('permission-')).sort()
+    );
+
+    expect(appTokenStep('scheduler')?.with).toMatchObject({
+      'permission-actions': 'write',
+      'permission-contents': 'read',
+      'permission-metadata': 'read',
+    });
+    expect(permissionKeys(appTokenStep('scheduler'))).toEqual([
+      'permission-actions', 'permission-contents', 'permission-metadata',
+    ]);
+    expect(appTokenStep('catalog-hint')?.with).toMatchObject({
+      'permission-actions': 'write',
+      'permission-contents': 'read',
+      'permission-metadata': 'read',
+    });
+    expect(permissionKeys(appTokenStep('catalog-hint'))).toEqual([
+      'permission-actions', 'permission-contents', 'permission-metadata',
+    ]);
+  });
+
   it('validates and readies the exact same-repository main release PR before candidate tagging', () => {
     const train = workflowSource('release-train.yml');
     expect(train).toContain('Validate release request before provider access');
@@ -740,10 +769,26 @@ describe('zero-touch release workflow contracts', () => {
     expect(train).toContain('PR_POLICY_ARGS+=(--allow-merged)');
     expect(train).toContain('REQUEST_RELEASE_PR: ${{ inputs.release_pr }}');
     expect(train).toContain('EXPECTED_HEAD: ${{ steps.source.outputs.head_sha }}');
-    expect(train).not.toContain('gh pr ready "$REQUEST_RELEASE_PR"');
+    expect(train).toContain('id: readiness-app');
+    expect(train).toContain('repositories: GuardScan');
+    expect(train).toContain('permission-pull-requests: write');
+    const parsedTrain = yaml.load(train) as {
+      jobs: Record<string, {steps?: Array<{id?: string; with?: Record<string, string>}>}>;
+    };
+    const readinessApp = parsedTrain.jobs.prepare.steps?.find(step => step.id === 'readiness-app');
+    expect(readinessApp?.with).toMatchObject({
+      'permission-pull-requests': 'write',
+      'permission-metadata': 'read',
+    });
+    expect(Object.keys(readinessApp?.with || {}).filter(key => key.startsWith('permission-')).sort())
+      .toEqual(['permission-metadata', 'permission-pull-requests']);
+    expect(train).toContain('GH_TOKEN="$RELEASE_APP_TOKEN" gh pr ready "$REQUEST_RELEASE_PR"');
+    expect(train).toContain('--repo "$GITHUB_REPOSITORY"');
+    expect(train).toContain('release PR must be ready after readiness transition');
     expect(train).toContain('expected_head:');
     expect(train).toContain('--match-head-commit "$EXPECTED_HEAD"');
-    expect(train).not.toContain('gh pr ready "${{ inputs.release_pr }}"');
+    expect(train.indexOf('gh pr ready "$REQUEST_RELEASE_PR"'))
+      .toBeLessThan(train.indexOf('cli/scripts/release/index.js validate-pr'));
   });
 
   it('builds signed artifacts and publishes through isolated provider environments', () => {
@@ -764,8 +809,10 @@ describe('zero-touch release workflow contracts', () => {
       expect(combined).toContain(environment);
     }
     expect(build).toContain('cosign sign-blob --yes');
-    expect(build).toContain('xcrun notarytool submit');
-    expect(build).toContain('xcrun stapler staple');
+    expect(build).toContain('name: Notarize exact macOS archive');
+    expect(build).toContain('xcrun notarytool submit "$NATIVE_ARCHIVE"');
+    expect(build).toContain('subject-path: native-output/guardscan-*.${{ matrix.archive }}');
+    expect(build).not.toContain('xcrun stapler staple "$RUNNER_TEMP/guardscan.dmg"');
     expect(build).toContain('security find-identity -v -p codesigning "$KEYCHAIN"');
     expect(build).toContain('awk -v team="($APPLE_TEAM_ID)"');
     expect(build).toContain('test -n "$IDENTITY"');

@@ -217,10 +217,12 @@ Enroll the publisher and provision:
 Store them only in `apple-notarization`. Renewals and Apple identity revalidation remain external authority boundaries.
 
 Import the certificate into an ephemeral keychain during the macOS job. Verify
-the Developer ID Application subject includes `APPLE_TEAM_ID`; submit with
-`notarytool`, inspect the accepted log, staple, and require both `codesign` and
-`spctl` verification before archiving. Delete the keychain and temporary key
-material at job cleanup.
+the Developer ID Application subject includes `APPLE_TEAM_ID`; create the
+deterministic signed ZIP, submit that exact ZIP with `notarytool`, and inspect
+the accepted log. ZIPs do not support offline stapling, so extract the exact
+downloaded ZIP and require both `codesign` and `spctl` verification of its
+executable before publication. Delete the keychain and temporary key material
+at job cleanup.
 
 ## Azure Artifact Signing
 

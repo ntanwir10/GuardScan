@@ -341,8 +341,9 @@
       "additionalProperties": false,
       "required": ["status", "evidenceUrl"],
       "properties": {
-        "status": { "enum": ["passed", "failed"] },
+        "status": { "enum": ["passed", "failed", "pending"] },
         "target": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "checkedAt": { "type": "string", "format": "date-time" },
         "evidenceUrl": { "type": "string", "format": "uri", "pattern": "^https://" }
       }
     }

@@ -15,7 +15,7 @@ const MAX_CANARY_AGE_MILLISECONDS = 90 * 60 * 1000;
 const REQUIRED_CANARY_FIELDS = Object.freeze([
   'channel', 'checkedAt', 'evidenceUrl', 'status', 'target', 'version',
 ]);
-const CANARY_STATUSES = new Set(['passed', 'failed']);
+const CANARY_STATUSES = new Set(['passed', 'failed', 'pending']);
 const SUPPORTED_CHANNELS = new Set(CHANNELS.map(channel => channel.id));
 
 // These are the immutable RC verification targets. Callers may add supported
@@ -45,6 +45,13 @@ function canonicalTimestamp(value, label) {
 
 function issueId(version, issue) {
   return `canary-${version}-${crypto.createHash('sha256').update(canonicalJson(issue)).digest('hex').slice(0, 32)}`;
+}
+
+function monotonicTimestamp(ledgerFile, proposedTimestamp) {
+  const previousTimestamp = readEvents(ledgerFile).at(-1)?.timestamp;
+  return previousTimestamp && proposedTimestamp < previousTimestamp
+    ? previousTimestamp
+    : proposedTimestamp;
 }
 
 function expectedTargetMap(value) {
@@ -85,7 +92,7 @@ function validateReport(report, expectedVersion, expectedTargets, evaluatedAt, m
   if (!expectedTargets[report.channel]?.includes(report.target)) {
     errors.push('report target is not expected for its channel');
   }
-  if (!CANARY_STATUSES.has(report.status)) errors.push('report status must be passed or failed');
+  if (!CANARY_STATUSES.has(report.status)) errors.push('report status must be passed, failed, or pending');
   let checkedAt;
   try {
     checkedAt = canonicalTimestamp(report.checkedAt, 'canary report checkedAt');
@@ -120,7 +127,7 @@ function appendIncident(ledgerFile, state, evaluatedAt, issue, summary) {
     version: state.version,
     tag: state.tag,
     commit: state.commit,
-    timestamp: evaluatedAt.toISOString(),
+    timestamp: monotonicTimestamp(ledgerFile, evaluatedAt.toISOString()),
     type: 'incident_opened',
     idempotencyKey: `canary-incident:${incidentId}`,
     payload: {incidentId, kind: 'availability', summary},
@@ -208,13 +215,14 @@ function recordCanary(input, reports, expectedTargets, evaluatedAt) {
       version: initialState.version,
       tag: initialState.tag,
       commit: initialState.commit,
-      timestamp: report.checkedAt,
+      timestamp: monotonicTimestamp(options.ledgerFile, report.checkedAt),
       type: 'canary_recorded',
       idempotencyKey: key,
       channel: report.channel,
       payload: {
         status: report.status,
         target: report.target,
+        checkedAt: report.checkedAt,
         evidenceUrl: report.evidenceUrl,
       },
     });
@@ -228,7 +236,7 @@ function recordCanary(input, reports, expectedTargets, evaluatedAt) {
           version: failedState.version,
           tag: failedState.tag,
           commit: failedState.commit,
-          timestamp: evaluated.toISOString(),
+          timestamp: monotonicTimestamp(options.ledgerFile, evaluated.toISOString()),
           type: 'channel_failed',
           idempotencyKey: `canary-failed:${failedState.version}:${report.channel}:${report.target}:${report.checkedAt}`,
           channel: report.channel,
@@ -256,7 +264,7 @@ function recordCanary(input, reports, expectedTargets, evaluatedAt) {
       version: state.version,
       tag: state.tag,
       commit: state.commit,
-      timestamp: evaluated.toISOString(),
+      timestamp: monotonicTimestamp(options.ledgerFile, evaluated.toISOString()),
       type: 'channel_verified',
       idempotencyKey: `canary-verified:${state.version}:${channel}:${latestCheckedAt}`,
       channel,

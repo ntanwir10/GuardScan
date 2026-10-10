@@ -368,12 +368,15 @@ function validateIncidentEvent(event) {
 
 function validateCanaryEvent(event) {
   if (event.type !== 'canary_recorded') return;
+  if (event.payload.checkedAt !== undefined) {
+    assertCanonicalTimestamp(event.payload.checkedAt, 'canary check time');
+  }
   const keys = Object.keys(event.payload).sort(compareUtf8);
   const expected = ['evidenceUrl', 'status'];
-  if (!keys.every(key => ['evidenceUrl', 'status', 'target'].includes(key))
+  if (!keys.every(key => ['checkedAt', 'evidenceUrl', 'status', 'target'].includes(key))
       || keys.length < expected.length
       || !expected.every(key => keys.includes(key))
-      || !['passed', 'failed'].includes(event.payload.status)
+      || !['passed', 'failed', 'pending'].includes(event.payload.status)
       || (event.payload.target !== undefined
         && (typeof event.payload.target !== 'string'
           || event.payload.target.length < 1

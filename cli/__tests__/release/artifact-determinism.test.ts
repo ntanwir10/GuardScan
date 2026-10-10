@@ -12,6 +12,11 @@ const {finalizeWheelArtifact} = require('../../scripts/release/python-wheel');
 const {createPublicationEvidence} = require('../../scripts/release/publication-evidence');
 const {writeReleaseManifest} = require('../../scripts/release/manifest');
 
+const workflowSource = fs.readFileSync(
+  path.resolve(__dirname, '../../../.github/workflows/release-build.yml'),
+  'utf8',
+).replace(/\r\n?/g, '\n');
+
 const source = {
   version: '1.1.0',
   tag: 'v1.1.0',
@@ -89,6 +94,26 @@ function writeManifestInput(root: string) {
 }
 
 describe('release artifact determinism', () => {
+  it('notarizes the exact macOS ZIP download and verifies its extracted executable', () => {
+    expect(workflowSource).toContain('name: Notarize exact macOS archive');
+    expect(workflowSource).toMatch(/id: darwin-arm64,[^\n]*archive: zip/);
+    expect(workflowSource).toMatch(/id: darwin-x64,[^\n]*archive: zip/);
+    expect(workflowSource).toContain('xcrun notarytool submit "$NATIVE_ARCHIVE"');
+    expect(workflowSource).toContain('subject-path: native-output/guardscan-*.${{ matrix.archive }}');
+    expect(workflowSource).toContain('macOS notarization subject does not match archive metadata');
+    expect(workflowSource).toContain('ditto -x -k "$NATIVE_ARCHIVE"');
+    expect(workflowSource).toContain('codesign --verify --deep --strict --verbose=2 "$RUNNER_TEMP/guardscan-unpacked/guardscan"');
+    expect(workflowSource).toContain('spctl --assess --type execute --verbose=4 "$RUNNER_TEMP/guardscan-unpacked/guardscan"');
+    expect(workflowSource.match(/spctl --assess --type execute/g)).toHaveLength(1);
+    expect(workflowSource).toContain("trap 'rm -f \"$RUNNER_TEMP/AuthKey.p8\"' EXIT");
+    expect(workflowSource).not.toContain('stapled-notarization.dmg');
+    expect(workflowSource).not.toContain('xcrun stapler staple "$RUNNER_TEMP/guardscan.dmg"');
+    expect(workflowSource.indexOf('name: Archive signed executable with trusted tooling'))
+      .toBeLessThan(workflowSource.indexOf('name: Notarize exact macOS archive'));
+    expect(workflowSource.indexOf('name: Notarize exact macOS archive'))
+      .toBeLessThan(workflowSource.indexOf('name: Attest signed archive'));
+  });
+
   it('orders serialized names by UTF-8 bytes', () => {
     const names = ['a', 'B', 'z'];
     expect([...names].sort(compareUtf8)).toEqual(['B', 'a', 'z']);
