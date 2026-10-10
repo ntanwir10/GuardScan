@@ -49,12 +49,30 @@ jobs:
             --repo "${{ github.repository }}" --json isDraft --jq .isDraft)"
           while IFS= read -r -d '' FILE; do
             NAME="$(basename "$FILE")"
-            ASSET_ID="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${{ inputs.tag }}" \
-              --jq ".assets[] | select(.name == \"$NAME\") | .id" | head -n 1)"
-            if [ -n "$ASSET_ID" ]; then
+            ASSET_JSON="$(gh release view "${{ inputs.tag }}" --repo "${{ github.repository }}" --json assets)"
+            ASSET_API_URL="$(jq -er --arg name "$NAME" --arg repository "$GITHUB_REPOSITORY" '
+              [.assets[]? | select(.name == $name)] as $matches |
+              if ($matches | length) > 1 then error("duplicate release asset name")
+              elif ($matches | length) == 0 then ""
+              else $matches[0] as $asset |
+                ("https://api.github.com/repos/" + $repository + "/releases/assets/") as $base |
+                if ($asset.id | type) != "string" or ($asset.id | length) == 0
+                    or ($asset.id | test("[[:cntrl:]]"))
+                    or ($asset.apiUrl | type) != "string"
+                then error("invalid release asset identity")
+                elif ($asset.apiUrl | startswith($base)) | not
+                then error("release asset URL is not the canonical same-repository API identity")
+                else $asset.apiUrl[($base | length):] as $databaseId |
+                  if ($databaseId | test("^[1-9][0-9]*$"))
+                  then $base + $databaseId
+                  else error("invalid release asset database ID") end
+                end
+              end
+            ' <<<"$ASSET_JSON")"
+            if [ -n "$ASSET_API_URL" ]; then
               gh api \
                 -H "Accept: application/octet-stream" \
-                "repos/${GITHUB_REPOSITORY}/releases/assets/$ASSET_ID" \
+                "$ASSET_API_URL" \
                 > "$RUNNER_TEMP/$NAME"
               if ! cmp --silent "$FILE" "$RUNNER_TEMP/$NAME"; then
                 echo "::error::Release-integrity incident: $NAME already exists with different bytes"

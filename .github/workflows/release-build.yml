@@ -496,7 +496,7 @@ jobs:
           find collected -type f \( \
               -name '*.tar.gz' -o -name '*.zip' -o -name '*.whl' -o -name '*.tgz' \
               -o -name 'guardscan-*.spdx.json' -o -name 'guardscan-*.cyclonedx.json' \
-              -o -name '*.sigstore.json' -o -name '*.notarization.json' -o -name '*.txt' \
+              -o -name '*.sigstore.json' -o -name 'apple-notarization.json' -o -name '*.txt' \
             \) \
             -exec cp {} release/ \;
       - name: Build production manifest from all native and wheel metadata

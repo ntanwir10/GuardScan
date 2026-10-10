@@ -106,7 +106,11 @@ function validateSource(options = {}) {
   if (semver.valid(packageJson.version)) {
     const changelog = readBounded(path.join(packageRoot, 'CHANGELOG.md'), 'CHANGELOG.md');
     const escapedVersion = packageJson.version.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    if (!new RegExp(`^## \\[${escapedVersion}\\](?:\\s|$)`, 'm').test(changelog)) {
+    const releaseHeading = new RegExp(
+      `^## (?:\\[${escapedVersion}\\](?:\\([^\\r\\n)]*\\))?|${escapedVersion})(?:\\s|$)`,
+      'm'
+    );
+    if (!releaseHeading.test(changelog)) {
       errors.push(`CHANGELOG.md has no release section for ${packageJson.version}`);
     }
   }

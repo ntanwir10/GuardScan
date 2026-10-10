@@ -99,6 +99,22 @@ describe('release source validation', () => {
     });
   });
 
+  it.each([
+    '## [1.2.3](https://github.com/example/project/releases/tag/v1.2.3) - 2026-07-20',
+    '## 1.2.3 - 2026-07-20',
+    '## [1.2.3] - 2026-07-20',
+  ])('accepts exact release-please changelog heading %s', heading => {
+    fs.writeFileSync(path.join(packageRoot, 'CHANGELOG.md'), `# Changelog\n\n${heading}\n`);
+    expect(validateSource({packageRoot, repositoryRoot: root, commit: COMMIT}).version).toBe('1.2.3');
+  });
+
+  it.each(['## 1.2.30 - 2026-07-20', '## [1.2.30](https://example.test)'])
+    ('rejects changelog heading for a different exact version: %s', heading => {
+      fs.writeFileSync(path.join(packageRoot, 'CHANGELOG.md'), `# Changelog\n\n${heading}\n`);
+      expect(() => validateSource({packageRoot, repositoryRoot: root, commit: COMMIT}))
+        .toThrow(/no release section for 1\.2\.3/);
+    });
+
   it('rejects drift between package, lockfile, changelog, tag, and Node floor', () => {
     writeJson('package-lock.json', {
       name: 'guardscan',

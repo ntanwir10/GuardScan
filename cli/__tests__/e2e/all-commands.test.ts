@@ -87,7 +87,8 @@ describe('CLI command surface', () => {
   it('prints a semantic version without touching the real home directory', () => {
     const result = runCli(['--version']);
     expect(result.status).toBe(0);
-    expect(result.stdout).toMatch(/\b1\.1\.0\b/);
+    const packageVersion = JSON.parse(fs.readFileSync(path.join(__dirname, '../../package.json'), 'utf8')).version;
+    expect(result.stdout.trim().split(/\r?\n/).pop()).toBe(packageVersion);
   });
 
   it('lists every supported top-level command and privacy flag', () => {
