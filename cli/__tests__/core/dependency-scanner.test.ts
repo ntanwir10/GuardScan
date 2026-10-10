@@ -611,6 +611,35 @@ describe('DependencyScanner OSV integration', () => {
     expect(fetchImpl).toHaveBeenCalledTimes(3);
   });
 
+  it('sorts npm fixed versions that are valid only in semver loose mode', async () => {
+    const record = {
+      ...advisory('GHSA-loose-fixed-versions', []),
+      affected: [{
+        package: {ecosystem: 'npm', name: 'lodash'},
+        ranges: [
+          {type: 'SEMVER', events: [{introduced: '0'}, {fixed: '=4.17.22'}]},
+          {type: 'SEMVER', events: [{introduced: '0'}, {fixed: '4.17.21'}]},
+        ],
+      }],
+    };
+    const fetchImpl = jest.fn(async (input: string | URL | Request) =>
+      String(input).endsWith('/v1/querybatch')
+        ? jsonResponse({results: [{vulns: [{id: record.id, modified: record.modified}]}]})
+        : jsonResponse(record)
+    ) as typeof fetch;
+
+    const results = await new DependencyScanner().scan(repository, {
+      client: new OsvClient({fetchImpl, retries: 0}),
+      cache: false,
+      enrichKnownExploited: false,
+    });
+
+    expect(results[0].vulnerabilities[0]).toMatchObject({
+      fixedVersions: ['4.17.21', '=4.17.22'],
+      recommendation: 'Update to 4.17.21 or later',
+    });
+  });
+
   it('reuses fresh matching OSV snapshots unless refresh is requested', async () => {
     const scanner = new DependencyScanner();
     const store = new VulnerabilitySnapshotStore(cache);

@@ -307,11 +307,11 @@ function fixedVersions(records: OsvVulnerability[], coordinate: DependencyCoordi
     if (!currentVersion) {
       return values
         .filter(version => semver.valid(version, { loose: true }))
-        .sort(semver.compare);
+        .sort((left, right) => semver.compare(left, right, { loose: true }));
     }
     return values
       .filter(version => semver.valid(version, { loose: true }) && semver.gt(version, currentVersion, { loose: true }))
-      .sort(semver.compare);
+      .sort((left, right) => semver.compare(left, right, { loose: true }));
   }
   return values.sort();
 }
