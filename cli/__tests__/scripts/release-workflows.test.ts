@@ -22,6 +22,51 @@ function stepCommands(job: any): string {
   return (job?.steps || []).map((step: any) => `${step.name || ''}\n${step.run || ''}`).join('\n');
 }
 
+function runWhitespaceCheck(step: any, cwd: string, baseSha: string): ReturnType<typeof spawnSync> {
+  const result = spawnSync('bash', ['-euo', 'pipefail', '-c', step.run], {
+    cwd,
+    encoding: 'utf8',
+    env: {...process.env, ...(step.env || {}), BASE_SHA: baseSha},
+  });
+  if (result.error) throw result.error;
+  if (result.status === null) throw new Error(result.stderr || 'bash did not return an exit status');
+  return result;
+}
+
+function createGitFixture(
+  root: string,
+  name: string,
+  firstCommit: string,
+): {cwd: string; base: string; commit: (contents: string) => string} {
+  const cwd = path.join(root, name);
+  fs.mkdirSync(cwd);
+  const git = (args: string[]) => {
+    const result = spawnSync('git', args, {
+      cwd,
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        GIT_AUTHOR_NAME: 'Workflow Test',
+        GIT_AUTHOR_EMAIL: 'workflow-test@example.invalid',
+        GIT_COMMITTER_NAME: 'Workflow Test',
+        GIT_COMMITTER_EMAIL: 'workflow-test@example.invalid',
+      },
+    });
+    if (result.error) throw result.error;
+    if (result.status !== 0) throw new Error(result.stderr || `git ${args.join(' ')} failed`);
+    return result.stdout.trim();
+  };
+  git(['init']);
+  const commit = (contents: string) => {
+    fs.writeFileSync(path.join(cwd, 'tracked.txt'), contents);
+    git(['add', 'tracked.txt']);
+    git(['-c', 'commit.gpgsign=false', 'commit', '-m', 'fixture commit']);
+    return git(['rev-parse', 'HEAD']);
+  };
+  const base = commit(firstCommit);
+  return {cwd, base, commit};
+}
+
 function assertBootstrapCi(workflow: any, scripts: Record<string, string>): void {
   const jobs = workflow.jobs || {};
   const bootstrap = jobs['release-bootstrap'];
@@ -201,6 +246,39 @@ describe('zero-touch release workflow contracts', () => {
       'source-contract', 'lint', 'test', 'npm-artifact', 'installed-package',
       'package-manager', 'standalone', 'integration',
     ]);
+  });
+
+  it('checks committed whitespace against the event base, including empty-tree fallbacks', () => {
+    const workflow = yaml.load(workflowSource('ci.yml')) as any;
+    const job = workflow.jobs['source-contract'] || workflow.jobs['release-bootstrap'];
+    const step = job.steps.find((candidate: any) => candidate.name === 'Reject whitespace and patch corruption');
+    expect(step).toBeTruthy();
+
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'guardscan-committed-diff-'));
+    try {
+      const clean = createGitFixture(root, 'clean-repo', 'clean\n');
+      const cleanHead = clean.commit('clean\nsecond clean line\n');
+      expect(runWhitespaceCheck(step, clean.cwd, clean.base).status).toBe(0);
+      expect(runWhitespaceCheck(step, clean.cwd, '').status).toBe(0);
+      expect(runWhitespaceCheck(step, clean.cwd, '0'.repeat(40)).status).toBe(0);
+
+      clean.commit('clean\nsecond clean line \n');
+      expect(runWhitespaceCheck(step, clean.cwd, cleanHead).status).not.toBe(0);
+      const invalidBase = runWhitespaceCheck(step, clean.cwd, 'not-a-revision');
+      expect(invalidBase.status).not.toBe(0);
+      expect(invalidBase.stderr).toContain('Refusing invalid base SHA');
+
+      const firstCommitWhitespace = createGitFixture(
+        root,
+        'first-commit-whitespace',
+        'first commit has trailing whitespace \n',
+      );
+      expect(runWhitespaceCheck(step, firstCommitWhitespace.cwd, '').status).not.toBe(0);
+      expect(runWhitespaceCheck(step, firstCommitWhitespace.cwd, '0'.repeat(40)).status).not.toBe(0);
+      expect(step.env?.BASE_SHA).toBe('${{ github.event.pull_request.base.sha || github.event.before }}');
+    } finally {
+      fs.rmSync(root, {recursive: true, force: true});
+    }
   });
 
   it('accepts a full inert-bootstrap gate graph and rejects a missing gate or dev audit', () => {
