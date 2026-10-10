@@ -1,0 +1,98 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://guardscancli.com/schemas/guardscan.release-state.v2.schema.json",
+  "title": "GuardScan materialized append-only release state",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "version",
+    "tag",
+    "commit",
+    "updatedAt",
+    "lastSequence",
+    "lastEventHash",
+    "channels",
+    "canaries",
+    "incidents"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "guardscan.release-state.v2" },
+    "version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:-[0-9A-Za-z.-]+)?$" },
+    "tag": { "type": "string", "pattern": "^v[0-9]+\\.[0-9]+\\.[0-9]+(?:-[0-9A-Za-z.-]+)?$" },
+    "commit": { "type": "string", "pattern": "^[a-f0-9]{40}$" },
+    "updatedAt": { "type": "string", "format": "date-time" },
+    "lastSequence": { "type": "integer", "minimum": 1 },
+    "lastEventHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "manifestSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "channels": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": { "$ref": "#/definitions/channel" }
+    },
+    "canaries": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "array",
+        "items": { "$ref": "#/definitions/canary" }
+      }
+    },
+    "incidents": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/definitions/incident" }
+    },
+    "promotion": { "type": "object" }
+  },
+  "definitions": {
+    "channel": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "artifactIds", "updatedAt"],
+      "properties": {
+        "status": {
+          "enum": [
+            "planned",
+            "published",
+            "submitted",
+            "accepted",
+            "verified",
+            "failed",
+            "withdrawn",
+            "superseded"
+          ]
+        },
+        "artifactIds": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1, "maxLength": 200 }
+        },
+        "updatedAt": { "type": "string", "format": "date-time" },
+        "remoteIdentity": { "type": "string", "minLength": 1, "maxLength": 500 },
+        "remoteDigest": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "error": { "type": "string", "minLength": 1, "maxLength": 2000 }
+      }
+    },
+    "canary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "checkedAt"],
+      "properties": {
+        "status": { "enum": ["passed", "failed"] },
+        "checkedAt": { "type": "string", "format": "date-time" },
+        "evidenceUrl": { "type": "string", "format": "uri" }
+      }
+    },
+    "incident": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "status", "openedAt", "summary"],
+      "properties": {
+        "kind": { "enum": ["integrity", "security", "availability"] },
+        "status": { "enum": ["open", "resolved"] },
+        "openedAt": { "type": "string", "format": "date-time" },
+        "resolvedAt": { "type": "string", "format": "date-time" },
+        "summary": { "type": "string", "minLength": 1, "maxLength": 2000 }
+      }
+    }
+  }
+}

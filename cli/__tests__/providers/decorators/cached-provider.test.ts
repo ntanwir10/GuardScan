@@ -2,13 +2,15 @@
  * cached-provider.test.ts - Unit tests for CachedProvider
  */
 
-import { describe, expect, it, jest, beforeEach } from '@jest/globals';
+import { afterEach, describe, expect, it, beforeEach } from '@jest/globals';
 import { CachedProvider } from '../../../src/providers/decorators/cached-provider';
 import { AIProvider, AIMessage, AIResponse } from '../../../src/providers/base';
 
 // Mock provider
 class MockProvider extends AIProvider {
   private callCount = 0;
+  private embeddingCallCount = 0;
+  private streamCallCount = 0;
 
   async chat(messages: AIMessage[]): Promise<AIResponse> {
     this.callCount++;
@@ -20,7 +22,13 @@ class MockProvider extends AIProvider {
   }
 
   async *stream(): AsyncGenerator<string> {
+    this.streamCallCount++;
     yield 'test';
+  }
+
+  async generateEmbedding(): Promise<number[]> {
+    this.embeddingCallCount++;
+    return [1, 0, 0];
   }
 
   isAvailable(): boolean {
@@ -51,13 +59,32 @@ class MockProvider extends AIProvider {
   resetCallCount() {
     this.callCount = 0;
   }
+
+  getEmbeddingCallCount() {
+    return this.embeddingCallCount;
+  }
+
+  getStreamCallCount() {
+    return this.streamCallCount;
+  }
 }
+
+const originalNoCache = process.env.GUARDSCAN_NO_CACHE;
 
 describe('CachedProvider', () => {
   beforeEach(async () => {
+    delete process.env.GUARDSCAN_NO_CACHE;
     const mock = new MockProvider();
     const cached = new CachedProvider(mock, 'test-repo');
     await cached.clearCache();
+  });
+
+  afterEach(() => {
+    if (originalNoCache === undefined) {
+      delete process.env.GUARDSCAN_NO_CACHE;
+    } else {
+      process.env.GUARDSCAN_NO_CACHE = originalNoCache;
+    }
   });
   describe('cache hits and misses', () => {
     it('should cache responses', async () => {
@@ -138,17 +165,39 @@ describe('CachedProvider', () => {
   });
 
   describe('cache bypass when disabled', () => {
-    it('should bypass cache when disabled', async () => {
+    it.each([
+      ['configuration', false, undefined],
+      ['GUARDSCAN_NO_CACHE', true, 'true'],
+    ])(
+      'fully bypasses exact and semantic caching when disabled by %s',
+      async (_source, configuredEnabled, environmentValue) => {
+      if (environmentValue) {
+        process.env.GUARDSCAN_NO_CACHE = environmentValue;
+      }
       const mock = new MockProvider();
-      const cached = new CachedProvider(mock, 'test-repo', undefined, {
-        enabled: false,
+      const cached = new CachedProvider(mock, 'test-repo', mock, {
+        enabled: configuredEnabled,
+        useSemanticSimilarity: true,
       });
 
       await cached.chat([{ role: 'user', content: 'test' }]);
       await cached.chat([{ role: 'user', content: 'test' }]);
+      for await (const _chunk of cached.stream([{ role: 'user', content: 'stream' }])) {
+        // Drain the stream; disabled caching must not store the response.
+      }
 
-      // Should call provider twice (no caching)
       expect(mock.getCallCount()).toBe(2);
+      expect(mock.getStreamCallCount()).toBe(1);
+      expect(mock.getEmbeddingCallCount()).toBe(0);
+      expect(cached.getCacheStats()).toEqual({
+        hits: 0,
+        misses: 0,
+        totalEntries: 0,
+        totalSize: 0,
+        hitRate: 0,
+      });
+      expect((cached as any).cache).toBeUndefined();
+      expect((cached as any).semanticCache).toBeUndefined();
     });
   });
 });

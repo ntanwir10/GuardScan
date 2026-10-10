@@ -43,7 +43,7 @@ describe("init command", () => {
   let originalEnv: NodeJS.ProcessEnv;
   let testConfigDir: string;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     // Save original environment
     originalEnv = { ...process.env };
 
@@ -53,8 +53,8 @@ describe("init command", () => {
     process.env.HOME = testConfigDir; // Also set HOME to ensure consistency
 
     jest.resetModules();
-    ({ configManager } = require("../../src/core/config"));
-    ({ initCommand } = require("../../src/commands/init"));
+    ({ initCommand } = await import("../../src/commands/init"));
+    ({ configManager } = await import("../../src/core/config"));
 
     // Clear all mocks
     jest.clearAllMocks();

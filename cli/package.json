@@ -22,6 +22,14 @@
     "test": "jest",
     "test:package": "node scripts/package-smoke.js",
     "test:package-manager": "node scripts/package-manager-smoke.js",
+    "test:release": "jest __tests__/ci/release-gate.test.ts __tests__/contracts/release-contracts.test.ts __tests__/scripts/artifact-sbom.test.ts __tests__/scripts/release-please-config.test.ts __tests__/scripts/release-renderers.test.ts __tests__/scripts/release-tool.test.ts __tests__/scripts/release-train.test.ts __tests__/scripts/release-workflows.test.ts __tests__/scripts/standalone-builder.test.ts --runInBand",
+    "release:validate": "node scripts/release/index.js validate",
+    "release:build": "node scripts/release/index.js build",
+    "release:manifest": "node scripts/release/index.js manifest",
+    "release:render": "node scripts/release/index.js render",
+    "release:package": "node scripts/release/index.js package",
+    "release:verify-npm": "node scripts/release/index.js verify-npm-artifact",
+    "release:npm-preflight": "node scripts/release/index.js npm-preflight",
     "lint:fix": "eslint src --ext .ts --fix"
   },
   "keywords": [

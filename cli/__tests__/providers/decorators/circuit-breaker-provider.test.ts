@@ -2,7 +2,10 @@
  * circuit-breaker-provider.test.ts - Unit tests for CircuitBreakerProvider
  */
 
-import { describe, expect, it, jest, beforeEach } from '@jest/globals';
+import { afterAll, beforeAll, describe, expect, it } from '@jest/globals';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import {
   CircuitBreakerProvider,
   CircuitState,
@@ -74,6 +77,40 @@ class FailingMockProvider extends AIProvider {
 }
 
 describe('CircuitBreakerProvider', () => {
+  const originalGuardScanHome = process.env.GUARDSCAN_HOME;
+  const isolatedHome = path.join(
+    os.tmpdir(),
+    `guardscan-circuit-breaker-${process.pid}-${Date.now()}`
+  );
+
+  beforeAll(() => {
+    process.env.GUARDSCAN_HOME = isolatedHome;
+  });
+
+  afterAll(async () => {
+    // State writes are intentionally best-effort; let pending writes settle.
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    fs.rmSync(isolatedHome, { recursive: true, force: true });
+    if (originalGuardScanHome === undefined) {
+      delete process.env.GUARDSCAN_HOME;
+    } else {
+      process.env.GUARDSCAN_HOME = originalGuardScanHome;
+    }
+  });
+
+  it('stores state under GUARDSCAN_HOME rather than the real user home', () => {
+    const cb = new CircuitBreakerProvider(new FailingMockProvider());
+
+    expect((cb as any).statePath).toBe(
+      path.join(
+        isolatedHome,
+        '.guardscan',
+        'circuit-breaker',
+        'FailingMock-state.json'
+      )
+    );
+  });
+
   describe('state transitions', () => {
     it('should start in CLOSED state', () => {
       const mock = new FailingMockProvider();

@@ -1,0 +1,310 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://guardscancli.com/schemas/guardscan.release-manifest.v1.schema.json",
+  "title": "GuardScan release artifact manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "version",
+    "tag",
+    "commit",
+    "createdAt",
+    "producer",
+    "toolchain",
+    "artifacts"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "guardscan.release-manifest.v1" },
+    "version": { "$ref": "#/definitions/semver" },
+    "tag": { "$ref": "#/definitions/versionTag" },
+    "commit": { "$ref": "#/definitions/commit" },
+    "createdAt": { "type": "string", "format": "date-time" },
+    "producer": { "$ref": "#/definitions/producer" },
+    "toolchain": { "$ref": "#/definitions/toolchain" },
+    "artifacts": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "$ref": "#/definitions/artifact" }
+    }
+  },
+  "definitions": {
+    "semver": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$"
+    },
+    "versionTag": {
+      "type": "string",
+      "pattern": "^v(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$"
+    },
+    "commit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "producer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider", "repository", "workflow", "runId", "runAttempt", "sourceRef"],
+      "properties": {
+        "provider": { "const": "github-actions" },
+        "repository": { "const": "ntanwir10/GuardScan" },
+        "workflow": { "type": "string", "pattern": "^\\.github/workflows/[A-Za-z0-9._-]+\\.yml$" },
+        "runId": { "type": "string", "pattern": "^[1-9][0-9]{0,19}$" },
+        "runAttempt": { "type": "integer", "minimum": 1 },
+        "sourceRef": { "type": "string", "pattern": "^refs/(heads|tags)/[A-Za-z0-9._/-]+$" }
+      }
+    },
+    "toolchain": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["node", "packageManager", "tools"],
+      "properties": {
+        "node": { "$ref": "#/definitions/semver" },
+        "packageManager": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "version"],
+          "properties": {
+            "name": { "enum": ["npm", "pnpm", "yarn", "bun"] },
+            "version": { "$ref": "#/definitions/semver" }
+          }
+        },
+        "tools": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "version"],
+            "properties": {
+              "name": { "type": "string", "minLength": 1, "maxLength": 100 },
+              "version": { "type": "string", "minLength": 1, "maxLength": 100 }
+            }
+          }
+        }
+      }
+    },
+    "capabilities": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["coreScan", "sbom", "chartRendering", "accurateTokenCounting"],
+      "properties": {
+        "coreScan": { "type": "boolean" },
+        "sbom": { "type": "boolean" },
+        "chartRendering": { "type": "boolean" },
+        "accurateTokenCounting": { "type": "boolean" }
+      }
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "tag", "commit"],
+      "properties": {
+        "version": { "$ref": "#/definitions/semver" },
+        "tag": { "$ref": "#/definitions/versionTag" },
+        "commit": { "$ref": "#/definitions/commit" }
+      }
+    },
+    "platform": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["os", "arch"],
+      "properties": {
+        "os": { "enum": ["darwin", "linux", "windows"] },
+        "arch": { "enum": ["x64", "arm64"] },
+        "libc": { "enum": ["glibc", "musl"] }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "url", "verified"],
+      "properties": {
+        "type": {
+          "enum": [
+            "sigstore",
+            "minisign",
+            "gpg",
+            "authenticode",
+            "apple-code-signing",
+            "apple-notarization",
+            "spdx",
+            "cyclonedx"
+          ]
+        },
+        "url": { "type": "string", "format": "uri" },
+        "verified": { "const": true },
+        "sha256": { "$ref": "#/definitions/sha256" },
+        "certificateUrl": { "type": "string", "format": "uri" },
+        "bundleUrl": { "type": "string", "format": "uri" }
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "url", "verified"],
+      "properties": {
+        "type": { "enum": ["slsa", "in-toto"] },
+        "url": { "type": "string", "format": "uri" },
+        "verified": { "const": true },
+        "sha256": { "$ref": "#/definitions/sha256" },
+        "predicateType": { "type": "string", "format": "uri" }
+      }
+    },
+    "archiveEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "size", "mode", "sha256"],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]*$"
+        },
+        "size": { "type": "integer", "minimum": 1 },
+        "mode": { "type": "string", "pattern": "^[0-7]{4}$" },
+        "sha256": { "$ref": "#/definitions/sha256" }
+      }
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "filename", "size", "sha256", "source", "capabilities"],
+      "allOf": [
+        {
+          "if": {
+            "properties": { "kind": { "const": "npm-tarball" } },
+            "required": ["kind"]
+          },
+          "then": {
+            "properties": {
+              "url": {},
+              "integrity": {},
+              "provenance": {}
+            },
+            "required": ["url", "integrity", "provenance"]
+          }
+        },
+        {
+          "if": {
+            "properties": { "kind": { "const": "standalone" } },
+            "required": ["kind"]
+          },
+          "then": {
+            "properties": {
+              "platform": {},
+              "productionReady": {},
+              "archiveFormat": {},
+              "entrypoint": {},
+              "url": {},
+              "signatures": {},
+              "sboms": {},
+              "archiveEntries": {},
+              "provenance": {}
+            },
+            "required": [
+              "platform",
+              "productionReady",
+              "archiveFormat",
+              "entrypoint",
+              "url",
+              "signatures",
+              "sboms",
+              "archiveEntries",
+              "provenance"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": { "kind": { "const": "python-wheel" } },
+            "required": ["kind"]
+          },
+          "then": {
+            "properties": {
+              "platform": {},
+              "embeddedStandaloneId": {},
+              "embeddedExecutableSha256": {},
+              "provenance": {}
+            },
+            "required": [
+              "platform",
+              "embeddedStandaloneId",
+              "embeddedExecutableSha256",
+              "provenance"
+            ]
+          }
+        }
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@+~/-]*$"
+        },
+        "kind": {
+          "enum": ["npm-tarball", "standalone", "python-wheel", "sbom", "checksum"]
+        },
+        "productionReady": { "const": true },
+        "filename": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._+~-]*$"
+        },
+        "size": { "type": "integer", "minimum": 1 },
+        "sha256": { "$ref": "#/definitions/sha256" },
+        "source": { "$ref": "#/definitions/source" },
+        "capabilities": { "$ref": "#/definitions/capabilities" },
+        "platform": { "$ref": "#/definitions/platform" },
+        "archiveFormat": { "enum": ["tar.gz", "zip"] },
+        "entrypoint": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]*$"
+        },
+        "url": { "type": "string", "format": "uri" },
+        "integrity": {
+          "type": "string",
+          "pattern": "^sha512-[A-Za-z0-9+/]+={0,2}$"
+        },
+        "signature": { "$ref": "#/definitions/evidence" },
+        "signatures": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "$ref": "#/definitions/evidence" }
+        },
+        "sboms": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "$ref": "#/definitions/evidence" }
+        },
+        "archiveEntries": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "uniqueItems": true,
+          "items": { "$ref": "#/definitions/archiveEntry" }
+        },
+        "embeddedStandaloneId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "embeddedExecutableSha256": { "$ref": "#/definitions/sha256" },
+        "provenance": { "$ref": "#/definitions/provenance" }
+      }
+    }
+  }
+}
