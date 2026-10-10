@@ -24,7 +24,8 @@ describe('zero-touch release workflow contracts', () => {
     expect(source).not.toContain('npm publish');
     expect(source).not.toContain('gh release create');
     expect(source).toContain('npm test -- --coverage --runInBand');
-    expect(source).toContain('npm audit --omit=dev --audit-level=high');
+    expect(source).toContain('npm audit --audit-level=moderate');
+    expect(source).not.toContain('npm audit --omit=dev');
     expect(source).toContain('npm run test:package');
     expect(source).toContain('npm run test:package-manager');
     expect(source).toContain('npm run lint:ratchet');
