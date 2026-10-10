@@ -229,11 +229,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - {id: linux-x64-glibc, runner: ubuntu-24.04, os: linux, arch: x64, libc: glibc, executable: guardscan}
-          - {id: linux-arm64-glibc, runner: ubuntu-24.04-arm, os: linux, arch: arm64, libc: glibc, executable: guardscan}
-          - {id: darwin-arm64, runner: macos-15, os: darwin, arch: arm64, libc: '', executable: guardscan}
-          - {id: darwin-x64, runner: macos-15-intel, os: darwin, arch: x64, libc: '', executable: guardscan}
-          - {id: windows-x64, runner: windows-2025, os: windows, arch: x64, libc: '', executable: guardscan.exe}
+          - {id: linux-x64-glibc, runner: ubuntu-24.04, os: linux, arch: x64, libc: glibc, executable: guardscan, archive: tar.gz}
+          - {id: linux-arm64-glibc, runner: ubuntu-24.04-arm, os: linux, arch: arm64, libc: glibc, executable: guardscan, archive: tar.gz}
+          - {id: darwin-arm64, runner: macos-15, os: darwin, arch: arm64, libc: '', executable: guardscan, archive: zip}
+          - {id: darwin-x64, runner: macos-15-intel, os: darwin, arch: x64, libc: '', executable: guardscan, archive: zip}
+          - {id: windows-x64, runner: windows-2025, os: windows, arch: x64, libc: '', executable: guardscan.exe, archive: zip}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -273,11 +273,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - {id: linux-x64-glibc, runner: ubuntu-24.04, os: linux, arch: x64, libc: glibc, executable: guardscan}
-          - {id: linux-arm64-glibc, runner: ubuntu-24.04-arm, os: linux, arch: arm64, libc: glibc, executable: guardscan}
-          - {id: darwin-arm64, runner: macos-15, os: darwin, arch: arm64, libc: '', executable: guardscan}
-          - {id: darwin-x64, runner: macos-15-intel, os: darwin, arch: x64, libc: '', executable: guardscan}
-          - {id: windows-x64, runner: windows-2025, os: windows, arch: x64, libc: '', executable: guardscan.exe}
+          - {id: linux-x64-glibc, runner: ubuntu-24.04, os: linux, arch: x64, libc: glibc, executable: guardscan, archive: tar.gz}
+          - {id: linux-arm64-glibc, runner: ubuntu-24.04-arm, os: linux, arch: arm64, libc: glibc, executable: guardscan, archive: tar.gz}
+          - {id: darwin-arm64, runner: macos-15, os: darwin, arch: arm64, libc: '', executable: guardscan, archive: zip}
+          - {id: darwin-x64, runner: macos-15-intel, os: darwin, arch: x64, libc: '', executable: guardscan, archive: zip}
+          - {id: windows-x64, runner: windows-2025, os: windows, arch: x64, libc: '', executable: guardscan.exe, archive: zip}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -365,14 +365,11 @@ jobs:
           security import "$RUNNER_TEMP/certificate.p12" -P "$APPLE_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN"
           security list-keychain -d user -s "$KEYCHAIN"
           security set-key-partition-list -S apple-tool:,apple: -s -k "$RUNNER_TEMP" "$KEYCHAIN"
-      - name: Sign, notarize, staple, and verify macOS executable
+      - name: Sign and verify macOS executable
         if: matrix.os == 'darwin'
         shell: bash
         env:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
-          APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
-          APPLE_NOTARY_PRIVATE_KEY: ${{ secrets.APPLE_NOTARY_PRIVATE_KEY }}
         run: |
           KEYCHAIN="$RUNNER_TEMP/guardscan-signing.keychain-db"
           IDENTITY="$(security find-identity -v -p codesigning "$KEYCHAIN" | awk -v team="($APPLE_TEAM_ID)" 'index($0, "Developer ID Application:") && index($0, team) {print $2}')"
@@ -385,38 +382,6 @@ jobs:
           SIGNED_VERSION="$(GUARDSCAN_HOME="$RUNNER_TEMP/post-sign-home" GUARDSCAN_NO_TELEMETRY=true \
             GUARDSCAN_OFFLINE=true standalone/guardscan --version | tail -n 1 | tr -d '\r')"
           test "$SIGNED_VERSION" = "${EXPECTED_VERSION#v}"
-          printf '%s' "$APPLE_NOTARY_PRIVATE_KEY" > "$RUNNER_TEMP/AuthKey.p8"
-          mkdir "$RUNNER_TEMP/notarization-volume"
-          cp standalone/guardscan "$RUNNER_TEMP/notarization-volume/guardscan"
-          hdiutil create \
-            -volname "GuardScan" \
-            -srcfolder "$RUNNER_TEMP/notarization-volume" \
-            -format UDZO \
-            "$RUNNER_TEMP/guardscan-notarization.dmg"
-          codesign --force --timestamp --sign "$IDENTITY" "$RUNNER_TEMP/guardscan-notarization.dmg"
-          xcrun notarytool submit "$RUNNER_TEMP/guardscan-notarization.dmg" \
-            --key "$RUNNER_TEMP/AuthKey.p8" \
-            --key-id "$APPLE_NOTARY_KEY_ID" \
-            --issuer "$APPLE_NOTARY_ISSUER_ID" \
-            --wait --output-format json > "$RUNNER_TEMP/notary-submission.json"
-          SUBMISSION_ID="$(node -p 'require(process.argv[1]).id' "$RUNNER_TEMP/notary-submission.json")"
-          xcrun notarytool log "$SUBMISSION_ID" \
-            --key "$RUNNER_TEMP/AuthKey.p8" \
-            --key-id "$APPLE_NOTARY_KEY_ID" \
-            --issuer "$APPLE_NOTARY_ISSUER_ID" \
-            "$RUNNER_TEMP/apple-notarization.json"
-          node -e '
-            const submission = require(process.argv[1]);
-            const log = require(process.argv[2]);
-            if (submission.status !== "Accepted" || log.status !== "Accepted") {
-              throw new Error(`notarization was not accepted: ${submission.status || log.status}`);
-            }
-          ' "$RUNNER_TEMP/notary-submission.json" "$RUNNER_TEMP/apple-notarization.json"
-          xcrun stapler staple "$RUNNER_TEMP/guardscan-notarization.dmg"
-          xcrun stapler validate "$RUNNER_TEMP/guardscan-notarization.dmg"
-          spctl --assess --type open --context context:primary-signature --verbose=4 "$RUNNER_TEMP/guardscan-notarization.dmg"
-          cp "$RUNNER_TEMP/apple-notarization.json" standalone/apple-notarization.json
-          cp "$RUNNER_TEMP/guardscan-notarization.dmg" standalone/stapled-notarization.dmg
           codesign -dvvv standalone/guardscan 2> standalone/apple-code-signing.txt
       - name: Remove ephemeral Apple signing material
         if: always() && matrix.os == 'darwin'
@@ -511,12 +476,47 @@ jobs:
           node cli/scripts/release/index.js build "${ARGS[@]}"
           cp standalone-sbom/guardscan-*.json native-output/
           cp "standalone/${{ matrix.id }}.executable.provenance.sigstore.json" native-output/
-          for file in guardscan.sigstore.json apple-code-signing.txt apple-notarization.json stapled-notarization.dmg authenticode.txt; do [ -f "standalone/$file" ] && cp "standalone/$file" "native-output/${{ matrix.id }}.$file"; done
+          for file in guardscan.sigstore.json apple-code-signing.txt authenticode.txt; do [ -f "standalone/$file" ] && cp "standalone/$file" "native-output/${{ matrix.id }}.$file"; done
+      - name: Notarize exact macOS archive
+        if: matrix.os == 'darwin'
+        shell: bash
+        env:
+          APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+          APPLE_NOTARY_PRIVATE_KEY: ${{ secrets.APPLE_NOTARY_PRIVATE_KEY }}
+        run: |
+          NATIVE_ARCHIVE="$(find native-output -maxdepth 1 -type f -name 'guardscan-*.zip' -print -quit)"
+          test -n "$NATIVE_ARCHIVE"
+          ARCHIVE_METADATA="$(find native-output -maxdepth 1 -type f -name '*.metadata.json' -print -quit)"
+          test -n "$ARCHIVE_METADATA"
+          trap 'rm -f "$RUNNER_TEMP/AuthKey.p8"' EXIT
+          node - "$NATIVE_ARCHIVE" "$ARCHIVE_METADATA" <<'NODE'
+          const crypto = require('crypto');
+          const fs = require('fs');
+          const path = require('path');
+          const [archiveFile, metadataFile] = process.argv.slice(2);
+          const metadata = JSON.parse(fs.readFileSync(metadataFile));
+          const bytes = fs.readFileSync(archiveFile);
+          if (metadata.artifact.filename !== path.basename(archiveFile)
+              || metadata.artifact.size !== bytes.length
+              || metadata.artifact.sha256 !== crypto.createHash('sha256').update(bytes).digest('hex')) {
+            throw new Error('macOS notarization subject does not match archive metadata');
+          }
+          NODE
+          printf '%s' "$APPLE_NOTARY_PRIVATE_KEY" > "$RUNNER_TEMP/AuthKey.p8"
+          xcrun notarytool submit "$NATIVE_ARCHIVE" --key "$RUNNER_TEMP/AuthKey.p8" --key-id "$APPLE_NOTARY_KEY_ID" --issuer "$APPLE_NOTARY_ISSUER_ID" --wait --output-format json > "$RUNNER_TEMP/notary.json"
+          test "$(node -p 'require(process.argv[1]).status' "$RUNNER_TEMP/notary.json")" = Accepted
+          rm -rf "$RUNNER_TEMP/guardscan-unpacked"
+          ditto -x -k "$NATIVE_ARCHIVE" "$RUNNER_TEMP/guardscan-unpacked"
+          test -f "$RUNNER_TEMP/guardscan-unpacked/guardscan"
+          codesign --verify --deep --strict --verbose=2 "$RUNNER_TEMP/guardscan-unpacked/guardscan"
+          spctl --assess --type execute --verbose=4 "$RUNNER_TEMP/guardscan-unpacked/guardscan"
+          cp "$RUNNER_TEMP/notary.json" "native-output/${{ matrix.id }}.apple-notarization.json"
       - name: Attest signed archive
         id: attest-archive
         uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
         with:
-          subject-path: native-output/guardscan-*
+          subject-path: native-output/guardscan-*.${{ matrix.archive }}
       - name: Bind archive metadata to archive attestation
         env:
           GH_TOKEN: ${{ github.token }}

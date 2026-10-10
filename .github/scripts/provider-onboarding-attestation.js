@@ -22,6 +22,10 @@ const ATTESTED_PATHS = Object.freeze([
   '.github/workflows/release-provider-rehearsal.yml',
   '.github/workflows/release-publish.yml',
   '.github/workflows/release-train.yml',
+  'cli/scripts/release',
+  'cli/schemas',
+  'cli/package.json',
+  'cli/package-lock.json',
   'catalog/homebrew-tap/.github/workflows/verify.yml',
   'docs/RELEASE_AUTOMATION.md',
   'docs/RELEASE_ONBOARDING.md',
@@ -31,15 +35,33 @@ function sha256(value) {
   return crypto.createHash('sha256').update(value).digest('hex');
 }
 
+function relativeFiles(repositoryRoot, entry) {
+  const files = [];
+  const walk = relative => {
+    const absolute = path.join(repositoryRoot, relative);
+    const stat = fs.lstatSync(absolute);
+    assert.equal(stat.isSymbolicLink(), false, `${relative} must not be a symlink`);
+    if (stat.isFile()) {
+      files.push(relative);
+      return;
+    }
+    assert.equal(stat.isDirectory(), true, `${relative} must be a regular file or directory`);
+    for (const name of fs.readdirSync(absolute).sort()) {
+      walk(path.posix.join(relative, name));
+    }
+  };
+  walk(entry);
+  assert(files.length > 0, `${entry} must not be empty`);
+  return files;
+}
+
 function computeProviderOnboardingAttestation(repositoryRoot, repository = EXPECTED_REPOSITORY) {
   assert.equal(repository, EXPECTED_REPOSITORY, 'provider onboarding repository identity drifted');
   const records = [`repository\0${repository}\n`];
-  for (const file of ATTESTED_PATHS) {
-    const absolute = path.join(repositoryRoot, file);
-    const stat = fs.lstatSync(absolute);
-    assert.equal(stat.isSymbolicLink(), false, `${file} must not be a symlink`);
-    assert.equal(stat.isFile(), true, `${file} must be a regular file`);
-    records.push(`${file}\0${sha256(fs.readFileSync(absolute))}\n`);
+  const files = ATTESTED_PATHS.flatMap(entry => relativeFiles(repositoryRoot, entry));
+  assert.equal(new Set(files).size, files.length, 'provider onboarding paths overlap');
+  for (const file of files) {
+    records.push(`${file}\0${sha256(fs.readFileSync(path.join(repositoryRoot, file)))}\n`);
   }
   return `sha256:${sha256(records.join(''))}`;
 }

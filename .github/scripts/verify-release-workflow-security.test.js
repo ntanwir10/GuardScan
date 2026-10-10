@@ -44,6 +44,10 @@ test('provider onboarding attestation is deterministic and content-bound', () =>
     '.github/workflows/release-provider-rehearsal.yml',
     '.github/workflows/release-publish.yml',
     '.github/workflows/release-train.yml',
+    'cli/scripts/release',
+    'cli/schemas',
+    'cli/package.json',
+    'cli/package-lock.json',
     'docs/RELEASE_ONBOARDING.md',
   ]) assert(ATTESTED_PATHS.includes(required), `${required} must be attested`);
 
@@ -51,8 +55,13 @@ test('provider onboarding attestation is deterministic and content-bound', () =>
   try {
     for (const file of ATTESTED_PATHS) {
       const absolute = path.join(fixture, file);
-      fs.mkdirSync(path.dirname(absolute), {recursive: true});
-      fs.writeFileSync(absolute, `${file}\n`);
+      if (file === 'cli/scripts/release' || file === 'cli/schemas') {
+        fs.mkdirSync(absolute, {recursive: true});
+        fs.writeFileSync(path.join(absolute, 'fixture.json'), `${file}\n`);
+      } else {
+        fs.mkdirSync(path.dirname(absolute), {recursive: true});
+        fs.writeFileSync(absolute, `${file}\n`);
+      }
     }
     const first = computeProviderOnboardingAttestation(fixture);
     assert.match(first, /^sha256:[a-f0-9]{64}$/);
@@ -82,6 +91,9 @@ test('provider onboarding attestation is deterministic and content-bound', () =>
     assert.throws(() => createProviderOnboardingAttestation(first, issuedAt, 31), /between 1 and 30/);
     fs.appendFileSync(path.join(fixture, ATTESTED_PATHS[0]), 'changed\n');
     assert.notEqual(computeProviderOnboardingAttestation(fixture), first);
+    const beforeNestedChange = computeProviderOnboardingAttestation(fixture);
+    fs.appendFileSync(path.join(fixture, 'cli/scripts/release/fixture.json'), 'nested-change\n');
+    assert.notEqual(computeProviderOnboardingAttestation(fixture), beforeNestedChange);
     assert.throws(
       () => computeProviderOnboardingAttestation(fixture, 'other/repository'),
       /repository identity drifted/

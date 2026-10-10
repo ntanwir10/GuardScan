@@ -112,7 +112,7 @@ jobs:
               channel: process.env.CHANNEL,
               status: "failed",
               checkedAt: new Date().toISOString(),
-              target: process.env.TARGET,
+              target: channel === "pypi" ? process.env.TARGET.replace(/-glibc$/, "") : process.env.TARGET,
               evidenceUrl: `${process.env.SERVER_URL}/${process.env.REPOSITORY}/actions/runs/${process.env.RUN_ID}`,
             }) + "\n")
           '
@@ -626,7 +626,7 @@ jobs:
               channel = $channel
               status = 'pending'
               checkedAt = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.fffZ')
-              target = 'windows-x64'
+              target = 'Windows'
               evidenceUrl = "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
             } | ConvertTo-Json -Compress | Out-File "$channel.json"
           }
@@ -642,7 +642,7 @@ jobs:
               channel = $channel
               status = 'pending'
               checkedAt = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.fffZ')
-              target = 'windows-x64'
+              target = 'Windows'
               evidenceUrl = "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
             }
             $notPublic = $false

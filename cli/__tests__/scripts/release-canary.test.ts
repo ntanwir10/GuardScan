@@ -24,7 +24,10 @@ const COMMIT = 'a'.repeat(40);
 const STARTED_AT = '2026-08-19T12:00:00.000Z';
 const EVALUATED_AT = '2026-08-19T13:00:00.000Z';
 
-function withLedger(callback: (ledger: string) => void): void {
+function withLedger(
+  callback: (ledger: string) => void,
+  channels: string[] = Object.keys(DEFAULT_RC_CANARY_TARGETS),
+): void {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'guardscan-canary-'));
   const ledger = path.join(root, 'events.ndjson');
   appendEvent(ledger, {
@@ -34,7 +37,7 @@ function withLedger(callback: (ledger: string) => void): void {
     commit: COMMIT,
     timestamp: STARTED_AT,
     idempotencyKey: 'train-started',
-    payload: {channels: Object.keys(DEFAULT_RC_CANARY_TARGETS)},
+    payload: {channels},
   });
   try {
     callback(ledger);
@@ -85,6 +88,23 @@ function promotionInput(overrides: Record<string, any> = {}): Record<string, any
 }
 
 describe('release canary public seams', () => {
+  test('native workflow maps Linux PyPI reports to PyPI targets without changing GitHub targets', () => {
+    const workflow = fs.readFileSync(
+      path.resolve(__dirname, '../../../.github/workflows/release-canary.yml'),
+      'utf8',
+    );
+    const packageManagersStart = workflow.indexOf('  package-managers:');
+    const nativeStart = workflow.indexOf('  native-and-pypi:');
+    const adaptersStart = workflow.indexOf('  adapters:');
+    const packageManagers = workflow.slice(packageManagersStart, nativeStart);
+    const nativeAndPypi = workflow.slice(nativeStart, adaptersStart);
+    expect(packageManagers).toContain('target: process.env.TARGET');
+    expect(packageManagers).not.toContain('channel === "pypi"');
+    expect(nativeAndPypi).toContain(
+      'target: channel === "pypi" ? process.env.TARGET.replace(/-glibc$/, "") : process.env.TARGET',
+    );
+  });
+
   test('schemas require report identity and the immutable promotion floor', () => {
     const ajv = new Ajv({allErrors: true, strict: true});
     addFormats(ajv);
@@ -94,11 +114,20 @@ describe('release canary public seams', () => {
     const promotionSchema = JSON.parse(fs.readFileSync(
       path.resolve(__dirname, '../../schemas/guardscan.promotion-decision.v1.schema.json'), 'utf8'
     ));
+    const eventSchema = JSON.parse(fs.readFileSync(
+      path.resolve(__dirname, '../../schemas/guardscan.release-event.v1.schema.json'), 'utf8'
+    ));
+    const stateSchema = JSON.parse(fs.readFileSync(
+      path.resolve(__dirname, '../../schemas/guardscan.release-state.v2.schema.json'), 'utf8'
+    ));
     const validateReport = ajv.compile(reportSchema);
     const validatePromotion = ajv.compile(promotionSchema);
     expect(validateReport(reports()[0])).toBe(true);
+    expect(validateReport({...reports()[0], status: 'pending'})).toBe(true);
     expect(validateReport({...reports()[0], target: undefined})).toBe(false);
     expect(validateReport({...reports()[0], evidenceUrl: 'http://example.test/evidence'})).toBe(false);
+    expect(eventSchema.definitions.canaryRecorded.properties.status.enum).toContain('pending');
+    expect(stateSchema.definitions.canary.properties.status.enum).toContain('pending');
     const policy = {
       soakHours: 24,
       minimumSamplesPerChannel: 24,
@@ -110,6 +139,35 @@ describe('release canary public seams', () => {
     decision.policy = policy;
     decision.policy.requiredChannels = [];
     expect(validatePromotion(decision)).toBe(false);
+  });
+
+  test('clamps ledger event time while preserving the original canary check time', () => {
+    withLedger(ledger => {
+      const ledgerTail = '2026-08-19T12:45:00.000Z';
+      const checkedAt = '2026-08-19T12:30:00.000Z';
+      appendEvent(ledger, {
+        version: VERSION,
+        tag: TAG,
+        commit: COMMIT,
+        timestamp: ledgerTail,
+        type: 'manifest_created',
+        idempotencyKey: 'manifest-after-canary-check',
+        payload: {manifestSha256: 'b'.repeat(64)},
+      });
+      const result = recordCanary({
+        ledgerFile: ledger,
+        reports: reports().map(report => ({...report, checkedAt})),
+        expectedTargets: DEFAULT_RC_CANARY_TARGETS,
+        evaluatedAt: EVALUATED_AT,
+      });
+      expect(result.failures).toEqual([]);
+      const events = readEvents(ledger);
+      const canaries = events.filter((event: any) => event.type === 'canary_recorded');
+      expect(canaries.every((event: any) => event.timestamp >= ledgerTail)).toBe(true);
+      expect(canaries.every((event: any) => event.payload.checkedAt === checkedAt)).toBe(true);
+      expect(Object.values(materializeReleaseState(events).canaries).flat()
+        .every((sample: any) => sample.checkedAt === checkedAt)).toBe(true);
+    });
   });
 
   test('records exactly one report per target and idempotently verifies every channel', () => {
@@ -290,6 +348,45 @@ describe('release canary public seams', () => {
       expect(events.filter((event: any) => event.type === 'channel_failed')).toHaveLength(8);
       expect(events.filter((event: any) => event.type === 'incident_opened')).toHaveLength(reports().length);
     });
+  });
+
+  test('records pending moderation reports without treating them as failures or incidents', () => {
+    const channels = [...Object.keys(DEFAULT_RC_CANARY_TARGETS), 'winget', 'chocolatey'];
+    const expectedTargets = {
+      ...DEFAULT_RC_CANARY_TARGETS,
+      winget: ['Windows'],
+      chocolatey: ['Windows'],
+    };
+    withLedger(ledger => {
+      const result = recordCanary({
+        ledgerFile: ledger,
+        reports: [
+          ...reports(),
+          ...['winget', 'chocolatey'].map(channel => ({
+            version: VERSION,
+            channel,
+            target: 'Windows',
+            status: 'pending',
+            checkedAt: EVALUATED_AT,
+            evidenceUrl: `https://example.test/${channel}/pending`,
+          })),
+        ],
+        expectedTargets,
+        evaluatedAt: EVALUATED_AT,
+      });
+      expect(result.failures).toEqual([]);
+      expect(result.incidents).toEqual([]);
+      const events = readEvents(ledger);
+      expect(events.filter((event: any) => event.type === 'canary_recorded'
+        && ['winget', 'chocolatey'].includes(event.channel)))
+        .toHaveLength(2);
+      expect(events.filter((event: any) => event.type === 'canary_recorded'
+        && ['winget', 'chocolatey'].includes(event.channel))
+        .every((event: any) => event.payload.status === 'pending')).toBe(true);
+      expect(events.some((event: any) => event.type === 'channel_failed'
+        && ['winget', 'chocolatey'].includes(event.channel))).toBe(false);
+      expect(events.some((event: any) => event.type === 'incident_opened')).toBe(false);
+    }, channels);
   });
 
   test.each(['withdrawn', 'superseded'])('does not treat %s as reconciliation success', status => {

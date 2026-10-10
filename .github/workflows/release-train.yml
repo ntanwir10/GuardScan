@@ -119,6 +119,7 @@ jobs:
         with:
           app-id: ${{ vars.RELEASE_APP_ID }}
           private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          permission-actions: write
           permission-contents: read
           permission-metadata: read
       - name: Dispatch one concurrency-isolated reconciliation per version
@@ -156,6 +157,7 @@ jobs:
           private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
           owner: ntanwir10
           repositories: GuardScan,homebrew-tap
+          permission-actions: write
           permission-contents: read
           permission-metadata: read
       - name: Refetch and validate the hinted immutable catalog commit
@@ -355,6 +357,12 @@ jobs:
             throw new Error('release PR must use its trusted release branch');
           }
           if (
+            pr.base?.repo?.full_name?.toLowerCase()
+            !== process.env.GITHUB_REPOSITORY.toLowerCase()
+          ) {
+            throw new Error('release PR must target this repository');
+          }
+          if (
             pr.head?.repo?.full_name?.toLowerCase()
             !== process.env.GITHUB_REPOSITORY.toLowerCase()
           ) {
@@ -366,7 +374,6 @@ jobs:
           if (pr.head.sha !== process.env.REQUEST_EXPECTED_HEAD) {
             throw new Error('release PR head does not match expected_head');
           }
-          if (pr.draft === true) throw new Error('release PR must be ready, not draft');
           process.stdout.write(pr.head.sha);
           NODE
           )"
@@ -378,26 +385,111 @@ jobs:
             esac
           test "${#SHA}" = 40
           done
-          gh api "repos/${GITHUB_REPOSITORY}/commits/$HEAD_SHA/check-runs?per_page=100&filter=latest" \
-            --jq '.check_runs' \
-            > release-check-runs.json
-          gh api "repos/${GITHUB_REPOSITORY}/pulls/$REQUEST_RELEASE_PR/reviews?per_page=100" \
-            > release-reviews.json
-          PR_POLICY_ARGS=(
-            --pull-request release-pr.json
-            --check-runs release-check-runs.json
-            --reviews release-reviews.json
-            --expected-head "$HEAD_SHA"
-          )
-          if [ "$REQUEST_ACTION" = promote ]; then PR_POLICY_ARGS+=(--allow-merged); fi
-          node cli/scripts/release/index.js validate-pr "${PR_POLICY_ARGS[@]}" \
-            > release-pr-authorization.json
           echo "head_sha=$HEAD_SHA" >> "$GITHUB_OUTPUT"
           echo "base_sha=$BASE_SHA" >> "$GITHUB_OUTPUT"
           echo "tree_sha=$TREE_SHA" >> "$GITHUB_OUTPUT"
           echo "is_draft=$(node -p 'String(require("./release-pr.json").draft)')" >> "$GITHUB_OUTPUT"
           echo "pr_state=$(node -p 'require("./release-pr.json").merged ? "MERGED" : "OPEN"')" >> "$GITHUB_OUTPUT"
           echo "merge_sha=$(node -p 'require("./release-pr.json").merge_commit_sha || ""')" >> "$GITHUB_OUTPUT"
+      - name: Create short-lived exact release PR readiness token
+        if: inputs.action == 'candidate' && steps.source.outputs.is_draft == 'true'
+        id: readiness-app
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        with:
+          app-id: ${{ vars.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          owner: ntanwir10
+          repositories: GuardScan
+          permission-pull-requests: write
+          permission-metadata: read
+      - name: Mark exact release PR ready before authorization
+        if: inputs.action == 'candidate' && steps.source.outputs.is_draft == 'true'
+        env:
+          RELEASE_APP_TOKEN: ${{ steps.readiness-app.outputs.token }}
+          REQUEST_RELEASE_PR: ${{ inputs.release_pr }}
+          EXPECTED_HEAD: ${{ steps.source.outputs.head_sha }}
+        run: |
+          GH_TOKEN="$RELEASE_APP_TOKEN" gh pr ready "$REQUEST_RELEASE_PR" \
+            --repo "$GITHUB_REPOSITORY"
+          GH_TOKEN="$RELEASE_APP_TOKEN" gh api \
+            "repos/$GITHUB_REPOSITORY/pulls/$REQUEST_RELEASE_PR" \
+            > release-pr.json
+          node - <<'NODE'
+          const pr = require('./release-pr.json');
+          if (pr.number !== Number(process.env.REQUEST_RELEASE_PR)) {
+            throw new Error('release PR readiness transition addressed the wrong pull request');
+          }
+          if (pr.base?.ref !== 'main') {
+            throw new Error('release PR must target main');
+          }
+          if (
+            pr.base?.repo?.full_name?.toLowerCase()
+            !== process.env.GITHUB_REPOSITORY.toLowerCase()
+          ) {
+            throw new Error('release PR must target this repository');
+          }
+          if (
+            pr.head?.repo?.full_name?.toLowerCase()
+            !== process.env.GITHUB_REPOSITORY.toLowerCase()
+          ) {
+            throw new Error('release PR must originate from this repository, not a fork');
+          }
+          if (pr.head?.sha !== process.env.EXPECTED_HEAD) {
+            throw new Error('release PR head changed during readiness transition');
+          }
+          if (pr.draft === true) {
+            throw new Error('release PR must be ready after readiness transition');
+          }
+          NODE
+      - name: Authorize exact release PR after readiness transition
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUEST_ACTION: ${{ inputs.action }}
+          REQUEST_RELEASE_PR: ${{ inputs.release_pr }}
+          EXPECTED_HEAD: ${{ steps.source.outputs.head_sha }}
+          EXPECTED_BASE: ${{ steps.source.outputs.base_sha }}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/pulls/$REQUEST_RELEASE_PR" > release-pr.json
+          node - <<'NODE'
+          const pr = require('./release-pr.json');
+          const resumableMergedPromotion = process.env.REQUEST_ACTION === 'promote'
+            && pr.state === 'closed'
+            && pr.merged === true
+            && /^[a-f0-9]{40}$/.test(pr.merge_commit_sha || '');
+          if (pr.state !== 'open' && !resumableMergedPromotion) {
+            throw new Error('release PR must be OPEN or an already-merged resumable promotion');
+          }
+          if (pr.draft === true) {
+            throw new Error('release PR must be ready after readiness transition');
+          }
+          if (pr.base?.ref !== 'main'
+              || pr.base?.repo?.full_name?.toLowerCase() !== process.env.GITHUB_REPOSITORY.toLowerCase()) {
+            throw new Error('release PR must target this repository main branch');
+          }
+          if (pr.head?.repo?.full_name?.toLowerCase() !== process.env.GITHUB_REPOSITORY.toLowerCase()) {
+            throw new Error('release PR must originate from this repository, not a fork');
+          }
+          if (pr.head?.sha !== process.env.EXPECTED_HEAD) {
+            throw new Error('release PR head changed during readiness transition');
+          }
+          if (pr.base?.sha !== process.env.EXPECTED_BASE) {
+            throw new Error('release PR base changed during readiness transition');
+          }
+          NODE
+          gh api "repos/$GITHUB_REPOSITORY/commits/$EXPECTED_HEAD/check-runs?per_page=100&filter=latest" \
+            --jq '.check_runs' \
+            > release-check-runs.json
+          gh api "repos/$GITHUB_REPOSITORY/pulls/$REQUEST_RELEASE_PR/reviews?per_page=100" \
+            > release-reviews.json
+          PR_POLICY_ARGS=(
+            --pull-request release-pr.json
+            --check-runs release-check-runs.json
+            --reviews release-reviews.json
+            --expected-head "$EXPECTED_HEAD"
+          )
+          if [ "$REQUEST_ACTION" = promote ]; then PR_POLICY_ARGS+=(--allow-merged); fi
+          node cli/scripts/release/index.js validate-pr "${PR_POLICY_ARGS[@]}" \
+            > release-pr-authorization.json
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ steps.source.outputs.head_sha }}

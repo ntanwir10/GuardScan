@@ -150,6 +150,24 @@ const source = {
 const timestamp = '2026-07-20T00:00:00.000Z';
 const workflowSha = 'f'.repeat(40);
 
+describe('release-train workflow readiness boundary', () => {
+  it('transitions the exact same-repository draft PR before authorization gates run', () => {
+    const repositoryRoot = path.resolve(__dirname, '../../..');
+    const workflow = fs.readFileSync(
+      path.join(repositoryRoot, '.github/workflows/release-train.yml'),
+      'utf8'
+    );
+    const readiness = workflow.indexOf('gh pr ready "$REQUEST_RELEASE_PR"');
+    const authorization = workflow.indexOf('cli/scripts/release/index.js validate-pr');
+    expect(readiness).toBeGreaterThan(-1);
+    expect(authorization).toBeGreaterThan(readiness);
+    expect(workflow).toContain('repositories: GuardScan');
+    expect(workflow).toContain('permission-pull-requests: write');
+    expect(workflow).toContain('release PR must be ready after readiness transition');
+    expect(workflow).toContain('pulls/$REQUEST_RELEASE_PR');
+  });
+});
+
 function attestation(subjectSha256: string, name: string): Record<string, any> {
   return {
     type: 'slsa',
