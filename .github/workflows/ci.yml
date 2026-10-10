@@ -32,7 +32,17 @@ jobs:
           npm run release:validate
           npm run test:release
       - name: Reject whitespace and patch corruption
-        run: git diff --check
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          empty_tree="$(git hash-object -w -t tree /dev/null)"
+          if [[ -z "$BASE_SHA" || "$BASE_SHA" =~ ^0{40}$ ]]; then
+            BASE_SHA="$empty_tree"
+          elif [[ ! "$BASE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Refusing invalid base SHA" >&2
+            exit 1
+          fi
+          git diff --check "$BASE_SHA" HEAD --
       - name: Audit locked dependency graph
         working-directory: cli
         run: npm audit --audit-level=moderate
