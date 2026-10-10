@@ -1137,7 +1137,8 @@ describe('append-only release train', () => {
     const ledger = path.join(root, 'ledger.jsonl');
     const authorityFile = path.join(root, 'authority.json');
     const repositoryRoot = path.resolve(__dirname, '../../..');
-    const packageRoot = path.join(repositoryRoot, 'cli');
+    const packageRoot = path.join(root, 'cli-source');
+    const schemaRoot = path.join(repositoryRoot, 'cli');
     const actualCommit = execFileSync('git', ['rev-parse', 'HEAD'], {
       cwd: repositoryRoot,
       encoding: 'utf8',
@@ -1149,6 +1150,23 @@ describe('append-only release train', () => {
     };
     const stdout = jest.spyOn(process.stdout, 'write').mockImplementation(() => true);
     try {
+      fs.mkdirSync(packageRoot, {recursive: true});
+      const packageJson = JSON.parse(
+        fs.readFileSync(path.join(schemaRoot, 'package.json'), 'utf8')
+      );
+      const packageLock = JSON.parse(
+        fs.readFileSync(path.join(schemaRoot, 'package-lock.json'), 'utf8')
+      );
+      // The withdrawal target remains v1.1.0 when this test runs in the 1.0.5 bootstrap.
+      packageJson.version = cliSource.version;
+      packageLock.version = cliSource.version;
+      packageLock.packages[''].version = cliSource.version;
+      fs.writeFileSync(path.join(packageRoot, 'package.json'), `${JSON.stringify(packageJson)}\n`);
+      fs.writeFileSync(path.join(packageRoot, 'package-lock.json'), `${JSON.stringify(packageLock)}\n`);
+      fs.writeFileSync(
+        path.join(packageRoot, 'CHANGELOG.md'),
+        `# GuardScan CLI changelog\n\n## [Unreleased]\n\n## [${cliSource.version}] - 2026-07-13\n`
+      );
       appendEvent(ledger, {
         ...cliSource,
         timestamp,
@@ -1168,6 +1186,7 @@ describe('append-only release train', () => {
       const args = [
         'rollback',
         '--package-root', packageRoot,
+        '--schema-root', schemaRoot,
         '--repository-root', repositoryRoot,
         '--commit', actualCommit,
         '--tag', 'v1.1.0',
