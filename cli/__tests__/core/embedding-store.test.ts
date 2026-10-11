@@ -12,8 +12,10 @@ describe('FileBasedEmbeddingStore', () => {
   let store: FileBasedEmbeddingStore;
   let testDir: string;
   const testRepoId = 'test-repo-123';
+  const originalNoCache = process.env.GUARDSCAN_NO_CACHE;
 
   beforeEach(async () => {
+    delete process.env.GUARDSCAN_NO_CACHE;
     // Create temporary test directory
     testDir = path.join(os.tmpdir(), `guardscan-test-${Date.now()}`);
     store = new FileBasedEmbeddingStore(testRepoId, testDir);
@@ -21,6 +23,11 @@ describe('FileBasedEmbeddingStore', () => {
   });
 
   afterEach(async () => {
+    if (originalNoCache === undefined) {
+      delete process.env.GUARDSCAN_NO_CACHE;
+    } else {
+      process.env.GUARDSCAN_NO_CACHE = originalNoCache;
+    }
     // Cleanup test directory
     if (fs.existsSync(testDir)) {
       fs.rmSync(testDir, { recursive: true, force: true });
@@ -84,6 +91,23 @@ describe('FileBasedEmbeddingStore', () => {
       const loaded = await store.loadEmbeddings();
       expect(loaded).toHaveLength(1);
       expect(loaded[0].content).toBe('updated content');
+    });
+
+    it('keeps embeddings ephemeral when the invocation disables caching', async () => {
+      process.env.GUARDSCAN_NO_CACHE = 'true';
+      const ephemeralBase = path.join(testDir, 'ephemeral');
+      const ephemeralStore = new FileBasedEmbeddingStore(testRepoId, ephemeralBase);
+      await ephemeralStore.saveEmbeddings([
+        createTestEmbedding('private-source', 'function', 'src/private.ts'),
+      ]);
+
+      expect(await ephemeralStore.count()).toBe(1);
+      expect((await ephemeralStore.loadEmbeddings())[0].content).toContain('test content');
+      expect(fs.existsSync(ephemeralStore.getIndexPath())).toBe(false);
+      expect(fs.existsSync(ephemeralStore.getStorageDir())).toBe(false);
+
+      const nextInvocation = new FileBasedEmbeddingStore(testRepoId, ephemeralBase);
+      expect(await nextInvocation.loadEmbeddings()).toEqual([]);
     });
   });
 

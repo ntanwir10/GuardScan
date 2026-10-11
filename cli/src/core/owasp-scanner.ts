@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { Finding } from '../utils/reporter';
+import { SCAN_IGNORED_DIRECTORY_NAMES } from './scan-ignored-directories';
 
 /**
  * OWASP Top 10 2021 Scanner
@@ -10,9 +11,9 @@ export class OwaspScanner {
   /**
    * Scan repository for OWASP Top 10 vulnerabilities
    */
-  async scan(repoPath: string = process.cwd()): Promise<Finding[]> {
+  async scan(repoPath: string = process.cwd(), onSkippedInput: () => void = () => {}): Promise<Finding[]> {
     const findings: Finding[] = [];
-    const files = this.findCodeFiles(repoPath);
+    const files = this.findCodeFiles(repoPath, onSkippedInput);
 
     for (const file of files) {
       try {
@@ -20,7 +21,7 @@ export class OwaspScanner {
         const language = this.detectLanguage(file);
         findings.push(...this.scanFile(file, content, language));
       } catch {
-        // Skip files that can't be read
+        onSkippedInput();
       }
     }
 
@@ -30,19 +31,22 @@ export class OwaspScanner {
   /**
    * Find code files to scan
    */
-  private findCodeFiles(dir: string): string[] {
+  private findCodeFiles(dir: string, onSkippedInput: () => void): string[] {
     const files: string[] = [];
 
     const search = (currentDir: string, depth: number) => {
-      if (depth > 5) {return;}
-
       try {
         const items = fs.readdirSync(currentDir);
         for (const item of items) {
-          if (item === 'node_modules' || item === '.git' || item === 'vendor') {continue;}
+          if (SCAN_IGNORED_DIRECTORY_NAMES.has(item)) {continue;}
 
           const fullPath = path.join(currentDir, item);
-          const stat = fs.statSync(fullPath);
+          const stat = fs.lstatSync(fullPath);
+
+          if (stat.isSymbolicLink()) {
+            if (this.isCodeFile(item) || isDirectorySymlink(fullPath)) {onSkippedInput();}
+            continue;
+          }
 
           if (stat.isDirectory()) {
             search(fullPath, depth + 1);
@@ -51,7 +55,7 @@ export class OwaspScanner {
           }
         }
       } catch {
-        // Skip
+        onSkippedInput();
       }
     };
 
@@ -664,6 +668,10 @@ export class OwaspScanner {
 
     return findings;
   }
+}
+
+function isDirectorySymlink(file: string): boolean {
+  try {return fs.statSync(file).isDirectory();} catch {return false;}
 }
 
 export const owaspScanner = new OwaspScanner();

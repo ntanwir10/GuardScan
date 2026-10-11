@@ -14,7 +14,12 @@ export class ClaudeEmbeddingProvider extends BaseEmbeddingProvider {
   private fallbackProvider: EmbeddingProvider;
   private fallbackType: 'ollama' | 'lmstudio';
 
-  constructor(fallbackProvider: 'ollama' | 'lmstudio', endpoint?: string) {
+  constructor(
+    fallbackProvider: 'ollama' | 'lmstudio',
+    endpoint?: string,
+    offline = false,
+    allowRemoteSelfHosted = false
+  ) {
     super(
       `claude (via ${fallbackProvider})`,
       'nomic-embed-text',
@@ -24,9 +29,17 @@ export class ClaudeEmbeddingProvider extends BaseEmbeddingProvider {
     this.fallbackType = fallbackProvider;
 
     if (fallbackProvider === 'lmstudio') {
-      this.fallbackProvider = new LMStudioEmbeddingProvider(endpoint);
+      this.fallbackProvider = new LMStudioEmbeddingProvider(
+        endpoint,
+        offline,
+        allowRemoteSelfHosted
+      );
     } else {
-      this.fallbackProvider = new OllamaEmbeddingProvider(endpoint);
+      this.fallbackProvider = new OllamaEmbeddingProvider(
+        endpoint,
+        offline,
+        allowRemoteSelfHosted
+      );
     }
   }
 
@@ -114,5 +127,4 @@ export class ClaudeEmbeddingProvider extends BaseEmbeddingProvider {
     }
   }
 }
-
 

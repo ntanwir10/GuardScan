@@ -1,21 +1,26 @@
 import chalk from "chalk";
 import inquirer from "inquirer";
-import { configManager, AIProvider } from "../core/config";
+import { configManager, AIProvider, Config } from "../core/config";
 import { ProviderFactory } from "../providers/factory";
 import { createDebugLogger } from "../utils/debug-logger";
 import { createPerformanceTracker } from "../utils/performance-tracker";
 import { handleCommandError } from "../utils/error-handler";
+import { createTelemetryManager } from "../core/telemetry";
 
 interface ConfigOptions {
   provider?: AIProvider;
   key?: string;
   embeddingFallback?: string;
   telemetry?: string;
+  offline?: string;
   show?: boolean;
 }
 
 const logger = createDebugLogger("config");
 const perfTracker = createPerformanceTracker("guardscan config");
+const VALID_AI_PROVIDERS = new Set<AIProvider>([
+  "openai", "claude", "gemini", "ollama", "lmstudio", "openrouter", "none",
+]);
 
 export async function configCommand(options: ConfigOptions): Promise<void> {
   logger.debug("Config command started", { options });
@@ -34,10 +39,11 @@ export async function configCommand(options: ConfigOptions): Promise<void> {
 
     // Direct config via flags
     if (
-      options.provider ||
-      options.key ||
-      options.embeddingFallback ||
-      options.telemetry !== undefined
+      options.provider !== undefined ||
+      options.key !== undefined ||
+      options.embeddingFallback !== undefined ||
+      options.telemetry !== undefined ||
+      options.offline !== undefined
     ) {
       perfTracker.start("direct-config");
       directConfig(options);
@@ -77,7 +83,7 @@ export async function configCommand(options: ConfigOptions): Promise<void> {
 
 function showConfig(): void {
   logger.debug("Showing current configuration");
-  const config = configManager.loadOrInit();
+  const config = configManager.loadOrInit({ touchLastUsed: false });
   logger.debug("Config loaded", {
     provider: config.provider,
     telemetryEnabled: config.telemetryEnabled,
@@ -94,14 +100,14 @@ function showConfig(): void {
     mode === "cloud"
       ? "AI-Enhanced Reviews mode uses cloud-based AI providers (OpenAI, Claude, Gemini, or OpenRouter) to perform intelligent code analysis, security scanning, and automated code reviews. This mode requires an internet connection and API keys."
       : mode === "local"
-      ? "Local AI mode uses locally running AI models via Ollama or LM Studio. This provides privacy and cost savings by processing code analysis entirely on your machine without sending data to external services."
+      ? "Local-provider AI mode uses Ollama or LM Studio at the configured endpoint. Loopback endpoints keep requests on this machine; non-loopback endpoints must be explicitly trusted."
       : "Static Analysis Only mode performs code analysis using built-in static analysis tools without any AI assistance. This mode works completely offline and doesn't require any API keys or internet connection.";
 
   const modeDisplay =
     mode === "cloud"
       ? "✨ AI-Enhanced Reviews"
       : mode === "local"
-      ? "🏠 Local AI (Offline)"
+      ? "🏠 Local-provider AI"
       : "🛡️  Static Analysis Only";
 
   console.log(chalk.white(`   Current: ${chalk.cyan.bold(modeDisplay)}`));
@@ -122,9 +128,9 @@ function showConfig(): void {
         : config.provider === "openrouter"
         ? "OpenRouter provides access to multiple AI models from various providers through a unified API interface."
         : config.provider === "ollama"
-        ? "Ollama runs AI models locally on your machine, providing complete privacy and no API costs."
+        ? "Ollama runs models at your configured endpoint. Loopback endpoints stay on this machine; non-loopback endpoints receive repository-derived context."
         : config.provider === "lmstudio"
-        ? "LM Studio runs AI models locally through a user-friendly interface, offering privacy and offline capabilities."
+        ? "LM Studio runs models at your configured endpoint. Loopback endpoints stay on this machine; non-loopback endpoints receive repository-derived context."
         : "AI provider for code analysis and review.";
 
     console.log(chalk.gray(`   ${providerDescription}`));
@@ -198,13 +204,6 @@ function showConfig(): void {
 
   // 3. System Settings
   console.log(chalk.cyan.bold("3. System Settings"));
-  console.log(chalk.white(`   Client ID: ${chalk.gray(config.clientId)}`));
-  console.log(
-    chalk.gray(
-      `   Unique identifier for this GuardScan installation, used for telemetry and analytics (if enabled).`
-    )
-  );
-
   console.log(
     chalk.white(
       `   Telemetry: ${
@@ -218,8 +217,8 @@ function showConfig(): void {
     chalk.gray(
       `   ${
         config.telemetryEnabled
-          ? "Usage analytics and error reporting are enabled to help improve GuardScan."
-          : "Usage analytics are disabled. No data is sent to external servers."
+          ? "Allowlisted usage events may be queued locally. Delivery occurs only when you run `guardscan telemetry sync`."
+          : "Usage analytics are disabled. No telemetry events are recorded or sent."
       }`
     )
   );
@@ -235,9 +234,25 @@ function showConfig(): void {
     chalk.gray(
       `   ${
         config.offlineMode
-          ? "Offline mode is enabled. Telemetry and monitoring are completely disabled."
-          : "GuardScan can connect to external services for updates and telemetry (if enabled)."
+          ? "Offline mode blocks cloud AI, telemetry delivery, update checks, and live advisory feeds. Local scanners, local AI, and matching vulnerability snapshots remain available."
+          : "Offline mode is disabled. GuardScan may connect to configured external services when a command requires it."
       }`
+    )
+  );
+
+  const vulnerabilityConfig = config.vulnerabilities;
+  console.log(
+    chalk.white(
+      `   CVE Scanning: ${
+        vulnerabilityConfig?.enabled === false
+          ? chalk.yellow("Disabled")
+          : chalk.green("Enabled")
+      }`
+    )
+  );
+  console.log(
+    chalk.gray(
+      `   Exact dependency versions are checked with ${vulnerabilityConfig?.source?.toUpperCase() || "OSV"}; offline runs require a fresh, matching local snapshot.`
     )
   );
   console.log();
@@ -275,14 +290,48 @@ function getModeFromProvider(provider: string): "cloud" | "local" | "static" {
   return "cloud";
 }
 
+function parseDirectBoolean(value: string | undefined, label: string): boolean | undefined {
+  if (value === undefined) {return undefined;}
+  const normalized = String(value).toLowerCase();
+  if (normalized !== "true" && normalized !== "false") {
+    throw new Error(`Invalid ${label} value. Use true or false.`);
+  }
+  return normalized === "true";
+}
+
+function parseEmbeddingFallback(value: string | undefined): "none" | "ollama" | "lmstudio" | undefined {
+  if (value === undefined || value === "none" || value === "ollama" || value === "lmstudio") {
+    return value;
+  }
+  throw new Error(
+    `Invalid embedding fallback: ${value}. Must be 'ollama', 'lmstudio', or 'none'`
+  );
+}
+
 function directConfig(options: ConfigOptions): void {
   logger.debug("Direct config update", { options });
+  if (options.provider !== undefined && !VALID_AI_PROVIDERS.has(options.provider)) {
+    throw new Error(`Invalid provider: ${String(options.provider)}`);
+  }
+  const embeddingFallback = parseEmbeddingFallback(options.embeddingFallback);
+  const telemetryEnabled = parseDirectBoolean(options.telemetry, "telemetry");
+  const offlineMode = parseDirectBoolean(options.offline, "offline");
+
   perfTracker.start("load-config");
   const config = configManager.loadOrInit();
   perfTracker.end("load-config");
 
   if (options.provider) {
+    const providerChanged = config.provider !== options.provider;
     config.provider = options.provider;
+    if (providerChanged) {
+      // Endpoints and remote approval are provider-specific; never carry them
+      // across a provider switch where they could target the wrong service.
+      config.apiEndpoint = undefined;
+      config.allowRemoteSelfHosted = false;
+      config.apiKey = undefined;
+      config.model = undefined;
+    }
     logger.debug("Provider updated", { provider: options.provider });
     console.log(chalk.green(`✓ Provider set to: ${options.provider}`));
   }
@@ -293,18 +342,11 @@ function directConfig(options: ConfigOptions): void {
     console.log(chalk.green("✓ API key updated"));
   }
 
-  if (options.embeddingFallback) {
-    if (options.embeddingFallback === "none") {
+  if (embeddingFallback !== undefined) {
+    if (embeddingFallback === "none") {
       config.embeddingFallback = undefined;
-    } else if (
-      options.embeddingFallback === "ollama" ||
-      options.embeddingFallback === "lmstudio"
-    ) {
-      config.embeddingFallback = options.embeddingFallback;
     } else {
-      throw new Error(
-        `Invalid embedding fallback: ${options.embeddingFallback}. Must be 'ollama', 'lmstudio', or 'none'`
-      );
+      config.embeddingFallback = embeddingFallback;
     }
     logger.debug("Embedding fallback updated", {
       embeddingFallback: config.embeddingFallback,
@@ -316,15 +358,8 @@ function directConfig(options: ConfigOptions): void {
     );
   }
 
-  if (options.telemetry !== undefined) {
-    const normalized = String(options.telemetry).toLowerCase();
-    if (normalized !== "true" && normalized !== "false") {
-      throw new Error("Invalid telemetry value. Use true or false.");
-    }
-
-    const telemetryEnabled = normalized === "true";
+  if (telemetryEnabled !== undefined) {
     config.telemetryEnabled = telemetryEnabled;
-    config.offlineMode = !telemetryEnabled;
     logger.debug("Telemetry updated", {
       telemetryEnabled: config.telemetryEnabled,
       offlineMode: config.offlineMode,
@@ -334,12 +369,40 @@ function directConfig(options: ConfigOptions): void {
         `✓ Telemetry ${telemetryEnabled ? "enabled" : "disabled"}`
       )
     );
+    if (!telemetryEnabled) {
+      // Persist consent withdrawal before maintenance cleanup so a lock or
+      // filesystem failure cannot leave telemetry enabled.
+      configManager.save(config);
+      try {
+        const cleared = createTelemetryManager(config).clear();
+        console.log(chalk.green(`✓ Cleared ${cleared} queued telemetry event(s)`));
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.error(chalk.yellow(
+          `⚠ Telemetry was disabled, but queued events could not be cleared (${message}). Retry with "guardscan config --telemetry false".`
+        ));
+      }
+    }
+  }
+
+  if (offlineMode !== undefined) {
+    config.offlineMode = offlineMode;
+    logger.debug("Offline mode updated", {
+      telemetryEnabled: config.telemetryEnabled,
+      offlineMode: config.offlineMode,
+    });
+    console.log(
+      chalk.green(
+        `✓ Offline mode ${offlineMode ? "enabled" : "disabled"}`
+      )
+    );
   }
 
   perfTracker.start("save-config");
   configManager.save(config);
   perfTracker.end("save-config");
   logger.debug("Config saved");
+
   console.log();
 }
 
@@ -348,6 +411,7 @@ async function interactiveConfig(): Promise<void> {
   displaySimpleBanner("config");
 
   const config = configManager.loadOrInit();
+  const telemetryWasEnabled = config.telemetryEnabled;
   const currentMode = getModeFromProvider(config.provider);
 
   // Show current mode
@@ -408,11 +472,24 @@ async function interactiveConfig(): Promise<void> {
   }
 
   configManager.save(config);
+  if (telemetryWasEnabled && !config.telemetryEnabled) {
+    try {
+      const cleared = createTelemetryManager(config).clear();
+      // eslint-disable-next-line no-console
+      console.log(chalk.green(`\n✓ Cleared ${cleared} queued telemetry event(s)`));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      // eslint-disable-next-line no-console
+      console.error(chalk.yellow(
+        `\n⚠ Telemetry was disabled, but queued events could not be cleared (${message}). Retry with "guardscan config --telemetry false".`
+      ));
+    }
+  }
   console.log(chalk.green("\n✓ Configuration saved\n"));
 }
 
 async function configureModeSettings(
-  config: any,
+  config: Config,
   mode: "cloud" | "local" | "static"
 ): Promise<void> {
   if (mode === "cloud") {
@@ -546,7 +623,7 @@ async function configureModeSettings(
       {
         type: "confirm",
         name: "offlineMode",
-        message: "Enable offline mode? (skip telemetry and monitoring)",
+        message: "Enable offline mode? (block network-backed checks and telemetry)",
         default: config.offlineMode,
       },
     ]);
@@ -573,7 +650,7 @@ async function configureModeSettings(
     }
 
     // Test connection (model is already set in config above)
-    if (answers.apiKey) {
+    if (ProviderFactory.isConfigured(config)) {
       console.log(chalk.gray("\nTesting connection..."));
       console.error(
         "[Config] Creating provider:",
@@ -643,8 +720,8 @@ async function configureModeSettings(
     }
   } else if (mode === "local") {
     const localProviders = [
-      { name: "Ollama (http://localhost:11434)", value: "ollama" },
-      { name: "LM Studio (http://localhost:1234)", value: "lmstudio" },
+      { name: "Ollama (http://127.0.0.1:11434)", value: "ollama" },
+      { name: "LM Studio (http://127.0.0.1:1234)", value: "lmstudio" },
     ];
 
     const answers = await inquirer.prompt([
@@ -663,8 +740,14 @@ async function configureModeSettings(
         message: "Enter API endpoint:",
         default: (answers: any) =>
           answers.provider === "ollama"
-            ? "http://localhost:11434"
-            : "http://localhost:1234",
+            ? "http://127.0.0.1:11434"
+            : "http://127.0.0.1:1234",
+      },
+      {
+        type: "confirm",
+        name: "allowRemoteSelfHosted",
+        message: "Explicitly allow a non-loopback self-hosted endpoint?",
+        default: config.allowRemoteSelfHosted === true,
       },
       {
         type: "confirm",
@@ -672,15 +755,30 @@ async function configureModeSettings(
         message: "Enable telemetry?",
         default: config.telemetryEnabled,
       },
+      {
+        type: "confirm",
+        name: "offlineMode",
+        message: "Enable offline mode? (skip network-backed checks)",
+        default: config.offlineMode,
+      },
     ]);
 
     config.provider = answers.provider;
     config.apiKey = undefined;
     config.apiEndpoint = answers.apiEndpoint;
+    config.allowRemoteSelfHosted = answers.allowRemoteSelfHosted === true;
     config.telemetryEnabled = answers.telemetry;
-    config.offlineMode = true;
+    config.offlineMode = answers.offlineMode;
 
-    console.log(chalk.green("\n✓ No internet required for reviews"));
+    const trustWarning = ProviderFactory.getEndpointTrustWarning(
+      config.provider,
+      config.apiEndpoint
+    );
+    if (trustWarning) {
+      console.log(chalk.yellow(`\n⚠ ${trustWarning}`));
+    } else {
+      console.log(chalk.green("\n✓ Configured to use a loopback AI endpoint"));
+    }
   } else {
     // static
     const answers = await inquirer.prompt([
@@ -690,13 +788,19 @@ async function configureModeSettings(
         message: "Enable telemetry?",
         default: config.telemetryEnabled,
       },
+      {
+        type: "confirm",
+        name: "offlineMode",
+        message: "Enable offline mode? (skip network-backed checks)",
+        default: config.offlineMode,
+      },
     ]);
 
     config.provider = "none";
     config.apiKey = undefined;
     config.apiEndpoint = undefined;
     config.telemetryEnabled = answers.telemetry;
-    config.offlineMode = true;
+    config.offlineMode = answers.offlineMode;
 
     console.log(chalk.green("\n✓ Static analysis only mode"));
   }

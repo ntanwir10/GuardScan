@@ -142,4 +142,3 @@ export function handleCommandError(
   // Exit with specified code
   process.exit(exitCode);
 }
-

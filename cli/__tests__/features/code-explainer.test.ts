@@ -4,15 +4,16 @@
  * Tests for AI-powered code explanation feature
  */
 
-import { CodeExplainer } from "../../src/features/code-explainer";
 import { AIProvider, ProviderCapabilities } from "../../src/providers/base";
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
 
 import { describe, expect, it, beforeEach, afterEach } from "@jest/globals";
-import { AICache } from "../../src/core/ai-cache";
-import { CodebaseIndexer } from "../../src/core/codebase-indexer";
+
+let CodeExplainerClass: typeof import("../../src/features/code-explainer").CodeExplainer;
+let AICacheClass: typeof import("../../src/core/ai-cache").AICache;
+let CodebaseIndexerClass: typeof import("../../src/core/codebase-indexer").CodebaseIndexer;
 
 // Mock AI Provider
 class MockAIProvider extends AIProvider {
@@ -87,25 +88,42 @@ class MockAIProvider extends AIProvider {
 }
 
 describe("CodeExplainer", () => {
-  let explainer: CodeExplainer;
+  let explainer: InstanceType<typeof CodeExplainerClass>;
   let mockProvider: MockAIProvider;
   let tempDir: string;
+  let testHomeDir: string;
+  let originalEnv: NodeJS.ProcessEnv;
 
   beforeEach(() => {
+    originalEnv = { ...process.env };
+    testHomeDir = fs.mkdtempSync(path.join(os.tmpdir(), "guardscan-explainer-home-"));
+    process.env.GUARDSCAN_HOME = testHomeDir;
+    process.env.HOME = testHomeDir;
+
+    // ConfigManager captures its home directory when its module is loaded.
+    jest.resetModules();
+    ({ CodeExplainer: CodeExplainerClass } = require("../../src/features/code-explainer"));
+    ({ AICache: AICacheClass } = require("../../src/core/ai-cache"));
+    ({ CodebaseIndexer: CodebaseIndexerClass } = require("../../src/core/codebase-indexer"));
+
     mockProvider = new MockAIProvider();
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "explain-test-"));
-    const indexer = new CodebaseIndexer(tempDir, "test-repo-id");
-    explainer = new CodeExplainer(
+    const indexer = new CodebaseIndexerClass(tempDir, "test-repo-id");
+    explainer = new CodeExplainerClass(
       mockProvider,
       indexer,
-      new AICache("test-repo", 100),
+      new AICacheClass("test-repo", 100),
       tempDir
     );
   });
 
   afterEach(() => {
+    process.env = originalEnv;
     if (fs.existsSync(tempDir)) {
       fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+    if (fs.existsSync(testHomeDir)) {
+      fs.rmSync(testHomeDir, { recursive: true, force: true });
     }
   });
 
@@ -116,7 +134,7 @@ describe("CodeExplainer", () => {
   ): Promise<string> {
     const filePath = path.join(tempDir, filename);
     fs.writeFileSync(filePath, code);
-    const indexer = (explainer as any).indexer as CodebaseIndexer;
+    const indexer = (explainer as any).indexer as InstanceType<typeof CodebaseIndexerClass>;
     indexer.clearCache(); // Clear cache before rebuilding to ensure fresh index
     await indexer.buildIndex();
     return filePath;

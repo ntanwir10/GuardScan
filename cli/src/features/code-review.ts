@@ -12,12 +12,12 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import { exec } from 'child_process';
+import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { AIProvider } from '../providers/base';
 import { AICache } from '../core/ai-cache';
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 /**
  * Review Severity Levels
@@ -198,19 +198,14 @@ export class CodeReviewEngine {
     const diffs: GitDiff[] = [];
 
     try {
-      // Build git diff command
-      let command = 'git diff --unified=3';
-      if (!head) {
-        command += ` ${base}`;
-      } else {
-        command += ` ${base}..${head}`;
-      }
+      const range = head ? `${base}..${head}` : base;
+      const args = ['diff', '--unified=3', '--end-of-options', range];
 
       if (files && files.length > 0) {
-        command += ` -- ${files.join(' ')}`;
+        args.push('--', ...files);
       }
 
-      const { stdout } = await execAsync(command, { cwd: this.repoPath });
+      const { stdout } = await execFileAsync('git', args, { cwd: this.repoPath });
 
       // Parse diff output
       const parsed = this.parseDiff(stdout);

@@ -51,7 +51,7 @@ export async function refactorCommand(options: RefactorOptions): Promise<void> {
   logger.debug('Config loaded', { provider: config.provider });
 
   // Check AI provider
-  if (!config.provider || config.provider === 'none' || !config.apiKey) {
+  if (!ProviderFactory.isConfigured(config)) {
     handleCommandError(new Error('AI provider not configured. Refactoring features require an AI provider. Configure with: guardscan config'), 'Refactor');
   }
 

@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
-import { execSync } from 'child_process';
+import { execFileSync } from 'child_process';
 import { v4 as uuidv4 } from 'uuid';
 
 export interface RepositoryInfo {
@@ -47,7 +47,7 @@ export class RepositoryManager {
       // Get remote URL
       let remoteUrl: string | undefined;
       try {
-        remoteUrl = execSync('git config --get remote.origin.url', {
+        remoteUrl = execFileSync('git', ['config', '--get', 'remote.origin.url'], {
           cwd: repoPath,
           encoding: 'utf-8',
         }).trim();
@@ -58,7 +58,7 @@ export class RepositoryManager {
       // Get current branch
       let branch: string | undefined;
       try {
-        branch = execSync('git rev-parse --abbrev-ref HEAD', {
+        branch = execFileSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], {
           cwd: repoPath,
           encoding: 'utf-8',
         }).trim();

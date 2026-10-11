@@ -24,7 +24,7 @@ export function createRoutingCommand(): Command {
 
       if (!config.modelRouting?.enabled) {
         console.log(chalk.yellow('\n⚠️  Model routing is disabled'));
-        console.log(chalk.dim('Enable it with: guardscan config set modelRouting.enabled true\n'));
+        console.log(chalk.dim('Enable it by setting modelRouting.enabled: true in ~/.guardscan/config.yml\n'));
       }
 
       const router = new ModelRouter(config);

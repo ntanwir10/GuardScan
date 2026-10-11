@@ -1,6 +1,6 @@
 import chalk from 'chalk';
 import ora from 'ora';
-import { execSync } from 'child_process';
+import { execFileSync } from 'child_process';
 import { performanceTester, PerformanceConfig } from '../core/performance-tester';
 import { createProgressBar } from '../utils/progress';
 import * as fs from 'fs';
@@ -256,7 +256,7 @@ function displayResults(result: any): void {
  */
 function checkK6Installed(): boolean {
   try {
-    execSync('k6 version', { stdio: 'ignore' });
+    execFileSync('k6', ['version'], { stdio: 'ignore' });
     return true;
   } catch {
     return false;
@@ -268,7 +268,7 @@ function checkK6Installed(): boolean {
  */
 function checkLighthouseInstalled(): boolean {
   try {
-    execSync('lighthouse --version', { stdio: 'ignore' });
+    execFileSync('lighthouse', ['--version'], { stdio: 'ignore' });
     return true;
   } catch {
     return false;

@@ -1,5 +1,13 @@
-import { execSync } from 'child_process';
+import { execFileSync } from 'child_process';
+import {
+  ProcessInvocation,
+  resolveGradleWrapperInvocation,
+  resolveMavenInvocation,
+  resolveMavenVersionInvocation,
+  resolveProcessInvocation,
+} from '../utils/process-runner';
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 
 export interface MutationResult {
@@ -31,10 +39,31 @@ export interface MutationConfig {
   framework?: 'stryker' | 'mutmut' | 'pitest' | 'auto';
   files?: string[];
   testCommand?: string;
+  allowUnsafeTestCommand?: boolean;
   threshold?: number;  // Minimum mutation score (0-100)
   mutators?: string[];  // Specific mutators to use
   excludeFiles?: string[];
   timeout?: number;  // Timeout per test in ms
+}
+
+export function resolveStrykerInvocation(
+  args: string[],
+  environment: NodeJS.ProcessEnv = process.env,
+  platform = process.platform
+): ProcessInvocation {
+  return resolveProcessInvocation('npx', args, environment, platform);
+}
+
+export function resolvePitestInvocation(
+  buildTool: 'maven' | 'gradle',
+  repoPath: string,
+  args: string[],
+  environment: NodeJS.ProcessEnv = process.env,
+  platform = process.platform
+): ProcessInvocation {
+  return buildTool === 'maven'
+    ? resolveMavenInvocation(args, environment, platform)
+    : resolveGradleWrapperInvocation(repoPath, args, environment, platform);
 }
 
 export class MutationTester {
@@ -66,7 +95,7 @@ export class MutationTester {
     }
 
     // Check if framework is available
-    if (!this.isFrameworkAvailable(framework)) {
+    if (!this.isFrameworkAvailable(framework, repoPath)) {
       throw new Error(`${framework} is not installed. Please install it first.`);
     }
 
@@ -97,7 +126,8 @@ export class MutationTester {
       }
 
       // Run Stryker
-      const output = execSync('npx stryker run', {
+      const invocation = resolveStrykerInvocation(['stryker', 'run']);
+      const output = execFileSync(invocation.command, invocation.args, {
         cwd: repoPath,
         encoding: 'utf-8',
         timeout: 600000,  // 10 minutes
@@ -137,20 +167,24 @@ export class MutationTester {
         fs.unlinkSync(cachePath);
       }
 
-      // Build mutmut command
-      let command = 'mutmut run';
+      const args = ['run'];
 
       if (config.files && config.files.length > 0) {
-        command += ` --paths-to-mutate="${config.files.join(',')}"`;
+        args.push('--paths-to-mutate', config.files.join(','));
       }
 
       if (config.testCommand) {
-        command += ` --runner="${config.testCommand}"`;
+        if (!config.allowUnsafeTestCommand) {
+          throw new Error(
+            'Custom mutmut test commands are disabled by default. Re-run with --allow-unsafe-test-command only for trusted command strings.'
+          );
+        }
+        args.push('--runner', config.testCommand);
       }
 
       // Run mutmut
       try {
-        execSync(command, {
+        execFileSync('mutmut', args, {
           cwd: repoPath,
           encoding: 'utf-8',
           timeout: 600000,  // 10 minutes
@@ -161,15 +195,21 @@ export class MutationTester {
       }
 
       // Get mutmut results
-      const resultsOutput = execSync('mutmut results', {
+      const resultsOutput = execFileSync('mutmut', ['results'], {
         cwd: repoPath,
         encoding: 'utf-8',
       });
 
-      const jsonOutput = execSync('mutmut junitxml > /tmp/mutmut-results.xml', {
-        cwd: repoPath,
-        encoding: 'utf-8',
-      });
+      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'guardscan-mutmut-'));
+      try {
+        const junitOutput = execFileSync('mutmut', ['junitxml'], {
+          cwd: repoPath,
+          encoding: 'utf-8',
+        });
+        fs.writeFileSync(path.join(tempDir, 'mutmut-results.xml'), junitOutput, 'utf-8');
+      } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+      }
 
       // Parse mutmut results
       const result = this.parseMutmutOutput(repoPath, resultsOutput);
@@ -195,17 +235,21 @@ export class MutationTester {
       const hasGradle = fs.existsSync(path.join(repoPath, 'build.gradle')) ||
                         fs.existsSync(path.join(repoPath, 'build.gradle.kts'));
 
-      let command: string;
+      let buildTool: 'maven' | 'gradle';
+      let args: string[];
       if (hasMaven) {
-        command = 'mvn test-compile org.pitest:pitest-maven:mutationCoverage';
+        buildTool = 'maven';
+        args = ['test-compile', 'org.pitest:pitest-maven:mutationCoverage'];
       } else if (hasGradle) {
-        command = './gradlew pitest';
+        buildTool = 'gradle';
+        args = ['pitest'];
       } else {
         throw new Error('Could not detect Maven or Gradle build tool');
       }
 
       // Run PITest
-      execSync(command, {
+      const invocation = resolvePitestInvocation(buildTool, repoPath, args);
+      execFileSync(invocation.command, invocation.args, {
         cwd: repoPath,
         encoding: 'utf-8',
         timeout: 600000,  // 10 minutes
@@ -381,7 +425,7 @@ export class MutationTester {
     // Get detailed mutant information
     const mutants: Mutant[] = [];
     try {
-      const showOutput = execSync('mutmut show', {
+      const showOutput = execFileSync('mutmut', ['show'], {
         cwd: repoPath,
         encoding: 'utf-8',
       });
@@ -536,22 +580,31 @@ export class MutationTester {
   /**
    * Check if framework is available
    */
-  private isFrameworkAvailable(framework: 'stryker' | 'mutmut' | 'pitest'): boolean {
+  private isFrameworkAvailable(framework: 'stryker' | 'mutmut' | 'pitest', repoPath: string): boolean {
     try {
       switch (framework) {
         case 'stryker':
-          execSync('npx stryker --version', { stdio: 'ignore' });
+          {
+            const invocation = resolveStrykerInvocation(['stryker', '--version']);
+            execFileSync(invocation.command, invocation.args, { stdio: 'ignore', cwd: repoPath });
+          }
           return true;
         case 'mutmut':
-          execSync('mutmut --version', { stdio: 'ignore' });
+          execFileSync('mutmut', ['--version'], { stdio: 'ignore', cwd: repoPath });
           return true;
         case 'pitest':
           // PITest is a Maven/Gradle plugin, check if build tool exists
           try {
-            execSync('mvn --version', { stdio: 'ignore' });
+            const maven = resolveMavenVersionInvocation();
+            execFileSync(maven.command, maven.args, { stdio: 'ignore', cwd: repoPath });
             return true;
           } catch {
-            execSync('./gradlew --version', { stdio: 'ignore' });
+            const gradleWrapper = path.join(repoPath, process.platform === 'win32' ? 'gradlew.bat' : 'gradlew');
+            if (!fs.existsSync(gradleWrapper)) {
+              return false;
+            }
+            const invocation = resolvePitestInvocation('gradle', repoPath, ['--version']);
+            execFileSync(invocation.command, invocation.args, { stdio: 'ignore', cwd: repoPath });
             return true;
           }
         default:

@@ -2,6 +2,17 @@ import { Reporter, ReviewResult, Finding } from "../../src/utils/reporter";
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
+import {
+  resolveMavenVersionInvocation,
+  resolveProcessInvocation,
+  runProcess,
+  sanitizeChildEnvironment,
+} from "../../src/utils/process-runner";
+import {
+  APIClient,
+  TelemetryDeliveryError,
+  TelemetryRequest,
+} from "../../src/utils/api-client";
 
 import { describe, it, beforeEach, afterEach, expect } from "@jest/globals";
 
@@ -61,6 +72,7 @@ describe("Reporter", () => {
           blankLines: 100,
           fileCount: 10,
           fileBreakdown: [],
+          skippedFiles: [],
         },
         provider: "openai",
         model: "gpt-4",
@@ -153,9 +165,9 @@ describe("Reporter", () => {
   });
 
   describe("saveReport", () => {
-    it("should save markdown report to file", () => {
+    it("should save markdown report to file", async () => {
       const outputPath = path.join(testDir, "report.md");
-      const savedPath = reporter.saveReport(mockResult, "markdown", outputPath);
+      const savedPath = await reporter.saveReport(mockResult, "markdown", outputPath);
 
       expect(savedPath).toBe(outputPath);
       expect(fs.existsSync(outputPath)).toBe(true);
@@ -164,11 +176,11 @@ describe("Reporter", () => {
       expect(content).toContain("# GuardScan Report");
     });
 
-    it("should generate default filename if not specified", () => {
+    it("should generate default filename if not specified", async () => {
       const originalCwd = process.cwd();
       process.chdir(testDir);
 
-      const savedPath = reporter.saveReport(mockResult, "markdown");
+      const savedPath = await reporter.saveReport(mockResult, "markdown");
 
       expect(savedPath).toMatch(/code-review-.*\.md/);
       expect(fs.existsSync(savedPath)).toBe(true);
@@ -176,13 +188,79 @@ describe("Reporter", () => {
       process.chdir(originalCwd);
     });
 
-    it("should handle markdown format", () => {
+    it("should handle markdown format", async () => {
       const outputPath = path.join(testDir, "report.md");
-      reporter.saveReport(mockResult, "markdown", outputPath);
+      await reporter.saveReport(mockResult, "markdown", outputPath);
 
       const content = fs.readFileSync(outputPath, "utf-8");
       expect(content).toContain("# GuardScan Report");
     });
+
+    it("should save resolved HTML content to file", async () => {
+      const outputPath = path.join(testDir, "report.html");
+      const htmlResult = {
+        ...mockResult,
+        findings: [],
+        metadata: {
+          ...mockResult.metadata,
+          provider: "static-analysis",
+        },
+      };
+
+      const savedPath = await reporter.saveReport(htmlResult, "html", outputPath);
+
+      expect(savedPath).toBe(outputPath);
+      const content = fs.readFileSync(outputPath, "utf-8");
+      expect(content).toContain("<!DOCTYPE html>");
+      expect(content).toContain("AI Review Not Configured");
+      expect(content).not.toContain("[object Promise]");
+      expect(content).not.toContain("Upgrade to Pro");
+    });
+
+    (process.platform === "win32" ? it.skip : it)(
+      "atomically replaces a report symlink without overwriting its target",
+      async () => {
+        const external = path.join(testDir, "external.md");
+        const outputPath = path.join(testDir, "report.md");
+        fs.writeFileSync(external, "preserve me");
+        fs.symlinkSync(external, outputPath);
+
+        const savedPath = await reporter.saveReport(
+          mockResult,
+          "markdown",
+          outputPath,
+          "security",
+          testDir
+        );
+
+        expect(savedPath).toBe(outputPath);
+        expect(fs.lstatSync(outputPath).isSymbolicLink()).toBe(false);
+        expect(fs.readFileSync(outputPath, "utf8")).toContain("# GuardScan Report");
+        expect(fs.readFileSync(external, "utf8")).toBe("preserve me");
+      }
+    );
+
+    (process.platform === "win32" ? it.skip : it)(
+      "rejects report paths through repository symlink directories",
+      async () => {
+        const external = fs.mkdtempSync(path.join(os.tmpdir(), "reporter-target-"));
+        const linkedDirectory = path.join(testDir, "reports");
+        fs.symlinkSync(external, linkedDirectory);
+
+        try {
+          await expect(reporter.saveReport(
+            mockResult,
+            "markdown",
+            path.join(linkedDirectory, "report.md"),
+            "security",
+            testDir
+          )).rejects.toThrow(/symlink/i);
+          expect(fs.existsSync(path.join(external, "report.md"))).toBe(false);
+        } finally {
+          fs.rmSync(external, {recursive: true, force: true});
+        }
+      }
+    );
   });
 
   describe("groupFindingsBySeverity", () => {
@@ -269,6 +347,146 @@ describe("Reporter", () => {
       );
 
       expect(distribution["Security"]).toBe(3);
+    });
+  });
+});
+
+describe("sanitizeChildEnvironment", () => {
+  it("blocks runtime-injection variables from child processes", () => {
+    const sanitized = sanitizeChildEnvironment(
+      {
+        SAFE_VALUE: "preserved",
+        LD_LIBRARY_PATH: "/tmp/injected",
+        LD_AUDIT: "audit.so",
+        DYLD_FRAMEWORK_PATH: "/tmp/frameworks",
+        DYLD_FALLBACK_LIBRARY_PATH: "/tmp/libraries",
+        NODE_EXTRA_CA_CERTS: "/tmp/ca.pem",
+        NODE_REPL_EXTERNAL_MODULE: "/tmp/module.js",
+      },
+      "/tmp/isolated-home"
+    );
+
+    expect(sanitized.SAFE_VALUE).toBe("preserved");
+    expect(sanitized.LD_LIBRARY_PATH).toBeUndefined();
+    expect(sanitized.LD_AUDIT).toBeUndefined();
+    expect(sanitized.DYLD_FRAMEWORK_PATH).toBeUndefined();
+    expect(sanitized.DYLD_FALLBACK_LIBRARY_PATH).toBeUndefined();
+    expect(sanitized.NODE_EXTRA_CA_CERTS).toBeUndefined();
+    expect(sanitized.NODE_REPL_EXTERNAL_MODULE).toBeUndefined();
+  });
+});
+
+describe("runProcess", () => {
+  it("returns a non-zero status when the child is terminated by a signal", () => {
+    const result = runProcess(process.execPath, [
+      "-e",
+      "process.kill(process.pid, 'SIGTERM')",
+    ]);
+
+    expect(result.status).not.toBe(0);
+  });
+});
+
+describe("isolated tool discovery", () => {
+  it("runs Windows npm shims through their Node entry points without a shell", () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "guardscan-npm-shim-"));
+    try {
+      const bin = path.join(directory, "node_modules", "npm", "bin");
+      fs.mkdirSync(bin, {recursive: true});
+      for (const command of ["npm", "npx"]) {
+        fs.writeFileSync(path.join(directory, `${command}.cmd`), "@echo off\r\n");
+        fs.writeFileSync(path.join(bin, `${command}-cli.js`), "");
+        const args = ["test", "path & echo unsafe"];
+        expect(resolveProcessInvocation(command, args, {Path: directory}, "win32")).toEqual({
+          command: "node",
+          args: [path.join(bin, `${command}-cli.js`), ...args],
+        });
+      }
+    } finally {
+      fs.rmSync(directory, {recursive: true, force: true});
+    }
+  });
+
+  it("checks Maven through cmd.exe on Windows without resolving an untrusted command", () => {
+    expect(resolveMavenVersionInvocation({ComSpec: "C:\\Windows\\System32\\cmd.exe"}, "win32")).toEqual({
+      command: "C:\\Windows\\System32\\cmd.exe",
+      args: ["/d", "/s", "/c", "mvn.cmd", "--version"],
+    });
+  });
+
+  it("preserves the rustup toolchain home only for Cargo execution", () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "guardscan-rustup-home-"));
+    try {
+      fs.mkdirSync(path.join(home, ".rustup"));
+      const environment = {HOME: home, PATH: "/usr/bin"};
+      const cargo = sanitizeChildEnvironment(environment, "/isolated", "cargo");
+      expect(cargo.HOME).toBe("/isolated");
+      expect(cargo.RUSTUP_HOME).toBe(path.join(home, ".rustup"));
+      expect(cargo.CARGO_HOME).toBeUndefined();
+      expect(sanitizeChildEnvironment(environment, "/isolated", "npm").RUSTUP_HOME).toBeUndefined();
+    } finally {
+      fs.rmSync(home, {recursive: true, force: true});
+    }
+  });
+
+  it("preserves an existing default Go module cache for Go tooling", () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "guardscan-go-home-"));
+    try {
+      const moduleCache = path.join(home, "go", "pkg", "mod");
+      fs.mkdirSync(moduleCache, {recursive: true});
+      const environment = {HOME: home, PATH: "/usr/bin"};
+
+      for (const command of ["go", "golangci-lint"]) {
+        const sanitized = sanitizeChildEnvironment(environment, "/isolated", command);
+        expect(sanitized.HOME).toBe("/isolated");
+        expect(sanitized.GOMODCACHE).toBe(moduleCache);
+      }
+      expect(sanitizeChildEnvironment(environment, "/isolated", "npm").GOMODCACHE).toBeUndefined();
+    } finally {
+      fs.rmSync(home, {recursive: true, force: true});
+    }
+  });
+});
+
+describe("APIClient endpoint validation", () => {
+  it("defers invalid endpoint errors until telemetry delivery", async () => {
+    let client: APIClient | undefined;
+
+    expect(() => {
+      client = new APIClient("not a URL");
+    }).not.toThrow();
+
+    const request: TelemetryRequest = {
+      schemaVersion: "guardscan.telemetry.v1",
+      batchId: "fixture-batch",
+      sentAt: 1,
+      cliVersion: "1.1.0",
+      events: [],
+    };
+    await expect(client!.sendTelemetry(request)).rejects.toBeInstanceOf(
+      TelemetryDeliveryError
+    );
+    await expect(client!.ping()).resolves.toBe(false);
+  });
+
+  it("does not retry unexpected local telemetry failures", async () => {
+    const client = new APIClient("https://example.test") as unknown as {
+      sendTelemetry: APIClient["sendTelemetry"];
+      client: { post: () => Promise<never> };
+    };
+    client.client = {
+      post: async () => { throw new Error("local fixture failure"); },
+    };
+
+    await expect(client.sendTelemetry({
+      schemaVersion: "guardscan.telemetry.v1",
+      batchId: "fixture-batch",
+      sentAt: 1,
+      cliVersion: "1.1.0",
+      events: [],
+    })).rejects.toMatchObject({
+      message: "Telemetry delivery failed.",
+      retryable: false,
     });
   });
 });

@@ -364,6 +364,7 @@ describe('RateLimitedProvider – edge cases', () => {
 
   describe('costMultiplier', () => {
     it('should apply costMultiplier to token consumption', async () => {
+      useControlledTime();
       const mock = new MockProvider(); // countMessagesTokens = 1000
       const rateLimited = new RateLimitedProvider(mock, {
         maxTokens: 3000,
@@ -375,7 +376,7 @@ describe('RateLimitedProvider – edge cases', () => {
 
       const remaining = await rateLimited.getCurrentTokens();
       // Should have consumed 2000 tokens (1000 * 2.0)
-      expect(remaining).toBeLessThanOrEqual(1000);
+      expect(remaining).toBe(1000);
     });
 
     it('should throw when multiplied cost exceeds maxTokens', async () => {

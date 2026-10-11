@@ -1,5 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import { SCAN_IGNORED_DIRECTORY_NAMES } from './scan-ignored-directories';
 
 export interface ComplianceViolation {
   standard: 'GDPR' | 'HIPAA' | 'PCI-DSS' | 'SOC2' | 'General';
@@ -26,10 +27,10 @@ export class ComplianceChecker {
   /**
    * Run compliance checks
    */
-  async check(repoPath: string = process.cwd()): Promise<ComplianceReport[]> {
+  async check(repoPath: string = process.cwd(), onSkippedInput: () => void = () => {}): Promise<ComplianceReport[]> {
     const reports: ComplianceReport[] = [];
 
-    const files = this.findCodeFiles(repoPath);
+    const files = this.findCodeFiles(repoPath, onSkippedInput);
     const violations: ComplianceViolation[] = [];
 
     for (const file of files) {
@@ -42,7 +43,7 @@ export class ComplianceChecker {
         violations.push(...this.checkPCIDSS(file, content, language));
         violations.push(...this.checkSOC2(file, content, language));
       } catch {
-        // Skip files that can't be read
+        onSkippedInput();
       }
     }
 
@@ -75,19 +76,22 @@ export class ComplianceChecker {
   /**
    * Find code files
    */
-  private findCodeFiles(dir: string): string[] {
+  private findCodeFiles(dir: string, onSkippedInput: () => void): string[] {
     const files: string[] = [];
 
     const search = (currentDir: string, depth: number) => {
-      if (depth > 5) {return;}
-
       try {
         const items = fs.readdirSync(currentDir);
         for (const item of items) {
-          if (item === 'node_modules' || item === '.git' || item === 'vendor') {continue;}
+          if (SCAN_IGNORED_DIRECTORY_NAMES.has(item)) {continue;}
 
           const fullPath = path.join(currentDir, item);
-          const stat = fs.statSync(fullPath);
+          const stat = fs.lstatSync(fullPath);
+
+          if (stat.isSymbolicLink()) {
+            if (this.isCodeFile(item) || isDirectorySymlink(fullPath)) {onSkippedInput();}
+            continue;
+          }
 
           if (stat.isDirectory()) {
             search(fullPath, depth + 1);
@@ -96,7 +100,7 @@ export class ComplianceChecker {
           }
         }
       } catch {
-        // Skip
+        onSkippedInput();
       }
     };
 
@@ -579,6 +583,10 @@ export class ComplianceChecker {
 
     return violations;
   }
+}
+
+function isDirectorySymlink(file: string): boolean {
+  try {return fs.statSync(file).isDirectory();} catch {return false;}
 }
 
 export const complianceChecker = new ComplianceChecker();

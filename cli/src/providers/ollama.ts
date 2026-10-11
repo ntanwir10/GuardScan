@@ -15,7 +15,7 @@ export class OllamaProvider extends AIProvider {
 
   constructor(endpoint?: string) {
     super(undefined, endpoint);
-    this.endpoint = endpoint || process.env.OLLAMA_ENDPOINT || 'http://localhost:11434';
+    this.endpoint = endpoint || process.env.OLLAMA_ENDPOINT || 'http://127.0.0.1:11434';
   }
 
   async chat(messages: AIMessage[], options?: ChatOptions): Promise<AIResponse> {
@@ -26,7 +26,7 @@ export class OllamaProvider extends AIProvider {
         content: msg.content,
       })),
       stream: false,
-    });
+    }, { maxRedirects: 0 });
 
     return {
       content: response.data.message.content,
@@ -53,6 +53,7 @@ export class OllamaProvider extends AIProvider {
       },
       {
         responseType: 'stream',
+        maxRedirects: 0,
       }
     );
 
@@ -102,7 +103,7 @@ export class OllamaProvider extends AIProvider {
 
   async testConnection(): Promise<boolean> {
     try {
-      await axios.get(`${this.endpoint}/api/tags`, { timeout: 5000 });
+      await axios.get(`${this.endpoint}/api/tags`, { timeout: 5000, maxRedirects: 0 });
       return true;
     } catch {
       return false;
@@ -136,7 +137,7 @@ export class OllamaProvider extends AIProvider {
     const response = await axios.post(`${this.endpoint}/api/embeddings`, {
       model: embeddingModel,
       prompt: text,
-    });
+    }, { maxRedirects: 0 });
 
     return response.data.embedding;
   }

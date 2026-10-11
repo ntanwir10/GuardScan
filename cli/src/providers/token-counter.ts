@@ -5,8 +5,9 @@
  * Uses provider-specific tokenizers where available.
  */
 
-// Note: tiktoken and @anthropic-ai/tokenizer are optional dependencies
-// They will be loaded dynamically if available, otherwise fall back to estimation
+// tiktoken is optional and loaded dynamically. Claude token counts use the
+// documented local estimate because no supported local Anthropic tokenizer is
+// distributed with GuardScan.
 
 export interface TokenCountResult {
   count: number;
@@ -17,7 +18,7 @@ export interface TokenCountResult {
 export class AccurateTokenCounter {
   private openaiEncoders: Map<string, any> = new Map();
   private tiktokenAvailable: boolean = false;
-  private claudeTokenizerAvailable: boolean = false;
+  private readonly claudeTokenizerAvailable: boolean = false;
 
   constructor() {
     this.checkDependencies();
@@ -32,13 +33,6 @@ export class AccurateTokenCounter {
       this.tiktokenAvailable = true;
     } catch {
       this.tiktokenAvailable = false;
-    }
-
-    try {
-      require.resolve('@anthropic-ai/tokenizer');
-      this.claudeTokenizerAvailable = true;
-    } catch {
-      this.claudeTokenizerAvailable = false;
     }
   }
 
@@ -103,29 +97,9 @@ export class AccurateTokenCounter {
     }
   }
 
-  /**
-   * Count Claude tokens using Anthropic tokenizer
-   */
+  /** Count Claude tokens using the local estimation policy. */
   private countClaudeTokens(text: string): TokenCountResult {
-    if (!this.claudeTokenizerAvailable) {
-      return this.estimateTokens(text, 'claude');
-    }
-
-    try {
-      // Dynamic import to avoid hard dependency
-      const { countTokens } = require('@anthropic-ai/tokenizer');
-
-      const count = countTokens(text);
-
-      return {
-        count,
-        method: 'accurate',
-        model: 'claude',
-      };
-    } catch (error) {
-      console.warn('Failed to use Claude tokenizer, falling back to estimation:', error);
-      return this.estimateTokens(text, 'claude');
-    }
+    return this.estimateTokens(text, 'claude');
   }
 
   /**
@@ -229,10 +203,6 @@ export class AccurateTokenCounter {
 
     if (!this.tiktokenAvailable) {
       recommended.push('tiktoken - for OpenAI/Gemini accurate token counting');
-    }
-
-    if (!this.claudeTokenizerAvailable) {
-      recommended.push('@anthropic-ai/tokenizer - for Claude accurate token counting');
     }
 
     return {

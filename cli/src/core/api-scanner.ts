@@ -1,5 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import { SCAN_IGNORED_DIRECTORY_NAMES } from './scan-ignored-directories';
 
 export interface APIFinding {
   type: string;
@@ -15,9 +16,9 @@ export class APIScanner {
   /**
    * Scan for API security vulnerabilities
    */
-  async scan(repoPath: string = process.cwd()): Promise<APIFinding[]> {
+  async scan(repoPath: string = process.cwd(), onSkippedInput: () => void = () => {}): Promise<APIFinding[]> {
     const findings: APIFinding[] = [];
-    const files = this.findAPIFiles(repoPath);
+    const files = this.findAPIFiles(repoPath, onSkippedInput);
 
     for (const file of files) {
       try {
@@ -28,7 +29,7 @@ export class APIScanner {
         findings.push(...this.scanGraphQL(file, content, language));
         findings.push(...this.scanGeneralAPI(file, content, language));
       } catch {
-        // Skip files that can't be read
+        onSkippedInput();
       }
     }
 
@@ -38,19 +39,22 @@ export class APIScanner {
   /**
    * Find API-related files
    */
-  private findAPIFiles(dir: string): string[] {
+  private findAPIFiles(dir: string, onSkippedInput: () => void): string[] {
     const files: string[] = [];
 
     const search = (currentDir: string, depth: number) => {
-      if (depth > 5) {return;}
-
       try {
         const items = fs.readdirSync(currentDir);
         for (const item of items) {
-          if (item === 'node_modules' || item === '.git' || item === 'vendor') {continue;}
+          if (SCAN_IGNORED_DIRECTORY_NAMES.has(item)) {continue;}
 
           const fullPath = path.join(currentDir, item);
-          const stat = fs.statSync(fullPath);
+          const stat = fs.lstatSync(fullPath);
+
+          if (stat.isSymbolicLink()) {
+            if (this.isAPIFile(item) || isDirectorySymlink(fullPath)) {onSkippedInput();}
+            continue;
+          }
 
           if (stat.isDirectory()) {
             search(fullPath, depth + 1);
@@ -59,7 +63,7 @@ export class APIScanner {
           }
         }
       } catch {
-        // Skip directories we can't read
+        onSkippedInput();
       }
     };
 
@@ -440,6 +444,10 @@ export class APIScanner {
     const contextLines = lines.slice(Math.max(0, index - 10), Math.min(lines.length, index + 3)).join('\n');
     return /(try\s*{|catch\s*\(|except|recover|\.catch\(|error|Error)/i.test(contextLines);
   }
+}
+
+function isDirectorySymlink(file: string): boolean {
+  try {return fs.statSync(file).isDirectory();} catch {return false;}
 }
 
 export const apiScanner = new APIScanner();
