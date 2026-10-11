@@ -55,8 +55,8 @@ describe('mutation tester process invocations', () => {
       .toEqual(['/d', '/s', '/c', 'gradlew.bat', '--version']);
   });
 
-  it('retains the repository Gradle wrapper path on non-Windows systems', () => {
-    expect(resolvePitestInvocation('gradle', '/repo', ['pitest'], {}, 'linux')).toEqual({
+  it.each(['linux', 'darwin'] as const)('retains the target-platform Gradle wrapper path for %s', platform => {
+    expect(resolvePitestInvocation('gradle', '/repo', ['pitest'], {}, platform)).toEqual({
       command: '/repo/gradlew',
       args: ['pitest'],
     });

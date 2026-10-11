@@ -15,6 +15,18 @@ const MAX_GLOB_PATTERN_BRACES = 64;
 const MAX_GLOB_PATTERN_LENGTH = 16_384;
 const MAX_GLOB_EXPANSION_WORK_BYTES = 8 * 1024 * 1024;
 
+export function normalizeGlobPatternForPlatform(pattern: string, platform = process.platform): string {
+  // Match fast-glob's default flipBackslashes behavior: Windows path separators
+  // become POSIX separators while backslashes escaping glob syntax are retained.
+  return platform === 'win32' ? pattern.replace(/\\(?![!()*?[\]{}])/g, '/') : pattern;
+}
+
+export function normalizeRelativePathForPlatform(relativePath: string, platform = process.platform): string {
+  // Windows filenames cannot contain backslashes, so these are path separators.
+  // On POSIX, leave backslashes alone because they may be literal filename bytes.
+  return platform === 'win32' ? relativePath.replace(/\\/g, '/') : relativePath;
+}
+
 function expandGlobPattern(pattern: string): string[] {
   if (pattern.length > MAX_GLOB_PATTERN_LENGTH) {
     throw new Error(`Glob pattern length exceeds ${MAX_GLOB_PATTERN_LENGTH}`);
@@ -248,7 +260,7 @@ export class LOCCounter {
     ];
 
     const cwd = process.cwd();
-    const globPatterns = patterns || defaultPatterns;
+    const globPatterns = (patterns || defaultPatterns).map(pattern => normalizeGlobPatternForPlatform(pattern));
     const expandedPatterns = globPatterns.flatMap(expandGlobPattern);
     const virtualEnvironmentRoots = discoverVirtualEnvironmentRoots(cwd, globPatterns, expandedPatterns);
     const virtualEnvironmentIgnores = virtualEnvironmentRoots.map(environment => {
@@ -269,7 +281,7 @@ export class LOCCounter {
       .filter(file => !virtualEnvironmentRoots.some(environment => {
         return isWithinDirectory(environment, file);
       }))
-      .map(file => path.relative(cwd, file))
+      .map(file => normalizeRelativePathForPlatform(path.relative(cwd, file)))
       .filter(file => !this.ignoreMatcher.ignores(file));
   }
 

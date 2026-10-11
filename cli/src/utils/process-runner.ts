@@ -185,7 +185,9 @@ export function resolveGradleWrapperInvocation(
     const command = environment.ComSpec || environment.COMSPEC || 'cmd.exe';
     return {command, args: ['/d', '/s', '/c', 'gradlew.bat', ...args]};
   }
-  return {command: path.join(repoPath, 'gradlew'), args: [...args]};
+  // The explicit platform controls the invocation, so the wrapper path must
+  // use target-platform separators rather than the host's path implementation.
+  return {command: path.posix.join(repoPath, 'gradlew'), args: [...args]};
 }
 
 export function resolveNetworkIsolatedInvocation(

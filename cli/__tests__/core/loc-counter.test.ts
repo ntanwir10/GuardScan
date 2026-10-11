@@ -1,4 +1,4 @@
-import { LOCCounter } from '../../src/core/loc-counter';
+import { LOCCounter, normalizeGlobPatternForPlatform, normalizeRelativePathForPlatform } from '../../src/core/loc-counter';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as braceExpansion from '@isaacs/brace-expansion';
@@ -23,6 +23,31 @@ describe('LOCCounter', () => {
     if (fs.existsSync(testDir)) {
       fs.rmSync(testDir, { recursive: true, force: true });
     }
+  });
+
+  describe('cross-platform glob path normalization', () => {
+    it.each([
+      ['drive-rooted mixed separators', 'C:\\repo\\src/**/*.ts', 'C:/repo/src/**/*.ts'],
+      ['UNC-rooted mixed separators', '\\\\server\\share\\repo\\src/**/*.ts', '//server/share/repo/src/**/*.ts'],
+      ['directory alternatives', 'C:\\repo/{src,tests}/**/*.ts', 'C:/repo/{src,tests}/**/*.ts'],
+      ['escaped literal brackets', 'C:\\repo\\src/\\[fixture\\]/**/*.ts', 'C:/repo/src/\\[fixture\\]/**/*.ts'],
+      ['escaped literal braces', 'C:\\repo\\src/\\{fixture,source\\}/**/*.ts', 'C:/repo/src/\\{fixture,source\\}/**/*.ts'],
+    ])('normalizes Windows separators for %s without changing glob escapes', (_name, input, expected) => {
+      expect(normalizeGlobPatternForPlatform(input, 'win32')).toBe(expected);
+    });
+
+    it('leaves POSIX paths and their escaped glob metacharacters unchanged', () => {
+      const pattern = '/repo/src/\\[fixture\\]/**/*.ts';
+
+      expect(normalizeGlobPatternForPlatform(pattern, 'linux')).toBe(pattern);
+    });
+
+    it('uses forward slashes for Windows relative results without altering POSIX literal backslashes', () => {
+      expect(normalizeRelativePathForPlatform('src\\nested\\file.ts', 'win32'))
+        .toBe('src/nested/file.ts');
+      expect(normalizeRelativePathForPlatform('src\\literal\\file.ts', 'linux'))
+        .toBe('src\\literal\\file.ts');
+    });
   });
 
   describe('countFile', () => {
