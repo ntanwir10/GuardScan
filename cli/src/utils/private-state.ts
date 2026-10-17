@@ -89,6 +89,22 @@ export function atomicReplaceText(
   content: string,
   options: {privateParent?: boolean} = {}
 ): void {
+  atomicReplaceFile(file, content, options);
+}
+
+export function atomicReplaceBuffer(
+  file: string,
+  content: Buffer,
+  options: {privateParent?: boolean} = {}
+): void {
+  atomicReplaceFile(file, content, options);
+}
+
+function atomicReplaceFile(
+  file: string,
+  content: string | Buffer,
+  options: {privateParent?: boolean}
+): void {
   ensureParentDirectory(path.dirname(file), options.privateParent !== false);
   const temporary = temporaryPath(file);
   fs.writeFileSync(temporary, content, {
@@ -107,7 +123,15 @@ export function prepareAtomicOutputTarget(file: string, untrustedRoot: string): 
   const requestedPath = path.resolve(file);
   const requestedParent = path.dirname(requestedPath);
   const absoluteRoot = path.resolve(untrustedRoot);
-  const relativeParent = path.relative(absoluteRoot, requestedParent);
+  const resolvedRoot = fs.realpathSync(absoluteRoot);
+  // Earlier safe writes can return canonical paths (for example /private/var
+  // instead of /var on macOS). Both spellings still belong to the same root.
+  const validationRoot = [absoluteRoot, resolvedRoot].find(root => {
+    const relative = path.relative(root, requestedParent);
+    return relative === '' || (relative !== '..' &&
+      !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
+  });
+  const relativeParent = path.relative(validationRoot || absoluteRoot, requestedParent);
   const requestedInsideRoot = relativeParent === '' || (
     relativeParent !== '..' &&
     !relativeParent.startsWith(`..${path.sep}`) &&
@@ -115,7 +139,7 @@ export function prepareAtomicOutputTarget(file: string, untrustedRoot: string): 
   );
 
   if (requestedInsideRoot) {
-    let current = absoluteRoot;
+    let current = validationRoot || absoluteRoot;
     for (const segment of relativeParent.split(path.sep).filter(Boolean)) {
       current = path.join(current, segment);
       try {
@@ -136,7 +160,6 @@ export function prepareAtomicOutputTarget(file: string, untrustedRoot: string): 
   fs.mkdirSync(requestedParent, {recursive: true});
   const resolvedParent = fs.realpathSync(requestedParent);
   if (requestedInsideRoot) {
-    const resolvedRoot = fs.realpathSync(absoluteRoot);
     const resolvedRelative = path.relative(resolvedRoot, resolvedParent);
     if (resolvedRelative === '..' || resolvedRelative.startsWith(`..${path.sep}`) ||
         path.isAbsolute(resolvedRelative)) {

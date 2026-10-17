@@ -4,7 +4,7 @@ import { marked } from 'marked';
 import { LOCResult } from '../core/loc-counter';
 import { RepositoryInfo } from '../core/repository';
 import type { SeveritySummary } from './chart-generator';
-import { atomicReplaceText, prepareAtomicOutputTarget } from './private-state';
+import { atomicReplaceBuffer, atomicReplaceText, prepareAtomicOutputTarget } from './private-state';
 
 export interface ReviewResult {
   summary: string;
@@ -146,7 +146,7 @@ export class Reporter {
   /**
    * Generate HTML report from markdown with charts
    */
-  async generateHTML(result: ReviewResult, outputDir?: string): Promise<string> {
+  async generateHTML(result: ReviewResult, outputDir?: string, untrustedRoot?: string): Promise<string> {
     const markdown = this.generateMarkdown(result);
     const htmlContent = await marked(markdown);
 
@@ -154,9 +154,25 @@ export class Reporter {
     const reportsDir = outputDir || path.join(process.cwd(), '.guardscan', 'reports');
     const imagesDir = path.join(reportsDir, 'images');
 
-    if (!fs.existsSync(imagesDir)) {
+    if (!untrustedRoot && !fs.existsSync(imagesDir)) {
       fs.mkdirSync(imagesDir, { recursive: true });
     }
+
+    // Validate before chart generation's optional-dependency fallback so unsafe
+    // output directories cannot be silently accepted or written through.
+    const severityChartPath = path.join(imagesDir, 'severity-distribution.png');
+    const categoryChartPath = path.join(imagesDir, 'category-distribution.png');
+    if (untrustedRoot && result.findings.length > 0) {
+      prepareAtomicOutputTarget(severityChartPath, untrustedRoot);
+      prepareAtomicOutputTarget(categoryChartPath, untrustedRoot);
+    }
+    const writeChart = (file: string, content: Buffer): void => {
+      if (untrustedRoot) {
+        atomicReplaceBuffer(prepareAtomicOutputTarget(file, untrustedRoot), content, {privateParent: false});
+      } else {
+        fs.writeFileSync(file, content);
+      }
+    };
 
     // Generate charts
     const chartImages: { [key: string]: string } = {};
@@ -172,8 +188,7 @@ export class Reporter {
         // chart support is unavailable or install scripts are disabled.
         const { chartGenerator } = await import('./chart-generator');
         const severityChart = await chartGenerator.generateSeverityChart(severitySummary);
-        const severityChartPath = path.join(imagesDir, 'severity-distribution.png');
-        fs.writeFileSync(severityChartPath, severityChart);
+        writeChart(severityChartPath, severityChart);
         chartImages.severity = 'images/severity-distribution.png';
       }
 
@@ -183,8 +198,7 @@ export class Reporter {
         const categoryData = this.calculateCategoryDistribution(result.findings);
         if (Object.keys(categoryData).length > 0) {
           const categoryChart = await chartGenerator.generateCategoryChart(categoryData);
-          const categoryChartPath = path.join(imagesDir, 'category-distribution.png');
-          fs.writeFileSync(categoryChartPath, categoryChart);
+          writeChart(categoryChartPath, categoryChart);
           chartImages.category = 'images/category-distribution.png';
         }
       }
@@ -320,16 +334,16 @@ export class Reporter {
     const reportPrefix = this.getReportPrefix(reportType);
     const defaultFilename = `${reportPrefix}-${timestamp}.${format === 'markdown' ? 'md' : 'html'}`;
     const filepath = outputPath || path.join(process.cwd(), defaultFilename);
+    const target = untrustedRoot ? prepareAtomicOutputTarget(filepath, untrustedRoot) : filepath;
 
     let content: string;
     if (format === 'markdown') {
       content = this.generateMarkdown(result);
     } else {
-      content = await this.generateHTML(result, path.dirname(filepath));
+      content = await this.generateHTML(result, path.dirname(target), untrustedRoot);
     }
 
     if (untrustedRoot) {
-      const target = prepareAtomicOutputTarget(filepath, untrustedRoot);
       atomicReplaceText(target, content, {privateParent: false});
     } else {
       fs.writeFileSync(filepath, content, 'utf-8');

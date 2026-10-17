@@ -16,6 +16,13 @@ import {
 
 import { describe, it, beforeEach, afterEach, expect } from "@jest/globals";
 
+jest.mock("../../src/utils/chart-generator", () => ({
+  chartGenerator: {
+    generateSeverityChart: jest.fn(async () => Buffer.from([0x89, 0x50, 0x4e, 0x47, 0xff])),
+    generateCategoryChart: jest.fn(async () => Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00])),
+  },
+}));
+
 describe("Reporter", () => {
   let reporter: Reporter;
   let testDir: string;
@@ -165,6 +172,78 @@ describe("Reporter", () => {
   });
 
   describe("saveReport", () => {
+    it("checks canonical chart paths when the repository root is a filesystem alias", async () => {
+      const repository = path.join(testDir, "repository");
+      const alias = path.join(testDir, "repository-alias");
+      const external = path.join(testDir, "external");
+      fs.mkdirSync(repository);
+      fs.mkdirSync(external);
+      const linkType = process.platform === "win32" ? "junction" : "dir";
+      fs.symlinkSync(repository, alias, linkType);
+      fs.symlinkSync(external, path.join(repository, "images"), linkType);
+
+      await expect(reporter.saveReport(mockResult, "html", path.join(repository, "report.html"), "security", alias))
+        .rejects.toThrow(/symlink|outside/i);
+
+      expect(fs.readdirSync(external)).toEqual([]);
+    });
+
+    it("rejects a symlinked HTML images directory without touching its target", async () => {
+      const repository = path.join(testDir, "repository");
+      const external = path.join(testDir, "external");
+      fs.mkdirSync(repository);
+      fs.mkdirSync(external);
+      fs.writeFileSync(path.join(external, "severity-distribution.png"), "preserve severity");
+      fs.writeFileSync(path.join(external, "category-distribution.png"), "preserve category");
+      fs.symlinkSync(external, path.join(repository, "images"), process.platform === "win32" ? "junction" : "dir");
+
+      await expect(reporter.saveReport(mockResult, "html", path.join(repository, "report.html"), "security", repository))
+        .rejects.toThrow(/symlink|outside/i);
+
+      expect(fs.readFileSync(path.join(external, "severity-distribution.png"), "utf8")).toBe("preserve severity");
+      expect(fs.readFileSync(path.join(external, "category-distribution.png"), "utf8")).toBe("preserve category");
+      expect(fs.existsSync(path.join(repository, "report.html"))).toBe(false);
+    });
+
+    it("validates the HTML output parent before creating any chart files", async () => {
+      const repository = path.join(testDir, "repository");
+      const external = path.join(testDir, "external");
+      fs.mkdirSync(repository);
+      fs.mkdirSync(external);
+      const outputDirectory = path.join(repository, "output");
+      fs.symlinkSync(external, outputDirectory, process.platform === "win32" ? "junction" : "dir");
+
+      await expect(reporter.saveReport(mockResult, "html", path.join(outputDirectory, "report.html"), "security", repository))
+        .rejects.toThrow(/symlink|outside/i);
+
+      expect(fs.existsSync(path.join(external, "images"))).toBe(false);
+      expect(fs.existsSync(path.join(external, "report.html"))).toBe(false);
+    });
+
+    it("atomically replaces linked chart files and preserves PNG bytes and external targets", async () => {
+      const repository = path.join(testDir, "repository");
+      const images = path.join(repository, "images");
+      fs.mkdirSync(images, {recursive: true});
+      for (const name of ["severity-distribution.png", "category-distribution.png"]) {
+        const external = path.join(testDir, name);
+        const output = path.join(images, name);
+        fs.writeFileSync(external, "preserve external");
+        if (process.platform === "win32") {fs.linkSync(external, output);}
+        else {fs.symlinkSync(external, output);}
+      }
+
+      await reporter.saveReport(mockResult, "html", path.join(repository, "report.html"), "security", repository);
+
+      expect(fs.readFileSync(path.join(images, "severity-distribution.png")))
+        .toEqual(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0xff]));
+      expect(fs.readFileSync(path.join(images, "category-distribution.png")))
+        .toEqual(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00]));
+      for (const name of ["severity-distribution.png", "category-distribution.png"]) {
+        expect(fs.lstatSync(path.join(images, name)).isSymbolicLink()).toBe(false);
+        expect(fs.readFileSync(path.join(testDir, name), "utf8")).toBe("preserve external");
+      }
+    });
+
     it("should save markdown report to file", async () => {
       const outputPath = path.join(testDir, "report.md");
       const savedPath = await reporter.saveReport(mockResult, "markdown", outputPath);
