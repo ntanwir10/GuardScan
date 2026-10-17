@@ -123,10 +123,15 @@ export function prepareAtomicOutputTarget(file: string, untrustedRoot: string): 
   const requestedPath = path.resolve(file);
   const requestedParent = path.dirname(requestedPath);
   const absoluteRoot = path.resolve(untrustedRoot);
-  const resolvedRoot = fs.realpathSync(absoluteRoot);
+  let resolvedRoot: string | undefined;
+  try {
+    resolvedRoot = fs.realpathSync(absoluteRoot);
+  } catch (error: unknown) {
+    if (!isNodeError(error) || error.code !== 'ENOENT') {throw error;}
+  }
   // Earlier safe writes can return canonical paths (for example /private/var
   // instead of /var on macOS). Both spellings still belong to the same root.
-  const validationRoot = [absoluteRoot, resolvedRoot].find(root => {
+  const validationRoot = (resolvedRoot ? [absoluteRoot, resolvedRoot] : [absoluteRoot]).find(root => {
     const relative = path.relative(root, requestedParent);
     return relative === '' || (relative !== '..' &&
       !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
@@ -160,7 +165,7 @@ export function prepareAtomicOutputTarget(file: string, untrustedRoot: string): 
   fs.mkdirSync(requestedParent, {recursive: true});
   const resolvedParent = fs.realpathSync(requestedParent);
   if (requestedInsideRoot) {
-    const resolvedRelative = path.relative(resolvedRoot, resolvedParent);
+    const resolvedRelative = path.relative(resolvedRoot || fs.realpathSync(absoluteRoot), resolvedParent);
     if (resolvedRelative === '..' || resolvedRelative.startsWith(`..${path.sep}`) ||
         path.isAbsolute(resolvedRelative)) {
       throw new Error('output directory resolves outside the repository through a symlink');

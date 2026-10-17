@@ -172,6 +172,25 @@ describe("Reporter", () => {
   });
 
   describe("saveReport", () => {
+    it("keeps explicit outside-root output usable when the supplied root does not exist", async () => {
+      const output = path.join(testDir, "report.md");
+      const missingRoot = path.join(testDir, "missing-root");
+
+      await reporter.saveReport(mockResult, "markdown", output, "security", missingRoot);
+
+      expect(fs.readFileSync(output, "utf8")).toContain("# GuardScan Report");
+      expect(fs.existsSync(missingRoot)).toBe(false);
+    });
+
+    it("validates output inside a newly created repository root", async () => {
+      const missingRoot = path.join(testDir, "missing-root");
+      const output = path.join(missingRoot, "reports", "report.md");
+
+      await reporter.saveReport(mockResult, "markdown", output, "security", missingRoot);
+
+      expect(fs.readFileSync(output, "utf8")).toContain("# GuardScan Report");
+    });
+
     it("checks canonical chart paths when the repository root is a filesystem alias", async () => {
       const repository = path.join(testDir, "repository");
       const alias = path.join(testDir, "repository-alias");
