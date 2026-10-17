@@ -18,13 +18,13 @@ describe('CLI config and global option parsing', () => {
 
   afterEach(() => fs.rmSync(home, {recursive: true, force: true}));
 
-  function cli(args: string[]) {
+  function cli(args: string[], cwd?: string) {
     const env: NodeJS.ProcessEnv = {...process.env, HOME: home, USERPROFILE: home, GUARDSCAN_HOME: home,
       GUARDSCAN_NO_TELEMETRY: 'true'};
     delete env.GUARDSCAN_OFFLINE;
     delete env.GUARDSCAN_DEBUG;
     return spawnSync(process.execPath, [path.resolve(__dirname, '../../dist/index.js'), ...args], {
-      env, encoding: 'utf8', timeout: 15_000,
+      env, cwd, encoding: 'utf8', timeout: 15_000,
     });
   }
 
@@ -50,5 +50,24 @@ describe('CLI config and global option parsing', () => {
     const result = cli(['vuln', 'db', 'status', '--offline', '--no-cache', '--no-telemetry']);
     expect({status: result.status, stderr: result.stderr}).toEqual({status: 0, stderr: ''});
     expect(result.stdout).toContain('guardscan.vulnerability-snapshot-status.v1');
+  });
+
+  it.each([[], ['--isolate-project-network']])('explains blocked offline project execution without running it (%j)', (...isolation) => {
+    const repository = path.join(home, 'project');
+    fs.mkdirSync(repository);
+    fs.writeFileSync(path.join(repository, 'package.json'), JSON.stringify({
+      name: 'offline-fixture', version: '1.0.0',
+      scripts: {test: 'node -e "require(\'fs\').writeFileSync(\'executed\', \'unsafe\')"'},
+    }));
+    fs.writeFileSync(path.join(repository, 'owned.js'), 'module.exports = 1;\n');
+    const output = path.join(repository, 'report.json');
+
+    const result = cli(['scan', '--run-project-code', ...isolation, '--no-cve', '--skip-ai',
+      '--format', 'json', '--output', output], repository);
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toContain('--run-project-code is disabled in offline mode');
+    expect(fs.existsSync(path.join(repository, 'executed'))).toBe(false);
+    expect(JSON.parse(fs.readFileSync(output, 'utf8')).run.executionMode).toBe('static-analysis');
   });
 });

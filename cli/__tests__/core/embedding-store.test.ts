@@ -93,8 +93,8 @@ describe('FileBasedEmbeddingStore', () => {
       expect(loaded[0].content).toBe('updated content');
     });
 
-    it('keeps embeddings ephemeral when the invocation disables caching', async () => {
-      process.env.GUARDSCAN_NO_CACHE = 'true';
+    it.each(['true', '1', 'TRUE', 'TrUe'])('keeps embeddings ephemeral when GUARDSCAN_NO_CACHE=%s', async value => {
+      process.env.GUARDSCAN_NO_CACHE = value;
       const ephemeralBase = path.join(testDir, 'ephemeral');
       const ephemeralStore = new FileBasedEmbeddingStore(testRepoId, ephemeralBase);
       await ephemeralStore.saveEmbeddings([

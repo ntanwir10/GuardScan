@@ -95,6 +95,11 @@ export async function scanCommand(options: ScanOptions): Promise<void> {
       cve: options.cve === true && config.vulnerabilities?.enabled !== false,
       allowPartial: options.allowPartial,
     });
+    if (options.runProjectCode && !executionPolicy.runProjectCode) {
+      console.warn(chalk.yellow(
+        'Warning: --run-project-code is disabled in offline mode. Use guardscan test for explicit offline local tests.'
+      ));
+    }
     const { offline } = executionPolicy;
     const allowPartial = executionPolicy.allowPartial;
     const concurrency = parseConcurrency(options.concurrency);

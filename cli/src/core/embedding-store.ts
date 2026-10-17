@@ -44,7 +44,7 @@ export class FileBasedEmbeddingStore implements EmbeddingStore {
     const base = basePath || path.join(getGuardScanCacheDir(), repoId);
     this.storageDir = path.join(base, 'embeddings');
     this.indexPath = path.join(this.storageDir, 'index.json');
-    this.persistent = process.env.GUARDSCAN_NO_CACHE !== 'true';
+    this.persistent = !['true', '1'].includes(process.env.GUARDSCAN_NO_CACHE?.toLowerCase() || '');
   }
 
   /**
