@@ -6,6 +6,38 @@ import { applyEarlyEnvironmentFlags } from "./utils/execution-policy";
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const packageJson = require("../package.json") as { version: string };
 
+function prioritizeGlobalOptions(program: Command, args: string[]): string[] {
+  const globals: string[] = [];
+  const commandArgs: string[] = [];
+  let command = program;
+  for (let index = 0; index < args.length; index++) {
+    const argument = args[index];
+    if (argument === '--') {commandArgs.push(...args.slice(index)); break;}
+    const name = argument.split('=', 1)[0];
+    const local = command.options.find(option => option.long === name || option.short === name);
+    const rootOption = program.options.find(option => option.long === name || option.short === name);
+    if (rootOption && (!local || (!local.required && !local.optional))) {
+      globals.push(argument);
+    } else {
+      commandArgs.push(argument);
+    }
+    const option = local || rootOption;
+    if (!argument.includes('=') && option) {
+      if (option.required && index + 1 < args.length) {commandArgs.push(args[++index]);}
+      else if (option.optional && args[index + 1] && !args[index + 1].startsWith('-')) {
+        commandArgs.push(args[++index]);
+      }
+      if (option.variadic) {
+        while (args[index + 1] && !args[index + 1].startsWith('-')) {commandArgs.push(args[++index]);}
+      }
+    } else if (!argument.startsWith('-')) {
+      const child = command.commands.find(candidate => candidate.name() === argument || candidate.aliases().includes(argument));
+      if (child) {command = child;}
+    }
+  }
+  return [...globals, ...commandArgs];
+}
+
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
   applyEarlyEnvironmentFlags(args);
@@ -404,6 +436,12 @@ async function main(): Promise<void> {
   program.addCommand(createTelemetryCommand());
   program.addCommand(createVulnerabilityCommand());
 
+  // Keep config's value-taking --offline distinct while preserving existing
+  // global boolean flags before or after commands, including nested commands.
+  program.enablePositionalOptions();
+  const normalizedArgs = prioritizeGlobalOptions(program, args);
+  applyEarlyEnvironmentFlags(normalizedArgs);
+
   if (
     args.length === 0 ||
     args.includes("--help") ||
@@ -418,7 +456,7 @@ async function main(): Promise<void> {
     // Silent fail
   });
 
-  await program.parseAsync();
+  await program.parseAsync(normalizedArgs, {from: 'user'});
 }
 
 main().catch((error) => {

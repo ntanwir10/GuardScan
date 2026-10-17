@@ -18,12 +18,25 @@ export interface EffectiveExecutionPolicy {
 }
 
 export function applyEarlyEnvironmentFlags(args: string[]): void {
-  if (args.includes('--no-telemetry')) {process.env.GUARDSCAN_NO_TELEMETRY = 'true';}
-  if (args.includes('--no-cache')) {process.env.GUARDSCAN_NO_CACHE = 'true';}
-  if (args.includes('--offline') || args.includes('--no-cloud')) {
+  const separator = args.indexOf('--');
+  const input = separator === -1 ? args : args.slice(0, separator);
+  const commandIndex = input.findIndex(value => !value.startsWith('-'));
+  const config = input[commandIndex] === 'config';
+  const flags: string[] = [];
+  const configValueOptions = new Set(['--provider', '-p', '--key', '-k', '--telemetry', '--offline']);
+  for (let index = 0; index < input.length; index++) {
+    if (config && index > commandIndex && configValueOptions.has(input[index])) {
+      index++;
+      continue;
+    }
+    flags.push(input[index]);
+  }
+  if (flags.includes('--no-telemetry')) {process.env.GUARDSCAN_NO_TELEMETRY = 'true';}
+  if (flags.includes('--no-cache')) {process.env.GUARDSCAN_NO_CACHE = 'true';}
+  if (flags.includes('--offline') || flags.includes('--no-cloud')) {
     process.env.GUARDSCAN_OFFLINE = 'true';
   }
-  if (args.includes('--debug')) {process.env.GUARDSCAN_DEBUG = 'true';}
+  if (flags.includes('--debug')) {process.env.GUARDSCAN_DEBUG = 'true';}
 }
 
 export function environmentRequestsOffline(): boolean {
