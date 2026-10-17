@@ -305,6 +305,9 @@ describe('ScanEngine built-in coverage adapters', () => {
       const excludedDirectory = path.join(repository, 'packages', directory, 'nested');
       fs.mkdirSync(excludedDirectory, {recursive: true});
       fs.writeFileSync(path.join(excludedDirectory, scanner.source), 'generated dependency source\n');
+      if (directory === '.venv' || directory === 'venv') {
+        fs.writeFileSync(path.join(repository, 'packages', directory, 'pyvenv.cfg'), 'home = /python\n');
+      }
     }
 
     const linkedSource = path.join(repository, scanner.name === 'dockerfile' ? 'Dockerfile.link' : `linked-${scanner.source}`);

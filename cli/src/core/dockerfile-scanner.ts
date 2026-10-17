@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { Finding } from '../utils/reporter';
-import { SCAN_IGNORED_DIRECTORY_NAMES } from './scan-ignored-directories';
+import { isPythonVirtualEnvironment, SCAN_IGNORED_DIRECTORY_NAMES } from './scan-ignored-directories';
 
 export class DockerfileScanner {
   /**
@@ -39,6 +39,7 @@ export class DockerfileScanner {
           }
 
           if (stat.isDirectory()) {
+            if (isPythonVirtualEnvironment(fullPath)) {continue;}
             search(fullPath, depth + 1);
           } else if (isDockerfile(item)) {
             dockerfiles.push(fullPath);

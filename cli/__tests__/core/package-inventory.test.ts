@@ -628,6 +628,90 @@ describe('collectPackageInventory', () => {
     ]);
   });
 
+  it('covers npm brace workspaces and their root, member, and transitive dependencies', () => {
+    const workspaces = ['packages/{api,web}'];
+    fs.writeFileSync(path.join(repository, 'package.json'), JSON.stringify({
+      name: 'root', workspaces, dependencies: {'@fixture/api': '*', rootdep: '1.0.0'},
+    }));
+    for (const member of ['api', 'web']) {
+      fs.mkdirSync(path.join(repository, `packages/${member}`), {recursive: true});
+      fs.writeFileSync(path.join(repository, `packages/${member}/package.json`), JSON.stringify({
+        name: `@fixture/${member}`, version: '1.0.0',
+        dependencies: member === 'api' ? {'@fixture/web': '*', registry: '2.0.0'} : {webdep: '4.0.0'},
+      }));
+    }
+    fs.writeFileSync(path.join(repository, 'package-lock.json'), JSON.stringify({lockfileVersion: 3, packages: {
+      '': {name: 'root', workspaces, dependencies: {'@fixture/api': '*', rootdep: '1.0.0'}},
+      'packages/api': {name: '@fixture/api', version: '1.0.0', dependencies: {'@fixture/web': '*', registry: '2.0.0'}},
+      'packages/web': {name: '@fixture/web', version: '1.0.0', dependencies: {webdep: '4.0.0'}},
+      'node_modules/@fixture/api': {resolved: 'packages/api', link: true},
+      'node_modules/@fixture/web': {resolved: 'packages/web', link: true},
+      'node_modules/rootdep': {version: '1.0.0', dependencies: {'@fixture/web': '*'}},
+      'node_modules/registry': {version: '2.0.0', dependencies: {child: '3.0.0'}},
+      'node_modules/child': {version: '3.0.0'},
+      'node_modules/webdep': {version: '4.0.0'},
+    }}));
+
+    const inventory = collectPackageInventory(repository);
+
+    expect(inventory.coordinates).toEqual(expect.arrayContaining([
+      expect.objectContaining({name: 'rootdep', direct: true, manifestPath: 'package.json'}),
+      expect.objectContaining({name: 'registry', direct: true, manifestPath: 'packages/api/package.json', lockfilePath: 'package-lock.json'}),
+      expect.objectContaining({name: 'child', direct: false, dependencyPaths: ['registry@2.0.0 > child@3.0.0']}),
+      expect.objectContaining({name: 'webdep', direct: true, scope: 'runtime', manifestPath: 'packages/web/package.json', lockfilePath: 'package-lock.json'}),
+    ]));
+    expect(inventory.coordinates.map(value => value.name).sort()).toEqual(['child', 'registry', 'rootdep', 'webdep']);
+    expect(inventory.errors).toEqual([]);
+  });
+
+  it.each(['packages/{api,web}', 'packages/{a{pi,pp},web}'])('covers Yarn brace workspaces (%s)', pattern => {
+    fs.writeFileSync(path.join(repository, 'package.json'), JSON.stringify({name: 'root', workspaces: [pattern]}));
+    fs.mkdirSync(path.join(repository, 'packages/api'), {recursive: true});
+    fs.writeFileSync(path.join(repository, 'packages/api/package.json'), JSON.stringify({name: 'api', dependencies: {registry: '1.0.0'}}));
+    fs.writeFileSync(path.join(repository, 'yarn.lock'), 'registry@1.0.0:\n  version "1.0.0"\n');
+
+    const inventory = collectPackageInventory(repository);
+
+    expect(inventory.coordinates).toEqual([expect.objectContaining({
+      name: 'registry', direct: true, manifestPath: 'packages/api/package.json', lockfilePath: 'yarn.lock',
+    })]);
+    expect(inventory.errors).toEqual([]);
+  });
+
+  it('preserves escaped literal workspace braces', () => {
+    fs.writeFileSync(path.join(repository, 'package.json'), JSON.stringify({name: 'root', workspaces: ['packages/\\{api,web\\}']}));
+    fs.mkdirSync(path.join(repository, 'packages/{api,web}'), {recursive: true});
+    fs.writeFileSync(path.join(repository, 'packages/{api,web}/package.json'), JSON.stringify({name: 'literal', dependencies: {registry: '1.0.0'}}));
+    fs.writeFileSync(path.join(repository, 'yarn.lock'), 'registry@1.0.0:\n  version "1.0.0"\n');
+
+    const inventory = collectPackageInventory(repository);
+
+    expect(inventory.coordinates).toEqual([expect.objectContaining({
+      name: 'registry', direct: true, manifestPath: 'packages/{api,web}/package.json', lockfilePath: 'yarn.lock',
+    })]);
+    expect(inventory.errors).toEqual([]);
+  });
+
+  it.each([
+    'packages/{1..999999999999}', 'packages/{1..2..0}', `packages/${'{a,'.repeat(65)}api${'}'.repeat(65)}`,
+    `packages/${'a'.repeat(16_385)}`,
+  ])('fails closed for unsafe workspace glob patterns', pattern => {
+    fs.writeFileSync(path.join(repository, 'package.json'), JSON.stringify({name: 'root', workspaces: [pattern]}));
+    fs.mkdirSync(path.join(repository, 'packages/api'), {recursive: true});
+    fs.writeFileSync(path.join(repository, 'packages/api/package.json'), JSON.stringify({name: 'api', dependencies: {registry: '1.0.0'}}));
+    fs.writeFileSync(path.join(repository, 'package-lock.json'), JSON.stringify({lockfileVersion: 3, packages: {
+      '': {workspaces: [pattern]}, 'packages/api': {name: 'api', version: '1.0.0'},
+      'node_modules/api': {resolved: 'packages/api', link: true},
+      'node_modules/registry': {version: '1.0.0'},
+    }}));
+
+    const inventory = collectPackageInventory(repository);
+
+    expect(inventory.errors).toEqual(expect.arrayContaining([
+      expect.objectContaining({file: 'package-lock.json', code: 'INVALID_MANIFEST', message: expect.stringMatching(/glob|brace|sequence|expansion/i)}),
+    ]));
+  });
+
   it('reports npm lock entries with missing or malformed versions', () => {
     fs.writeFileSync(path.join(repository, 'package.json'), JSON.stringify({name: 'root'}));
     fs.writeFileSync(path.join(repository, 'package-lock.json'), JSON.stringify({
@@ -1679,6 +1763,41 @@ describe('collectPackageInventory', () => {
     expect(inventory.errors).toEqual([]);
   });
 
+  it('ignores standalone Go comments and blank lines in all directive blocks', () => {
+    fs.writeFileSync(path.join(repository, 'go.mod'), [
+      'module example.test/app', 'go 1.22',
+      'require (', '  // Direct dependencies', '', '  example.test/direct v1.0.0',
+      '  // Transitive dependencies', '  example.test/indirect v2.0.0 // indirect', ')',
+      'replace (', '  // Registry replacement', '', '  example.test/direct => example.test/replacement v1.2.0', ')',
+      'exclude (', '  // No active exclusions', '', ')',
+    ].join('\n'));
+
+    const inventory = collectPackageInventory(repository);
+
+    expect(inventory.coordinates).toEqual(expect.arrayContaining([
+      expect.objectContaining({name: 'example.test/replacement', exactVersion: 'v1.2.0', direct: true}),
+      expect.objectContaining({name: 'example.test/indirect', exactVersion: 'v2.0.0', direct: false}),
+    ]));
+    expect(inventory.errors).toEqual([]);
+  });
+
+  it('retains Go exclusion and malformed-entry errors alongside standalone comments', () => {
+    fs.writeFileSync(path.join(repository, 'go.mod'), [
+      'module example.test/app', 'go 1.22',
+      'require (', '// A comment', 'invalid', ')',
+      'replace (', '// A comment', 'invalid', ')',
+      'exclude (', '// A comment', 'example.test/excluded v1.0.0 // known issue', 'invalid', ')',
+    ].join('\n'));
+
+    const inventory = collectPackageInventory(repository);
+
+    expect(inventory.errors).toHaveLength(4);
+    expect(inventory.errors.map(value => value.message)).toEqual(expect.arrayContaining([
+      expect.stringMatching(/requirement.*invalid/), expect.stringMatching(/replacement.*invalid/),
+      expect.stringMatching(/exclusion.*invalid/), expect.stringMatching(/excluded.*effective module graph/),
+    ]));
+  });
+
   it('reports unsupported Poetry and Pipenv lockfile projects', () => {
     fs.mkdirSync(path.join(repository, 'poetry'));
     fs.writeFileSync(path.join(repository, 'poetry/pyproject.toml'), '[tool.poetry]\nname = "fixture"\n');
@@ -2480,6 +2599,59 @@ GEM
     ]));
     expect(filterPackageInventory(inventory, {scope: 'runtime'}).coordinates).toEqual([]);
     expect(inventory.errors).toEqual([]);
+  });
+
+  it.each([
+    'groups: %i[test development]', 'group: %w(test development)',
+    ':groups => %i{test development}', ':group => %w<test development>',
+    "groups: [:test, :development]", "group: ['test', 'development']",
+  ])('inherits Bundler percent-array group scope through transitive dependencies (%s)', option => {
+    fs.writeFileSync(path.join(repository, 'Gemfile'), `source 'https://rubygems.org'\ngem 'rspec', ${option}\n`);
+    fs.writeFileSync(path.join(repository, 'Gemfile.lock'), [
+      'GEM', '  remote: https://rubygems.org/', '  specs:',
+      '    rspec (3.13.0)', '      child (>= 1.0.0)', '    child (1.0.0)', '', 'DEPENDENCIES', '  rspec',
+    ].join('\n'));
+
+    const inventory = collectPackageInventory(repository);
+
+    expect(inventory.coordinates).toEqual(expect.arrayContaining([
+      expect.objectContaining({name: 'rspec', direct: true, scope: 'development'}),
+      expect.objectContaining({name: 'child', direct: false, scope: 'development'}),
+    ]));
+    expect(filterPackageInventory(inventory, {scope: 'runtime'}).coordinates).toEqual([]);
+    expect(inventory.errors).toEqual([]);
+  });
+
+  it('keeps mixed Bundler percent-array groups in runtime scope', () => {
+    fs.writeFileSync(path.join(repository, 'Gemfile'), "gem 'rack', groups: %i[test production]\n");
+    fs.writeFileSync(path.join(repository, 'Gemfile.lock'), 'GEM\n  specs:\n    rack (3.1.0)\n\nDEPENDENCIES\n  rack\n');
+
+    const inventory = collectPackageInventory(repository);
+
+    expect(inventory.coordinates).toEqual([expect.objectContaining({name: 'rack', scope: 'runtime'})]);
+    expect(inventory.errors).toEqual([]);
+  });
+
+  it('inherits static percent-array Bundler block groups', () => {
+    fs.writeFileSync(path.join(repository, 'Gemfile'), "group *%i[test development] do\n  gem 'rspec'\nend\n");
+    fs.writeFileSync(path.join(repository, 'Gemfile.lock'), 'GEM\n  specs:\n    rspec (3.13.0)\n\nDEPENDENCIES\n  rspec\n');
+
+    const inventory = collectPackageInventory(repository);
+
+    expect(inventory.coordinates).toEqual([expect.objectContaining({name: 'rspec', scope: 'development'})]);
+    expect(inventory.errors).toEqual([]);
+  });
+
+  it.each(['groups: configured_groups', 'groups: %W[#{configured_group}]', 'groups: %i[test] + extra_groups'])('fails closed for dynamic Bundler group expressions (%s)', option => {
+    fs.writeFileSync(path.join(repository, 'Gemfile'), `gem 'rspec', ${option}\n`);
+    fs.writeFileSync(path.join(repository, 'Gemfile.lock'), 'GEM\n  specs:\n    rspec (3.13.0)\n\nDEPENDENCIES\n  rspec\n');
+
+    const inventory = collectPackageInventory(repository);
+
+    expect(inventory.coordinates).toEqual([expect.objectContaining({name: 'rspec', scope: 'unknown'})]);
+    expect(inventory.errors).toEqual(expect.arrayContaining([
+      expect.objectContaining({file: 'Gemfile', code: 'UNSUPPORTED_FORMAT', message: expect.stringMatching(/group/i)}),
+    ]));
   });
 
   it('preserves Maven optional and non-runtime scopes', () => {

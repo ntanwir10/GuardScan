@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { Finding } from '../utils/reporter';
-import { SCAN_IGNORED_DIRECTORY_NAMES } from './scan-ignored-directories';
+import { isPythonVirtualEnvironment, SCAN_IGNORED_DIRECTORY_NAMES } from './scan-ignored-directories';
 
 /**
  * OWASP Top 10 2021 Scanner
@@ -49,6 +49,7 @@ export class OwaspScanner {
           }
 
           if (stat.isDirectory()) {
+            if (isPythonVirtualEnvironment(fullPath)) {continue;}
             search(fullPath, depth + 1);
           } else if (this.isCodeFile(item)) {
             files.push(fullPath);

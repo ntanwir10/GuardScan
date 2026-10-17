@@ -27,6 +27,12 @@ describe('LOCCounter', () => {
 
   describe('cross-platform glob path normalization', () => {
     it.each([
+      ['native relative wildcards', 'src\\**\\*.ts', 'src/**/*.ts'],
+      ['native drive-rooted wildcards', 'C:\\repo\\src\\**\\*.ts', 'C:/repo/src/**/*.ts'],
+      ['native UNC wildcards', '\\\\server\\share\\src\\**\\*.ts', '//server/share/src/**/*.ts'],
+      ['native brace alternatives', 'C:\\repo\\{src,tests}\\**\\*.ts', 'C:/repo/{src,tests}/**/*.ts'],
+      ['native character class', 'src\\[ab]\\file?.ts', 'src/[ab]/file?.ts'],
+      ['native negative extglob', 'src\\!(generated)\\*.ts', 'src/!(generated)/*.ts'],
       ['drive-rooted mixed separators', 'C:\\repo\\src/**/*.ts', 'C:/repo/src/**/*.ts'],
       ['UNC-rooted mixed separators', '\\\\server\\share\\repo\\src/**/*.ts', '//server/share/repo/src/**/*.ts'],
       ['directory alternatives', 'C:\\repo/{src,tests}/**/*.ts', 'C:/repo/{src,tests}/**/*.ts'],
@@ -40,6 +46,21 @@ describe('LOCCounter', () => {
       const pattern = '/repo/src/\\[fixture\\]/**/*.ts';
 
       expect(normalizeGlobPatternForPlatform(pattern, 'linux')).toBe(pattern);
+    });
+
+    it('discovers selected files after normalizing native Windows wildcard separators', async () => {
+      const sourceDirectory = path.join(testDir, 'src');
+      fs.mkdirSync(path.join(sourceDirectory, 'nested'), {recursive: true});
+      fs.writeFileSync(path.join(sourceDirectory, 'index.ts'), 'export const first = 1;\n');
+      fs.writeFileSync(path.join(sourceDirectory, 'nested', 'second.ts'), 'export const second = 2;\n');
+      fs.writeFileSync(path.join(sourceDirectory, 'nested', 'ignored.py'), 'ignored = True\n');
+
+      const pattern = normalizeGlobPatternForPlatform(`${sourceDirectory}\\**\\*.ts`, 'win32');
+      const result = await counter.count([pattern]);
+
+      expect(result.fileCount).toBe(2);
+      expect(result.fileBreakdown.map(file => path.basename(file.path)).sort())
+        .toEqual(['index.ts', 'second.ts']);
     });
 
     it('uses forward slashes for Windows relative results without altering POSIX literal backslashes', () => {

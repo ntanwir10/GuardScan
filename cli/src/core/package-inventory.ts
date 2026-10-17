@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import yaml from 'js-yaml';
 import semver from 'semver';
+import {expandGlobPattern, normalizeGlobPatternForPlatform} from './glob-pattern';
 
 export type PackageEcosystem = 'npm' | 'pip' | 'go' | 'ruby' | 'cargo' | 'maven';
 export type DependencyScope = 'runtime' | 'development' | 'optional' | 'unknown';
@@ -361,11 +362,24 @@ function yarnWorkspacePatterns(data: Record<string, unknown>): string[] {
 }
 
 function yarnWorkspacePatternMatches(pattern: string, directory: string): boolean {
-  const normalizedPattern = pattern.replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/$/, '');
+  const normalizedPattern = normalizeGlobPatternForPlatform(pattern)
+    .replace(/^\.\//, '').replace(/\/$/, '');
   const normalizedDirectory = directory.replace(/\\/g, '/').replace(/\/$/, '');
-  const expression = normalizedPattern
-    .split('**').map(part => part.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '[^/]*')).join('.*');
-  return new RegExp(`^${expression}$`).test(normalizedDirectory);
+  return expandGlobPattern(normalizedPattern).some(expanded => {
+    let expression = '';
+    for (let index = 0; index < expanded.length; index++) {
+      const character = expanded[index];
+      if (character === '\\' && index + 1 < expanded.length) {
+        expression += expanded[++index].replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      } else if (character === '*') {
+        if (expanded[index + 1] === '*') {expression += '.*'; index++;}
+        else {expression += '[^/]*';}
+      } else {
+        expression += character.replace(/[.+?^${}()|[\]\\]/g, '\\$&');
+      }
+    }
+    return new RegExp(`^${expression}$`).test(normalizedDirectory);
+  });
 }
 
 function yarnWorkspaceManifestDirectories(
@@ -638,7 +652,7 @@ function parseNpmLock(
         });
       }
 
-      const resolveInstalledNode = (parentPath: string, installName: string): NpmNode | undefined => {
+      const resolveInstalledNode = (parentPath: string, installName: string): NpmNode | 'workspace' | undefined => {
         let directory: string | undefined = parentPath;
         while (directory !== undefined) {
           const candidate = directory
@@ -646,6 +660,8 @@ function parseNpmLock(
             : `node_modules/${installName}`;
           const resolved = nodes.get(path.posix.normalize(candidate));
           if (resolved) {return resolved;}
+          const record = asRecord(lockPackages[path.posix.normalize(candidate)]);
+          if (record && isNpmWorkspaceLink(record, workspacePackagePaths, lockPackages)) {return 'workspace';}
           if (!directory) {return undefined;}
           const parent = path.posix.dirname(directory);
           directory = parent === '.' || parent === directory ? '' : parent;
@@ -678,7 +694,11 @@ function parseNpmLock(
             ? 'optional'
             : rootScope;
           const child = resolveInstalledNode(node.packagePath, dependencyName);
-          if (child) {
+          if (child === 'workspace') {
+            // Each workspace's registry dependencies are independently seeded
+            // from its dependency declarations above.
+            continue;
+          } else if (child) {
             recordDependencyParent(parentsByNode, child.packagePath, identity(node));
             visit(child, `${currentPath} > ${identity(child)}`, nextStack, edgeScope);
           } else if (peerOnly) {
@@ -1695,6 +1715,7 @@ function parseGoMod(
     let inExclude = false;
     for (const raw of readInventoryText(file).split(/\r?\n/)) {
       const line = raw.trim();
+      if (!line || line.startsWith('//')) {continue;}
       const goDirective = line.match(/^go\s+(\d+)\.(\d+)(?:\.\d+)?$/);
       if (goDirective) {
         declaredGoVersion = `${goDirective[1]}.${goDirective[2]}`;
@@ -2117,6 +2138,39 @@ function rubyRequirementMatches(requested: string | undefined, version: string):
   });
 }
 
+function staticRubyGroups(expression: string): string[] | undefined {
+  // Accept only literal names; dynamic Ruby expressions require an explicit
+  // incomplete-inventory error rather than guessing their dependency scope.
+  const value = expression.trim();
+  const percent = value.match(/^%[iw]([[({<|/!])(.*)([\])}>|/!])$/);
+  if (percent) {
+    const closing: Record<string, string> = {'[': ']', '(': ')', '{': '}', '<': '>', '|': '|', '/': '/', '!': '!'};
+    if (closing[percent[1]] !== percent[3] || !/^[A-Za-z0-9_\s-]*$/.test(percent[2])) {return undefined;}
+    return percent[2].trim().split(/\s+/).filter(Boolean);
+  }
+  const contents = value.startsWith('[') && value.endsWith(']') ? value.slice(1, -1) : value;
+  if (!contents.trim()) {return [];}
+  const groups: string[] = [];
+  for (const element of contents.split(',')) {
+    const group = element.trim().match(/^(?::([A-Za-z0-9_]+)|'([A-Za-z0-9_-]+)'|"([A-Za-z0-9_-]+)")$/);
+    if (!group) {return undefined;}
+    groups.push(group[1] || group[2] || group[3]);
+  }
+  return groups;
+}
+
+function inlineRubyGroups(expression: string): string[] | undefined {
+  const value = expression.trim();
+  const percent = value.match(/^%[iw]([[({<|/!])/);
+  const closing: Record<string, string> = {'[': ']', '(': ')', '{': '}', '<': '>', '|': '|', '/': '/', '!': '!'};
+  let end: number;
+  if (percent) {end = value.indexOf(closing[percent[1]], percent[0].length) + 1;}
+  else if (value.startsWith('[')) {end = value.indexOf(']') + 1;}
+  else {end = value.match(/^(?::[A-Za-z0-9_]+|'[A-Za-z0-9_-]+'|"[A-Za-z0-9_-]+")/)?.[0].length || 0;}
+  if (end === 0 || !/^\s*(?:,|\)\s*$|$)/.test(value.slice(end))) {return undefined;}
+  return staticRubyGroups(value.slice(0, end));
+}
+
 function parseGemfileLock(
   root: string,
   file: string,
@@ -2133,12 +2187,14 @@ function parseGemfileLock(
     const scopeRank: Record<DependencyScope, number> = {unknown: 0, development: 1, optional: 2, runtime: 3};
     const requirements = new Map<string, GemRequirement>();
     if (fs.existsSync(manifest)) {
-      const blocks: Array<{groups: string[]}> = [];
+      const blocks: Array<{groups: string[]; unsupported?: boolean}> = [];
       for (const rawLine of readInventoryText(manifest).split(/\r?\n/)) {
         const line = rawLine.replace(/\s+#.*$/, '').trim();
-        const group = line.match(/^group\s*(?:\(\s*)?(.+?)(?:\s*\))?\s+do(?:\s*\|[^|]*\|)?\s*$/);
+        const group = line.match(/^group\s*(.+?)\s+do(?:\s*\|[^|]*\|)?\s*$/);
         if (group) {
-          blocks.push({groups: [...group[1].matchAll(/:([A-Za-z0-9_]+)/g)].map(match => match[1])});
+          const expression = group[1].replace(/^\((.*)\)$/, '$1').replace(/^\*\s*/, '');
+          const groups = staticRubyGroups(expression);
+          blocks.push({groups: groups || [], unsupported: groups === undefined});
           continue;
         }
         if (/^end\b/.test(line)) {blocks.pop(); continue;}
@@ -2151,13 +2207,19 @@ function parseGemfileLock(
         if (!gem) {continue;}
         const tail = gem[2];
         const requested = tail.match(/^\s*,\s*['"]([^'"]+)['"]/)?.[1];
-        const inlineGroups = [...tail.matchAll(/(?:groups?|:group)\s*(?:=>|:)\s*(?:\[([^\]]+)\]|:([A-Za-z0-9_]+)|['"]([^'"]+)['"])/g)]
-          .flatMap(match => match[1]
-            ? [...match[1].matchAll(/:?([A-Za-z0-9_]+)/g)].map(value => value[1])
-            : [match[2] || match[3]])
-          .filter(Boolean);
+        const inlineGroups: string[] = [];
+        let unsupportedGroups = blocks.some(block => block.unsupported);
+        for (const option of tail.matchAll(/(?:^|,)\s*(?::groups?\s*=>|groups?\s*:)\s*/g)) {
+          const groups = inlineRubyGroups(tail.slice(option.index + option[0].length));
+          if (groups === undefined) {unsupportedGroups = true;}
+          else {inlineGroups.push(...groups);}
+        }
+        if (unsupportedGroups) {
+          errors.push({file: manifestPath, code: 'UNSUPPORTED_FORMAT', ecosystem: 'ruby', scope: 'unknown',
+            message: `Gem dependency ${gem[1]} has a group expression that cannot be resolved statically`});
+        }
         const groups = [...blocks.flatMap(block => block.groups), ...inlineGroups];
-        const scope: DependencyScope = groups.length > 0 && groups.every(value => ['development', 'test'].includes(value))
+        const scope: DependencyScope = unsupportedGroups ? 'unknown' : groups.length > 0 && groups.every(value => ['development', 'test'].includes(value))
           ? 'development'
           : 'runtime';
         const next: GemRequirement = {

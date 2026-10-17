@@ -1,6 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { SCAN_IGNORED_DIRECTORY_NAMES } from './scan-ignored-directories';
+import { isPythonVirtualEnvironment, SCAN_IGNORED_DIRECTORY_NAMES } from './scan-ignored-directories';
 
 export interface ComplianceViolation {
   standard: 'GDPR' | 'HIPAA' | 'PCI-DSS' | 'SOC2' | 'General';
@@ -94,6 +94,7 @@ export class ComplianceChecker {
           }
 
           if (stat.isDirectory()) {
+            if (isPythonVirtualEnvironment(fullPath)) {continue;}
             search(fullPath, depth + 1);
           } else if (this.isCodeFile(item)) {
             files.push(fullPath);

@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import yaml from 'js-yaml';
 import { Finding } from '../utils/reporter';
-import { SCAN_IGNORED_DIRECTORY_NAMES } from './scan-ignored-directories';
+import { isPythonVirtualEnvironment, SCAN_IGNORED_DIRECTORY_NAMES } from './scan-ignored-directories';
 
 function looksLikeKubernetesManifest(content: string): boolean {
   return content.split(/^---(?:\s+#.*)?\s*$/m).some(document => {
@@ -401,6 +401,7 @@ export class IaCScanner {
           }
 
           if (stat.isDirectory()) {
+            if (isPythonVirtualEnvironment(fullPath)) {continue;}
             search(fullPath, depth + 1);
           } else if (pattern.test(item)) {
             files.push(fullPath);
