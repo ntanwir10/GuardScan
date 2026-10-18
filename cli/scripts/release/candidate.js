@@ -9,8 +9,10 @@ function assertCandidateVersion(stableVersion, candidateVersion) {
   const stable = semver.parse(stableVersion);
   const candidate = semver.parse(candidateVersion);
   if (!stable || stable.prerelease.length > 0) throw new Error('candidate source must use a stable version');
-  if (!candidate || candidate.prerelease[0] !== 'rc'
-      || !Number.isInteger(candidate.prerelease[1])
+  if (!candidate || candidate.prerelease.length !== 2
+      || candidate.prerelease[0] !== 'rc'
+      || !Number.isSafeInteger(candidate.prerelease[1])
+      || candidate.build.length > 0
       || candidate.major !== stable.major
       || candidate.minor !== stable.minor
       || candidate.patch !== stable.patch) {

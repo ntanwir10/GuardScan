@@ -112,7 +112,7 @@ function transitionState(state, options) {
     throw new Error(`remote identity is not valid for ${target} release status`);
   }
 
-  if (target === PROMOTION_STATUS) {
+  if (target in STATUS_ORDER && STATUS_ORDER[target] >= STATUS_ORDER[PROMOTION_STATUS]) {
     assertApproval(options.approval, {channel, manifestSha256, state, timestamp});
   }
   const unchanged = current.status === target

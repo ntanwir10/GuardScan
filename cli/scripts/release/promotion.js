@@ -23,18 +23,26 @@ function stableVersion(rcVersion) {
   return `${parsed.major}.${parsed.minor}.${parsed.patch}`;
 }
 
-function summarizeCanaries(samples, publishedAt, evaluatedAt, minimumSamples) {
+function summarizeCanaries(samples, publishedAt, eligibleAt, evaluatedAt, minimumSamples) {
   const normalized = [...samples].sort((a, b) => a.checkedAt.localeCompare(b.checkedAt));
   for (const sample of normalized) canonicalTimestamp(sample.checkedAt, 'canary checkedAt');
   const failures = normalized.filter(sample => sample.status !== 'passed');
   const latest = normalized.at(-1);
+  const first = normalized[0];
   return {
     sampleCount: normalized.length,
     passed: failures.length === 0 && normalized.length >= minimumSamples,
-    firstCheckedAt: normalized[0]?.checkedAt,
+    firstCheckedAt: first?.checkedAt,
     lastCheckedAt: latest?.checkedAt,
     failures: failures.length,
-    coversPublication: normalized[0] ? normalized[0].checkedAt >= publishedAt : false,
+    coversPublication: first ? first.checkedAt >= publishedAt : false,
+    startsNearPublication: first
+      ? new Date(first.checkedAt).getTime() - new Date(publishedAt).getTime()
+        <= MAX_CANARY_AGE_MILLISECONDS
+      : false,
+    coversSoakWindow: latest
+      ? new Date(latest.checkedAt).getTime() >= eligibleAt.getTime()
+      : false,
     fresh: latest
       ? evaluatedAt.getTime() - new Date(latest.checkedAt).getTime() <= MAX_CANARY_AGE_MILLISECONDS
       : false,
@@ -67,6 +75,7 @@ function createPromotionDecision(input) {
     const summary = summarizeCanaries(
       (input.canaries || []).filter(sample => sample.channel === channel),
       input.rc.publishedAt,
+      eligibleAt,
       evaluatedAt,
       minimumSamples
     );
@@ -76,6 +85,8 @@ function createPromotionDecision(input) {
       if (summary.failures > 0) reasons.push(`canary_failed:${channel}`);
       if (summary.sampleCount < minimumSamples) reasons.push(`canary_samples_insufficient:${channel}`);
       if (!summary.coversPublication) reasons.push(`canary_predates_publication:${channel}`);
+      if (!summary.startsNearPublication) reasons.push(`canary_start_late:${channel}`);
+      if (!summary.coversSoakWindow) reasons.push(`canary_soak_incomplete:${channel}`);
       if (!summary.fresh) reasons.push(`canary_stale:${channel}`);
     }
   }

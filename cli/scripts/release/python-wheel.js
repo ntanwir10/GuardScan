@@ -75,7 +75,7 @@ function buildWheel(source, executableFile, platform, outputDir, timestamp) {
     [`${distribution}/launcher.py`, Buffer.from(launcherSource(binaryName, binaryDigest))],
     [`${distribution}/bin/${binaryName}`, executable],
     [`${distInfo}/METADATA`, Buffer.from([
-      'Metadata-Version: 2.3',
+      'Metadata-Version: 2.4',
       'Name: guardscan-cli',
       `Version: ${pythonVersion}`,
       'Summary: Privacy-first code review and security scanning CLI',

@@ -4,6 +4,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const {spawnSync} = require('child_process');
+const semver = require('semver');
 const yaml = require('js-yaml');
 const {readBounded} = require('./lib');
 const {
@@ -81,7 +82,13 @@ function validateStructuredOutput(manifest, outputDir, channels) {
   return results;
 }
 
-function nativeValidationPlan(outputDir, channels, platform = process.platform, tempDir = os.tmpdir()) {
+function nativeValidationPlan(
+  outputDir,
+  channels,
+  platform = process.platform,
+  tempDir = os.tmpdir(),
+  version
+) {
   const plan = [];
   const skip = (channel, reason) => plan.push({channel, skipped: true, reason});
   if (channels.includes('homebrew')) {
@@ -97,6 +104,8 @@ function nativeValidationPlan(outputDir, channels, platform = process.platform, 
   }
   if (channels.includes('scoop')) {
     if (platform === 'win32') {
+      const manifest = path.join(outputDir, 'scoop', 'bucket', 'guardscan.json');
+      const literalPath = manifest.replace(/'/g, "''");
       plan.push({
         channel: 'scoop',
         command: 'pwsh',
@@ -104,8 +113,7 @@ function nativeValidationPlan(outputDir, channels, platform = process.platform, 
           '-NoProfile',
           '-NonInteractive',
           '-Command',
-          '$value = Get-Content -Raw -LiteralPath $args[0] | ConvertFrom-Json; if (-not $value.bin) { exit 1 }',
-          path.join(outputDir, 'scoop', 'bucket', 'guardscan.json'),
+          `$value = Get-Content -Raw -LiteralPath '${literalPath}' | ConvertFrom-Json; if (-not $value.bin) { exit 1 }`,
         ],
       });
     } else {
@@ -114,13 +122,16 @@ function nativeValidationPlan(outputDir, channels, platform = process.platform, 
   }
   if (channels.includes('winget')) {
     if (platform === 'win32') {
+      if (typeof version !== 'string' || semver.valid(version) !== version) {
+        throw new Error('WinGet native validation requires a valid release version');
+      }
       plan.push({
         channel: 'winget',
         command: 'winget',
         args: [
           'validate',
           '--manifest',
-          path.join(outputDir, 'winget', 'manifests', 'n', 'NaumanTanwir', 'GuardScan'),
+          path.join(outputDir, 'winget', 'manifests', 'n', 'NaumanTanwir', 'GuardScan', version),
         ],
       });
     } else {
@@ -177,7 +188,9 @@ function validateAdapters(manifest, outputDir, channelInput, options = {}) {
   if (options.native) {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'guardscan-adapter-validation-'));
     try {
-      const plan = nativeValidationPlan(path.resolve(outputDir), channels, options.platform, tempDir);
+      const plan = nativeValidationPlan(
+        path.resolve(outputDir), channels, options.platform, tempDir, manifest.version
+      );
       for (const command of plan) {
         if (command.skipped) {
           if (options.requireNative) throw new Error(`${command.channel}: ${command.reason}`);

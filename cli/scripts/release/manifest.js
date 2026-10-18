@@ -250,16 +250,36 @@ function writeReleaseManifest(source, descriptorFile, outputFile) {
   const manifest = createReleaseManifest(source, loadManifestInput(source, descriptorFile));
   const resolved = path.resolve(outputFile);
   const contents = `${JSON.stringify(manifest, null, 2)}\n`;
-  if (fs.existsSync(resolved)) {
-    if (readBounded(resolved, 'release manifest') !== contents) {
-      throw new Error(`release manifest conflicts with existing output: ${resolved}`);
+  const directory = path.dirname(resolved);
+  fs.mkdirSync(directory, {recursive: true, mode: 0o700});
+  const stage = path.join(
+    directory,
+    `.${path.basename(resolved)}.tmp-${process.pid}-${crypto.randomUUID()}`
+  );
+  try {
+    fs.writeFileSync(stage, contents, {encoding: 'utf8', mode: 0o600, flag: 'wx'});
+    validateDocument('manifest', stage, source.packageRoot);
+
+    if (fs.existsSync(resolved)) {
+      if (readBounded(resolved, 'release manifest') !== contents) {
+        throw new Error(`release manifest conflicts with existing output: ${resolved}`);
+      }
+      return {created: false, manifest, sha256: sha256Text(contents), outputFile: resolved};
     }
-    return {created: false, manifest, sha256: sha256Text(contents), outputFile: resolved};
+
+    try {
+      fs.linkSync(stage, resolved);
+    } catch (error) {
+      if (error?.code !== 'EEXIST') throw error;
+      if (readBounded(resolved, 'release manifest') !== contents) {
+        throw new Error(`release manifest conflicts with existing output: ${resolved}`);
+      }
+      return {created: false, manifest, sha256: sha256Text(contents), outputFile: resolved};
+    }
+    return {created: true, manifest, sha256: sha256Text(contents), outputFile: resolved};
+  } finally {
+    fs.rmSync(stage, {force: true});
   }
-  fs.mkdirSync(path.dirname(resolved), {recursive: true, mode: 0o700});
-  fs.writeFileSync(resolved, contents, {encoding: 'utf8', mode: 0o600, flag: 'wx'});
-  validateDocument('manifest', resolved, source.packageRoot);
-  return {created: true, manifest, sha256: sha256Text(contents), outputFile: resolved};
 }
 
 function verifyManifestFiles(manifest, artifactRoot) {

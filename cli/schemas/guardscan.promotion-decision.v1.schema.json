@@ -118,6 +118,8 @@
         "lastCheckedAt": { "type": "string", "format": "date-time" },
         "failures": { "type": "integer", "minimum": 0 },
         "coversPublication": { "type": "boolean" },
+        "startsNearPublication": { "type": "boolean" },
+        "coversSoakWindow": { "type": "boolean" },
         "fresh": { "type": "boolean" }
       }
     }

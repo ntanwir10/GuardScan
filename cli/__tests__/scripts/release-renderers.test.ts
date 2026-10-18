@@ -30,7 +30,8 @@ const {
     outputDir: string,
     channels: string[],
     platform?: NodeJS.Platform,
-    tempDir?: string
+    tempDir?: string,
+    version?: string
   ) => Array<Record<string, any>>;
   validateAdapters: (
     manifest: Record<string, any>,
@@ -249,7 +250,8 @@ describe('release adapter rendering', () => {
         output,
         ['homebrew', 'scoop', 'winget', 'chocolatey', 'pypi'],
         'win32',
-        path.join(root, 'native-output')
+        path.join(root, 'native-output'),
+        manifest.version
       );
       expect(windowsPlan.find(step => step.channel === 'homebrew')).toMatchObject({skipped: true});
       expect(windowsPlan.find(step => step.channel === 'scoop')).toMatchObject({command: 'pwsh'});
