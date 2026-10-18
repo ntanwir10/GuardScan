@@ -395,9 +395,10 @@ describe('deterministic artifacts and manifest aggregation', () => {
       expect(launcherText).toContain('hashlib.sha256()');
       expect(launcherText).toContain('stream.read(1024 * 1024)');
       const program = [
-        'import hashlib, os, runpy, sys',
+        'import hashlib, os, runpy, subprocess, sys',
         'hashlib.file_digest = None',
-        'os.execv = lambda executable, argv: print("EXEC:" + " ".join(argv[1:]))',
+        'os.execv = lambda executable, argv: (print("EXEC:" + " ".join(argv[1:])), sys.exit(0))',
+        'subprocess.run = lambda argv, check=False: (print("EXEC:" + " ".join(argv[1:])), subprocess.CompletedProcess(argv, 0))[1]',
         'sys.path.insert(0, sys.argv[1])',
         'sys.argv = [sys.argv[2], "--version"]',
         'runpy.run_path(sys.argv[0])["main"]()',
@@ -414,6 +415,9 @@ describe('deterministic artifacts and manifest aggregation', () => {
       }
       if (!result) return;
       expect(result.error).toBeUndefined();
+      if (result.status !== 0) {
+        throw new Error(`Python launcher exited ${result.status}: ${result.stderr || result.stdout}`);
+      }
       expect(result.status).toBe(0);
       expect(result.stdout.trim()).toBe('EXEC:--version');
     } finally {

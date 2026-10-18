@@ -73,10 +73,35 @@ describe('private state persistence', () => {
     for (let index = 0; index < 5; index++) {
       fs.writeFileSync(path.join(root, `${index}.json`), '{}');
     }
-    expect(listDirectoryBounded(root, 3)).toEqual({
-      names: ['0.json', '1.json', '2.json'],
-      truncated: true,
-    });
+    const result = listDirectoryBounded(root, 3);
+    expect(result.names).toHaveLength(3);
+    expect(result.names).toEqual([...result.names].sort((left, right) => left.localeCompare(right)));
+    expect(result.names.every(name => ['0.json', '1.json', '2.json', '3.json', '4.json'].includes(name))).toBe(true);
+    expect(result.truncated).toBe(true);
+  });
+
+  it('reads only one entry beyond the bounded prefix before closing the directory', () => {
+    const entries = ['zeta.json', 'alpha.json', 'unread-1.json', 'unread-2.json']
+      .map(name => ({name}) as fs.Dirent);
+    const readSync = jest.fn(() => entries.shift() ?? null);
+    const closeSync = jest.fn();
+    const fsModule = require('fs') as typeof fs;
+    const originalOpendirSync = fsModule.opendirSync;
+    fsModule.opendirSync = jest.fn().mockReturnValue({
+      readSync,
+      closeSync,
+    } as unknown as fs.Dir);
+
+    try {
+      expect(listDirectoryBounded(root, 2)).toEqual({
+        names: ['alpha.json', 'zeta.json'],
+        truncated: true,
+      });
+      expect(readSync).toHaveBeenCalledTimes(3);
+      expect(closeSync).toHaveBeenCalledTimes(1);
+    } finally {
+      fsModule.opendirSync = originalOpendirSync;
+    }
   });
 
   it('can process every directory entry with bounded callback memory', () => {
