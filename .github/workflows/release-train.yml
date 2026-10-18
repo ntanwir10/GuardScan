@@ -72,6 +72,7 @@ jobs:
     runs-on: ubuntu-24.04
     concurrency:
       group: release-ledger
+      queue: max
       cancel-in-progress: false
     outputs:
       build: ${{ steps.result.outputs.build }}
@@ -91,15 +92,30 @@ jobs:
         id: source
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
+          RELEASE_PR: ${{ inputs.release_pr }}
+          RELEASE_VERSION: ${{ inputs.version }}
         run: |
-          test -n "${{ inputs.release_pr }}"
-          HEAD_SHA="$(gh pr view "${{ inputs.release_pr }}" \
+          if ! [[ "$RELEASE_PR" =~ ^[1-9][0-9]*$ ]]; then
+            echo 'Release PR number is malformed.' >&2
+            exit 1
+          fi
+          PR_DETAILS="$(gh pr view "$RELEASE_PR" \
             --repo "${GITHUB_REPOSITORY}" \
-            --json headRefOid \
-            --jq .headRefOid)"
-          test "${#HEAD_SHA}" = 40
+            --json state,baseRefName,headRefName,headRefOid,headRepository)"
+          BASE_VERSION="$RELEASE_VERSION"
+          BASE_VERSION="${BASE_VERSION%%-rc.*}"
+          EXPECTED_HEAD_BRANCH="release/$BASE_VERSION"
+          jq -e --arg repository "${GITHUB_REPOSITORY,,}" --arg branch "$EXPECTED_HEAD_BRANCH" \
+            '.state == "OPEN" and .baseRefName == "main" and .headRefName == $branch and
+             (.headRepository.nameWithOwner | ascii_downcase) == $repository and
+             (.headRefOid | test("^[a-f0-9]{40}$"))' <<< "$PR_DETAILS" >/dev/null || {
+              echo 'Release PR must be open, same-repository, main-based, on its trusted release branch, and use a valid head SHA.' >&2
+              exit 1
+            }
+          HEAD_SHA="$(jq -er '.headRefOid' <<< "$PR_DETAILS")"
           echo "head_sha=$HEAD_SHA" >> "$GITHUB_OUTPUT"
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Checkout source PR head
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ steps.source.outputs.head_sha }}
           fetch-depth: 0
@@ -241,24 +257,60 @@ jobs:
         id: stable
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
+          RELEASE_PR: ${{ inputs.release_pr }}
         run: |
           STABLE_VERSION="$(node -p 'require("./promotion-decision.json").stable.version')"
-          gh pr merge "${{ inputs.release_pr }}" \
+          gh pr merge "$RELEASE_PR" \
             --repo "${GITHUB_REPOSITORY}" \
             --auto --squash --match-head-commit "${{ steps.source.outputs.head_sha }}"
           for ATTEMPT in $(seq 1 60); do
-            STATE="$(gh pr view "${{ inputs.release_pr }}" --repo "${GITHUB_REPOSITORY}" --json state --jq .state)"
+            STATE="$(gh pr view "$RELEASE_PR" --repo "${GITHUB_REPOSITORY}" --json state --jq .state)"
             if [ "$STATE" = MERGED ]; then break; fi
             sleep 10
           done
           test "$STATE" = MERGED
-          MERGE_SHA="$(gh pr view "${{ inputs.release_pr }}" \
-            --repo "${GITHUB_REPOSITORY}" --json mergeCommit --jq .mergeCommit.oid)"
+          MERGED_PR="$(gh pr view "$RELEASE_PR" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --json state,baseRefName,headRefOid,mergeCommit)"
+          jq -e --arg head "${{ steps.source.outputs.head_sha }}" \
+            '.state == "MERGED" and .baseRefName == "main" and .headRefOid == $head and
+             (.mergeCommit.oid | test("^[a-f0-9]{40}$"))' <<< "$MERGED_PR" >/dev/null || {
+              echo 'Merged release PR no longer matches its authorized head and main base.' >&2
+              exit 1
+            }
+          MERGE_SHA="$(jq -er '.mergeCommit.oid' <<< "$MERGED_PR")"
           git fetch origin "$MERGE_SHA"
           git switch --detach "$MERGE_SHA"
           test "$(node -p 'require("./cli/package.json").version')" = "$STABLE_VERSION"
-          git tag "v$STABLE_VERSION"
-          git push origin "refs/tags/v$STABLE_VERSION"
+          TAG_REF="refs/tags/v$STABLE_VERSION"
+          set +e
+          REMOTE_TAGS="$(git ls-remote --exit-code origin "$TAG_REF" "$TAG_REF^{}")"
+          TAG_LOOKUP_STATUS=$?
+          set -e
+          if [ "$TAG_LOOKUP_STATUS" -eq 0 ]; then
+            EXISTING_TAG_SHA="$(printf '%s\n' "$REMOTE_TAGS" | awk -v tag="$TAG_REF" '$2 == tag "^{}" {peeled=$1} $2 == tag {direct=$1} END {print peeled ? peeled : direct}')"
+            if [ "$EXISTING_TAG_SHA" != "$MERGE_SHA" ]; then
+              echo 'Existing stable tag does not point to the exact merged PR commit.' >&2
+              exit 1
+            fi
+            TAG_PUSH_REQUIRED=false
+          elif [ "$TAG_LOOKUP_STATUS" -eq 2 ]; then
+            TAG_PUSH_REQUIRED=true
+          else
+            echo 'Failed to query the existing stable tag; refusing to create or push it.' >&2
+            exit "$TAG_LOOKUP_STATUS"
+          fi
+          if [ "$TAG_PUSH_REQUIRED" = true ]; then
+            if git rev-parse --verify "$TAG_REF" >/dev/null 2>&1; then
+              if [ "$(git rev-list -n 1 "$TAG_REF")" != "$MERGE_SHA" ]; then
+                echo 'Local stable tag does not point to the exact merged PR commit.' >&2
+                exit 1
+              fi
+            else
+              git tag "v$STABLE_VERSION" "$MERGE_SHA"
+            fi
+            git push origin "refs/tags/v$STABLE_VERSION"
+          fi
           echo "ref=$MERGE_SHA" >> "$GITHUB_OUTPUT"
           echo "tag=v$STABLE_VERSION" >> "$GITHUB_OUTPUT"
       - name: Select build result
@@ -306,6 +358,7 @@ jobs:
     runs-on: ubuntu-24.04
     concurrency:
       group: release-ledger
+      queue: max
       cancel-in-progress: false
     steps:
       - name: Create short-lived release app token
@@ -551,6 +604,7 @@ jobs:
     runs-on: ubuntu-24.04
     concurrency:
       group: release-ledger
+      queue: max
       cancel-in-progress: false
     steps:
       - name: Create short-lived release app token

@@ -134,17 +134,18 @@ describe('zero-touch release workflow contracts', () => {
         'printf "%s\\n" "$*" >> "$GH_CALL_LOG"',
         'case "$*" in',
         '  *"--json assets"*) printf "%s\\n" "$GH_ASSET_JSON" ;;',
-        '  *"--json isDraft"*) printf "%s\\n" "$GH_DRAFT_STATE" ;;',
+        '  *"--json isDraft,isPrerelease"*) printf "%s" "$GH_RELEASE_STATE" ;;',
         '  *"/releases/assets/"*) printf "%s" "$GH_ASSET_BYTES" ;;',
         'esac',
       ].join('\n'), {mode: 0o700});
-      const run = (step.run as string).split('${{ inputs.tag }}').join('v1.2.3')
-        .split('${{ github.repository }}').join('owner/repo');
       const runStep = (
         name: string,
         assets: Array<Record<string, unknown>>,
-        options: {draft?: string; bytes?: string} = {}
+        options: {draft?: string; prerelease?: string; bytes?: string; channel?: string} = {}
       ) => {
+        const run = (step.run as string).split('${{ inputs.tag }}').join('v1.2.3')
+          .split('${{ inputs.channel }}').join(options.channel || 'stable')
+          .split('${{ github.repository }}').join('owner/repo');
         for (const file of fs.readdirSync(payload)) fs.rmSync(path.join(payload, file));
         fs.writeFileSync(path.join(payload, name), 'identical payload');
         return spawnSync('bash', ['-euo', 'pipefail', '-c', run], {
@@ -157,7 +158,10 @@ describe('zero-touch release workflow contracts', () => {
             GH_CALL_LOG: log,
             RUNNER_TEMP: runnerTemp,
             GH_ASSET_JSON: JSON.stringify({assets}),
-            GH_DRAFT_STATE: options.draft || 'true',
+            GH_RELEASE_STATE: JSON.stringify({
+              isDraft: (options.draft || 'true') === 'true',
+              isPrerelease: (options.prerelease || 'false') === 'true',
+            }),
             GH_ASSET_BYTES: options.bytes || 'identical payload',
           },
         });
@@ -199,6 +203,12 @@ describe('zero-touch release workflow contracts', () => {
       expect(publishedMissing.status).toBe(1);
       expect(publishedMissing.stdout).toContain('Published release is missing required immutable asset');
       expect(fs.readFileSync(log, 'utf8')).not.toContain('release upload');
+
+      const channelMismatch = runStep('artifact.zip', [validAsset('artifact.zip')], {
+        channel: 'rc', prerelease: 'false',
+      });
+      expect(channelMismatch.status).toBe(1);
+      expect(channelMismatch.stderr).toContain('Release channel mismatch');
     } finally {
       fs.rmSync(root, {recursive: true, force: true});
     }
@@ -207,7 +217,7 @@ describe('zero-touch release workflow contracts', () => {
   it('collects the exact Apple notarization evidence filename emitted by the producer', () => {
     const build = workflowSource('release-build.yml');
     expect(build).toContain("'apple-notarization.json'");
-    expect(build).toContain("-name 'apple-notarization.json'");
+    expect(build).toContain("-name '*.apple-notarization.json'");
   });
   it('validates the production or inert-bootstrap CI gates without allowing publication', () => {
     const source = workflowSource('ci.yml');

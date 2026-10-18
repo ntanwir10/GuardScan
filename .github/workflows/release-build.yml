@@ -496,7 +496,7 @@ jobs:
           find collected -type f \( \
               -name '*.tar.gz' -o -name '*.zip' -o -name '*.whl' -o -name '*.tgz' \
               -o -name 'guardscan-*.spdx.json' -o -name 'guardscan-*.cyclonedx.json' \
-              -o -name '*.sigstore.json' -o -name 'apple-notarization.json' -o -name '*.txt' \
+              -o -name '*.sigstore.json' -o -name '*.apple-notarization.json' -o -name '*.txt' \
             \) \
             -exec cp {} release/ \;
       - name: Build production manifest from all native and wheel metadata
@@ -557,7 +557,8 @@ jobs:
           cosign sign-blob --yes --bundle release/SHA256SUMS.sigstore.json release/SHA256SUMS
           cosign verify-blob \
             --bundle release/SHA256SUMS.sigstore.json \
-            --certificate-identity-regexp "^https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release-build.yml@" \
+            --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release-build.yml@refs/heads/main" \
+            --certificate-github-workflow-sha "${GITHUB_SHA}" \
             --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
             release/SHA256SUMS
       - name: Attest complete release payload

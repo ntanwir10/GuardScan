@@ -26,12 +26,58 @@ jobs:
     environment: ${{ inputs.channel == 'rc' && 'release-rc' || 'release-stable' }}
     permissions:
       contents: write
+      actions: read
     steps:
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: release-payload-${{ inputs.tag }}
           path: payload
       - uses: sigstore/cosign-installer@d58896d6a1865668819e1d91763c7751a165e159 # v3.9.2
+      - name: Authenticate release-build producer and verify payload
+        id: release-build-identity
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.tag }}
+        run: |
+          VERSION="${VERSION#v}"
+          PRODUCER_RUN_ID="$(jq -er '.producer.runId | select(type == "string" and test("^[1-9][0-9]{0,19}$"))' payload/release-manifest.json)"
+          PRODUCER_ATTEMPT="$(jq -er '.producer.runAttempt | select(type == "number" and floor == . and . > 0 and . <= 1000)' payload/release-manifest.json)"
+          BUILD_RUN="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/$PRODUCER_RUN_ID/attempts/$PRODUCER_ATTEMPT")"
+          jq -e --arg repository "$GITHUB_REPOSITORY" \
+            --arg run_id "$PRODUCER_RUN_ID" --arg attempt "$PRODUCER_ATTEMPT" '
+              ((.path | split("@")[0]) == ".github/workflows/release-train.yml") and
+              .event == "workflow_dispatch" and .head_branch == "main" and
+              (.repository.full_name | ascii_downcase) == ($repository | ascii_downcase) and
+              (.head_repository.full_name | ascii_downcase) == ($repository | ascii_downcase) and
+              (.id | tostring) == $run_id and (.run_attempt | tostring) == $attempt and
+              (.head_sha | test("^[a-f0-9]{40}$"))
+            ' <<< "$BUILD_RUN" >/dev/null || {
+              echo 'Authenticated release-train producer run does not match the trusted main workflow.' >&2
+              exit 1
+            }
+          BUILD_WORKFLOW_SHA="$(jq -er '.head_sha' <<< "$BUILD_RUN")"
+          cosign verify-blob \
+            --bundle payload/SHA256SUMS.sigstore.json \
+            --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release-build.yml@refs/heads/main" \
+            --certificate-github-workflow-sha "$BUILD_WORKFLOW_SHA" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            payload/SHA256SUMS
+          (cd payload && sha256sum --check SHA256SUMS)
+          TAG_SHA="$(gh api "repos/${GITHUB_REPOSITORY}/commits/v$VERSION" --jq .sha)"
+          jq -e --arg repository "$GITHUB_REPOSITORY" --arg version "$VERSION" \
+            --arg run_id "$PRODUCER_RUN_ID" --arg attempt "$PRODUCER_ATTEMPT" --arg tag_sha "$TAG_SHA" '
+              .schemaVersion == "guardscan.release-manifest.v1" and
+              .version == $version and .tag == ("v" + $version) and .commit == $tag_sha and
+              .producer.provider == "github-actions" and
+              (.producer.repository | ascii_downcase) == ($repository | ascii_downcase) and
+              .producer.workflow == ".github/workflows/release-build.yml" and
+              .producer.runId == $run_id and (.producer.runAttempt | tostring) == $attempt and
+              .producer.sourceRef == ("refs/tags/v" + $version)
+            ' payload/release-manifest.json >/dev/null || {
+              echo 'Signed release manifest does not match the exact train and immutable tag.' >&2
+              exit 1
+            }
+          echo "workflow_sha=$BUILD_WORKFLOW_SHA" >> "$GITHUB_OUTPUT"
       - name: Create or reuse draft and upload only missing identical assets
         env:
           GH_TOKEN: ${{ github.token }}
@@ -45,8 +91,18 @@ jobs:
               --title "GuardScan ${{ inputs.tag }}" \
               --generate-notes
           fi
-          IS_DRAFT="$(gh release view "${{ inputs.tag }}" \
-            --repo "${{ github.repository }}" --json isDraft --jq .isDraft)"
+          RELEASE_JSON="$(gh release view "${{ inputs.tag }}" \
+            --repo "${{ github.repository }}" --json isDraft,isPrerelease)"
+          jq -e '.isDraft | type == "boolean"' <<< "$RELEASE_JSON" >/dev/null
+          jq -e '.isPrerelease | type == "boolean"' <<< "$RELEASE_JSON" >/dev/null
+          IS_DRAFT="$(jq -r '.isDraft' <<< "$RELEASE_JSON")"
+          IS_PRERELEASE="$(jq -r '.isPrerelease' <<< "$RELEASE_JSON")"
+          EXPECTED_PRERELEASE=false
+          if [ "${{ inputs.channel }}" = rc ]; then EXPECTED_PRERELEASE=true; fi
+          if [ "$IS_PRERELEASE" != "$EXPECTED_PRERELEASE" ]; then
+            echo 'Release channel mismatch: existing release prerelease state differs from requested channel.' >&2
+            exit 1
+          fi
           while IFS= read -r -d '' FILE; do
             NAME="$(basename "$FILE")"
             ASSET_JSON="$(gh release view "${{ inputs.tag }}" --repo "${{ github.repository }}" --json assets)"
@@ -96,12 +152,13 @@ jobs:
             --dir redownload
           diff -u <(find payload -maxdepth 1 -type f -printf '%f\n' | sort) \
             <(find redownload -maxdepth 1 -type f -printf '%f\n' | sort)
-          (cd redownload && sha256sum --check SHA256SUMS)
           cosign verify-blob \
             --bundle redownload/SHA256SUMS.sigstore.json \
-            --certificate-identity-regexp "^https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release-build.yml@" \
+            --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release-build.yml@refs/heads/main" \
+            --certificate-github-workflow-sha "${{ steps.release-build-identity.outputs.workflow_sha }}" \
             --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
             redownload/SHA256SUMS
+          (cd redownload && sha256sum --check SHA256SUMS)
       - name: Publish verified draft
         env:
           GH_TOKEN: ${{ github.token }}
@@ -131,6 +188,8 @@ jobs:
         with:
           node-version: ${{ env.RELEASE_NODE_VERSION }}
           registry-url: https://registry.npmjs.org
+      - name: Install OIDC-compatible npm
+        run: npm install --global npm@11.21.0
       - working-directory: cli
         run: npm ci
       - name: Verify and classify registry state
@@ -514,6 +573,8 @@ jobs:
           $manifestDirectory = $installer.Directory.FullName
           winget validate --manifest $manifestDirectory
           if ($LASTEXITCODE -ne 0) { throw 'WinGet manifest validation failed' }
+          winget settings --enable LocalManifestFiles
+          if ($LASTEXITCODE -ne 0) { throw 'WinGet local manifest setting failed' }
           winget install --manifest $manifestDirectory --accept-package-agreements --accept-source-agreements
           if ($LASTEXITCODE -ne 0) { throw 'WinGet local manifest installation failed' }
           guardscan --version
@@ -527,7 +588,9 @@ jobs:
         run: |
           dotnet tool install --global wingetcreate
           if ($LASTEXITCODE -ne 0) { throw 'wingetcreate installation failed' }
-          wingetcreate submit adapters\winget --token $env:WINGET_GITHUB_TOKEN
+          $installer = Get-ChildItem adapters\winget -Filter '*.installer.yaml' -Recurse | Select-Object -First 1
+          if ($null -eq $installer) { throw 'Rendered WinGet installer manifest is missing' }
+          wingetcreate submit $installer.Directory.FullName --token $env:WINGET_GITHUB_TOKEN
 
   chocolatey:
     name: Chocolatey submission

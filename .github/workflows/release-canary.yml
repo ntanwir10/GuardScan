@@ -22,7 +22,6 @@ jobs:
     runs-on: ubuntu-24.04
     outputs:
       trains: ${{ steps.matrix.outputs.trains }}
-      implementation_ref: ${{ steps.matrix.outputs.implementation_ref }}
     steps:
       - name: Create short-lived release app token
         id: app
@@ -47,7 +46,6 @@ jobs:
               > active.json
           fi
           echo "trains=$(node -p 'JSON.stringify(require("./active.json").trains || [])')" >> "$GITHUB_OUTPUT"
-          echo "implementation_ref=$(node -p 'require("./active.json").trains[0] ? `v${require("./active.json").trains[0].version}` : \"\"')" >> "$GITHUB_OUTPUT"
 
   package-managers:
     name: ${{ matrix.manager }} canary for ${{ matrix.train.version }}
@@ -151,6 +149,9 @@ jobs:
     needs: [discover]
     if: needs.discover.outputs.trains != '[]'
     runs-on: ${{ matrix.target.runner }}
+    permissions:
+      contents: read
+      actions: read
     strategy:
       fail-fast: false
       matrix:
@@ -181,7 +182,6 @@ jobs:
         with:
           python-version: "3.13"
       - uses: sigstore/cosign-installer@d58896d6a1865668819e1d91763c7751a165e159 # v3.9.2
-        if: startsWith(matrix.target.id, 'linux-')
       - name: Initialize fail-closed reports
         shell: bash
         run: |
@@ -215,8 +215,87 @@ jobs:
             --dir release \
             --pattern "guardscan-$VERSION-$TARGET.$ARCHIVE" \
             --pattern "SHA256SUMS" \
-            --pattern "SHA256SUMS.sigstore.json"
+            --pattern "SHA256SUMS.sigstore.json" \
+            --pattern "release-manifest.json"
+      - name: Authenticate the release-build producer and verify signed checksums
+        id: release-build-identity
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ matrix.train.version }}
+          TARGET: ${{ matrix.target.id }}
+          ARCHIVE: ${{ matrix.target.archive }}
+        run: |
+          PRODUCER_RUN_ID="$(jq -er '.producer.runId | select(type == "string" and test("^[1-9][0-9]{0,19}$"))' release/release-manifest.json)"
+          PRODUCER_ATTEMPT="$(jq -er '.producer.runAttempt | select(type == "number" and floor == . and . > 0 and . <= 1000)' release/release-manifest.json)"
+          BUILD_RUN="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/$PRODUCER_RUN_ID/attempts/$PRODUCER_ATTEMPT")"
+          jq -e --arg repository "$GITHUB_REPOSITORY" \
+            --arg run_id "$PRODUCER_RUN_ID" --arg attempt "$PRODUCER_ATTEMPT" '
+              ((.path | split("@")[0]) == ".github/workflows/release-train.yml") and
+              .event == "workflow_dispatch" and .head_branch == "main" and
+              (.repository.full_name | ascii_downcase) == ($repository | ascii_downcase) and
+              (.head_repository.full_name | ascii_downcase) == ($repository | ascii_downcase) and
+              (.id | tostring) == $run_id and (.run_attempt | tostring) == $attempt and
+              (.head_sha | test("^[a-f0-9]{40}$"))
+            ' <<< "$BUILD_RUN" >/dev/null || {
+              echo 'Authenticated release-train producer run does not match the trusted main workflow.' >&2
+              exit 1
+            }
+          BUILD_WORKFLOW_SHA="$(jq -er '.head_sha' <<< "$BUILD_RUN")"
+          cosign verify-blob \
+            --bundle release/SHA256SUMS.sigstore.json \
+            --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release-build.yml@refs/heads/main" \
+            --certificate-github-workflow-sha "$BUILD_WORKFLOW_SHA" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            release/SHA256SUMS
+          echo "workflow_sha=$BUILD_WORKFLOW_SHA" >> "$GITHUB_OUTPUT"
+      - name: Verify signed checksums and bind the manifest to the immutable tag
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ matrix.train.version }}
+          TARGET: ${{ matrix.target.id }}
+          ARCHIVE: ${{ matrix.target.archive }}
+        run: |
+          ARCHIVE_NAME="guardscan-$VERSION-$TARGET.$ARCHIVE"
+          for REQUIRED_FILE in "$ARCHIVE_NAME" release-manifest.json; do
+            ENTRY_COUNT="$(awk -v name="$REQUIRED_FILE" '$2 == name && $1 ~ /^[a-f0-9]{64}$/ {count++} END {print count + 0}' release/SHA256SUMS)"
+            if [ "$ENTRY_COUNT" -ne 1 ]; then
+              echo "SHA256SUMS must contain exactly one valid digest for $REQUIRED_FILE." >&2
+              exit 1
+            fi
+          done
+          test -f "release/$ARCHIVE_NAME"
+          test -f release/release-manifest.json
+          ARCHIVE_SHA="$(awk -v name="$ARCHIVE_NAME" '$2 == name {print $1}' release/SHA256SUMS)"
           (cd release && sha256sum --check --ignore-missing SHA256SUMS)
+          TAG_SHA="$(gh api "repos/${GITHUB_REPOSITORY}/commits/v$VERSION" --jq .sha)"
+          jq -e --arg repository "$GITHUB_REPOSITORY" --arg version "$VERSION" \
+            --arg archive "$ARCHIVE_NAME" --arg archive_sha "$ARCHIVE_SHA" \
+            --arg run_id "$(jq -r '.producer.runId' release/release-manifest.json)" \
+            --arg attempt "$(jq -r '.producer.runAttempt' release/release-manifest.json)" \
+            --arg tag_sha "$TAG_SHA" '
+              .schemaVersion == "guardscan.release-manifest.v1" and
+              .version == $version and .tag == ("v" + $version) and .commit == $tag_sha and
+              .producer.provider == "github-actions" and
+              (.producer.repository | ascii_downcase) == ($repository | ascii_downcase) and
+              .producer.workflow == ".github/workflows/release-build.yml" and
+              .producer.runId == $run_id and (.producer.runAttempt | tostring) == $attempt and
+              .producer.sourceRef == ("refs/tags/v" + $version) and
+              ([.artifacts[] | select(.filename == $archive and .kind == "standalone" and
+                .sha256 == $archive_sha and .source.version == $version and
+                .source.tag == ("v" + $version) and .source.commit == $tag_sha)] | length == 1)
+            ' release/release-manifest.json >/dev/null || {
+              echo 'Signed release manifest does not match the exact train and immutable tag.' >&2
+              exit 1
+            }
+      - name: Extract verified GitHub archive
+        shell: bash
+        env:
+          VERSION: ${{ matrix.train.version }}
+          TARGET: ${{ matrix.target.id }}
+          ARCHIVE: ${{ matrix.target.archive }}
+        run: |
           if [ "$ARCHIVE" = zip ]; then
             python -m zipfile -e "release/guardscan-$VERSION-$TARGET.$ARCHIVE" executable
           else
@@ -230,12 +309,14 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ matrix.train.version }}
           TARGET: ${{ matrix.target.id }}
+          BUILD_WORKFLOW_SHA: ${{ steps.release-build-identity.outputs.workflow_sha }}
         run: |
           gh release download "v$VERSION" --repo "${GITHUB_REPOSITORY}" \
             --dir release --pattern "$TARGET.guardscan.sigstore.json"
           cosign verify-blob \
             --bundle "release/$TARGET.guardscan.sigstore.json" \
-            --certificate-identity-regexp "^https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release-build.yml@" \
+            --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release-build.yml@refs/heads/main" \
+            --certificate-github-workflow-sha "$BUILD_WORKFLOW_SHA" \
             --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
             executable/guardscan
       - name: Verify macOS signing and Gatekeeper
@@ -263,14 +344,14 @@ jobs:
           EXE="$PWD/executable/$EXECUTABLE"
           (
             cd project
-            env -i \
+            test "$(env -i \
               HOME="$PWD/../isolated-home" \
               USERPROFILE="$PWD/../isolated-home" \
               GUARDSCAN_HOME="$PWD/../isolated-home/.guardscan" \
               GUARDSCAN_NO_TELEMETRY=true \
               GUARDSCAN_OFFLINE=true \
               PATH="" \
-              "$EXE" --version
+              "$EXE" --version)" = "$VERSION"
             env -i HOME="$PWD/../isolated-home" PATH="" "$EXE" --help
             env -i HOME="$PWD/../isolated-home" PATH="" "$EXE" \
               --no-telemetry scan --offline --no-cve --skip-tests --skip-ai \
@@ -354,6 +435,9 @@ jobs:
           CHANNEL: ${{ matrix.train.channel }}
           GH_TOKEN: ${{ github.token }}
         run: |
+          if [ "$RUNNER_OS" = Linux ]; then
+            eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
+          fi
           if [ "$CHANNEL" = stable ]; then
             brew tap ntanwir10/tap
             brew audit --strict --online ntanwir10/tap/guardscan
@@ -365,9 +449,10 @@ jobs:
           else
             git clone --branch "guardscan/v$VERSION" \
               https://github.com/ntanwir10/homebrew-tap preview-tap
-            brew style preview-tap/Formula/guardscan.rb
-            brew audit --strict preview-tap/Formula/guardscan.rb
-            brew install --formula preview-tap/Formula/guardscan.rb
+            brew tap --custom-remote ntanwir10/tap "$PWD/preview-tap"
+            brew style ntanwir10/tap/guardscan
+            brew audit --strict ntanwir10/tap/guardscan
+            brew install ntanwir10/tap/guardscan
             test "$(guardscan --version | tr -d '\r')" = "$VERSION"
             brew uninstall guardscan
           fi
@@ -385,6 +470,12 @@ jobs:
           VERSION: ${{ matrix.train.version }}
           CHANNEL: ${{ matrix.train.channel }}
         run: |
+          scoop config installRunAsAdmin true
+          if ($LASTEXITCODE -ne 0) { throw 'Scoop admin-install configuration failed' }
+          $scoopRoot = if ($env:SCOOP) { $env:SCOOP } else { Join-Path $env:USERPROFILE 'scoop' }
+          $shimPath = Join-Path $scoopRoot 'shims'
+          if (-not (Test-Path $shimPath)) { throw 'Scoop shim directory is missing' }
+          $env:PATH = "$shimPath;$env:PATH"
           if ($env:CHANNEL -eq 'stable') {
             scoop bucket add guardscan https://github.com/ntanwir10/scoop-bucket
           } else {
@@ -440,6 +531,7 @@ jobs:
         shell: pwsh
         run: |
           $reports = @()
+          $unexpectedFailure = $null
           foreach ($channel in @('winget', 'chocolatey')) {
             $report = @{
               version = '${{ matrix.train.version }}'
@@ -449,10 +541,28 @@ jobs:
               target = 'windows-x64'
               evidenceUrl = "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
             }
+            $notPublic = $false
             try {
               if ($channel -eq 'winget') {
-                winget show --exact --id NaumanTanwir.GuardScan --version "${{ matrix.train.version }}"
-                if ($LASTEXITCODE -ne 0) { throw 'WinGet package is not public yet' }
+                $availability = winget show --exact --id NaumanTanwir.GuardScan --version "${{ matrix.train.version }}" 2>&1
+                $availabilityStatus = $LASTEXITCODE
+                $availabilityText = $availability | Out-String
+                if ($availabilityStatus -ne 0) {
+                  if ($availabilityText -match '(?im)^\s*No package found matching input criteria\.?\s*$') {
+                    $notPublic = $true
+                  } else {
+                    throw "Unexpected moderated registry error: WinGet availability query exited ${availabilityStatus}: $availabilityText"
+                  }
+                } elseif ($availabilityText -notmatch '(?im)^\s*Id\s*:\s*NaumanTanwir\.GuardScan\s*$'
+                    -or $availabilityText -notmatch '(?im)^\s*Version\s*:\s*${{ matrix.train.version }}\s*$') {
+                  throw 'Unexpected moderated registry error: WinGet did not confirm the exact package and version'
+                }
+                if ($notPublic) {
+                  $report.status = 'pending'
+                  $report.reason = 'not_public'
+                  $reports += $report
+                  continue
+                }
                 winget install --exact --id NaumanTanwir.GuardScan --version "${{ matrix.train.version }}" --accept-package-agreements --accept-source-agreements
                 if ($LASTEXITCODE -ne 0) { throw 'WinGet installation failed' }
                 guardscan --version
@@ -460,8 +570,26 @@ jobs:
                 winget uninstall --exact --id NaumanTanwir.GuardScan
                 if ($LASTEXITCODE -ne 0) { throw 'WinGet uninstall failed' }
               } else {
-                choco info guardscan --version "${{ matrix.train.version }}" --source https://community.chocolatey.org/api/v2/
-                if ($LASTEXITCODE -ne 0) { throw 'Chocolatey package is not public yet' }
+                $availability = choco info guardscan --exact --version "${{ matrix.train.version }}" --source https://community.chocolatey.org/api/v2/ 2>&1
+                $availabilityStatus = $LASTEXITCODE
+                $availabilityText = $availability | Out-String
+                $escapedVersion = [regex]::Escape('${{ matrix.train.version }}')
+                $exactVersion = $availabilityText -match "(?im)^\s*guardscan\s+$escapedVersion(?:\s|$)"
+                if ($availabilityStatus -ne 0) {
+                  if ($availabilityText -match '(?im)^\s*(Unable to find package .guardscan.|0 packages found\.)\s*$') {
+                    $notPublic = $true
+                  } else {
+                    throw "Unexpected moderated registry error: Chocolatey availability query exited ${availabilityStatus}: $availabilityText"
+                  }
+                } elseif (-not $exactVersion) {
+                  throw 'Unexpected moderated registry error: Chocolatey did not confirm the exact package version'
+                }
+                if ($notPublic) {
+                  $report.status = 'pending'
+                  $report.reason = 'not_public'
+                  $reports += $report
+                  continue
+                }
                 choco install guardscan --version "${{ matrix.train.version }}" --yes
                 if ($LASTEXITCODE -ne 0) { throw 'Chocolatey installation failed' }
                 guardscan --version
@@ -471,9 +599,17 @@ jobs:
               }
               $report.status = 'passed'
             } catch {
-              if ($_ -notmatch 'not found|No package found|Unable to find') { $report.status = 'failed' }
+              $report.status = 'failed'
+              $report.error = $_.ToString()
+              $unexpectedFailure = $_.ToString()
             }
-            $report | ConvertTo-Json -Compress | Out-File "$channel.json"
+            $reports += $report
+          }
+          foreach ($report in $reports) {
+            $report | ConvertTo-Json -Compress | Out-File "$($report.channel).json"
+          }
+          if ($unexpectedFailure) {
+            throw "Unexpected moderated registry error: $unexpectedFailure"
           }
       - if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -485,12 +621,17 @@ jobs:
           if-no-files-found: error
 
   record:
-    name: Append canary evidence
+    name: Append canary evidence for ${{ matrix.train.version }}
     needs: [discover, package-managers, native-and-pypi, adapters, moderated]
     if: always() && needs.discover.outputs.trains != '[]'
     runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        train: ${{ fromJSON(needs.discover.outputs.trains) }}
     concurrency:
       group: release-ledger
+      queue: max
       cancel-in-progress: false
     steps:
       - name: Create short-lived release app token
@@ -499,19 +640,22 @@ jobs:
         with:
           app-id: ${{ vars.RELEASE_APP_ID }}
           private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Checkout exact train implementation
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: ${{ needs.discover.outputs.implementation_ref }}
+          ref: v${{ matrix.train.version }}
           fetch-depth: 0
           token: ${{ steps.app.outputs.token }}
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      - name: Download this train reports
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          pattern: canary-*
+          pattern: canary-${{ matrix.train.version }}-*
           path: reports
           merge-multiple: false
       - name: Append hash-chained canary and verification events
         env:
           RELEASE_APP_TOKEN: ${{ steps.app.outputs.token }}
+          TRAIN_VERSION: ${{ matrix.train.version }}
         run: |
           git fetch origin release-ledger
           node - <<'NODE'
@@ -527,56 +671,56 @@ jobs:
           });
           walk('reports');
           const reports = files.map(file => ({file, report: JSON.parse(fs.readFileSync(file))}))
-            .filter(({report}) => typeof report.version === 'string')
-            .sort((a, b) => a.report.version.localeCompare(b.report.version)
-              || a.report.checkedAt.localeCompare(b.report.checkedAt)
+            .filter(({report}) => report.version === process.env.TRAIN_VERSION)
+            .sort((a, b) => a.report.checkedAt.localeCompare(b.report.checkedAt)
               || a.file.localeCompare(b.file));
-          const versions = [...new Set(reports.map(({report}) => report.version))];
+          if (reports.length === 0) throw new Error(`no reports found for train ${process.env.TRAIN_VERSION}`);
+          const version = process.env.TRAIN_VERSION;
+          const tag = `v${version}`;
+          const ledger = `ledgers/${tag}.jsonl`;
           fs.mkdirSync('ledgers', {recursive: true});
-          for (const version of versions) {
-            const tag = `v${version}`;
-            const ledger = `ledgers/${tag}.jsonl`;
-            const contents = cp.execFileSync(
-              'git',
-              ['show', `origin/release-ledger:events/${tag}.jsonl`],
-              {encoding: 'utf8'}
-            );
-            fs.writeFileSync(ledger, contents);
-            const existing = readEvents(ledger);
-            if (existing.length === 0) throw new Error(`release ledger is empty for ${tag}`);
-            const commit = existing[0].commit;
-            for (const {file, report} of reports.filter(item => item.report.version === version)) {
-              if (report.status === 'pending') continue;
-              const suffix = `${process.env.GITHUB_RUN_ID}:${process.env.GITHUB_RUN_ATTEMPT}:${report.channel}:${report.target}:${path.basename(path.dirname(file))}`;
-              appendEvent(ledger, {
-                version, tag, commit,
-                timestamp: monotonicLedgerTimestamp(readEvents(ledger), report.checkedAt, `canary:${suffix}`),
-                type: 'canary_recorded',
-                channel: report.channel,
-                idempotencyKey: `canary:${suffix}`,
-                payload: {
-                  status: report.status,
-                  checkedAt: report.checkedAt,
-                  target: report.target,
-                  evidenceUrl: report.evidenceUrl,
-                },
-              });
-              if (report.status === 'passed') {
-                const types = ['winget', 'chocolatey'].includes(report.channel)
-                  ? ['channel_accepted', 'channel_verified']
-                  : ['channel_verified'];
-                for (const type of types) {
-                  appendEvent(ledger, {
-                    version, tag, commit,
-                    timestamp: monotonicLedgerTimestamp(readEvents(ledger), report.checkedAt, `${type}:${suffix}`),
-                    type,
-                    channel: report.channel,
-                    idempotencyKey: `${type}:${suffix}`,
-                    payload: {
-                      remoteIdentity: `${report.channel}:${version}`,
-                    },
-                  });
-                }
+          const contents = cp.execFileSync(
+            'git',
+            ['show', `origin/release-ledger:events/${tag}.jsonl`],
+            {encoding: 'utf8'}
+          );
+          fs.writeFileSync(ledger, contents);
+          const existing = readEvents(ledger);
+          if (existing.length === 0) throw new Error(`release ledger is empty for ${tag}`);
+          const commit = existing[0].commit;
+          const checkoutCommit = cp.execFileSync('git', ['rev-parse', 'HEAD'], {encoding: 'utf8'}).trim();
+          if (commit !== checkoutCommit) throw new Error(`release ledger commit does not match checked-out tag ${tag}`);
+          for (const {file, report} of reports) {
+            if (report.status === 'pending') continue;
+            const suffix = `${process.env.GITHUB_RUN_ID}:${process.env.GITHUB_RUN_ATTEMPT}:${report.channel}:${report.target}:${path.basename(path.dirname(file))}`;
+            appendEvent(ledger, {
+              version, tag, commit,
+              timestamp: monotonicLedgerTimestamp(readEvents(ledger), report.checkedAt, `canary:${suffix}`),
+              type: 'canary_recorded',
+              channel: report.channel,
+              idempotencyKey: `canary:${suffix}`,
+              payload: {
+                status: report.status,
+                checkedAt: report.checkedAt,
+                target: report.target,
+                evidenceUrl: report.evidenceUrl,
+              },
+            });
+            if (report.status === 'passed') {
+              const types = ['winget', 'chocolatey'].includes(report.channel)
+                ? ['channel_accepted', 'channel_verified']
+                : ['channel_verified'];
+              for (const type of types) {
+                appendEvent(ledger, {
+                  version, tag, commit,
+                  timestamp: monotonicLedgerTimestamp(readEvents(ledger), report.checkedAt, `${type}:${suffix}`),
+                  type,
+                  channel: report.channel,
+                  idempotencyKey: `${type}:${suffix}`,
+                  payload: {
+                    remoteIdentity: `${report.channel}:${version}`,
+                  },
+                });
               }
             }
           }
