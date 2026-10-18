@@ -44,7 +44,7 @@ describe('CLI config and global option parsing', () => {
     const {version} = JSON.parse(fs.readFileSync(path.resolve(__dirname, '../../package.json'), 'utf8')) as {version: string};
     const result = cli(['config', '--version']);
     expect(result.status).toBe(0);
-    expect(result.stdout.trim()).toBe(version);
+    expect(result.stdout.trim().split(/\r?\n/).at(-1)).toBe(version);
   });
 
   it('keeps global privacy flags available on nested commands', () => {

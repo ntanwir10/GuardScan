@@ -77,4 +77,15 @@ describe('CodebaseIndexer cache policy', () => {
     expect(rename).toHaveBeenCalledWith(expect.any(String), target);
     if (process.platform !== 'win32') {expect(fs.statSync(target).mode & 0o777).toBe(0o600);}
   });
+
+  it('creates the private cache directory on the first atomic publication', async () => {
+    const directory = path.join(cache, 'fixture-repo', 'ai-cache');
+    expect(fs.existsSync(directory)).toBe(false);
+    await new AICache('fixture-repo').set('prompt', 'fixture-model', 'response');
+    expect(await new AICache('fixture-repo').get('prompt', 'fixture-model')).toBe('response');
+    if (process.platform !== 'win32') {
+      expect(fs.statSync(directory).mode & 0o777).toBe(0o700);
+      expect(fs.statSync(path.join(directory, 'cache.json')).mode & 0o777).toBe(0o600);
+    }
+  });
 });
