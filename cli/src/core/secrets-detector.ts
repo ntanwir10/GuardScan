@@ -3,16 +3,15 @@ import * as crypto from 'crypto';
 import * as path from 'path';
 import { execFileSync } from 'child_process';
 import { StringDecoder } from 'string_decoder';
-import {glob} from 'tinyglobby';
 import { SECURITY_CONSTANTS } from '../constants/security-constants';
+import { isPythonVirtualEnvironment } from './scan-ignored-directories';
 
 const MAX_SECRET_FILE_BYTES = 2 * 1024 * 1024;
 const MAX_SECRET_LINE_FRAGMENT_CHARS = 256 * 1024;
 const SECRET_LINE_OVERLAP_CHARS = 1024;
-const SECRET_DISCOVERY_IGNORES = [
-  '**/.git/**', '**/.guardscan/**', '**/node_modules/**', '**/vendor/**', '**/dist/**',
-  '**/build/**', '**/coverage/**', '**/.venv/**', '**/venv/**', '**/target/**',
-];
+const SECRET_IGNORED_DIRECTORIES = new Set([
+  '.git', '.guardscan', 'node_modules', 'vendor', 'dist', 'build', 'coverage', 'target',
+]);
 
 function isWithinRoot(root: string, candidate: string): boolean {
   const relative = path.relative(root, candidate);
@@ -44,31 +43,27 @@ export class SecretsDetector {
       return [];
     }
 
-    try {
-      const candidates = await glob('**/*', {
-        cwd: root,
-        absolute: true,
-        dot: true,
-        expandDirectories: false,
-        onlyFiles: true,
-        followSymbolicLinks: false,
-        ignore: SECRET_DISCOVERY_IGNORES,
-      });
-      const files: string[] = [];
-      for (const candidate of candidates.sort()) {
-        try {
-          if (fs.lstatSync(candidate).isSymbolicLink()) {continue;}
-          const real = fs.realpathSync(candidate);
-          if (isWithinRoot(root, real) && fs.statSync(real).isFile()) {files.push(real);}
-        } catch {
-          onSkippedInput();
+    const files: string[] = [];
+    const pending = [root];
+    while (pending.length > 0) {
+      const directory = pending.pop()!;
+      try {
+        for (const entry of await fs.promises.readdir(directory, {withFileTypes: true})) {
+          if (SECRET_IGNORED_DIRECTORIES.has(entry.name) && (entry.isDirectory() || entry.isSymbolicLink())) {continue;}
+          try {
+            const candidate = path.join(directory, entry.name);
+            const stat = fs.lstatSync(candidate);
+            if (stat.isSymbolicLink()) {onSkippedInput(); continue;}
+            const real = fs.realpathSync(candidate);
+            if (!isWithinRoot(root, real)) {onSkippedInput(); continue;}
+            if (stat.isDirectory()) {
+              if (!isPythonVirtualEnvironment(real)) {pending.push(real);}
+            } else if (stat.isFile()) {files.push(real);}
+          } catch {onSkippedInput();}
         }
-      }
-      return files;
-    } catch {
-      onSkippedInput();
-      return [];
+      } catch {onSkippedInput();}
     }
+    return files.sort();
   }
 
   /**

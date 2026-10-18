@@ -57,4 +57,24 @@ describe('CodebaseIndexer cache policy', () => {
     expect(await ai.get('private source prompt', 'fixture-model')).toBeNull();
     expect(fs.readdirSync(cache)).toEqual([]);
   });
+
+  it('publishes AI cache JSON privately through atomic rename without modifying linked targets', async () => {
+    const ai = new AICache('fixture-repo');
+    const directory = path.join(cache, 'fixture-repo', 'ai-cache');
+    fs.mkdirSync(directory, {recursive: true});
+    const external = path.join(repository, 'external-cache.json');
+    fs.writeFileSync(external, 'untouched');
+    const target = path.join(directory, 'cache.json');
+    if (process.platform === 'win32') {fs.linkSync(external, target);}
+    else {fs.symlinkSync(external, target);}
+    const nativeFs = require('fs') as typeof fs;
+    const rename = jest.spyOn(nativeFs, 'renameSync');
+
+    await ai.set('private prompt', 'fixture-model', 'private response');
+
+    expect(fs.readFileSync(external, 'utf8')).toBe('untouched');
+    expect(JSON.parse(fs.readFileSync(target, 'utf8')).entries).toHaveLength(1);
+    expect(rename).toHaveBeenCalledWith(expect.any(String), target);
+    if (process.platform !== 'win32') {expect(fs.statSync(target).mode & 0o777).toBe(0o600);}
+  });
 });

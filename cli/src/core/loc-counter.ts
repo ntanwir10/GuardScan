@@ -4,6 +4,7 @@ import {expandGlobPattern, normalizeGlobPatternForPlatform} from './glob-pattern
 import globParent from 'glob-parent';
 import {glob, isDynamicPattern} from 'tinyglobby';
 import ignore from 'ignore';
+import { isPythonVirtualEnvironment } from './scan-ignored-directories';
 
 const LOC_IGNORED_DIRECTORIES = new Set([
   'node_modules', '.git', 'dist', 'build', 'coverage',
@@ -26,11 +27,7 @@ function isWithinDirectory(root: string, candidate: string): boolean {
 }
 
 function hasVirtualEnvironmentMarker(directory: string): boolean {
-  try {
-    return fs.statSync(path.join(directory, 'pyvenv.cfg')).isFile();
-  } catch {
-    return false;
-  }
+  return isPythonVirtualEnvironment(directory);
 }
 
 function discoverVirtualEnvironmentRoots(cwd: string, patterns: string[], expandedPatterns: string[]): string[] {

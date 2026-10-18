@@ -41,9 +41,10 @@ describe('CLI config and global option parsing', () => {
   });
 
   it('keeps the existing version flag available after a subcommand', () => {
+    const {version} = JSON.parse(fs.readFileSync(path.resolve(__dirname, '../../package.json'), 'utf8')) as {version: string};
     const result = cli(['config', '--version']);
     expect(result.status).toBe(0);
-    expect(result.stdout).toContain('1.1.0');
+    expect(result.stdout.trim()).toBe(version);
   });
 
   it('keeps global privacy flags available on nested commands', () => {

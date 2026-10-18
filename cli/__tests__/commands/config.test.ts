@@ -241,6 +241,43 @@ describe("config command", () => {
     consoleLogSpy.mockRestore();
   });
 
+  it.each([
+    ['ollama', true, true], ['lmstudio', true, true],
+    ['ollama', false, true], ['lmstudio', false, true],
+    ['ollama', false, false], ['lmstudio', false, false],
+  ] as const)('validates interactive %s endpoints with offline=%s and approval=%s before saving', async (provider, offlineMode, approved) => {
+    configManager.init();
+    const initial = configManager.load();
+    initial.provider = 'ollama';
+    initial.apiEndpoint = 'http://127.0.0.1:11434';
+    configManager.save(initial);
+    delete process.env.GUARDSCAN_OFFLINE;
+    const inquirer = require('inquirer') as typeof import('inquirer');
+    jest.mocked(inquirer.prompt)
+      .mockResolvedValueOnce({changeMode: false})
+      .mockResolvedValueOnce({provider, apiEndpoint: 'https://models.example',
+        allowRemoteSelfHosted: approved, telemetry: false, offlineMode});
+    const tty = Object.getOwnPropertyDescriptor(process.stdin, 'isTTY');
+    Object.defineProperty(process.stdin, 'isTTY', {configurable: true, value: true});
+    jest.spyOn(console, 'log').mockImplementation(() => {});
+    jest.spyOn(console, 'error').mockImplementation(() => {});
+    jest.spyOn(process, 'exit').mockImplementation((() => {throw new Error('rejected configuration');}) as typeof process.exit);
+    try {
+      if (offlineMode || !approved) {
+        await expect(configCommand({})).rejects.toThrow('rejected configuration');
+        expect(configManager.load().apiEndpoint).toBe(initial.apiEndpoint);
+      } else {
+        await configCommand({});
+        expect(configManager.load()).toMatchObject({provider, offlineMode: false, allowRemoteSelfHosted: true,
+          apiEndpoint: provider === 'lmstudio' ? 'https://models.example/v1' : 'https://models.example'});
+      }
+    } finally {
+      if (tty) {Object.defineProperty(process.stdin, 'isTTY', tty);}
+      else {delete (process.stdin as unknown as {isTTY?: boolean}).isTTY;}
+      jest.restoreAllMocks();
+    }
+  });
+
   it("should handle debug logging", async () => {
     process.env.GUARDSCAN_DEBUG = "true";
     if (!configManager.exists()) {

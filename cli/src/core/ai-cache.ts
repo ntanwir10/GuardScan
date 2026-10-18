@@ -3,6 +3,7 @@ import * as path from 'path';
 import * as crypto from 'crypto';
 import { configManager } from './config';
 import { environmentDisablesCache } from '../utils/execution-policy';
+import { atomicReplaceText } from '../utils/private-state';
 
 // Maximum size for a single cache entry (1MB)
 const MAX_CACHE_ENTRY_SIZE = 1024 * 1024;
@@ -411,14 +412,6 @@ export class AICache {
 
     const cacheDir = this.getCacheDir();
 
-    // Ensure directory and all parent directories exist
-    try {
-      fs.mkdirSync(cacheDir, { recursive: true });
-    } catch (error) {
-      // If directory creation fails, log and continue (might already exist)
-      console.warn(`Warning: Failed to create cache directory ${cacheDir}:`, error);
-    }
-
     // Convert cache to serializable format
     const serializable = {
       entries: Array.from(this.cache.entries()).map(([key, entry]) => ({
@@ -433,7 +426,7 @@ export class AICache {
     const cachePath = path.join(cacheDir, 'cache.json');
     
     try {
-      fs.writeFileSync(cachePath, JSON.stringify(serializable, null, 2), 'utf-8');
+      atomicReplaceText(cachePath, JSON.stringify(serializable, null, 2));
     } catch (error: any) {
       console.warn('Failed to save cache to disk:', error.message);
       // Continue without crashing - cache just won't persist

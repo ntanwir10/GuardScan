@@ -40,3 +40,37 @@ describe('EmbeddingChunker documentation boundaries', () => {
     expect(result.chunks.map(chunk => chunk.content).join('\n')).not.toContain('external sensitive documentation');
   });
 });
+
+describe('EmbeddingChunker bounded documentation', () => {
+  let repository: string;
+  beforeEach(() => {
+    repository = fs.mkdtempSync(path.join(os.tmpdir(), 'guardscan-doc-chunks-'));
+    fs.mkdirSync(path.join(repository, 'docs'));
+  });
+  afterEach(() => {
+    jest.restoreAllMocks();
+    fs.rmSync(repository, {recursive: true, force: true});
+  });
+  function chunker() {
+    const index = {files: new Map(), functions: new Map(), classes: new Map()} as any;
+    return new EmbeddingChunker({} as any, repository).chunkCodebase(index, {includeDocumentation: true});
+  }
+
+  it.each(['line\n'.repeat(2_000), '🔒'.repeat(3_000)])('splits long documentation into bounded chunks without losing content (%#)', async content => {
+    fs.writeFileSync(path.join(repository, 'docs', 'large.md'), content);
+    const result = await chunker();
+    expect(result.chunks.length).toBeGreaterThan(1);
+    expect(result.chunks.every(chunk => chunk.content.length <= 2_000)).toBe(true);
+    expect(result.chunks.map(chunk => chunk.content.replace(/^# Documentation: docs\/large.md\n\n/, '')).join('')).toBe(content);
+    expect(result.stats.documentationChunks).toBe(result.chunks.length);
+  });
+
+  it('rejects oversized documentation before embedding while retaining readable documents', async () => {
+    fs.writeFileSync(path.join(repository, 'docs', 'oversized.md'), 'x'.repeat(2 * 1024 * 1024 + 1));
+    fs.writeFileSync(path.join(repository, 'README.md'), 'kept documentation');
+    const warning = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    const result = await chunker();
+    expect(result.chunks.map(chunk => chunk.source)).toEqual(['README.md']);
+    expect(warning).toHaveBeenCalledWith(expect.stringMatching(/oversized.md/));
+  });
+});

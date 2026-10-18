@@ -372,7 +372,12 @@ function yarnWorkspacePatternMatches(pattern: string, directory: string): boolea
       if (character === '\\' && index + 1 < expanded.length) {
         expression += expanded[++index].replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       } else if (character === '*') {
-        if (expanded[index + 1] === '*') {expression += '.*'; index++;}
+        if (expanded[index + 1] === '*') {
+          if ((index === 0 || expanded[index - 1] === '/') && expanded[index + 2] === '/') {
+            expression += '(?:[^/]+/)*';
+            index += 2;
+          } else {expression += '.*'; index++;}
+        }
         else {expression += '[^/]*';}
       } else {
         expression += character.replace(/[.+?^${}()|[\]\\]/g, '\\$&');

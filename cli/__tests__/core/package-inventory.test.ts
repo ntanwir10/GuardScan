@@ -628,8 +628,8 @@ describe('collectPackageInventory', () => {
     ]);
   });
 
-  it('covers npm brace workspaces and their root, member, and transitive dependencies', () => {
-    const workspaces = ['packages/{api,web}'];
+  it.each(['packages/{api,web}', 'packages/**/{api,web}'])('covers npm workspace dependencies with %s', pattern => {
+    const workspaces = [pattern];
     fs.writeFileSync(path.join(repository, 'package.json'), JSON.stringify({
       name: 'root', workspaces, dependencies: {'@fixture/api': '*', rootdep: '1.0.0'},
     }));
@@ -664,7 +664,7 @@ describe('collectPackageInventory', () => {
     expect(inventory.errors).toEqual([]);
   });
 
-  it.each(['packages/{api,web}', 'packages/{a{pi,pp},web}'])('covers Yarn brace workspaces (%s)', pattern => {
+  it.each(['packages/{api,web}', 'packages/{a{pi,pp},web}', 'packages/**/{api,web}', '**/packages/**/a*'])('covers Yarn brace workspaces (%s)', pattern => {
     fs.writeFileSync(path.join(repository, 'package.json'), JSON.stringify({name: 'root', workspaces: [pattern]}));
     fs.mkdirSync(path.join(repository, 'packages/api'), {recursive: true});
     fs.writeFileSync(path.join(repository, 'packages/api/package.json'), JSON.stringify({name: 'api', dependencies: {registry: '1.0.0'}}));

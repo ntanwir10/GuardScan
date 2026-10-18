@@ -205,6 +205,34 @@ const y = 2;`;
       ]));
     });
 
+    it('does not exclude explicitly selected source through a symlinked environment marker', async () => {
+      const directory = path.join(testDir, 'src', 'venv');
+      fs.mkdirSync(directory, {recursive: true});
+      const source = path.join(directory, 'owned.py');
+      fs.writeFileSync(source, 'owned = True\n');
+      const marker = path.join(directory, 'pyvenv.cfg');
+      fs.mkdirSync(path.join(testDir, 'marker-target'));
+      const target = path.join(testDir, 'marker-target', 'config');
+      fs.writeFileSync(target, 'home = /python\n');
+      if (process.platform === 'win32') {
+        fs.writeFileSync(marker, 'home = /python\n');
+        const nativeFs = require('fs') as typeof fs;
+        const original = nativeFs.lstatSync;
+        const linkedStat = original(marker);
+        linkedStat.isSymbolicLink = () => true;
+        linkedStat.isFile = () => false;
+        jest.spyOn(nativeFs, 'lstatSync').mockImplementation(((file: fs.PathLike, options?: unknown) =>
+          String(file) === marker ? linkedStat : Reflect.apply(original, nativeFs, [file, options])) as typeof nativeFs.lstatSync);
+      } else {
+        fs.symlinkSync(target, marker);
+      }
+      try {
+        expect((await counter.count([source])).fileCount).toBe(1);
+      } finally {
+        jest.restoreAllMocks();
+      }
+    });
+
     it('keeps brace-expanded directory roots bounded while excluding virtual environments', async () => {
       const dependencyEnvironment = path.join(testDir, 'src', '.venv');
       const dependencyFile = path.join(dependencyEnvironment, 'lib', 'dependency.py');

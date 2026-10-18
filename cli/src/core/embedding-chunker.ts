@@ -11,6 +11,10 @@ import {glob} from 'tinyglobby';
 import { CodebaseIndexer, CodebaseIndex } from './codebase-indexer';
 import { ParsedFunction, ParsedClass } from './ast-parser';
 import { CodeChunk, EmbeddingMetadata, hashContent } from './embeddings';
+import { readTextFileBounded } from '../utils/private-state';
+
+const MAX_DOCUMENTATION_BYTES = 2 * 1024 * 1024;
+const MAX_DOCUMENTATION_CHUNK_CHARS = 2_000;
 
 export interface ChunkingOptions {
   maxFunctionSize?: number;      // Max chars for function chunks (default: 2000)
@@ -272,27 +276,27 @@ export class EmbeddingChunker {
         if (!isWithinRoot(realRepoRoot, fullPath)) {continue;}
 
         if ((await fs.promises.stat(fullPath)).isFile()) {
-          const content = await fs.promises.readFile(fullPath, 'utf-8');
-          const formattedContent = this.formatDocumentationForEmbedding(
-            docPath,
-            content
-          );
-
-          chunks.push({
-            type: 'documentation',
-            content: formattedContent,
-            metadata: {
-              language: 'markdown',
-              dependencies: [],
-              exports: [],
-              tags: ['documentation', this.inferDocType(docPath)],
-              lastModified: await this.getFileModificationTime(fullPath),
-            },
-            source: docPath,
-          });
+          const content = readTextFileBounded(fullPath, MAX_DOCUMENTATION_BYTES);
+          // Bound both provider inputs and per-file memory. Include context in
+          // the chunk budget, and never split a UTF-16 surrogate pair.
+          const header = this.formatDocumentationForEmbedding(docPath, '')
+            .slice(0, MAX_DOCUMENTATION_CHUNK_CHARS / 2);
+          const payloadLimit = MAX_DOCUMENTATION_CHUNK_CHARS - header.length;
+          const lastModified = await this.getFileModificationTime(fullPath);
+          for (let start = 0; start < content.length;) {
+            let end = Math.min(content.length, start + payloadLimit);
+            if (end < content.length && /[\uD800-\uDBFF]/.test(content[end - 1])) {end--;}
+            chunks.push({
+              type: 'documentation', content: header + content.slice(start, end),
+              metadata: {language: 'markdown', dependencies: [], exports: [],
+                tags: ['documentation', this.inferDocType(docPath)], lastModified},
+              source: docPath,
+            });
+            start = end;
+          }
         }
       } catch (error) {
-        // Skip docs that can't be read
+        console.warn(`Skipping documentation ${docPath}: unable to safely read bounded input.`);
         continue;
       }
     }

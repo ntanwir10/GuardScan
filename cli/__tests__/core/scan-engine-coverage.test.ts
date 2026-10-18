@@ -94,6 +94,35 @@ describe('ScanEngine built-in coverage adapters', () => {
     ]));
   });
 
+  it.each(['venv', '.venv'])('discovers secrets in first-party %s directories but not marked environments', async name => {
+    const owned = path.join(repository, 'src', name);
+    const generated = path.join(repository, 'python-runtime');
+    for (const directory of [owned, generated]) {
+      fs.mkdirSync(directory, {recursive: true});
+      fs.writeFileSync(path.join(directory, 'credentials.env'), 'AWS_ACCESS_KEY_ID=AKIA1234567890123456\n');
+    }
+    fs.writeFileSync(path.join(generated, 'pyvenv.cfg'), 'home = /python\n');
+    const output = await tasks().find(task => task.scanner === 'secrets')!.run() as ScannerTaskOutput;
+    const findings = Array.isArray(output) ? output : output.findings;
+    expect(output).not.toHaveProperty('error');
+    expect(findings).toEqual(expect.arrayContaining([
+      expect.objectContaining({file: fs.realpathSync(path.join(owned, 'credentials.env'))}),
+    ]));
+    expect(findings.some(finding => finding.file.includes('python-runtime'))).toBe(false);
+  });
+
+  it('reports independent secret-discovery directory links as partial without following them', async () => {
+    const external = fs.mkdtempSync(path.join(os.tmpdir(), 'guardscan-secret-links-'));
+    fs.writeFileSync(path.join(external, 'credentials.env'), 'AWS_ACCESS_KEY_ID=AKIA1234567890123456\n');
+    fs.symlinkSync(external, path.join(repository, 'linked-config'), process.platform === 'win32' ? 'junction' : 'dir');
+    try {
+      const output = await tasks().find(task => task.scanner === 'secrets')!.run() as ScannerTaskOutput;
+      expect(output).toMatchObject({findings: [], error: {code: 'SECRET_SCAN_PARTIAL'}});
+    } finally {
+      fs.rmSync(external, {recursive: true, force: true});
+    }
+  });
+
   it('keeps explicit secret scans within selected files and skips global history', async () => {
     const selectedFile = path.join(repository, 'selected.ts');
     const excludedFile = path.join(repository, '.env');

@@ -770,6 +770,9 @@ async function configureModeSettings(
     config.telemetryEnabled = answers.telemetry;
     config.offlineMode = answers.offlineMode;
 
+    config.apiEndpoint = ProviderFactory.normalizeEndpoint(
+      config.provider, config.apiEndpoint, config.offlineMode, config.allowRemoteSelfHosted
+    );
     const trustWarning = ProviderFactory.getEndpointTrustWarning(
       config.provider,
       config.apiEndpoint
