@@ -21,6 +21,7 @@ env:
 
 jobs:
   github:
+    if: vars.RELEASE_AUTOMATION_ENABLED == 'true'
     name: Immutable GitHub release
     runs-on: ubuntu-24.04
     environment: ${{ inputs.channel == 'rc' && 'release-rc' || 'release-stable' }}
@@ -220,10 +221,21 @@ jobs:
         run: |
           DIST_TAG=latest
           if [ "${{ inputs.channel }}" = rc ]; then DIST_TAG=next; fi
-          npm run release:npm-preflight -- \
-            --artifact-dir ../npm-artifact \
-            --expected-dist-tag "$DIST_TAG" \
-            --github-output "$RUNNER_TEMP/npm-preflight-output"
+          for ATTEMPT in $(seq 1 30); do
+            : > "$RUNNER_TEMP/npm-preflight-output"
+            npm run release:npm-preflight -- \
+              --artifact-dir ../npm-artifact \
+              --expected-dist-tag "$DIST_TAG" \
+              --github-output "$RUNNER_TEMP/npm-preflight-output"
+            if grep -Fxq 'publish-required=false' "$RUNNER_TEMP/npm-preflight-output" \
+              && grep -Fxq 'matching=true' "$RUNNER_TEMP/npm-preflight-output" \
+              && grep -Fxq 'dist-tag-repair-required=false' "$RUNNER_TEMP/npm-preflight-output"; then
+              break
+            fi
+            sleep 10
+          done
+          grep -Fx 'publish-required=false' "$RUNNER_TEMP/npm-preflight-output"
+          grep -Fx 'matching=true' "$RUNNER_TEMP/npm-preflight-output"
           grep -Fx 'dist-tag-repair-required=false' "$RUNNER_TEMP/npm-preflight-output"
 
   pypi-test:
@@ -414,6 +426,7 @@ jobs:
         run: npm run release:render -- --manifest ../payload/release-manifest.json --output-dir ../adapters
       - name: Push deterministic adapter branches and open PRs
         run: |
+          gh auth setup-git --hostname github.com
           BRANCH="guardscan/${{ inputs.tag }}"
           export BRANCH
           mkdir -p release-evidence

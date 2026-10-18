@@ -36,7 +36,7 @@ env:
 jobs:
   scheduler:
     name: Dispatch reconciliation for every active train
-    if: github.event_name == 'schedule'
+    if: github.event_name == 'schedule' && vars.RELEASE_AUTOMATION_ENABLED == 'true'
     runs-on: ubuntu-24.04
     steps:
       - name: Create short-lived release app token
@@ -68,7 +68,7 @@ jobs:
 
   prepare:
     name: Resolve exact source and create protected tag
-    if: github.event_name == 'workflow_dispatch' && (inputs.action == 'candidate' || inputs.action == 'promote')
+    if: github.event_name == 'workflow_dispatch' && vars.RELEASE_AUTOMATION_ENABLED == 'true' && (inputs.action == 'candidate' || inputs.action == 'promote')
     runs-on: ubuntu-24.04
     concurrency:
       group: release-ledger
@@ -105,8 +105,11 @@ jobs:
           BASE_VERSION="$RELEASE_VERSION"
           BASE_VERSION="${BASE_VERSION%%-rc.*}"
           EXPECTED_HEAD_BRANCH="release/$BASE_VERSION"
+          RELEASE_PLEASE_BRANCH="release-please--branches--main"
           jq -e --arg repository "${GITHUB_REPOSITORY,,}" --arg branch "$EXPECTED_HEAD_BRANCH" \
-            '.state == "OPEN" and .baseRefName == "main" and .headRefName == $branch and
+            --arg release_please_branch "$RELEASE_PLEASE_BRANCH" \
+            '.state == "OPEN" and .baseRefName == "main" and
+             (.headRefName == $branch or .headRefName == $release_please_branch) and
              (.headRepository.nameWithOwner | ascii_downcase) == $repository and
              (.headRefOid | test("^[a-f0-9]{40}$"))' <<< "$PR_DETAILS" >/dev/null || {
               echo 'Release PR must be open, same-repository, main-based, on its trusted release branch, and use a valid head SHA.' >&2
@@ -331,7 +334,7 @@ jobs:
 
   build:
     name: Build exact tagged release
-    if: needs.prepare.outputs.build == 'true'
+    if: vars.RELEASE_AUTOMATION_ENABLED == 'true' && needs.prepare.outputs.build == 'true'
     needs: [prepare]
     uses: ./.github/workflows/release-build.yml
     with:
@@ -342,7 +345,7 @@ jobs:
 
   publish:
     name: Publish every automated channel
-    if: needs.prepare.outputs.build == 'true'
+    if: vars.RELEASE_AUTOMATION_ENABLED == 'true' && needs.prepare.outputs.build == 'true'
     needs: [prepare, build]
     uses: ./.github/workflows/release-publish.yml
     with:
@@ -353,7 +356,7 @@ jobs:
 
   record:
     name: Append publication evidence to protected ledger
-    if: needs.prepare.outputs.build == 'true'
+    if: vars.RELEASE_AUTOMATION_ENABLED == 'true' && needs.prepare.outputs.build == 'true'
     needs: [prepare, publish]
     runs-on: ubuntu-24.04
     concurrency:
@@ -545,7 +548,7 @@ jobs:
 
   reconcile:
     name: Reconcile remote state and trigger eligible promotion
-    if: github.event_name == 'workflow_dispatch' && inputs.action == 'reconcile'
+    if: github.event_name == 'workflow_dispatch' && vars.RELEASE_AUTOMATION_ENABLED == 'true' && inputs.action == 'reconcile'
     runs-on: ubuntu-24.04
     steps:
       - name: Create short-lived release app token
@@ -580,14 +583,18 @@ jobs:
         run: |
           ELIGIBLE="$(node - <<'NODE'
           const {readEvents, materializeReleaseState} = require('./cli/scripts/release/events');
-          const state = materializeReleaseState(readEvents('release-events.jsonl'));
+          const events = readEvents('release-events.jsonl');
+          const state = materializeReleaseState(events);
           const channels = ['npm', 'pnpm', 'yarn', 'bun', 'github', 'homebrew', 'scoop', 'pypi'];
           const enough = channels.every(channel => {
             const samples = state.canaries[channel] || [];
             return samples.length >= 24 && samples.every(sample => sample.status === 'passed');
           });
           const noIncidents = Object.values(state.incidents).every(incident => incident.status !== 'open');
-          process.stdout.write(String(enough && noIncidents));
+          const published = events.find(event => event.type === 'channel_published' && event.channel === 'github');
+          const soaked = Boolean(published)
+            && Date.now() >= Date.parse(published.timestamp) + 24 * 60 * 60 * 1000;
+          process.stdout.write(String(enough && noIncidents && soaked));
           NODE
           )"
           if [ "$ELIGIBLE" = true ]; then
@@ -600,7 +607,7 @@ jobs:
 
   rollback:
     name: Append rollback and prepare forward fix
-    if: github.event_name == 'workflow_dispatch' && inputs.action == 'rollback'
+    if: github.event_name == 'workflow_dispatch' && vars.RELEASE_AUTOMATION_ENABLED == 'true' && inputs.action == 'rollback'
     runs-on: ubuntu-24.04
     concurrency:
       group: release-ledger

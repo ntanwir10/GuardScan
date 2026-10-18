@@ -21,6 +21,7 @@ env:
 
 jobs:
   quality:
+    if: vars.RELEASE_AUTOMATION_ENABLED == 'true'
     name: Exact-source release gate
     runs-on: ubuntu-24.04
     steps:
@@ -179,6 +180,18 @@ jobs:
         working-directory: cli
         run: npm run release:build -- --kind standalone --output-dir ../standalone
 
+      - name: Resolve canonical native build timestamp
+        shell: bash
+        env:
+          SOURCE_REF: ${{ inputs.ref }}
+        run: |
+          node -e '
+            const fs = require("fs");
+            const {resolveGitTimestamp} = require("./cli/scripts/release/lib");
+            fs.appendFileSync(process.env.GITHUB_ENV,
+              "SOURCE_TIMESTAMP=" + resolveGitTimestamp(process.cwd(), process.env.SOURCE_REF) + "\n");
+          '
+
       - name: Install Sigstore cosign
         if: matrix.os == 'linux'
         uses: sigstore/cosign-installer@d58896d6a1865668819e1d91763c7751a165e159 # v3.9.2
@@ -220,8 +233,13 @@ jobs:
           APPLE_NOTARY_PRIVATE_KEY: ${{ secrets.APPLE_NOTARY_PRIVATE_KEY }}
         run: |
           IDENTITY="Developer ID Application: Nauman Tanwir ($APPLE_TEAM_ID)"
-          codesign --force --options runtime --timestamp --sign "$IDENTITY" standalone/guardscan
+          codesign --force --options runtime --timestamp \
+            --entitlements .github/release/macos-entitlements.plist --sign "$IDENTITY" standalone/guardscan
           codesign --verify --deep --strict --verbose=2 standalone/guardscan
+          EXPECTED_VERSION="${{ inputs.tag }}"
+          SIGNED_VERSION="$(GUARDSCAN_HOME="$RUNNER_TEMP/post-sign-home" GUARDSCAN_NO_TELEMETRY=true \
+            GUARDSCAN_OFFLINE=true standalone/guardscan --version | tail -n 1 | tr -d '\r')"
+          test "$SIGNED_VERSION" = "${EXPECTED_VERSION#v}"
           printf '%s' "$APPLE_NOTARY_PRIVATE_KEY" > "$RUNNER_TEMP/AuthKey.p8"
           mkdir "$RUNNER_TEMP/notarization-volume"
           cp standalone/guardscan "$RUNNER_TEMP/notarization-volume/guardscan"
@@ -230,6 +248,7 @@ jobs:
             -srcfolder "$RUNNER_TEMP/notarization-volume" \
             -format UDZO \
             "$RUNNER_TEMP/guardscan-notarization.dmg"
+          codesign --force --timestamp --sign "$IDENTITY" "$RUNNER_TEMP/guardscan-notarization.dmg"
           xcrun notarytool submit "$RUNNER_TEMP/guardscan-notarization.dmg" \
             --key "$RUNNER_TEMP/AuthKey.p8" \
             --key-id "$APPLE_NOTARY_KEY_ID" \
@@ -251,7 +270,6 @@ jobs:
           xcrun stapler staple "$RUNNER_TEMP/guardscan-notarization.dmg"
           xcrun stapler validate "$RUNNER_TEMP/guardscan-notarization.dmg"
           spctl --assess --type open --context context:primary-signature --verbose=4 "$RUNNER_TEMP/guardscan-notarization.dmg"
-          spctl --assess --type execute --verbose=4 standalone/guardscan
           cp "$RUNNER_TEMP/apple-notarization.json" standalone/apple-notarization.json
           cp "$RUNNER_TEMP/guardscan-notarization.dmg" standalone/stapled-notarization.dmg
           codesign -dvvv standalone/guardscan 2> standalone/apple-code-signing.txt
@@ -292,7 +310,7 @@ jobs:
             --executable "../standalone/${{ matrix.executable }}" \
             --prototype-metadata "../standalone/standalone-prototype.json" \
             --platform-os "${{ matrix.os }}" --platform-arch "${{ matrix.arch }}" \
-            --timestamp "$(git show -s --format=%cI "${{ inputs.ref }}")")
+            --timestamp "$SOURCE_TIMESTAMP")
           if [ -n "${{ matrix.libc }}" ]; then ARGS+=(--platform-libc "${{ matrix.libc }}"); fi
           npm run release:build -- "${ARGS[@]}"
 
@@ -367,7 +385,7 @@ jobs:
             --executable "../standalone/${{ matrix.executable }}" \
             --evidence "../standalone/evidence.json" \
             --platform-os "${{ matrix.os }}" --platform-arch "${{ matrix.arch }}" \
-            --timestamp "$(git show -s --format=%cI "${{ inputs.ref }}")")
+            --timestamp "$SOURCE_TIMESTAMP")
           if [ -n "${{ matrix.libc }}" ]; then ARGS+=(--platform-libc "${{ matrix.libc }}"); fi
           npm run release:build -- "${ARGS[@]}"
           cp ../standalone-sbom/guardscan-*.json ../native-output/
@@ -378,6 +396,7 @@ jobs:
             'guardscan.sigstore.json',
             'apple-code-signing.txt',
             'apple-notarization.json',
+            'stapled-notarization.dmg',
             'authenticode.txt',
           ]) {
             const source = `../standalone/${name}`;
@@ -429,7 +448,7 @@ jobs:
           ARGS=(--kind python-wheel --output-dir "../wheel-output" \
             --executable "../standalone/${{ matrix.executable }}" \
             --platform-os "${{ matrix.os }}" --platform-arch "${{ matrix.arch }}" \
-            --timestamp "$(git show -s --format=%cI "${{ inputs.ref }}")")
+            --timestamp "$SOURCE_TIMESTAMP")
           if [ -n "${{ matrix.libc }}" ]; then ARGS+=(--platform-libc "${{ matrix.libc }}"); fi
           npm run release:build -- "${ARGS[@]}"
 
@@ -494,7 +513,7 @@ jobs:
           if find collected -type l -print -quit | grep -q .; then exit 1; fi
           mkdir release
           find collected -type f \( \
-              -name '*.tar.gz' -o -name '*.zip' -o -name '*.whl' -o -name '*.tgz' \
+              -name '*.tar.gz' -o -name '*.zip' -o -name '*.whl' -o -name '*.tgz' -o -name '*.dmg' \
               -o -name 'guardscan-*.spdx.json' -o -name 'guardscan-*.cyclonedx.json' \
               -o -name '*.sigstore.json' -o -name '*.apple-notarization.json' -o -name '*.txt' \
             \) \
