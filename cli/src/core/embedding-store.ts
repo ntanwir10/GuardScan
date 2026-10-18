@@ -8,6 +8,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { getGuardScanCacheDir } from '../utils/path-helper';
+import { environmentDisablesCache } from '../utils/execution-policy';
 import {
   CodeEmbedding,
   EmbeddingIndex,
@@ -44,7 +45,7 @@ export class FileBasedEmbeddingStore implements EmbeddingStore {
     const base = basePath || path.join(getGuardScanCacheDir(), repoId);
     this.storageDir = path.join(base, 'embeddings');
     this.indexPath = path.join(this.storageDir, 'index.json');
-    this.persistent = !['true', '1'].includes(process.env.GUARDSCAN_NO_CACHE?.toLowerCase() || '');
+    this.persistent = !environmentDisablesCache();
   }
 
   /**

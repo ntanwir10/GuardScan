@@ -22,7 +22,7 @@ import { createTelemetryRecorder } from '../core/telemetry';
 import { hasConfiguredJestRunner, testRunner } from '../core/test-runner';
 import { handleCommandError } from '../utils/error-handler';
 import { reporter, ReviewResult } from '../utils/reporter';
-import { EffectiveExecutionPolicy, resolveExecutionPolicy } from '../utils/execution-policy';
+import { EffectiveExecutionPolicy, environmentDisablesCache, resolveExecutionPolicy } from '../utils/execution-policy';
 import { classifySbomInventoryErrors } from './sbom';
 
 interface ScanOptions {
@@ -105,7 +105,7 @@ export async function scanCommand(options: ScanOptions): Promise<void> {
     const concurrency = parseConcurrency(options.concurrency);
     const vulnerabilityScope = parseScope(options.scope || config.vulnerabilities?.scope);
     const useCache = options.cache !== false &&
-      process.env.GUARDSCAN_NO_CACHE !== 'true' &&
+      !environmentDisablesCache() &&
       config.cache?.enabled !== false;
     const includeVulnerabilities = executionPolicy.includeCve;
     const inventory = collectPackageInventory(repoInfo.path);

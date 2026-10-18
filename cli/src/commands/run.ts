@@ -14,7 +14,7 @@ import { displaySimpleBanner } from '../utils/ascii-art';
 import { createDebugLogger } from '../utils/debug-logger';
 import { createPerformanceTracker } from '../utils/performance-tracker';
 import { handleCommandError } from '../utils/error-handler';
-import { EffectiveExecutionPolicy, resolveExecutionPolicy } from '../utils/execution-policy';
+import { EffectiveExecutionPolicy, environmentDisablesCache, resolveExecutionPolicy } from '../utils/execution-policy';
 
 const logger = createDebugLogger('run');
 const perfTracker = createPerformanceTracker('guardscan run');
@@ -45,7 +45,7 @@ export function vulnerabilitySettingsForRun(
   config: Pick<Config, 'cache' | 'vulnerabilities'>
 ): RunVulnerabilitySettings {
   return {
-    cache: process.env.GUARDSCAN_NO_CACHE !== 'true' && config.cache?.enabled !== false,
+    cache: !environmentDisablesCache() && config.cache?.enabled !== false,
     vulnerabilityScope: config.vulnerabilities?.scope,
     vulnerabilityEndpoint: config.vulnerabilities?.endpoint,
     vulnerabilitySnapshotMaxAgeDays: config.vulnerabilities?.snapshotMaxAgeDays,

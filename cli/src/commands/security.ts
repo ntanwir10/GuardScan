@@ -25,7 +25,7 @@ import {
 } from '../providers/factory';
 import { displaySimpleBanner } from '../utils/ascii-art';
 import { handleCommandError } from '../utils/error-handler';
-import { resolveExecutionPolicy } from '../utils/execution-policy';
+import { environmentDisablesCache, resolveExecutionPolicy } from '../utils/execution-policy';
 import { Finding, reporter, ReviewResult } from '../utils/reporter';
 import { SECURITY_CONSTANTS } from '../constants/security-constants';
 
@@ -69,7 +69,7 @@ export async function securityCommand(options: SecurityOptions): Promise<void> {
     const concurrency = parseConcurrency(options.concurrency);
     const vulnerabilityScope = parseScope(options.scope || config.vulnerabilities?.scope);
     const useCache = options.cache !== false &&
-      process.env.GUARDSCAN_NO_CACHE !== 'true' &&
+      !environmentDisablesCache() &&
       config.cache?.enabled !== false;
     const inventory = includeVulnerabilities || options.licenses
       ? collectPackageInventory(repoInfo.path)

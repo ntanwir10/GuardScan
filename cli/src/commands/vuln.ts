@@ -10,7 +10,7 @@ import {
 import { configManager } from '../core/config';
 import { filterPackageInventory, PackageEcosystem } from '../core/package-inventory';
 import { snapshotCoversInventory } from '../core/vulnerability-cache';
-import { resolveExecutionPolicy } from '../utils/execution-policy';
+import { environmentDisablesCache, resolveExecutionPolicy } from '../utils/execution-policy';
 import { atomicReplaceText, prepareAtomicOutputTarget } from '../utils/private-state';
 
 type VulnerabilityFormat = 'table' | 'json' | 'sarif';
@@ -275,7 +275,7 @@ function parseOptions(options: VulnerabilityOptions, defaultScope: 'all' | 'runt
     maxVulnerabilities: options.maxVulnerabilities === undefined
       ? undefined
       : parseInteger(options.maxVulnerabilities, '--max-vulnerabilities', 0, Number.MAX_SAFE_INTEGER),
-    cache: options.cache !== false && process.env.GUARDSCAN_NO_CACHE !== 'true',
+    cache: options.cache !== false && !environmentDisablesCache(),
   };
 }
 

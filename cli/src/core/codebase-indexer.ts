@@ -8,6 +8,7 @@ import {
   ParsedClass,
 } from "./ast-parser";
 import { configManager } from "./config";
+import { environmentDisablesCache } from '../utils/execution-policy';
 
 /**
  * Symbol information in the codebase
@@ -728,7 +729,7 @@ export class CodebaseIndexer {
    * Save index to disk
    */
   private async saveIndex(index: CodebaseIndex): Promise<void> {
-    if (process.env.GUARDSCAN_NO_CACHE === 'true') {return;}
+    if (environmentDisablesCache()) {return;}
     const cacheDir = this.getCacheDir();
 
     // Ensure cache directory and all parent directories exist
@@ -784,7 +785,7 @@ export class CodebaseIndexer {
       return this.cachedIndex;
     }
 
-    if (process.env.GUARDSCAN_NO_CACHE === 'true') {return null;}
+    if (environmentDisablesCache()) {return null;}
 
     const cacheDir = this.getCacheDir();
     const indexPath = path.join(cacheDir, "index.json");

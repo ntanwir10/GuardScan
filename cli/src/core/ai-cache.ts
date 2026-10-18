@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
 import { configManager } from './config';
+import { environmentDisablesCache } from '../utils/execution-policy';
 
 // Maximum size for a single cache entry (1MB)
 const MAX_CACHE_ENTRY_SIZE = 1024 * 1024;
@@ -63,7 +64,7 @@ export class AICache {
     this.currentSizeBytes = 0;
     this.repoId = repoId;
     this.enabled =
-      options.enabled !== false && process.env.GUARDSCAN_NO_CACHE !== 'true';
+      options.enabled !== false && !environmentDisablesCache();
     this.ttlSeconds = options.ttlSeconds;
     this.stats = {
       hits: 0,

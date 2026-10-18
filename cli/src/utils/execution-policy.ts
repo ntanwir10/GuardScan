@@ -45,6 +45,10 @@ export function environmentRequestsOffline(): boolean {
   );
 }
 
+export function environmentDisablesCache(): boolean {
+  return ['true', '1'].includes(process.env.GUARDSCAN_NO_CACHE?.trim().toLowerCase() || '');
+}
+
 export function resolveExecutionPolicy(input: ExecutionPolicyInput = {}): EffectiveExecutionPolicy {
   const environmentOffline = environmentRequestsOffline();
   const offline = input.configOffline === true ||

@@ -8,6 +8,7 @@
 import { AIProviderDecorator } from './base-decorator';
 import { AIProvider, AIMessage, AIResponse, ChatOptions } from '../base';
 import { AICache, CacheStats } from '../../core/ai-cache';
+import { environmentDisablesCache } from '../../utils/execution-policy';
 import * as crypto from 'crypto';
 
 export interface CacheConfig {
@@ -65,8 +66,7 @@ export class CachedProvider extends AIProviderDecorator {
   }
 
   private cacheDisabledByEnvironment(): boolean {
-    const value = process.env.GUARDSCAN_NO_CACHE?.toLowerCase();
-    return value === 'true' || value === '1';
+    return environmentDisablesCache();
   }
 
   private isCacheEnabled(): boolean {

@@ -111,4 +111,16 @@ describe('run command optional AI fallback', () => {
       fileSelection: 'explicit',
     }));
   });
+
+  it.each(['true', '1', 'TRUE', 'TrUe'])('disables scanner caching for environment opt-out %s', async value => {
+    const original = process.env.GUARDSCAN_NO_CACHE;
+    process.env.GUARDSCAN_NO_CACHE = value;
+    try {
+      await runCommand({});
+      expect(scanEngine.runSecurityScan).toHaveBeenCalledWith(expect.objectContaining({cache: false}));
+    } finally {
+      if (original === undefined) {delete process.env.GUARDSCAN_NO_CACHE;}
+      else {process.env.GUARDSCAN_NO_CACHE = original;}
+    }
+  });
 });

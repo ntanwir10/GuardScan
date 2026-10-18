@@ -1,5 +1,6 @@
 import {
   applyEarlyEnvironmentFlags,
+  environmentDisablesCache,
   resolveExecutionPolicy,
 } from '../../src/utils/execution-policy';
 
@@ -81,5 +82,22 @@ describe('early CLI environment policy', () => {
       if (originalOffline === undefined) {delete process.env.GUARDSCAN_OFFLINE;}
       else {process.env.GUARDSCAN_OFFLINE = originalOffline;}
     }
+  });
+});
+
+describe('shared environment cache policy', () => {
+  const original = process.env.GUARDSCAN_NO_CACHE;
+  afterEach(() => {
+    if (original === undefined) {delete process.env.GUARDSCAN_NO_CACHE;}
+    else {process.env.GUARDSCAN_NO_CACHE = original;}
+  });
+
+  it.each([
+    ['true', true], ['1', true], ['TRUE', true], [' TrUe ', true],
+    ['false', false], ['0', false], ['', false], [undefined, false],
+  ] as const)('parses GUARDSCAN_NO_CACHE=%s as disabled=%s', (value, expected) => {
+    if (value === undefined) {delete process.env.GUARDSCAN_NO_CACHE;}
+    else {process.env.GUARDSCAN_NO_CACHE = value;}
+    expect(environmentDisablesCache()).toBe(expected);
   });
 });

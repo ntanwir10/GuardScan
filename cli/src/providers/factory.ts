@@ -17,7 +17,7 @@ import { CircuitBreakerProvider } from './decorators/circuit-breaker-provider';
 import { RateLimitedProvider } from './decorators/rate-limited-provider';
 import { ObservableProvider } from './decorators/observable-provider';
 import { MetricsCollector } from '../core/metrics-collector';
-import { resolveExecutionPolicy } from '../utils/execution-policy';
+import { environmentDisablesCache, resolveExecutionPolicy } from '../utils/execution-policy';
 
 export interface ProviderOptions {
   apiKey?: string;
@@ -380,13 +380,10 @@ export class ProviderFactory {
     }
 
     // Cache (before observability to track cache hits)
-    const cacheDisabledByEnvironment = ['true', '1'].includes(
-      process.env.GUARDSCAN_NO_CACHE?.toLowerCase() || ''
-    );
     if (
       options.enableCache !== false &&
       cacheConfig?.enabled &&
-      !cacheDisabledByEnvironment
+      !environmentDisablesCache()
     ) {
       // Preserve decorators for supported embeddings; chat-only providers use exact caching.
       const embeddingProvider = base.getCapabilities().supportsEmbeddings ? enhanced : undefined;
