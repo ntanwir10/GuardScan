@@ -1,13 +1,16 @@
 import chalk from 'chalk';
-import ora from 'ora';
 import { licenseScanner } from '../core/license-scanner';
+import type { CycloneDx17Document, Spdx23Document } from '../core/license-scanner';
+import { configManager } from '../core/config';
 import { repositoryManager } from '../core/repository';
 import { createProgressBar } from '../utils/progress';
-import * as fs from 'fs';
 import * as path from 'path';
 import { createDebugLogger } from '../utils/debug-logger';
 import { createPerformanceTracker } from '../utils/performance-tracker';
 import { handleCommandError } from '../utils/error-handler';
+import { resolveExecutionPolicy } from '../utils/execution-policy';
+import { atomicReplaceText, prepareAtomicOutputTarget } from '../utils/private-state';
+import type {PackageInventoryError} from '../core/package-inventory';
 
 const logger = createDebugLogger('sbom');
 const perfTracker = createPerformanceTracker('guardscan sbom');
@@ -15,6 +18,8 @@ const perfTracker = createPerformanceTracker('guardscan sbom');
 interface SBOMOptions {
   output?: string;
   format?: 'spdx' | 'cyclonedx';
+  offline?: boolean;
+  cloud?: boolean;
 }
 
 export async function sbomCommand(options: SBOMOptions): Promise<void> {
@@ -27,6 +32,12 @@ export async function sbomCommand(options: SBOMOptions): Promise<void> {
     perfTracker.start('detect-repository');
     const repoPath = process.cwd();
     const repoInfo = repositoryManager.getRepoInfo();
+    const config = configManager.loadOrInit();
+    const executionPolicy = resolveExecutionPolicy({
+      configOffline: config.offlineMode,
+      offline: options.offline,
+      cloud: options.cloud,
+    });
     perfTracker.end('detect-repository');
     logger.debug('Repository detected', { name: repoInfo.name });
 
@@ -40,16 +51,31 @@ export async function sbomCommand(options: SBOMOptions): Promise<void> {
     // Step 1: Scan licenses/dependencies
     progressBar.update(0, { status: 'Scanning dependencies...' });
 
-    const licenseReport = await licenseScanner.scan(repoPath, 'proprietary');
+    const licenseReport = await licenseScanner.scan(repoPath, 'proprietary', { offline: executionPolicy.offline });
+
+    const inventoryErrors = classifySbomInventoryErrors(licenseReport.inventoryErrors);
+    if (inventoryErrors.fatal.length > 0) {
+      const first = inventoryErrors.fatal[0];
+      throw new Error(
+        `SBOM inventory contains ${inventoryErrors.fatal.length} invalid manifest(s); ` +
+        `${first.file}: ${first.message}`
+      );
+    }
+    if (inventoryErrors.warnings.length > 0) {
+      console.warn(chalk.yellow(
+        `Warning: SBOM inventory has ${inventoryErrors.warnings.length} incomplete coverage warning(s).`
+      ));
+    }
 
     progressBar.update(1, { status: `Found ${licenseReport.totalDependencies} dependencies` });
 
     // Step 2: Generate SBOM
     progressBar.update(1, { status: 'Generating SBOM...' });
 
+    const format = options.format || 'spdx';
     const sbom = licenseScanner.generateSBOM(
       licenseReport.findings,
-      options.format || 'spdx',
+      format,
       repoInfo.name
     );
 
@@ -57,10 +83,13 @@ export async function sbomCommand(options: SBOMOptions): Promise<void> {
 
     // Display summary
     console.log(chalk.white.bold('\n📊 SBOM Summary:\n'));
-    console.log(chalk.gray(`  Total Packages: ${sbom.packages.length}`));
-    console.log(chalk.gray(`  Format: ${sbom.format.toUpperCase()}`));
-    console.log(chalk.gray(`  Version: ${sbom.version}`));
-    console.log(chalk.gray(`  Timestamp: ${sbom.timestamp}`));
+    const summary = format === 'spdx'
+      ? summarizeSpdx(sbom as Spdx23Document)
+      : summarizeCycloneDx(sbom as CycloneDx17Document);
+    console.log(chalk.gray(`  ${summary.itemLabel}: ${summary.itemCount}`));
+    console.log(chalk.gray(`  Format: ${summary.format} (${summary.specification})`));
+    console.log(chalk.gray(`  Version: ${summary.version}`));
+    console.log(chalk.gray(`  Timestamp: ${summary.timestamp}`));
 
     // License breakdown
     console.log(chalk.white.bold('\n📜 License Breakdown:\n'));
@@ -100,17 +129,60 @@ export async function sbomCommand(options: SBOMOptions): Promise<void> {
     // Step 3: Save SBOM
     progressBar.update(2, { status: 'Saving SBOM...' });
 
-    const outputPath = options.output || path.join(repoPath, `sbom-${sbom.format}.json`);
+    const outputPath = options.output || path.join(repoPath, `sbom-${format}.json`);
 
-    fs.writeFileSync(outputPath, JSON.stringify(sbom, null, 2));
+    const outputTarget = prepareAtomicOutputTarget(outputPath, repoPath);
+    atomicReplaceText(outputTarget, JSON.stringify(sbom, null, 2), {privateParent: false});
 
     progressBar.update(3, { status: 'Complete' });
     progressBar.stop();
 
     console.log(chalk.green(`\n✓ SBOM saved: ${outputPath}`));
+
     console.log();
 
   } catch (error) {
     handleCommandError(error, 'SBOM generation');
   }
+}
+
+export function classifySbomInventoryErrors(errors: PackageInventoryError[]): {
+  fatal: PackageInventoryError[];
+  warnings: PackageInventoryError[];
+} {
+  return {
+    fatal: errors.filter(error => error.code === 'INVALID_MANIFEST'),
+    warnings: errors.filter(error => error.code !== 'INVALID_MANIFEST'),
+  };
+}
+
+interface SbomSummary {
+  itemLabel: 'Packages' | 'Components';
+  itemCount: number;
+  format: string;
+  specification: string;
+  version: string;
+  timestamp: string;
+}
+
+function summarizeSpdx(document: Spdx23Document): SbomSummary {
+  return {
+    itemLabel: 'Packages',
+    itemCount: document.packages.length,
+    format: 'SPDX',
+    specification: document.spdxVersion,
+    version: document.spdxVersion.replace('SPDX-', ''),
+    timestamp: document.creationInfo.created,
+  };
+}
+
+function summarizeCycloneDx(document: CycloneDx17Document): SbomSummary {
+  return {
+    itemLabel: 'Components',
+    itemCount: document.components.length,
+    format: document.bomFormat,
+    specification: document.specVersion,
+    version: String(document.version),
+    timestamp: document.metadata.timestamp,
+  };
 }

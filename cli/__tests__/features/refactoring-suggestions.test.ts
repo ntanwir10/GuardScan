@@ -4,18 +4,15 @@
  * Tests for AI-powered refactoring suggestions (Phase 5)
  */
 
-import {
-  RefactoredCode,
-  RefactoringSuggestionsEngine,
-} from "../../src/features/refactoring-suggestions";
+import type { RefactoredCode } from "../../src/features/refactoring-suggestions";
 import { AIProvider, ProviderCapabilities } from "../../src/providers/base";
-import { CodebaseIndexer } from "../../src/core/codebase-indexer";
-import { AICache } from "../../src/core/ai-cache";
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
 
 import { describe, expect, it, beforeEach, afterEach } from "@jest/globals";
+
+let RefactoringSuggestionsEngineClass: typeof import("../../src/features/refactoring-suggestions").RefactoringSuggestionsEngine;
 
 // Mock AI Provider
 class MockAIProvider extends AIProvider {
@@ -86,12 +83,23 @@ class MockAIProvider extends AIProvider {
 }
 
 describe("RefactoringSuggestionsEngine", () => {
-  let engine: RefactoringSuggestionsEngine;
+  let engine: InstanceType<typeof RefactoringSuggestionsEngineClass>;
   let mockProvider: MockAIProvider;
   let tempDir: string;
   let repoId: string;
+  let testHomeDir: string;
+  let originalEnv: NodeJS.ProcessEnv;
 
   beforeEach(() => {
+    originalEnv = { ...process.env };
+    testHomeDir = fs.mkdtempSync(path.join(os.tmpdir(), "guardscan-refactoring-home-"));
+    process.env.GUARDSCAN_HOME = testHomeDir;
+    process.env.HOME = testHomeDir;
+
+    // ConfigManager captures its home directory when its module is loaded.
+    jest.resetModules();
+    ({ RefactoringSuggestionsEngine: RefactoringSuggestionsEngineClass } = require("../../src/features/refactoring-suggestions"));
+
     mockProvider = new MockAIProvider();
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "refactor-test-"));
     repoId = "test-repo-id";
@@ -106,14 +114,16 @@ describe("RefactoringSuggestionsEngine", () => {
       })
     );
 
-    const indexer = new CodebaseIndexer(tempDir, repoId);
-    const cache = new AICache(repoId);
-    engine = new RefactoringSuggestionsEngine(mockProvider, tempDir, repoId);
+    engine = new RefactoringSuggestionsEngineClass(mockProvider, tempDir, repoId);
   });
 
   afterEach(() => {
+    process.env = originalEnv;
     if (fs.existsSync(tempDir)) {
       fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+    if (fs.existsSync(testHomeDir)) {
+      fs.rmSync(testHomeDir, { recursive: true, force: true });
     }
   });
 

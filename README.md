@@ -13,7 +13,7 @@
 ```
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
-[![Node.js Version](https://img.shields.io/badge/node-%3E%3D18.0.0-brightgreen)](https://nodejs.org)
+[![Node.js Version](https://img.shields.io/badge/node-%3E%3D22.0.0-brightgreen)](https://nodejs.org)
 
 ---
 
@@ -342,7 +342,7 @@ GuardScan follows a **privacy-first, client-side architecture** where all code a
 **CLI (34,213 LOC):**
 
 - Language: TypeScript 5.3+ (strict mode)
-- Runtime: Node.js 18+
+- Runtime: Node.js 22+
 - Framework: Commander.js
 - Testing: Jest (70%+ coverage)
 - Build: TypeScript Compiler (tsc)

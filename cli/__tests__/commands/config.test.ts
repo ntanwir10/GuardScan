@@ -2,8 +2,6 @@
  * Tests for config command
  */
 
-import { configCommand } from "../../src/commands/config";
-import { configManager } from "../../src/core/config";
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
@@ -19,6 +17,10 @@ import {
 // Mock dependencies
 jest.mock("inquirer");
 
+let configCommand: typeof import("../../src/commands/config").configCommand;
+let configManager: typeof import("../../src/core/config").configManager;
+let TelemetryManager: typeof import("../../src/core/telemetry").TelemetryManager;
+
 describe("config command", () => {
   let originalEnv: NodeJS.ProcessEnv;
   let testConfigDir: string;
@@ -30,6 +32,13 @@ describe("config command", () => {
     testConfigDir = path.join(os.tmpdir(), `guardscan-test-${Date.now()}`);
     process.env.GUARDSCAN_HOME = testConfigDir;
     process.env.HOME = testConfigDir; // Also set HOME to ensure consistency
+
+    // ConfigManager captures its home directory when the module loads.
+    // Reset and load it only after this test's isolated home is configured.
+    jest.resetModules();
+    ({ configCommand } = require("../../src/commands/config"));
+    ({ configManager } = require("../../src/core/config"));
+    ({ TelemetryManager } = require("../../src/core/telemetry"));
 
     if (fs.existsSync(testConfigDir)) {
       fs.rmSync(testConfigDir, { recursive: true, force: true });
@@ -115,6 +124,158 @@ describe("config command", () => {
     // Restore all mocks
     providerFactorySpy.mockRestore();
     consoleLogSpy.mockRestore();
+  });
+
+  it("clears provider-specific endpoint and remote approval when switching provider families", async () => {
+    if (!configManager.exists()) {
+      configManager.init();
+    }
+
+    const consoleLogSpy = jest.spyOn(console, "log").mockImplementation(() => {});
+    const initial = configManager.load();
+    initial.provider = "ollama";
+    initial.apiEndpoint = "https://models.example.test";
+    initial.allowRemoteSelfHosted = true;
+    initial.apiKey = "old-key";
+    initial.model = "old-model";
+    configManager.save(initial);
+
+    await configCommand({ provider: "openai", key: "test-key" });
+    let updated = configManager.load();
+    expect(updated.provider).toBe("openai");
+    expect(updated.apiEndpoint).toBeUndefined();
+    expect(updated.allowRemoteSelfHosted).toBe(false);
+    expect(updated.apiKey).toBe("test-key");
+    expect(updated.model).toBeUndefined();
+
+    updated.apiEndpoint = "https://api.example.test/v1";
+    updated.allowRemoteSelfHosted = true;
+    updated.apiKey = "openai-key";
+    updated.model = "gpt-4o";
+    configManager.save(updated);
+    await configCommand({ provider: "ollama" });
+    updated = configManager.load();
+    expect(updated.provider).toBe("ollama");
+    expect(updated.apiEndpoint).toBeUndefined();
+    expect(updated.allowRemoteSelfHosted).toBe(false);
+    expect(updated.apiKey).toBeUndefined();
+    expect(updated.model).toBeUndefined();
+
+    consoleLogSpy.mockRestore();
+  });
+
+  it("persists telemetry opt-out before a queue-clear failure", async () => {
+    if (!configManager.exists()) {configManager.init();}
+    const initial = configManager.load();
+    initial.telemetryEnabled = true;
+    configManager.save(initial);
+    const clearSpy = jest.spyOn(TelemetryManager.prototype, "clear").mockImplementation(() => {
+      throw new Error("maintenance lock unavailable");
+    });
+    const consoleErrorSpy = jest.spyOn(console, "error").mockImplementation(() => {});
+    const consoleLogSpy = jest.spyOn(console, "log").mockImplementation(() => {});
+
+    await configCommand({ telemetry: "false" });
+
+    expect(configManager.load().telemetryEnabled).toBe(false);
+    expect(consoleErrorSpy).toHaveBeenCalledWith(expect.stringContaining("could not be cleared"));
+    clearSpy.mockRestore();
+    consoleErrorSpy.mockRestore();
+    consoleLogSpy.mockRestore();
+  });
+
+  it("validates every direct option before persisting telemetry withdrawal or provider changes", async () => {
+    if (!configManager.exists()) {configManager.init();}
+    const initial = configManager.load();
+    initial.provider = "openai";
+    initial.apiKey = "existing-key";
+    initial.model = "existing-model";
+    initial.telemetryEnabled = true;
+    initial.offlineMode = false;
+    configManager.save(initial);
+    const clearSpy = jest.spyOn(TelemetryManager.prototype, "clear");
+    const consoleErrorSpy = jest.spyOn(console, "error").mockImplementation(() => {});
+    const consoleLogSpy = jest.spyOn(console, "log").mockImplementation(() => {});
+    const exitSpy = jest.spyOn(process, "exit").mockImplementation(((code?: string | number | null) => {
+      throw new Error(`process.exit(${String(code)})`);
+    }) as typeof process.exit);
+
+    try {
+      await expect(configCommand({
+        provider: "claude",
+        telemetry: "false",
+        offline: "invalid",
+      })).rejects.toThrow("process.exit(1)");
+
+      expect(configManager.load()).toMatchObject({
+        provider: "openai",
+        apiKey: "existing-key",
+        model: "existing-model",
+        telemetryEnabled: true,
+        offlineMode: false,
+      });
+      expect(clearSpy).not.toHaveBeenCalled();
+    } finally {
+      exitSpy.mockRestore();
+      consoleErrorSpy.mockRestore();
+      consoleLogSpy.mockRestore();
+      clearSpy.mockRestore();
+    }
+  });
+
+  it("preserves provider credentials and model for same-provider updates", async () => {
+    if (!configManager.exists()) {configManager.init();}
+    const config = configManager.load();
+    config.provider = "openai";
+    config.apiKey = "existing-key";
+    config.model = "gpt-4o";
+    configManager.save(config);
+    const consoleLogSpy = jest.spyOn(console, "log").mockImplementation(() => {});
+
+    await configCommand({ provider: "openai" });
+
+    expect(configManager.load()).toMatchObject({
+      apiKey: "existing-key",
+      model: "gpt-4o",
+    });
+    consoleLogSpy.mockRestore();
+  });
+
+  it.each([
+    ['ollama', true, true], ['lmstudio', true, true],
+    ['ollama', false, true], ['lmstudio', false, true],
+    ['ollama', false, false], ['lmstudio', false, false],
+  ] as const)('validates interactive %s endpoints with offline=%s and approval=%s before saving', async (provider, offlineMode, approved) => {
+    configManager.init();
+    const initial = configManager.load();
+    initial.provider = 'ollama';
+    initial.apiEndpoint = 'http://127.0.0.1:11434';
+    configManager.save(initial);
+    delete process.env.GUARDSCAN_OFFLINE;
+    const inquirer = require('inquirer') as typeof import('inquirer');
+    jest.mocked(inquirer.prompt)
+      .mockResolvedValueOnce({changeMode: false})
+      .mockResolvedValueOnce({provider, apiEndpoint: 'https://models.example',
+        allowRemoteSelfHosted: approved, telemetry: false, offlineMode});
+    const tty = Object.getOwnPropertyDescriptor(process.stdin, 'isTTY');
+    Object.defineProperty(process.stdin, 'isTTY', {configurable: true, value: true});
+    jest.spyOn(console, 'log').mockImplementation(() => {});
+    jest.spyOn(console, 'error').mockImplementation(() => {});
+    jest.spyOn(process, 'exit').mockImplementation((() => {throw new Error('rejected configuration');}) as typeof process.exit);
+    try {
+      if (offlineMode || !approved) {
+        await expect(configCommand({})).rejects.toThrow('rejected configuration');
+        expect(configManager.load().apiEndpoint).toBe(initial.apiEndpoint);
+      } else {
+        await configCommand({});
+        expect(configManager.load()).toMatchObject({provider, offlineMode: false, allowRemoteSelfHosted: true,
+          apiEndpoint: provider === 'lmstudio' ? 'https://models.example/v1' : 'https://models.example'});
+      }
+    } finally {
+      if (tty) {Object.defineProperty(process.stdin, 'isTTY', tty);}
+      else {delete (process.stdin as unknown as {isTTY?: boolean}).isTTY;}
+      jest.restoreAllMocks();
+    }
   });
 
   it("should handle debug logging", async () => {

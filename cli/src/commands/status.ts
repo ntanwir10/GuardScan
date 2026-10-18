@@ -1,18 +1,21 @@
 import chalk from 'chalk';
 import { configManager } from '../core/config';
 import { repositoryManager } from '../core/repository';
-import { apiClient } from '../utils/api-client';
 import { isOnline } from '../utils/network';
 import { displaySimpleBanner } from '../utils/ascii-art';
-import ora from 'ora';
 import { createDebugLogger } from '../utils/debug-logger';
 import { createPerformanceTracker } from '../utils/performance-tracker';
 import { handleCommandError } from '../utils/error-handler';
+import { resolveExecutionPolicy } from '../utils/execution-policy';
 
 const logger = createDebugLogger('status');
 const perfTracker = createPerformanceTracker('guardscan status');
 
-export async function statusCommand(): Promise<void> {
+interface StatusOptions {
+  checkNetwork?: boolean;
+}
+
+export async function statusCommand(options: StatusOptions = {}): Promise<void> {
   logger.debug('Status command started');
   perfTracker.start('status-total');
   
@@ -21,7 +24,8 @@ export async function statusCommand(): Promise<void> {
   try {
     // Load config
     perfTracker.start('load-config');
-    const config = configManager.loadOrInit();
+    const config = configManager.loadOrInit({ touchLastUsed: false });
+    const executionPolicy = resolveExecutionPolicy({ configOffline: config.offlineMode });
     perfTracker.end('load-config');
     logger.debug('Config loaded', { provider: config.provider });
 
@@ -35,10 +39,9 @@ export async function statusCommand(): Promise<void> {
 
     // Display configuration
     console.log(chalk.white.bold('Configuration:'));
-    console.log(chalk.gray(`  Client ID: ${config.clientId}`));
     console.log(chalk.gray(`  Provider: ${config.provider}`));
     console.log(chalk.gray(`  Telemetry: ${config.telemetryEnabled ? 'Enabled' : 'Disabled'}`));
-    console.log(chalk.gray(`  Offline Mode: ${config.offlineMode ? 'Yes' : 'No'}`));
+    console.log(chalk.gray(`  Offline Mode: ${executionPolicy.offline ? 'Yes' : 'No'}`));
 
     // Display repository info
     if (repoInfo) {
@@ -52,17 +55,27 @@ export async function statusCommand(): Promise<void> {
       console.log(chalk.gray(`  Repo ID: ${repoInfo.repoId}`));
     }
 
-    // Check network connectivity
+    // Check network connectivity only when explicitly requested.
     console.log(chalk.white.bold('\nConnectivity:'));
-    const online = await isOnline();
-    console.log(chalk.gray(`  Internet: ${online ? chalk.green('Connected') : chalk.red('Offline')}`));
+    let networkStatus: string;
+    if (options.checkNetwork) {
+      if (executionPolicy.offline) {
+        networkStatus = chalk.yellow('Not checked (blocked by offline mode)');
+      } else {
+        const online = await isOnline();
+        networkStatus = online ? chalk.green('Connected') : chalk.red('Offline');
+      }
+    } else {
+      networkStatus = 'Not checked (use --check-network)';
+    }
+    console.log(chalk.gray(`  Internet: ${networkStatus}`));
 
     // GuardScan is now 100% free and open source!
     console.log(chalk.white.bold('\nLicense:'));
     console.log(chalk.green('  ✓ GuardScan is 100% free and open source'));
     console.log(chalk.gray('  ✓ Unlimited static analysis (offline)'));
     console.log(chalk.gray('  ✓ AI review with your own API key (BYOK)'));
-    console.log(chalk.gray('  ✓ No usage limits or subscriptions'))
+    console.log(chalk.gray('  ✓ No usage limits or subscriptions'));
 
     console.log();
   } catch (error) {

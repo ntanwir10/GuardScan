@@ -10,10 +10,10 @@ const logger = createDebugLogger('commit');
 const perfTracker = createPerformanceTracker('guardscan commit');
 import { CommitMessageGenerator } from '../features/commit-generator';
 import { AICache } from '../core/ai-cache';
-import { exec } from 'child_process';
+import { execFile } from 'child_process';
 import { promisify } from 'util';
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 interface CommitOptions {
   ai?: boolean;
@@ -42,7 +42,7 @@ export async function commitCommand(options: CommitOptions): Promise<void> {
     console.log(chalk.blue('🤖 Generating commit message...'));
 
     // Check if AI provider is configured
-    if (!config.provider || config.provider === 'none' || !config.apiKey) {
+    if (!ProviderFactory.isConfigured(config)) {
       console.log(chalk.yellow('\n⚠ AI provider not configured. Run `guardscan config` to set up.'));
       console.log(chalk.gray('  Falling back to standard git commit.'));
       return;
@@ -52,7 +52,7 @@ export async function commitCommand(options: CommitOptions): Promise<void> {
     const provider = ProviderFactory.createForCli(config, { task: 'code-generation' });
 
     // Create AI cache
-    const cache = new AICache(repoInfo.repoId, 100); // 100MB cache
+    const cache = new AICache(repoInfo.repoId, config.cache || 100);
 
     // Create commit generator
     const commitGenerator = new CommitMessageGenerator(provider, cache, repoRoot);
@@ -88,7 +88,7 @@ export async function commitCommand(options: CommitOptions): Promise<void> {
       console.log(chalk.blue('\n🔄 Creating commit...'));
 
       try {
-        await execAsync(`git commit -m "${formattedMessage.replace(/"/g, '\\"')}"`, {
+        await execFileAsync('git', ['commit', '-m', formattedMessage], {
           cwd: repoRoot,
         });
 
@@ -98,11 +98,9 @@ export async function commitCommand(options: CommitOptions): Promise<void> {
       }
     } else {
       // Interactive mode - set to confirm
-      console.log(chalk.yellow('\n💡 To commit with this message, run:'));
-      console.log(chalk.gray(`   git commit -m "${formattedMessage.replace(/\n/g, '\\n')}"`));
-
-      console.log(chalk.yellow('\n   Or use --auto flag to commit automatically:'));
+      console.log(chalk.yellow('\n💡 To commit safely with this message, use --auto:'));
       console.log(chalk.gray('   guardscan commit --ai --auto'));
+      console.log(chalk.gray('   Or copy the displayed message into your preferred git commit workflow.'));
     }
 
   } catch (error) {

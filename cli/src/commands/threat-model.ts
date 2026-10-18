@@ -57,7 +57,7 @@ export async function threatModelCommand(options: ThreatModelCommandOptions): Pr
     logger.debug('Config loaded', { provider: config.provider });
 
     // Check AI provider
-    if (!config.provider || config.provider === 'none' || !config.apiKey) {
+    if (!ProviderFactory.isConfigured(config)) {
       spinner.fail('No AI provider configured');
       console.log(chalk.yellow('\nRun `guardscan config` to set up an AI provider.'));
       return;
@@ -74,7 +74,7 @@ export async function threatModelCommand(options: ThreatModelCommandOptions): Pr
     // Initialize components
     const provider = ProviderFactory.createForCli(config, { task: 'code-review' });
     const indexer = new CodebaseIndexer(repoInfo.path, repoInfo.repoId);
-    const cache = new AICache(repoInfo.repoId);
+    const cache = new AICache(repoInfo.repoId, config.cache || 100);
     const engine = new ThreatModelingEngine(provider, indexer, cache, repoInfo.path);
 
     spinner.text = 'Generating threat model...';

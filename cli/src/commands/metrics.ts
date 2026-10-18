@@ -8,7 +8,10 @@ import { Command } from 'commander';
 import chalk from 'chalk';
 import { MetricsCollector } from '../core/metrics-collector';
 import { Repository } from '../core/repository';
-import { configManager } from '../core/config';
+
+interface MetricsShowOptions { provider?: string; days: string; }
+interface MetricsExportOptions { format: string; output: string; days: string; }
+interface MetricsClearOptions { force?: boolean; }
 
 export function createMetricsCommand(): Command {
   const command = new Command('metrics');
@@ -20,13 +23,12 @@ export function createMetricsCommand(): Command {
     .description('Show aggregated metrics')
     .option('--provider <provider>', 'Filter by provider')
     .option('--days <days>', 'Time range in days', '7')
-    .action(async (options) => {
-      const config = configManager.loadOrInit();
+    .action((options: MetricsShowOptions) => {
       const repo = new Repository(process.cwd());
       const repoId = repo.getId();
 
-      const collector = new MetricsCollector(repoId, config.telemetryEnabled || false);
-      const days = parseInt(options.days);
+      const collector = new MetricsCollector(repoId);
+      const days = parseDays(options.days);
       const timeRangeMs = days * 24 * 60 * 60 * 1000;
 
       const metrics = collector.getMetrics(timeRangeMs);
@@ -94,13 +96,12 @@ export function createMetricsCommand(): Command {
     .option('--format <format>', 'Export format: json, csv', 'json')
     .option('--output <path>', 'Output file path', 'metrics.json')
     .option('--days <days>', 'Time range in days', '30')
-    .action(async (options) => {
-      const config = configManager.loadOrInit();
+    .action((options: MetricsExportOptions) => {
       const repo = new Repository(process.cwd());
       const repoId = repo.getId();
 
-      const collector = new MetricsCollector(repoId, config.telemetryEnabled || false);
-      const days = parseInt(options.days);
+      const collector = new MetricsCollector(repoId);
+      const days = parseDays(options.days);
       const timeRangeMs = days * 24 * 60 * 60 * 1000;
 
       if (options.format === 'json') {
@@ -117,19 +118,18 @@ export function createMetricsCommand(): Command {
     .command('clear')
     .description('Clear all collected metrics')
     .option('--force', 'Skip confirmation')
-    .action(async (options) => {
+    .action(async (options: MetricsClearOptions) => {
       if (!options.force) {
         console.log(chalk.yellow('⚠️  This will delete all collected metrics'));
         console.log(chalk.dim('Use --force to skip confirmation\n'));
         return;
       }
 
-      const config = configManager.loadOrInit();
       const repo = new Repository(process.cwd());
       const repoId = repo.getId();
 
-      const collector = new MetricsCollector(repoId, config.telemetryEnabled || false);
-      collector.clear();
+      const collector = new MetricsCollector(repoId);
+      await collector.clear();
 
       console.log(chalk.green('✅ All metrics cleared\n'));
     });
@@ -137,18 +137,10 @@ export function createMetricsCommand(): Command {
   return command;
 }
 
-// Helper to create progress bar
-function createProgressBar(percent: number): string {
-  const width = 20;
-  const filled = Math.floor((percent / 100) * width);
-  const empty = width - filled;
-
-  let color = chalk.green;
-  if (percent >= 90) {
-    color = chalk.red;
-  } else if (percent >= 80) {
-    color = chalk.yellow;
+function parseDays(value: string): number {
+  const days = Number(value);
+  if (!Number.isInteger(days) || days < 1 || days > 3650) {
+    throw new Error('Invalid --days value. Use an integer from 1 to 3650.');
   }
-
-  return '[' + color('█'.repeat(filled)) + '░'.repeat(empty) + ']';
+  return days;
 }

@@ -3,7 +3,8 @@ import * as path from 'path';
 import { marked } from 'marked';
 import { LOCResult } from '../core/loc-counter';
 import { RepositoryInfo } from '../core/repository';
-import { chartGenerator, SeveritySummary, ComplexityData } from './chart-generator';
+import type { SeveritySummary } from './chart-generator';
+import { atomicReplaceBuffer, atomicReplaceText, prepareAtomicOutputTarget } from './private-state';
 
 export interface ReviewResult {
   summary: string;
@@ -28,6 +29,18 @@ export interface ReviewMetadata {
   provider: string;
   model: string;
   durationMs: number;
+  executionMode?: 'static-analysis' | 'project-code-executed';
+  operationalFailure?: boolean;
+  scannerCoverage?: {
+    status: 'complete' | 'partial' | 'failed';
+    scanners: Array<{
+      name: string;
+      status: 'succeeded' | 'failed' | 'skipped';
+      required: boolean;
+      detail?: string;
+    }>;
+    errors: Array<{scanner: string; code: string; message: string}>;
+  };
 }
 
 export class Reporter {
@@ -48,7 +61,28 @@ export class Reporter {
     markdown += `- **Timestamp:** ${new Date(metadata.timestamp).toLocaleString()}\n`;
     markdown += `- **AI Provider:** ${metadata.provider}\n`;
     markdown += `- **Model:** ${metadata.model}\n`;
+    if (metadata.executionMode) {
+      markdown += `- **Execution mode:** ${metadata.executionMode}\n`;
+    }
+    if (metadata.scannerCoverage) {
+      markdown += `- **Scanner coverage:** ${metadata.scannerCoverage.status}\n`;
+      markdown += `- **Operational status:** ${metadata.operationalFailure ? 'failed' : 'satisfied'}\n`;
+    }
     markdown += `- **Duration:** ${(metadata.durationMs / 1000).toFixed(2)}s\n\n`;
+
+    if (metadata.scannerCoverage) {
+      markdown += '## Scanner Coverage\n\n';
+      for (const scanner of metadata.scannerCoverage.scanners) {
+        const required = scanner.required ? 'required' : 'optional';
+        markdown += `- **${scanner.name}:** ${scanner.status} (${required})`;
+        if (scanner.detail) {markdown += ` - ${scanner.detail}`;}
+        markdown += '\n';
+      }
+      for (const error of metadata.scannerCoverage.errors) {
+        markdown += `- **${error.scanner} error (${error.code}):** ${error.message}\n`;
+      }
+      markdown += '\n';
+    }
 
     // LOC Stats
     markdown += '## Code Statistics\n\n';
@@ -112,7 +146,7 @@ export class Reporter {
   /**
    * Generate HTML report from markdown with charts
    */
-  async generateHTML(result: ReviewResult, outputDir?: string): Promise<string> {
+  async generateHTML(result: ReviewResult, outputDir?: string, untrustedRoot?: string): Promise<string> {
     const markdown = this.generateMarkdown(result);
     const htmlContent = await marked(markdown);
 
@@ -120,9 +154,25 @@ export class Reporter {
     const reportsDir = outputDir || path.join(process.cwd(), '.guardscan', 'reports');
     const imagesDir = path.join(reportsDir, 'images');
 
-    if (!fs.existsSync(imagesDir)) {
+    if (!untrustedRoot && !fs.existsSync(imagesDir)) {
       fs.mkdirSync(imagesDir, { recursive: true });
     }
+
+    // Validate before chart generation's optional-dependency fallback so unsafe
+    // output directories cannot be silently accepted or written through.
+    const severityChartPath = path.join(imagesDir, 'severity-distribution.png');
+    const categoryChartPath = path.join(imagesDir, 'category-distribution.png');
+    if (untrustedRoot && result.findings.length > 0) {
+      prepareAtomicOutputTarget(severityChartPath, untrustedRoot);
+      prepareAtomicOutputTarget(categoryChartPath, untrustedRoot);
+    }
+    const writeChart = (file: string, content: Buffer): void => {
+      if (untrustedRoot) {
+        atomicReplaceBuffer(prepareAtomicOutputTarget(file, untrustedRoot), content, {privateParent: false});
+      } else {
+        fs.writeFileSync(file, content);
+      }
+    };
 
     // Generate charts
     const chartImages: { [key: string]: string } = {};
@@ -133,19 +183,22 @@ export class Reporter {
 
       // Only generate chart if there are findings
       if (result.findings.length > 0) {
+        // chartjs-node-canvas has a native binding. Keep it off the CLI startup
+        // path so help/version/static reports work even when optional native
+        // chart support is unavailable or install scripts are disabled.
+        const { chartGenerator } = await import('./chart-generator');
         const severityChart = await chartGenerator.generateSeverityChart(severitySummary);
-        const severityChartPath = path.join(imagesDir, 'severity-distribution.png');
-        fs.writeFileSync(severityChartPath, severityChart);
+        writeChart(severityChartPath, severityChart);
         chartImages.severity = 'images/severity-distribution.png';
       }
 
       // Generate category distribution chart if there are findings
       if (result.findings.length > 0) {
+        const { chartGenerator } = await import('./chart-generator');
         const categoryData = this.calculateCategoryDistribution(result.findings);
         if (Object.keys(categoryData).length > 0) {
           const categoryChart = await chartGenerator.generateCategoryChart(categoryData);
-          const categoryChartPath = path.join(imagesDir, 'category-distribution.png');
-          fs.writeFileSync(categoryChartPath, categoryChart);
+          writeChart(categoryChartPath, categoryChart);
           chartImages.category = 'images/category-distribution.png';
         }
       }
@@ -230,26 +283,20 @@ export class Reporter {
       height: auto;
       border-radius: 4px;
     }
-    .upgrade-notice {
-      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-      color: white;
+    .configuration-notice {
+      background: #f8fafc;
+      color: #1f2937;
       padding: 20px 30px;
+      border: 1px solid #dbe3ef;
       border-radius: 8px;
       margin-top: 40px;
-      text-align: center;
     }
-    .upgrade-notice h3 {
+    .configuration-notice h3 {
       margin-top: 0;
-      color: white;
+      color: #1f2937;
     }
-    .upgrade-notice p {
+    .configuration-notice p {
       margin: 10px 0;
-      opacity: 0.95;
-    }
-    .upgrade-notice a {
-      color: #ffd700;
-      text-decoration: none;
-      font-weight: bold;
     }
   </style>
 </head>
@@ -258,16 +305,9 @@ export class Reporter {
     ${htmlContent}
     ${visualsSection}
     ${result.metadata.provider === 'static-analysis' ? `
-    <div class="upgrade-notice">
-      <h3>💡 Want More Insights?</h3>
-      <p>Upgrade to Pro for:</p>
-      <ul style="list-style: none; padding: 0;">
-        <li>🤖 AI-powered code analysis</li>
-        <li>🎯 Context-aware understanding</li>
-        <li>📋 PRD alignment checking</li>
-        <li>📊 Interactive dashboards</li>
-      </ul>
-      <p style="margin-top: 15px;">Configure with <code style="background: rgba(255,255,255,0.2); padding: 4px 8px; border-radius: 4px;">guardscan config</code></p>
+    <div class="configuration-notice">
+      <h3>AI Review Not Configured</h3>
+      <p>This report was generated with local static analysis only. Configure a BYOK cloud provider or a local model with <code>guardscan config</code> to add AI-assisted review.</p>
     </div>
     ` : ''}
   </div>
@@ -281,27 +321,33 @@ export class Reporter {
   /**
    * Save report to file
    */
-  saveReport(
+  async saveReport(
     result: ReviewResult,
     format: 'markdown' | 'html' = 'markdown',
     outputPath?: string,
-    reportType?: string
-  ): string {
+    reportType?: string,
+    untrustedRoot?: string
+  ): Promise<string> {
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
 
     // Generate command-specific filename
     const reportPrefix = this.getReportPrefix(reportType);
     const defaultFilename = `${reportPrefix}-${timestamp}.${format === 'markdown' ? 'md' : 'html'}`;
     const filepath = outputPath || path.join(process.cwd(), defaultFilename);
+    const target = untrustedRoot ? prepareAtomicOutputTarget(filepath, untrustedRoot) : filepath;
 
     let content: string;
     if (format === 'markdown') {
       content = this.generateMarkdown(result);
     } else {
-      content = this.generateHTML(result) as any; // Will be resolved
+      content = await this.generateHTML(result, path.dirname(target), untrustedRoot);
     }
 
-    fs.writeFileSync(filepath, content, 'utf-8');
+    if (untrustedRoot) {
+      atomicReplaceText(target, content, {privateParent: false});
+    } else {
+      fs.writeFileSync(filepath, content, 'utf-8');
+    }
     return filepath;
   }
 

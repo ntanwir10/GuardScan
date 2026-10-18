@@ -7,9 +7,14 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
+import {glob} from 'tinyglobby';
 import { CodebaseIndexer, CodebaseIndex } from './codebase-indexer';
 import { ParsedFunction, ParsedClass } from './ast-parser';
 import { CodeChunk, EmbeddingMetadata, hashContent } from './embeddings';
+import { readTextFileBounded } from '../utils/private-state';
+
+const MAX_DOCUMENTATION_BYTES = 2 * 1024 * 1024;
+const MAX_DOCUMENTATION_CHUNK_CHARS = 2_000;
 
 export interface ChunkingOptions {
   maxFunctionSize?: number;      // Max chars for function chunks (default: 2000)
@@ -255,32 +260,43 @@ export class EmbeddingChunker {
       'docs/**/*.md',
     ];
 
-    for (const pattern of docPatterns) {
+    const docPaths = [...new Set(await glob(docPatterns, {
+      cwd: this.repoRoot,
+      onlyFiles: true,
+      followSymbolicLinks: false,
+      expandDirectories: false,
+    }))];
+    const realRepoRoot = await fs.promises.realpath(this.repoRoot);
+
+    for (const docPath of docPaths) {
       try {
-        const docPath = path.join(this.repoRoot, pattern);
+        const candidatePath = path.resolve(this.repoRoot, docPath);
+        if ((await fs.promises.lstat(candidatePath)).isSymbolicLink()) {continue;}
+        const fullPath = await fs.promises.realpath(candidatePath);
+        if (!isWithinRoot(realRepoRoot, fullPath)) {continue;}
 
-        if (fs.existsSync(docPath) && fs.statSync(docPath).isFile()) {
-          const content = await fs.promises.readFile(docPath, 'utf-8');
-          const formattedContent = this.formatDocumentationForEmbedding(
-            pattern,
-            content
-          );
-
-          chunks.push({
-            type: 'documentation',
-            content: formattedContent,
-            metadata: {
-              language: 'markdown',
-              dependencies: [],
-              exports: [],
-              tags: ['documentation', this.inferDocType(pattern)],
-              lastModified: await this.getFileModificationTime(pattern),
-            },
-            source: pattern,
-          });
+        if ((await fs.promises.stat(fullPath)).isFile()) {
+          const content = readTextFileBounded(fullPath, MAX_DOCUMENTATION_BYTES);
+          // Bound both provider inputs and per-file memory. Include context in
+          // the chunk budget, and never split a UTF-16 surrogate pair.
+          const header = this.formatDocumentationForEmbedding(docPath, '')
+            .slice(0, MAX_DOCUMENTATION_CHUNK_CHARS / 2);
+          const payloadLimit = MAX_DOCUMENTATION_CHUNK_CHARS - header.length;
+          const lastModified = await this.getFileModificationTime(fullPath);
+          for (let start = 0; start < content.length;) {
+            let end = Math.min(content.length, start + payloadLimit);
+            if (end < content.length && /[\uD800-\uDBFF]/.test(content[end - 1])) {end--;}
+            chunks.push({
+              type: 'documentation', content: header + content.slice(start, end),
+              metadata: {language: 'markdown', dependencies: [], exports: [],
+                tags: ['documentation', this.inferDocType(docPath)], lastModified},
+              source: docPath,
+            });
+            start = end;
+          }
         }
       } catch (error) {
-        // Skip docs that can't be read
+        console.warn(`Skipping documentation ${docPath}: unable to safely read bounded input.`);
         continue;
       }
     }
@@ -511,7 +527,7 @@ export class EmbeddingChunker {
    */
   private async getFileModificationTime(filePath: string): Promise<Date> {
     try {
-      const fullPath = path.join(this.repoRoot, filePath);
+      const fullPath = path.isAbsolute(filePath) ? filePath : path.join(this.repoRoot, filePath);
       const stats = await fs.promises.stat(fullPath);
       return stats.mtime;
     } catch (error) {
@@ -532,4 +548,9 @@ export class EmbeddingChunker {
       minComplexity: options.minComplexity || 0,
     };
   }
+}
+
+function isWithinRoot(root: string, candidate: string): boolean {
+  const relative = path.relative(root, candidate);
+  return relative === '' || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative));
 }

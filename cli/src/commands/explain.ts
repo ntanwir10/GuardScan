@@ -38,7 +38,7 @@ export async function explainCommand(target: string, options: ExplainOptions): P
     console.log(chalk.blue(`🤖 Explaining: ${target}...`));
 
     // Check if AI provider is configured
-    if (!config.provider || config.provider === 'none' || !config.apiKey) {
+    if (!ProviderFactory.isConfigured(config)) {
       console.log(chalk.yellow('\n⚠ AI provider not configured. Run `guardscan config` to set up.'));
       return;
     }
@@ -59,7 +59,7 @@ export async function explainCommand(target: string, options: ExplainOptions): P
     const provider = ProviderFactory.createForCli(config, { task: 'explanation' });
 
     // Create AI cache
-    const cache = new AICache(repoInfo.repoId, 100); // 100MB cache
+    const cache = new AICache(repoInfo.repoId, config.cache || 100);
 
     // Create indexer
     const indexer = new CodebaseIndexer(repoRoot, repoInfo.repoId);

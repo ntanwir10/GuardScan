@@ -1,14 +1,12 @@
 /**
  * observable-provider.ts - Observability Decorator
  *
- * Records spans locally via MetricsCollector. When telemetry is enabled,
- * span-derived metrics flush to the GuardScan-Monitoring Worker (POST /api/monitoring).
+ * Records spans locally via MetricsCollector. Spans are not sent remotely.
  */
 
 import { AIProviderDecorator } from './base-decorator';
 import { AIProvider, AIMessage, AIResponse, ChatOptions } from '../base';
 import { MetricsCollector, AISpan } from '../../core/metrics-collector';
-import * as crypto from 'crypto';
 
 export interface ObservabilityConfig {
   enabled: boolean;
@@ -73,21 +71,20 @@ export class ObservableProvider extends AIProviderDecorator {
       span.cacheHit = response.model?.includes('cached') || false;
       span.model = response.model || span.model;
 
-      await this.metrics.recordSpan(span);
+      await this.recordSpan(span);
 
       if (this.config.logSpans) {
         this.logSpan(span);
       }
 
       return response;
-    } catch (error: any) {
+    } catch (error: unknown) {
       span.endTime = Date.now();
       span.latency = span.endTime - span.startTime;
       span.success = false;
-      span.error = error.message || String(error);
       span.errorType = this.categorizeError(error);
 
-      await this.metrics.recordSpan(span);
+      await this.recordSpan(span);
 
       if (this.config.logSpans) {
         this.logSpan(span);
@@ -121,11 +118,8 @@ export class ObservableProvider extends AIProviderDecorator {
       success: false,
     };
 
-    let chunksReceived = 0;
-
     try {
       for await (const chunk of this.wrapped.stream(messages, options)) {
-        chunksReceived++;
         yield chunk;
       }
 
@@ -141,19 +135,18 @@ export class ObservableProvider extends AIProviderDecorator {
         total: estimatedPromptTokens,
       };
 
-      await this.metrics.recordSpan(span);
+      await this.recordSpan(span);
 
       if (this.config.logSpans) {
         this.logSpan(span);
       }
-    } catch (error: any) {
+    } catch (error: unknown) {
       span.endTime = Date.now();
       span.latency = span.endTime - span.startTime;
       span.success = false;
-      span.error = error.message || String(error);
       span.errorType = this.categorizeError(error);
 
-      await this.metrics.recordSpan(span);
+      await this.recordSpan(span);
 
       if (this.config.logSpans) {
         this.logSpan(span);
@@ -197,21 +190,20 @@ export class ObservableProvider extends AIProviderDecorator {
         total: estimatedTokens,
       };
 
-      await this.metrics.recordSpan(span);
+      await this.recordSpan(span);
 
       if (this.config.logSpans) {
         this.logSpan(span);
       }
 
       return result;
-    } catch (error: any) {
+    } catch (error: unknown) {
       span.endTime = Date.now();
       span.latency = span.endTime - span.startTime;
       span.success = false;
-      span.error = error.message || String(error);
       span.errorType = this.categorizeError(error);
 
-      await this.metrics.recordSpan(span);
+      await this.recordSpan(span);
 
       if (this.config.logSpans) {
         this.logSpan(span);
@@ -261,21 +253,20 @@ export class ObservableProvider extends AIProviderDecorator {
         total: estimatedTokens,
       };
 
-      await this.metrics.recordSpan(span);
+      await this.recordSpan(span);
 
       if (this.config.logSpans) {
         this.logSpan(span);
       }
 
       return result;
-    } catch (error: any) {
+    } catch (error: unknown) {
       span.endTime = Date.now();
       span.latency = span.endTime - span.startTime;
       span.success = false;
-      span.error = error.message || String(error);
       span.errorType = this.categorizeError(error);
 
-      await this.metrics.recordSpan(span);
+      await this.recordSpan(span);
 
       if (this.config.logSpans) {
         this.logSpan(span);
@@ -288,6 +279,19 @@ export class ObservableProvider extends AIProviderDecorator {
   /**
    * Calculate actual cost from response
    */
+  private async recordSpan(span: AISpan): Promise<void> {
+    try {
+      await this.metrics.recordSpan(span);
+    } catch (error: unknown) {
+      if (process.env.GUARDSCAN_DEBUG === 'true') {
+        console.warn(
+          'Unable to persist local observability metrics; continuing without this span:',
+          error instanceof Error ? error.message : String(error)
+        );
+      }
+    }
+  }
+
   private calculateCost(
     messages: AIMessage[],
     response: AIResponse,
@@ -308,10 +312,15 @@ export class ObservableProvider extends AIProviderDecorator {
   /**
    * Categorize error type
    */
-  private categorizeError(error: any): string {
-    const status = error.status || error.statusCode;
-    const message = (error.message || '').toLowerCase();
-    const code = (error.code || '').toLowerCase();
+  private categorizeError(error: unknown): string {
+    const details = error && typeof error === 'object'
+      ? error as Record<string, unknown>
+      : {};
+    const status = typeof details.status === 'number'
+      ? details.status
+      : typeof details.statusCode === 'number' ? details.statusCode : undefined;
+    const message = typeof details.message === 'string' ? details.message.toLowerCase() : '';
+    const code = typeof details.code === 'string' ? details.code.toLowerCase() : '';
 
     // Rate limiting
     if (status === 429 || message.includes('rate limit') || message.includes('too many requests')) {
@@ -324,7 +333,7 @@ export class ObservableProvider extends AIProviderDecorator {
     }
 
     // Server errors
-    if (status >= 500 || message.includes('server error')) {
+    if ((status !== undefined && status >= 500) || message.includes('server error')) {
       return 'server_error';
     }
 
@@ -359,7 +368,7 @@ export class ObservableProvider extends AIProviderDecorator {
       `${span.latency}ms | ` +
       (span.tokens ? `${span.tokens.total} tokens | ` : '') +
       (span.cost ? `$${span.cost.toFixed(6)} | ` : '') +
-      (span.error ? `Error: ${span.errorType}` : 'Success')
+      (span.success ? 'Success' : `Error: ${span.errorType || 'unknown_error'}`)
     );
   }
 

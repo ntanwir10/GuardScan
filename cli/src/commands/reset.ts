@@ -30,7 +30,7 @@ export async function resetCommand(options: ResetOptions): Promise<void> {
             type: "confirm",
             name: "confirm",
             message: chalk.yellow(
-              "This will delete ALL configuration including your client_id. Continue?"
+              "This will delete ALL local configuration and state. Continue?"
             ),
             default: false,
           },

@@ -13,6 +13,9 @@ import {
   jest,
 } from '@jest/globals';
 import type { Command } from 'commander';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 
 // Mock external dependencies before importing the module under test
 jest.mock('../../src/core/config', () => ({
@@ -22,6 +25,7 @@ jest.mock('../../src/core/config', () => ({
     load: jest.fn(),
     exists: jest.fn().mockReturnValue(true),
     init: jest.fn(),
+    getCacheDir: jest.fn().mockReturnValue('/tmp/guardscan-cache-command-test'),
   },
 }));
 
@@ -46,6 +50,7 @@ jest.mock('../../src/core/ai-cache', () => ({
     getStats: jest.fn().mockReturnValue(mockCacheStats),
     getSizeMB: jest.fn().mockReturnValue(5.0),
     getUtilization: jest.fn().mockReturnValue(5.0),
+    isEnabled: jest.fn().mockReturnValue(true),
     clear: mockClear,
   })),
 }));
@@ -69,12 +74,15 @@ const getConsoleOutput = (consoleSpy: ReturnType<typeof jest.spyOn>): string =>
 describe('createCacheCommand', () => {
   let consoleLogSpy: ReturnType<typeof jest.spyOn>;
   let consoleErrorSpy: ReturnType<typeof jest.spyOn>;
+  let testCacheDir: string;
   const mockedConfigManager = configManager as jest.Mocked<typeof configManager>;
 
   beforeEach(() => {
     consoleLogSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
     consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
     mockClear.mockClear();
+    testCacheDir = fs.mkdtempSync(path.join(os.tmpdir(), 'guardscan-cache-command-'));
+    mockedConfigManager.getCacheDir.mockReturnValue(testCacheDir);
 
     mockedConfigManager.loadOrInit.mockReturnValue({
       clientId: 'test-client',
@@ -96,6 +104,7 @@ describe('createCacheCommand', () => {
     consoleLogSpy.mockRestore();
     consoleErrorSpy.mockRestore();
     jest.clearAllMocks();
+    fs.rmSync(testCacheDir, { recursive: true, force: true });
   });
 
   describe('command structure', () => {
@@ -124,7 +133,7 @@ describe('createCacheCommand', () => {
 
     it('should have correct description', () => {
       const cmd = createCacheCommand();
-      expect(cmd.description()).toBe('Manage AI response cache');
+      expect(cmd.description()).toContain('advisory caches');
     });
   });
 
@@ -190,6 +199,7 @@ describe('createCacheCommand', () => {
         }),
         getSizeMB: jest.fn().mockReturnValue(0),
         getUtilization: jest.fn().mockReturnValue(0),
+        isEnabled: jest.fn().mockReturnValue(true),
         clear: mockClear,
       }));
 
@@ -328,12 +338,16 @@ describe('createCacheCommand', () => {
     });
 
     it('should clear cache with --force flag', async () => {
+      const repositoryCache = path.join(testCacheDir, 'test-repo-id');
+      fs.mkdirSync(repositoryCache, { recursive: true });
+      fs.writeFileSync(path.join(repositoryCache, 'entry.json'), '{}');
       const cmd = createCacheCommand();
       const clearCmd = getSubcommand(cmd, 'clear');
 
       await clearCmd.parseAsync(['--force'], { from: 'user' });
 
-      expect(mockClear).toHaveBeenCalledTimes(1);
+      expect(fs.existsSync(repositoryCache)).toBe(false);
+      expect(consoleErrorSpy).not.toHaveBeenCalled();
     });
 
     it('should show success message after clearing with --force', async () => {
@@ -375,6 +389,7 @@ describe('createCacheCommand', () => {
         }),
         getSizeMB: jest.fn().mockReturnValue(0),
         getUtilization: jest.fn().mockReturnValue(0),
+        isEnabled: jest.fn().mockReturnValue(true),
         clear: mockClear,
       }));
 
@@ -396,6 +411,7 @@ describe('createCacheCommand', () => {
         }),
         getSizeMB: jest.fn().mockReturnValue(90),
         getUtilization: jest.fn().mockReturnValue(90),
+        isEnabled: jest.fn().mockReturnValue(true),
         clear: mockClear,
       }));
 

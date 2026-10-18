@@ -9,7 +9,7 @@ import chalk from "chalk";
 import * as readline from "readline";
 import * as fs from "fs/promises";
 import * as path from "path";
-import { configManager } from "../core/config";
+import { AIProvider as AIProviderType, configManager } from "../core/config";
 import { repositoryManager } from "../core/repository";
 import { ProviderFactory } from "../providers/factory";
 import { createDebugLogger } from "../utils/debug-logger";
@@ -26,8 +26,6 @@ import { RAGContextBuilder } from "../core/rag-context";
 import { ChatbotEngine } from "../core/chatbot-engine";
 import { EmbeddingIndexer } from "../core/embedding-indexer";
 import { EmbeddingProviderFactory } from "../providers/embedding-factory";
-import { OpenAIEmbeddingProvider } from "../providers/embedding-openai";
-import { GeminiEmbeddingProvider } from "../providers/embedding-gemini";
 import { OllamaEmbeddingProvider } from "../providers/embedding-ollama";
 import { LMStudioEmbeddingProvider } from "../providers/embedding-lmstudio";
 import { ClaudeEmbeddingProvider } from "../providers/embedding-claude";
@@ -62,7 +60,7 @@ export async function chatCommand(options: ChatCommandOptions): Promise<void> {
     );
 
     // Check if AI provider is configured
-    if (!config.provider || config.provider === "none" || !config.apiKey) {
+    if (!ProviderFactory.isConfigured(config)) {
       handleCommandError(
         new Error(
           "AI provider not configured. Run `guardscan config` to set up your AI provider."
@@ -83,100 +81,42 @@ export async function chatCommand(options: ChatCommandOptions): Promise<void> {
     });
 
     // Initialize embedding provider
-    let embeddingProvider;
-    let embeddingResult;
-
-    if (options.embeddingProvider) {
-      // Manual override - create provider directly
-      const providerType = options.embeddingProvider.toLowerCase();
-      switch (providerType) {
-        case "openai":
-          if (!config.apiKey) {
-            handleCommandError(
-              new Error("OpenAI API key required for OpenAI embeddings"),
-              "Chat"
-            );
-          }
-          embeddingProvider = new OpenAIEmbeddingProvider(
-            config.apiKey || "",
-            config.apiEndpoint
-          );
-          embeddingResult = {
-            provider: embeddingProvider,
-            isFallback: false,
-            dimensions: 1536,
-          };
-          break;
-        case "gemini":
-          if (!config.apiKey) {
-            handleCommandError(
-              new Error("Google API key required for Gemini embeddings"),
-              "Chat"
-            );
-          }
-          embeddingProvider = new GeminiEmbeddingProvider(config.apiKey || "");
-          embeddingResult = {
-            provider: embeddingProvider,
-            isFallback: false,
-            dimensions: 768,
-          };
-          break;
-        case "ollama":
-          embeddingProvider = new OllamaEmbeddingProvider(config.apiEndpoint);
-          embeddingResult = {
-            provider: embeddingProvider,
-            isFallback: false,
-            dimensions: 768,
-          };
-          break;
-        case "lmstudio":
-          embeddingProvider = new LMStudioEmbeddingProvider(config.apiEndpoint);
-          embeddingResult = {
-            provider: embeddingProvider,
-            isFallback: false,
-            dimensions: 768,
-          };
-          break;
-        case "claude":
-          // Claude requires fallback - default to Ollama
-          const claudeFallback = config.embeddingFallback || "ollama";
-          embeddingProvider = new ClaudeEmbeddingProvider(
-            claudeFallback as "ollama" | "lmstudio",
-            config.apiEndpoint
-          );
-          embeddingResult = {
-            provider: embeddingProvider,
-            isFallback: true,
-            fallbackReason: `Claude does not support embeddings natively. Using ${claudeFallback} for embeddings.`,
-            dimensions: 768,
-            fallbackProvider: claudeFallback as "ollama" | "lmstudio",
-          };
-          break;
-        default:
-          handleCommandError(
-            new Error(
-              `Unknown embedding provider: ${providerType}. Use: openai, gemini, ollama, claude, or lmstudio`
-            ),
-            "Chat"
-          );
-      }
-    } else {
-      // Auto-select based on config
-      try {
-        embeddingResult = EmbeddingProviderFactory.create(
-          config.provider,
-          config.apiKey,
-          config.apiEndpoint,
-          config.embeddingFallback
-        );
-        embeddingProvider = embeddingResult.provider;
-      } catch (error: any) {
-        handleCommandError(
-          new Error(`Failed to create embedding provider: ${error.message}`),
-          "Chat"
-        );
-      }
+    const requestedEmbeddingProvider = options.embeddingProvider?.toLowerCase();
+    const supportedEmbeddingProviders: Array<Exclude<AIProviderType, "none">> = [
+      "openai",
+      "gemini",
+      "ollama",
+      "lmstudio",
+      "claude",
+      "openrouter",
+    ];
+    if (
+      requestedEmbeddingProvider &&
+      !supportedEmbeddingProviders.includes(
+        requestedEmbeddingProvider as Exclude<AIProviderType, "none">
+      )
+    ) {
+      handleCommandError(
+        new Error(
+          `Unknown embedding provider: ${requestedEmbeddingProvider}. Use: ${supportedEmbeddingProviders.join(", ")}`
+        ),
+        "Chat"
+      );
     }
+
+    let embeddingResult;
+    try {
+      embeddingResult = EmbeddingProviderFactory.createForCli(config, {
+        provider: requestedEmbeddingProvider as Exclude<AIProviderType, "none"> | undefined,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      handleCommandError(
+        new Error(`Failed to create embedding provider: ${message}`),
+        "Chat"
+      );
+    }
+    const embeddingProvider = embeddingResult.provider;
 
     // Show which provider is being used
     if (embeddingResult.isFallback && embeddingResult.fallbackReason) {
