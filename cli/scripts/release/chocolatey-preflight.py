@@ -5,6 +5,7 @@ import io
 import json
 import pathlib
 import re
+import sys
 import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
@@ -106,4 +107,11 @@ if __name__ == '__main__':
     parser.add_argument('--package', required=True)
     parser.add_argument('--version', required=True)
     args = parser.parse_args()
-    print(json.dumps(preflight(args.package, args.version)))
+    try:
+        print(json.dumps(preflight(args.package, args.version)))
+    except (urllib.error.URLError, TimeoutError) as error:
+        if isinstance(error, urllib.error.HTTPError) and error.code not in (429, 500, 502, 503, 504):
+            raise
+        # Pre-push remains fail-closed; only post-push polling may retry this code.
+        print('Chocolatey registry is temporarily unavailable', file=sys.stderr)
+        sys.exit(75)

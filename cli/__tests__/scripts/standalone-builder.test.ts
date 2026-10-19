@@ -62,7 +62,7 @@ describe('standalone executable builder contract', () => {
 
   it('keeps the real CLI bundle inside the unchanged optional-external allowlist', async () => {
     const result = await build({...bundleOptions(
-      path.resolve(__dirname, '../../dist/index.js'), path.join(os.tmpdir(), 'guardscan-sea-regression.cjs')
+      path.resolve(__dirname, '../../src/index.ts'), path.join(os.tmpdir(), 'guardscan-sea-regression.cjs')
     ), write: false});
     expect(() => assertExternalAllowlist(result.metafile!)).not.toThrow();
     const components = bundledComponents(result.metafile!, require('../../package-lock.json'));

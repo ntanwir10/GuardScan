@@ -6,7 +6,9 @@ import yaml from 'js-yaml';
 describe('Chocolatey publication idempotency', () => {
   it('compares complete package payloads and exact identity without timestamp/GUID churn', () => {
     const result = spawnSync(process.platform === 'win32' ? 'python' : 'python3', ['-c', [
-      'import importlib.util, io, pathlib, sys, tempfile, urllib.error, zipfile',
+      'import contextlib, importlib.util, io, pathlib, runpy, sys, tempfile, urllib.error, zipfile',
+      'from unittest.mock import patch',
+      'helper = sys.argv[1]',
       'spec = importlib.util.spec_from_file_location("preflight", sys.argv[1])',
       'module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)',
       'def package(content="verified installer", version="1.2.3", extra=False, identity="guardscan", guid="a" * 32):',
@@ -30,6 +32,11 @@ describe('Chocolatey publication idempotency', () => {
       '    try: module.preflight(local, "1.2.3", failure)',
       '    except urllib.error.HTTPError: pass',
       '    else: raise AssertionError("server failure became a publication request")',
+      '    with patch("urllib.request.urlopen", side_effect=urllib.error.HTTPError("https://community.chocolatey.org", 503, "temporary", {}, None)), contextlib.redirect_stderr(io.StringIO()):',
+      '        sys.argv = [helper, "--package", str(local), "--version", "1.2.3"]',
+      '        try: runpy.run_path(helper, run_name="__main__")',
+      '        except SystemExit as error: assert error.code == 75',
+      '        else: raise AssertionError("temporary failure has no retry exit code")',
       'print("Chocolatey identity, payload-set, duplicate, and server-error regressions passed")',
     ].join('\n'), path.resolve(__dirname, '../../scripts/release/chocolatey-preflight.py')], {
       encoding: 'utf8', timeout: 10000,
@@ -46,5 +53,6 @@ describe('Chocolatey publication idempotency', () => {
     expect(submit.run.indexOf('Get-PublicationState')).toBeLessThan(submit.run.indexOf('choco push'));
     expect(submit.run).toContain('publishRequired');
     expect(submit.run).toContain('Chocolatey package did not converge');
+    expect(submit.run).toContain('catch [System.IO.IOException]');
   });
 });

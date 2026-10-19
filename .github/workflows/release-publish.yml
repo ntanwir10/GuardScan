@@ -667,7 +667,9 @@ jobs:
           if ($null -eq $package) { throw 'Chocolatey package is missing' }
           function Get-PublicationState {
             $state = & python cli/scripts/release/chocolatey-preflight.py --package $package.FullName --version $env:RELEASE_VERSION
-            if ($LASTEXITCODE -ne 0) { throw 'Chocolatey remote integrity preflight failed' }
+            $preflightStatus = $LASTEXITCODE
+            if ($preflightStatus -eq 75) { throw [System.IO.IOException]::new('Chocolatey registry temporarily unavailable') }
+            if ($preflightStatus -ne 0) { throw 'Chocolatey remote integrity preflight failed' }
             return ($state | ConvertFrom-Json)
           }
           $state = Get-PublicationState
@@ -678,8 +680,12 @@ jobs:
           choco push $package.FullName --source https://push.chocolatey.org/ --api-key $env:CHOCO_API_KEY
           $pushStatus = $LASTEXITCODE
           for ($attempt = 0; $attempt -lt 6; $attempt++) {
-            $state = Get-PublicationState
-            if (-not $state.publishRequired) { exit 0 }
+            try {
+              $state = Get-PublicationState
+              if (-not $state.publishRequired) { exit 0 }
+            } catch [System.IO.IOException] {
+              Write-Warning 'Chocolatey registry temporarily unavailable; retrying verification.'
+            }
             if ($attempt -lt 5) { Start-Sleep -Seconds 10 }
           }
           throw "Chocolatey package did not converge to matching remote payloads (push exit $pushStatus)"
