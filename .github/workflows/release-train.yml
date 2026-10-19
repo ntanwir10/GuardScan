@@ -293,6 +293,11 @@ jobs:
           STABLE_VERSION="$(node -p 'require("./promotion-decision.json").stable.version')"
           STATE="$(gh pr view "$RELEASE_PR" --repo "${GITHUB_REPOSITORY}" --json state --jq .state)"
           if [ "$STATE" = OPEN ]; then
+            git fetch origin main
+            if ! git merge-base --is-ancestor FETCH_HEAD "$SOURCE_HEAD"; then
+              echo 'Release PR head does not contain current main; refresh the candidate and repeat its soak.' >&2
+              exit 1
+            fi
             gh pr merge "$RELEASE_PR" \
               --repo "${GITHUB_REPOSITORY}" \
               --auto --squash --match-head-commit "${{ steps.source.outputs.head_sha }}"

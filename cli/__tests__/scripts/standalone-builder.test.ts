@@ -1,4 +1,8 @@
 import path from 'path';
+import fs from 'fs';
+import os from 'os';
+import vm from 'vm';
+import {build} from 'esbuild';
 
 const {
   OPTIONAL_EXTERNALS,
@@ -27,6 +31,45 @@ function metafile(imports: Array<{path: string; external?: boolean}>): Record<st
 }
 
 describe('standalone executable builder contract', () => {
+  it('bundles dependency probes without filesystem package lookups or extra runtime externals', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'guardscan-sea-probes-'));
+    try {
+      const modules: Record<string, string> = {
+        'fdir/dist/index.cjs': 'let pm; try { require.resolve("picomatch"); pm = require("picomatch"); } catch {}\nmodule.exports = value => pm(value);',
+        'fdir/package.json': JSON.stringify({name: 'fdir', main: 'dist/index.cjs'}),
+        'picomatch/index.js': 'module.exports = value => value === "matched";',
+        'typescript/lib/typescript.js': 'let missing = false; try { require("source-map-support").install(); } catch { missing = true; } module.exports = missing;',
+        'typescript/package.json': JSON.stringify({name: 'typescript', main: 'lib/typescript.js'}),
+      };
+      for (const [file, contents] of Object.entries(modules)) {
+        const target = path.join(root, 'node_modules', file);
+        fs.mkdirSync(path.dirname(target), {recursive: true});
+        fs.writeFileSync(target, contents);
+      }
+      const entry = path.join(root, 'index.js');
+      fs.writeFileSync(entry, 'module.exports = {matched: require("fdir")("matched"), sourceMapsUnavailable: require("typescript")};');
+      const result = await build({...bundleOptions(entry, path.join(root, 'bundle.cjs')), write: false});
+      expect(assertExternalAllowlist(result.metafile!)).toEqual([]);
+      const module = {exports: {}};
+      vm.runInNewContext(result.outputFiles![0].text, {
+        module, require: (name: string) => { throw new Error('Unbundled dependency: ' + name); },
+      });
+      expect(module.exports).toEqual({matched: true, sourceMapsUnavailable: true});
+    } finally {
+      fs.rmSync(root, {recursive: true, force: true});
+    }
+  });
+
+  it('keeps the real CLI bundle inside the unchanged optional-external allowlist', async () => {
+    const result = await build({...bundleOptions(
+      path.resolve(__dirname, '../../dist/index.js'), path.join(os.tmpdir(), 'guardscan-sea-regression.cjs')
+    ), write: false});
+    expect(() => assertExternalAllowlist(result.metafile!)).not.toThrow();
+    const components = bundledComponents(result.metafile!, require('../../package-lock.json'));
+    expect(components.some(component => component.name === 'picomatch')).toBe(true);
+    expect(components.some(component => component.name === 'typescript')).toBe(true);
+  });
+
   it('creates a single CommonJS Node 22 bundle and externalizes only optional native capabilities', () => {
     const options = bundleOptions('/source/dist/index.js', '/output/guardscan.bundle.cjs');
     expect(options).toMatchObject({

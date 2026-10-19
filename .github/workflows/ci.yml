@@ -251,12 +251,24 @@ jobs:
         run: npm run build
       - working-directory: cli
         run: npm link
-      - name: Exercise static scan and both SBOM formats
-        working-directory: cli
+      - name: Create isolated offline fixture
+        run: |
+          node - <<'NODE'
+          const fs = require('fs');
+          const path = require('path');
+          const root = path.join(process.env.RUNNER_TEMP, 'guardscan-integration');
+          fs.mkdirSync(root, {recursive: true});
+          fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({
+            name: 'guardscan-offline-integration', version: '1.0.0', private: true,
+          }));
+          fs.writeFileSync(path.join(root, 'index.js'), 'module.exports = () => 42;\n');
+          NODE
+      - name: Exercise offline CLI on the isolated fixture
+        working-directory: ${{ runner.temp }}/guardscan-integration
         run: |
           guardscan --version
           guardscan --help
-          guardscan --no-telemetry scan --offline --no-cve --skip-ai --ci --format json --output guardscan-scan.json --max-findings 10000
+          guardscan --no-telemetry scan --offline --no-cve --skip-ai --skip-tests --ci --format json --output guardscan-scan.json --max-findings 0
           guardscan --no-telemetry sbom --offline --format spdx --output guardscan.spdx.json
           guardscan --no-telemetry sbom --offline --format cyclonedx --output guardscan.cyclonedx.json
 

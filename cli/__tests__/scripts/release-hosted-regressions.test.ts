@@ -16,6 +16,36 @@ const step = (job: any, name: string): any => {
 };
 
 describe('hosted release review regressions', () => {
+  it('checks the latest main ancestry before enabling stable auto-merge', () => {
+    const run = step(workflow('release-train.yml').jobs.prepare,
+      'Auto-merge unchanged stable release PR and create stable tag').run as string;
+    expect(run).toContain('git merge-base --is-ancestor');
+    expect(run.indexOf('git merge-base --is-ancestor')).toBeLessThan(run.indexOf('gh pr merge'));
+    expect(run).toContain('git fetch origin main');
+    expect(run.indexOf('MERGE_TREE=')).toBeGreaterThan(run.indexOf('gh pr merge'));
+  });
+
+  it('runs offline integration against a clean fixture with policy enforcement intact', () => {
+    const job = workflow('ci.yml').jobs.integration;
+    const fixture = step(job, 'Create isolated offline fixture');
+    const exercise = step(job, 'Exercise offline CLI on the isolated fixture');
+    expect(exercise['working-directory']).toBe('${{ runner.temp }}/guardscan-integration');
+    expect(job.steps.indexOf(fixture)).toBeLessThan(job.steps.indexOf(exercise));
+    expect(exercise.run).toContain('--ci');
+    expect(exercise.run).not.toMatch(/\|\|\s*(true|exit 0)|--fail-on\s+(none|info)/);
+    expect(fixture.run).toContain('guardscan-integration');
+    const script = fixture.run.match(/node - <<'NODE'\n([\s\S]*?)\nNODE/)?.[1];
+    expect(script).toBeTruthy();
+    const files: Record<string, string> = {};
+    vm.runInNewContext(script!, {
+      require: (name: string) => name === 'path' ? path : {
+        mkdirSync: () => {}, writeFileSync: (file: string, value: string) => { files[path.basename(file)] = value; },
+      }, process: {env: {RUNNER_TEMP: '/fixture'}},
+    });
+    expect(JSON.parse(files['package.json']).private).toBe(true);
+    expect(files['index.js']).toContain('42');
+  });
+
   it('validates dispatch versions before credentials and never embeds dispatch input in shell source', () => {
     const train = workflow('release-train.yml');
     for (const key of ['prepare', 'reconcile', 'rollback']) {

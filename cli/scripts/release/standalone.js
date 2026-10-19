@@ -51,6 +51,30 @@ function bundleOptions(entryPoint, outputFile) {
     legalComments: 'eof',
     metafile: true,
     logLevel: 'warning',
+    plugins: [{
+      name: 'guardscan-sea-optional-probes',
+      setup(build) {
+        // These two locked upstream modules probe the filesystem for optional
+        // packages. SEA has no package filesystem: picomatch is actually bundled,
+        // while TypeScript's optional debug source-map helper is not a capability
+        // of this sourcemap:false bundle. Keep the runtime allowlist unchanged.
+        build.onLoad({filter: /[/\\]node_modules[/\\](?:fdir[/\\]dist[/\\]index\.cjs|typescript[/\\]lib[/\\]typescript\.js)$/}, args => {
+          const isFdir = args.path.replace(/\\/g, '/').endsWith('/fdir/dist/index.cjs');
+          const probe = isFdir ? 'require.resolve("picomatch");' : 'require("source-map-support").install();';
+          const contents = fs.readFileSync(args.path, 'utf8');
+          if (contents.split(probe).length !== 2) {
+            throw new Error(`locked standalone compatibility probe changed: ${args.path}`);
+          }
+          return {
+            contents: contents.replace(probe, isFdir
+              ? '/* picomatch is bundled, so no filesystem probe is needed. */'
+              : 'throw new Error("Optional TypeScript debug source maps are unavailable in the standalone bundle");'),
+            loader: 'js',
+            resolveDir: path.dirname(args.path),
+          };
+        });
+      },
+    }],
     external: [
       'chartjs-node-canvas',
       'chartjs-node-canvas/*',
