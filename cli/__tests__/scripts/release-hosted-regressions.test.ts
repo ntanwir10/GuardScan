@@ -60,14 +60,54 @@ describe('hosted release review regressions', () => {
   });
 
   it('installs dependencies and pinned Node before publication ledger imports', () => {
-    const job = workflow('release-train.yml').jobs.record;
-    const node = job.steps.findIndex((item: any) => item.uses?.startsWith('actions/setup-node@'));
-    const install = job.steps.findIndex((item: any) => item.run === 'npm ci' && item['working-directory'] === 'cli');
-    const append = job.steps.indexOf(step(job, 'Fetch ledger, append chained events, and push'));
-    expect(node).toBeGreaterThan(0);
-    expect(job.steps[node].with['node-version']).toBe('${{ env.RELEASE_NODE_VERSION }}');
-    expect(install).toBeGreaterThan(node);
-    expect(append).toBeGreaterThan(install);
+    for (const [file, name] of [
+      ['release-train.yml', 'Fetch ledger, append chained events, and push'],
+      ['release-canary.yml', 'Append hash-chained canary and verification events'],
+    ]) {
+      const job = workflow(file).jobs.record;
+      const node = job.steps.findIndex((item: any) => item.uses?.startsWith('actions/setup-node@'));
+      const install = job.steps.findIndex((item: any) => item.run === 'npm ci' && item['working-directory'] === 'cli');
+      const append = job.steps.indexOf(step(job, name));
+      expect(node).toBeGreaterThan(0);
+      expect(job.steps[node].with['node-version']).toBe('${{ env.RELEASE_NODE_VERSION }}');
+      expect(install).toBeGreaterThan(node);
+      expect(append).toBeGreaterThan(install);
+    }
+  });
+
+  it('refuses to tag an unsoaked merge tree even when the PR head and package version match', () => {
+    const run = step(workflow('release-train.yml').jobs.prepare,
+      'Auto-merge unchanged stable release PR and create stable tag').run as string;
+    const start = run.indexOf('MERGE_TREE=');
+    const end = run.indexOf('test "$(node -p');
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    const check = (headTree: string) => spawnSync('bash', ['-euo', 'pipefail', '-c',
+      'git() { if [ "$2" = "merge^{tree}" ]; then printf "%s" "$MERGED_TREE"; else printf "%s" "$HEAD_TREE"; fi; };\n' + run.slice(start, end),
+    ], {encoding: 'utf8', env: {...process.env, MERGE_SHA: 'merge', SOURCE_HEAD: 'head',
+      MERGED_TREE: 'a'.repeat(40), HEAD_TREE: headTree}});
+    expect(check('a'.repeat(40)).status).toBe(0);
+    expect(check('b'.repeat(40)).status).not.toBe(0);
+  });
+
+  it('treats unchanged canary ledger retries as no-ops while propagating actual Git errors', () => {
+    const run = step(workflow('release-canary.yml').jobs.record,
+      'Append hash-chained canary and verification events').run as string;
+    const start = run.indexOf('if git diff --cached --quiet; then');
+    expect(start).toBeGreaterThanOrEqual(0);
+    const end = run.indexOf('\n)', start);
+    const script = run.slice(start, end);
+    const check = (diff: string, commit = '0') => spawnSync('bash', ['-euo', 'pipefail', '-c',
+      'git() { case "$1" in diff) return "$DIFF_STATUS_FIXTURE" ;; commit) echo commit; return "$COMMIT_STATUS_FIXTURE" ;; push) echo push ;; esac; };\n' + script,
+    ], {encoding: 'utf8', env: {...process.env, DIFF_STATUS_FIXTURE: diff,
+      COMMIT_STATUS_FIXTURE: commit, GITHUB_RUN_ID: '123'}});
+    expect(check('0').status).toBe(0);
+    expect(check('0').stdout).not.toMatch(/commit|push/);
+    expect(check('1').status).toBe(0);
+    expect(check('1').stdout).toContain('commit');
+    expect(check('1', '128').status).toBe(128);
+    expect(check('1', '128').stdout).not.toContain('push');
+    expect(check('128').status).toBe(128);
   });
 
   it('refreshes WinGet PATH and downloads a hash-pinned supported manifest creator', () => {

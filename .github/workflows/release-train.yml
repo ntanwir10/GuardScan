@@ -288,6 +288,7 @@ jobs:
           GH_TOKEN: ${{ steps.app.outputs.token }}
           RELEASE_PR: ${{ inputs.release_pr }}
           SOURCE_MERGE_SHA: ${{ steps.source.outputs.merge_sha }}
+          SOURCE_HEAD: ${{ steps.source.outputs.head_sha }}
         run: |
           STABLE_VERSION="$(node -p 'require("./promotion-decision.json").stable.version')"
           STATE="$(gh pr view "$RELEASE_PR" --repo "${GITHUB_REPOSITORY}" --json state --jq .state)"
@@ -321,6 +322,12 @@ jobs:
           fi
           git fetch origin "$MERGE_SHA"
           git switch --detach "$MERGE_SHA"
+          MERGE_TREE="$(git rev-parse "$MERGE_SHA^{tree}")"
+          SOURCE_TREE="$(git rev-parse "$SOURCE_HEAD^{tree}")"
+          if [ "$MERGE_TREE" != "$SOURCE_TREE" ]; then
+            echo 'Stable merge tree differs from the soaked release PR head; refusing to tag.' >&2
+            exit 1
+          fi
           test "$(node -p 'require("./cli/package.json").version')" = "$STABLE_VERSION"
           TAG_REF="refs/tags/v$STABLE_VERSION"
           set +e

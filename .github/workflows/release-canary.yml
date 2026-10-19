@@ -701,6 +701,11 @@ jobs:
           pattern: canary-${{ matrix.train.version }}-*
           path: reports
           merge-multiple: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.RELEASE_NODE_VERSION }}
+      - working-directory: cli
+        run: npm ci
       - name: Append hash-chained canary and verification events
         env:
           RELEASE_APP_TOKEN: ${{ steps.app.outputs.token }}
@@ -781,6 +786,12 @@ jobs:
             git config user.name guardscan-release-bot
             git config user.email 41898282+github-actions[bot]@users.noreply.github.com
             git add events
-            git commit -m "canary evidence: run $GITHUB_RUN_ID"
-            git push origin HEAD:release-ledger
+            if git diff --cached --quiet; then
+              echo 'Canary evidence already persisted.'
+            else
+              DIFF_STATUS=$?
+              if [ "$DIFF_STATUS" -ne 1 ]; then exit "$DIFF_STATUS"; fi
+              git commit -m "canary evidence: run $GITHUB_RUN_ID"
+              git push origin HEAD:release-ledger
+            fi
           )
