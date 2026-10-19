@@ -24,13 +24,14 @@ const CHANNELS = Object.freeze([
   {id: 'pypi', phase: 'full', operation: 'publish', artifacts: ['python-wheel', 'standalone']},
 ]);
 
-function readBounded(file, label = 'file') {
+function readBounded(file, label = 'file', maxBytes = MAX_RELEASE_FILE_BYTES) {
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 1) throw new Error('file byte limit is invalid');
   const descriptor = fs.openSync(file, 'r');
   try {
     const stat = fs.fstatSync(descriptor);
     if (!stat.isFile()) throw new Error(`${label} is not a regular file: ${file}`);
-    if (stat.size > MAX_RELEASE_FILE_BYTES) {
-      throw new Error(`${label} exceeds ${MAX_RELEASE_FILE_BYTES} bytes: ${file}`);
+    if (stat.size > maxBytes) {
+      throw new Error(`${label} exceeds ${maxBytes} bytes: ${file}`);
     }
     const buffer = Buffer.alloc(stat.size + 1);
     let offset = 0;
@@ -39,8 +40,8 @@ function readBounded(file, label = 'file') {
       if (bytes === 0) break;
       offset += bytes;
     }
-    if (offset > MAX_RELEASE_FILE_BYTES) {
-      throw new Error(`${label} exceeds ${MAX_RELEASE_FILE_BYTES} bytes: ${file}`);
+    if (offset > maxBytes) {
+      throw new Error(`${label} exceeds ${maxBytes} bytes: ${file}`);
     }
     return buffer.subarray(0, offset).toString('utf8');
   } finally {

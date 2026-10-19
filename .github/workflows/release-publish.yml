@@ -661,8 +661,25 @@ jobs:
         shell: pwsh
         env:
           CHOCO_API_KEY: ${{ secrets.CHOCO_API_KEY }}
+          RELEASE_VERSION: ${{ inputs.tag }}
         run: |
           $package = Get-ChildItem local-feed\*.nupkg | Select-Object -First 1
           if ($null -eq $package) { throw 'Chocolatey package is missing' }
+          function Get-PublicationState {
+            $state = & python cli/scripts/release/chocolatey-preflight.py --package $package.FullName --version $env:RELEASE_VERSION
+            if ($LASTEXITCODE -ne 0) { throw 'Chocolatey remote integrity preflight failed' }
+            return ($state | ConvertFrom-Json)
+          }
+          $state = Get-PublicationState
+          if (-not $state.publishRequired) {
+            Write-Host 'Identical Chocolatey package already submitted.'
+            exit 0
+          }
           choco push $package.FullName --source https://push.chocolatey.org/ --api-key $env:CHOCO_API_KEY
-          if ($LASTEXITCODE -ne 0) { throw 'Chocolatey submission failed' }
+          $pushStatus = $LASTEXITCODE
+          for ($attempt = 0; $attempt -lt 6; $attempt++) {
+            $state = Get-PublicationState
+            if (-not $state.publishRequired) { exit 0 }
+            if ($attempt -lt 5) { Start-Sleep -Seconds 10 }
+          }
+          throw "Chocolatey package did not converge to matching remote payloads (push exit $pushStatus)"

@@ -7,6 +7,9 @@ const {CHANNELS, readBounded} = require('./lib');
 
 const EVENT_SCHEMA = 'guardscan.release-event.v1';
 const MAX_EVENT_BYTES = 64 * 1024;
+// Hourly matrix evidence is an append-only history, not a small manifest.
+// Keep a separate bounded allowance without widening JSON/config reads.
+const MAX_LEDGER_BYTES = 256 * 1024 * 1024;
 const EVENT_TYPES = Object.freeze([
   'train_started',
   'artifact_built',
@@ -150,7 +153,7 @@ function parseLedgerText(text, label = 'release ledger') {
 function readEvents(ledgerFile) {
   const resolved = path.resolve(ledgerFile);
   if (!fs.existsSync(resolved)) return [];
-  return parseLedgerText(readBounded(resolved, 'release ledger'));
+  return parseLedgerText(readBounded(resolved, 'release ledger', MAX_LEDGER_BYTES));
 }
 
 function monotonicLedgerTimestamp(events, proposedTimestamp, idempotencyKey) {
@@ -227,6 +230,9 @@ function appendEvent(ledgerFile, input) {
     }
     const descriptor = fs.openSync(resolved, 'a', 0o600);
     try {
+      if (fs.fstatSync(descriptor).size + Buffer.byteLength(line, 'utf8') > MAX_LEDGER_BYTES) {
+        throw new Error(`release ledger exceeds ${MAX_LEDGER_BYTES} bytes`);
+      }
       fs.writeFileSync(descriptor, line, 'utf8');
       fs.fsyncSync(descriptor);
     } finally {
@@ -334,6 +340,7 @@ module.exports = {
   EVENT_SCHEMA,
   EVENT_TYPES,
   MAX_EVENT_BYTES,
+  MAX_LEDGER_BYTES,
   appendEvent,
   canonicalJson,
   createEvent,

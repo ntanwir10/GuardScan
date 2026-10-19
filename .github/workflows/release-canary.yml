@@ -454,13 +454,14 @@ jobs:
               channel: process.env.CHANNEL,
               status: "failed",
               checkedAt: new Date().toISOString(),
-              target: process.env.RUNNER_OS,
+              target: process.env.TARGET,
               evidenceUrl: `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`,
             }) + "\n")
           '
         env:
           CHANNEL: ${{ startsWith(matrix.adapter, 'homebrew-') && 'homebrew' || 'scoop' }}
           VERSION: ${{ matrix.train.version }}
+          TARGET: ${{ matrix.adapter }}
       - name: Homebrew install, test, upgrade check, and uninstall
         if: startsWith(matrix.adapter, 'homebrew-')
         shell: bash
@@ -717,6 +718,7 @@ jobs:
           const path = require('path');
           const cp = require('child_process');
           const {appendEvent, monotonicLedgerTimestamp, readEvents} = require('./cli/scripts/release/events');
+          const {validateCanaryReports} = require('./cli/scripts/release/canary-reports');
           const files = [];
           const walk = dir => fs.readdirSync(dir, {withFileTypes: true}).forEach(entry => {
             const file = path.join(dir, entry.name);
@@ -729,6 +731,8 @@ jobs:
             .sort((a, b) => a.report.checkedAt.localeCompare(b.report.checkedAt)
               || a.file.localeCompare(b.file));
           if (reports.length === 0) throw new Error(`no reports found for train ${process.env.TRAIN_VERSION}`);
+          validateCanaryReports(reports.map(({report}) => report), process.env.TRAIN_VERSION,
+            `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`);
           const version = process.env.TRAIN_VERSION;
           const tag = `v${version}`;
           const ledger = `ledgers/${tag}.jsonl`;
