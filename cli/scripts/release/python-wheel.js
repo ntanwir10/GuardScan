@@ -108,7 +108,9 @@ function buildWheel(source, executableFile, platform, outputDir, timestamp) {
     mode: name.endsWith(`/${binaryName}`) ? 0o755 : 0o644,
   }));
   const filename = `guardscan_cli-${pythonVersion}-py3-none-${platformTag}.whl`;
-  const archive = buildArchive('zip', entries, timestamp);
+  const archive = buildArchive('zip', entries, timestamp, {compression: 'deflate'});
+  // Fail before writing/uploading any wheel that exceeds the default PyPI/TestPyPI limit.
+  if (archive.length > 100_000_000) throw new Error('Python wheel exceeds the PyPI per-file size limit');
   const resolvedOutput = path.resolve(outputDir);
   fs.mkdirSync(resolvedOutput, {recursive: true, mode: 0o700});
   const wheelFile = path.join(resolvedOutput, filename);

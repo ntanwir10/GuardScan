@@ -332,7 +332,7 @@ describe('release workflow review regressions', () => {
     ].join('\n'), {mode: 0o700});
 
     const run = (tagMode: string, extra: Record<string, string> = {}) => spawnSync(
-      'bash', ['-euo', 'pipefail', '-c', script], {
+      'bash', ['-euo', 'pipefail', '-c', 'GIT_CALLS="$PWD/git.calls"; git() { sh ./bin/git "$@"; };\n' + script], {
         cwd: root,
         encoding: 'utf8',
         env: {
@@ -396,7 +396,7 @@ describe('release workflow review regressions', () => {
       .toBeLessThan(local.run.indexOf('winget install --manifest'));
     expect(local.run).toContain("if ($LASTEXITCODE -ne 0) { throw 'WinGet local manifest setting failed' }");
     const submit = step(winget, 'Submit WinGet manifests');
-    expect(submit.run).toContain('wingetcreate submit $installer.Directory.FullName');
+    expect(submit.run).toContain('& $creator submit $installer.Directory.FullName');
     expect(submit.run).not.toContain('wingetcreate submit adapters\\winget ');
   });
 

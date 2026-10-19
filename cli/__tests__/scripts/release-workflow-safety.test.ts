@@ -120,9 +120,9 @@ describe('release workflow safety', () => {
     expect(run).toContain('release-please--branches--main');
     const predicate = run.match(/jq -e --arg repository[\s\S]*?'\n?([\s\S]*?)' <<< "\$PR_DETAILS"/)?.[1];
     expect(predicate).toBeTruthy();
-    const check = (head: string, extra: Record<string, unknown> = {}) => spawnSync('jq', [
+    const check = (head: string, extra: Record<string, unknown> = {}, action = 'candidate') => spawnSync('jq', [
       '-e', '--arg', 'repository', 'ntanwir10/guardscan', '--arg', 'branch', 'release/1.2.3',
-      '--arg', 'release_please_branch', 'release-please--branches--main', predicate!,
+      '--arg', 'release_please_branch', 'release-please--branches--main', '--arg', 'action', action, predicate!,
     ], {input: JSON.stringify({
       state: 'OPEN', baseRefName: 'main', headRefName: head, headRefOid: 'a'.repeat(40),
       headRepository: {nameWithOwner: 'ntanwir10/GuardScan'}, ...extra,
@@ -135,6 +135,10 @@ describe('release workflow safety', () => {
     }
     expect(check('release-please--branches--main', {headRepository: {nameWithOwner: 'attacker/GuardScan'}}).status)
       .not.toBe(0);
+    const merged = {state: 'MERGED', mergeCommit: {oid: 'b'.repeat(40)}};
+    expect(check('release/1.2.3', merged, 'promote').status).toBe(0);
+    expect(check('release/1.2.3', merged, 'candidate').status).not.toBe(0);
+    expect(check('release/1.2.3', {...merged, mergeCommit: {oid: 'invalid'}}, 'promote').status).not.toBe(0);
   });
 
   it('requires visible matching npm bytes and tag, allowing bounded propagation retries', () => {
@@ -155,7 +159,8 @@ describe('release workflow safety', () => {
     ].join('\n'), {mode: 0o700});
     const run = (mode: string) => {
       for (const name of ['count', 'npm-preflight-output']) fs.rmSync(path.join(root, name), {force: true});
-      return spawnSync('bash', ['-euo', 'pipefail', '-c', script], {
+      return spawnSync('bash', ['-euo', 'pipefail', '-c',
+        'RUNNER_TEMP="$PWD"; npm() { sh ./bin/npm "$@"; }; sleep() { :; };\n' + script], {
         cwd: root, encoding: 'utf8', timeout: 10000,
         env: {...process.env, PATH: bin + path.delimiter + process.env.PATH,
           RUNNER_TEMP: root, NPM_MODE: mode},

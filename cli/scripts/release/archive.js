@@ -83,7 +83,8 @@ function dosTimestamp(timestamp) {
   return {date: day, time};
 }
 
-function buildZip(entries, timestamp) {
+function buildZip(entries, timestamp, compression = 'store') {
+  if (!['store', 'deflate'].includes(compression)) throw new Error('unsupported zip compression');
   const normalized = normalizeEntries(entries);
   const dos = dosTimestamp(timestamp);
   const localParts = [];
@@ -92,30 +93,32 @@ function buildZip(entries, timestamp) {
   for (const entry of normalized) {
     const name = Buffer.from(entry.name, 'utf8');
     const crc = crc32(entry.data);
+    const method = compression === 'deflate' ? 8 : 0;
+    const compressed = method === 8 ? zlib.deflateRawSync(entry.data, {level: 9}) : entry.data;
     const local = Buffer.alloc(30);
     local.writeUInt32LE(0x04034b50, 0);
     local.writeUInt16LE(20, 4);
     local.writeUInt16LE(0x0800, 6);
-    local.writeUInt16LE(0, 8);
+    local.writeUInt16LE(method, 8);
     local.writeUInt16LE(dos.time, 10);
     local.writeUInt16LE(dos.date, 12);
     local.writeUInt32LE(crc, 14);
-    local.writeUInt32LE(entry.data.length, 18);
+    local.writeUInt32LE(compressed.length, 18);
     local.writeUInt32LE(entry.data.length, 22);
     local.writeUInt16LE(name.length, 26);
     local.writeUInt16LE(0, 28);
-    localParts.push(local, name, entry.data);
+    localParts.push(local, name, compressed);
 
     const central = Buffer.alloc(46);
     central.writeUInt32LE(0x02014b50, 0);
     central.writeUInt16LE((3 << 8) | 20, 4);
     central.writeUInt16LE(20, 6);
     central.writeUInt16LE(0x0800, 8);
-    central.writeUInt16LE(0, 10);
+    central.writeUInt16LE(method, 10);
     central.writeUInt16LE(dos.time, 12);
     central.writeUInt16LE(dos.date, 14);
     central.writeUInt32LE(crc, 16);
-    central.writeUInt32LE(entry.data.length, 20);
+    central.writeUInt32LE(compressed.length, 20);
     central.writeUInt32LE(entry.data.length, 24);
     central.writeUInt16LE(name.length, 28);
     central.writeUInt16LE(0, 30);
@@ -125,7 +128,7 @@ function buildZip(entries, timestamp) {
     central.writeUInt32LE(((0x8000 | entry.mode) << 16) >>> 0, 38);
     central.writeUInt32LE(offset, 42);
     centralParts.push(central, name);
-    offset += local.length + name.length + entry.data.length;
+    offset += local.length + name.length + compressed.length;
   }
   const centralDirectory = Buffer.concat(centralParts);
   const end = Buffer.alloc(22);
@@ -182,8 +185,8 @@ function buildTar(entries, timestamp) {
   return Buffer.concat(parts);
 }
 
-function buildArchive(format, entries, timestamp) {
-  if (format === 'zip') return buildZip(entries, timestamp);
+function buildArchive(format, entries, timestamp, options = {}) {
+  if (format === 'zip') return buildZip(entries, timestamp, options.compression);
   if (format === 'tar.gz') {
     return zlib.gzipSync(buildTar(entries, timestamp), {level: 9, mtime: 0});
   }
@@ -269,8 +272,10 @@ function inspectTarGz(buffer) {
 
 function inspectZip(buffer) {
   const entries = [];
+  const localHeaders = [];
   const names = new Set();
   let offset = 0;
+  let expandedSize = 0;
   while (offset + 4 <= buffer.length && buffer.readUInt32LE(offset) === 0x04034b50) {
     if (offset + 30 > buffer.length) throw new Error('zip local header is truncated');
     const flags = buffer.readUInt16LE(offset + 6);
@@ -280,20 +285,31 @@ function inspectZip(buffer) {
     const size = buffer.readUInt32LE(offset + 22);
     const nameLength = buffer.readUInt16LE(offset + 26);
     const extraLength = buffer.readUInt16LE(offset + 28);
-    if ((flags & ~0x0800) !== 0 || method !== 0 || compressedSize !== size || extraLength !== 0) {
+    if ((flags & ~0x0800) !== 0 || ![0, 8].includes(method)
+        || (method === 0 && compressedSize !== size) || extraLength !== 0) {
       throw new Error('zip entry uses unsupported flags, compression, or extra data');
     }
+    expandedSize += size;
+    if (expandedSize > MAX_EXPANDED_BYTES) throw new Error('zip expanded size exceeds the supported limit');
     const nameStart = offset + 30;
     const dataStart = nameStart + nameLength + extraLength;
-    const dataEnd = dataStart + size;
+    const dataEnd = dataStart + compressedSize;
     if (dataEnd > buffer.length) throw new Error('zip entry is truncated');
     const name = buffer.subarray(nameStart, nameStart + nameLength).toString('utf8');
     normalizeArchivePath(name);
     const folded = name.toLocaleLowerCase('en-US');
     if (names.has(folded)) throw new Error(`archive contains duplicate entry: ${name}`);
     names.add(folded);
-    const data = buffer.subarray(dataStart, dataEnd);
+    const compressed = buffer.subarray(dataStart, dataEnd);
+    let data;
+    try {
+      data = method === 8 ? zlib.inflateRawSync(compressed, {maxOutputLength: Math.max(1, size)}) : compressed;
+    } catch (error) {
+      throw new Error(`zip deflate payload is invalid or unbounded: ${error.message}`);
+    }
+    if (data.length !== size) throw new Error(`zip expanded size mismatch: ${name}`);
     if (crc32(data) !== expectedCrc) throw new Error(`zip CRC mismatch: ${name}`);
+    localHeaders.push({offset, flags, method, crc: expectedCrc, compressedSize, size});
     entries.push({path: name, size, mode: undefined, sha256: sha256(data)});
     if (entries.length > MAX_ARCHIVE_ENTRIES) throw new Error('archive contains too many entries');
     offset = dataEnd;
@@ -307,8 +323,15 @@ function inspectZip(buffer) {
     const extraLength = buffer.readUInt16LE(offset + 30);
     const commentLength = buffer.readUInt16LE(offset + 32);
     const externalAttributes = buffer.readUInt32LE(offset + 38);
+    const local = localHeaders[index];
     const name = buffer.subarray(offset + 46, offset + 46 + nameLength).toString('utf8');
-    if (name !== entries[index].path || extraLength !== 0 || commentLength !== 0) {
+    if (name !== entries[index].path || extraLength !== 0 || commentLength !== 0
+        || buffer.readUInt16LE(offset + 8) !== local.flags
+        || buffer.readUInt16LE(offset + 10) !== local.method
+        || buffer.readUInt32LE(offset + 16) !== local.crc
+        || buffer.readUInt32LE(offset + 20) !== local.compressedSize
+        || buffer.readUInt32LE(offset + 24) !== local.size
+        || buffer.readUInt32LE(offset + 42) !== local.offset) {
       throw new Error('zip central directory conflicts with local entries');
     }
     const unixMode = (externalAttributes >>> 16) & 0xffff;

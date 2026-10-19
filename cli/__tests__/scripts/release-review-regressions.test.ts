@@ -22,6 +22,32 @@ const source = {
 const timestamp = '2026-10-01T00:00:00.000Z';
 
 describe('release reviewer regressions', () => {
+  it('deflates wheels deterministically while retaining executable modes and exact bytes', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'guardscan-wheel-compression-'));
+    try {
+      const executable = Buffer.alloc(4 * 1024 * 1024, 'native executable fixture\n');
+      const binary = path.join(root, 'guardscan');
+      fs.writeFileSync(binary, executable);
+      const first = buildWheel(source, binary, {os: 'linux', arch: 'x64', libc: 'glibc'}, path.join(root, 'one'), timestamp);
+      const second = buildWheel(source, binary, {os: 'linux', arch: 'x64', libc: 'glibc'}, path.join(root, 'two'), timestamp);
+      const bytes = fs.readFileSync(first.wheelFile);
+      expect(bytes.equals(fs.readFileSync(second.wheelFile))).toBe(true);
+      expect(bytes.length).toBeLessThan(executable.length / 10);
+      expect(inspectArchive(first.wheelFile, 'zip').entries).toContainEqual(expect.objectContaining({
+        path: 'guardscan_cli/bin/guardscan', size: executable.length, mode: '0755',
+        sha256: require('crypto').createHash('sha256').update(executable).digest('hex'),
+      }));
+      for (const [offset, value] of [[22, 513 * 1024 * 1024], [14, 0]]) {
+        const tampered = Buffer.from(bytes);
+        tampered.writeUInt32LE(value, offset);
+        const file = path.join(root, 'tampered-' + offset + '.zip');
+        fs.writeFileSync(file, tampered);
+        expect(() => inspectArchive(file, 'zip')).toThrow(/expanded size|CRC/);
+      }
+    } finally {
+      fs.rmSync(root, {recursive: true, force: true});
+    }
+  });
   it('requires stable promotion approval for every promotion-or-later transition', () => {
     const state = {
       schemaVersion: 'guardscan.release-state.v1',
@@ -249,8 +275,20 @@ describe('release reviewer regressions', () => {
       const archive = fs.readFileSync(built.wheelFile);
       const entries = inspectArchive(built.wheelFile, 'zip').entries;
       expect(entries.some((entry: any) => entry.path.endsWith('.dist-info/METADATA'))).toBe(true);
-      expect(archive.includes(Buffer.from('Metadata-Version: 2.4\n'))).toBe(true);
-      expect(archive.includes(Buffer.from('License-Expression: MIT\n'))).toBe(true);
+      let localOffset = 0;
+      let metadata = '';
+      while (archive.readUInt32LE(localOffset) === 0x04034b50) {
+        const length = archive.readUInt32LE(localOffset + 18);
+        const nameLength = archive.readUInt16LE(localOffset + 26);
+        const name = archive.subarray(localOffset + 30, localOffset + 30 + nameLength).toString('utf8');
+        const start = localOffset + 30 + nameLength;
+        if (name.endsWith('.dist-info/METADATA')) {
+          metadata = require('zlib').inflateRawSync(archive.subarray(start, start + length)).toString('utf8');
+        }
+        localOffset = start + length;
+      }
+      expect(metadata).toContain('Metadata-Version: 2.4\n');
+      expect(metadata).toContain('License-Expression: MIT\n');
       const executableName = 'guardscan_cli/bin/guardscan';
       let offset = archive.indexOf(Buffer.from([0x50, 0x4b, 0x01, 0x02]));
       let executableUnixMode = 0;

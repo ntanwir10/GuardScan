@@ -32,6 +32,10 @@ concurrency:
 
 env:
   RELEASE_NODE_VERSION: 22.23.1
+  RELEASE_VERSION: ${{ inputs.version }}
+  RELEASE_PR: ${{ inputs.release_pr }}
+  RELEASE_ACTION: ${{ inputs.action }}
+  KNOWN_GOOD: ${{ inputs.known_good }}
 
 jobs:
   scheduler:
@@ -82,6 +86,18 @@ jobs:
       release_pr: ${{ steps.result.outputs.release_pr }}
       source_pr_head: ${{ steps.result.outputs.source_pr_head }}
     steps:
+      - &validate-dispatch
+        name: Validate dispatch inputs
+        shell: bash
+        run: |
+          VERSION_PATTERN='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-rc\.(0|[1-9][0-9]*))?$'
+          for VERSION in "$RELEASE_VERSION" "${KNOWN_GOOD:-}"; do
+            if [ -z "$VERSION" ] && [ "$VERSION" != "$RELEASE_VERSION" ]; then continue; fi
+            if [ "${#VERSION}" -gt 256 ] || ! [[ "$VERSION" =~ $VERSION_PATTERN ]]; then
+              echo 'Invalid release version: expected strict X.Y.Z or X.Y.Z-rc.N.' >&2
+              exit 1
+            fi
+          done
       - name: Create short-lived release app token
         id: app
         uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
@@ -101,22 +117,25 @@ jobs:
           fi
           PR_DETAILS="$(gh pr view "$RELEASE_PR" \
             --repo "${GITHUB_REPOSITORY}" \
-            --json state,baseRefName,headRefName,headRefOid,headRepository)"
+            --json state,baseRefName,headRefName,headRefOid,headRepository,mergeCommit)"
           BASE_VERSION="$RELEASE_VERSION"
           BASE_VERSION="${BASE_VERSION%%-rc.*}"
           EXPECTED_HEAD_BRANCH="release/$BASE_VERSION"
           RELEASE_PLEASE_BRANCH="release-please--branches--main"
           jq -e --arg repository "${GITHUB_REPOSITORY,,}" --arg branch "$EXPECTED_HEAD_BRANCH" \
             --arg release_please_branch "$RELEASE_PLEASE_BRANCH" \
-            '.state == "OPEN" and .baseRefName == "main" and
+            --arg action "$RELEASE_ACTION" \
+            '(.state == "OPEN" or ($action == "promote" and .state == "MERGED" and
+               (.mergeCommit.oid | test("^[a-f0-9]{40}$")))) and .baseRefName == "main" and
              (.headRefName == $branch or .headRefName == $release_please_branch) and
              (.headRepository.nameWithOwner | ascii_downcase) == $repository and
              (.headRefOid | test("^[a-f0-9]{40}$"))' <<< "$PR_DETAILS" >/dev/null || {
-              echo 'Release PR must be open, same-repository, main-based, on its trusted release branch, and use a valid head SHA.' >&2
+              echo 'Release PR must be open (or merged for promotion), same-repository, main-based, on its trusted release branch, and use valid commit identities.' >&2
               exit 1
             }
           HEAD_SHA="$(jq -er '.headRefOid' <<< "$PR_DETAILS")"
           echo "head_sha=$HEAD_SHA" >> "$GITHUB_OUTPUT"
+          echo "merge_sha=$(jq -r '.mergeCommit.oid // ""' <<< "$PR_DETAILS")" >> "$GITHUB_OUTPUT"
       - name: Checkout source PR head
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -134,7 +153,7 @@ jobs:
         env:
           RELEASE_APP_TOKEN: ${{ steps.app.outputs.token }}
         run: |
-          case "${{ inputs.version }}" in
+          case "$RELEASE_VERSION" in
             *-rc.[0-9]*) ;;
             *) echo "Candidate version must end in -rc.N" >&2; exit 1 ;;
           esac
@@ -144,29 +163,29 @@ jobs:
             process.stdout.write(new Date(value).toISOString());
           ')"
           node cli/scripts/release/index.js candidate \
-            --candidate-version "${{ inputs.version }}" \
-            --source-pr "${{ inputs.release_pr }}" \
+            --candidate-version "$RELEASE_VERSION" \
+            --source-pr "$RELEASE_PR" \
             --source-pr-head "${{ steps.source.outputs.head_sha }}" \
             --timestamp "$CREATED_AT"
-          npm --prefix cli run release:validate -- --tag "v${{ inputs.version }}"
+          npm --prefix cli run release:validate -- --tag "v$RELEASE_VERSION"
           git config user.name guardscan-release-bot
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add cli/package.json cli/package-lock.json cli/CHANGELOG.md .release-candidate.json
           GIT_AUTHOR_DATE="$CREATED_AT" GIT_COMMITTER_DATE="$CREATED_AT" \
-            git commit -m "chore(release): candidate ${{ inputs.version }}"
-          if git rev-parse --verify "refs/tags/v${{ inputs.version }}" >/dev/null 2>&1; then
-            test "$(git rev-list -n 1 "v${{ inputs.version }}")" = "$(git rev-parse HEAD)"
+            git commit -m "chore(release): candidate $RELEASE_VERSION"
+          if git rev-parse --verify "refs/tags/v$RELEASE_VERSION" >/dev/null 2>&1; then
+            test "$(git rev-list -n 1 "v$RELEASE_VERSION")" = "$(git rev-parse HEAD)"
           else
-            git tag "v${{ inputs.version }}"
+            git tag "v$RELEASE_VERSION"
           fi
-          git push origin "HEAD:refs/heads/release-candidate/v${{ inputs.version }}"
-          git push origin "refs/tags/v${{ inputs.version }}"
+          git push origin "HEAD:refs/heads/release-candidate/v$RELEASE_VERSION"
+          git push origin "refs/tags/v$RELEASE_VERSION"
       - name: Emit candidate build identity
         if: inputs.action == 'candidate'
         id: candidate
         run: |
           echo "ref=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-          echo "tag=v${{ inputs.version }}" >> "$GITHUB_OUTPUT"
+          echo "tag=v$RELEASE_VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Materialize machine promotion decision
         if: inputs.action == 'promote'
@@ -176,12 +195,12 @@ jobs:
           CURRENT_HEAD: ${{ steps.source.outputs.head_sha }}
         run: |
           git fetch origin release-ledger
-          git show "origin/release-ledger:events/v${{ inputs.version }}.jsonl" > release-events.jsonl
-          RC_TAG="v${{ inputs.version }}"
+          git show "origin/release-ledger:events/v$RELEASE_VERSION.jsonl" > release-events.jsonl
+          RC_TAG="v$RELEASE_VERSION"
           git fetch origin "refs/tags/$RC_TAG:refs/tags/$RC_TAG"
           git switch --detach "$RC_TAG"
           npm --prefix cli ci
-          CURRENT_HEAD="$(gh pr view "${{ inputs.release_pr }}" \
+          CURRENT_HEAD="$(gh pr view "$RELEASE_PR" \
             --repo "${GITHUB_REPOSITORY}" --json headRefOid --jq .headRefOid)"
           node - <<'NODE'
           const fs = require('fs');
@@ -189,6 +208,13 @@ jobs:
           const events = readEvents('release-events.jsonl');
           const state = materializeReleaseState(events);
           const candidate = JSON.parse(fs.readFileSync('.release-candidate.json'));
+          const started = events.find(event => event.type === 'train_started');
+          if (candidate.sourcePr !== Number(process.env.RELEASE_PR)
+              || candidate.sourcePrHead !== process.env.CURRENT_HEAD
+              || started?.payload.releasePr !== candidate.sourcePr
+              || started?.payload.sourcePrHead !== candidate.sourcePrHead) {
+            throw new Error('Promotion source PR does not match the immutable candidate and recorded train head');
+          }
           const published = events.find(event => event.type === 'channel_published' && event.channel === 'github');
           if (!published || !state.manifestSha256) throw new Error('RC has no published manifest identity');
           const canaries = Object.entries(state.canaries).flatMap(([channel, samples]) =>
@@ -218,7 +244,7 @@ jobs:
             --promotion-input promotion-input.json \
             --output promotion-decision.json \
             --ledger release-events.jsonl \
-            --idempotency-key "promotion:${{ inputs.version }}:${GITHUB_RUN_ID}:${GITHUB_RUN_ATTEMPT}" \
+            --idempotency-key "promotion:$RELEASE_VERSION:${GITHUB_RUN_ID}:${GITHUB_RUN_ATTEMPT}" \
             --tag "$RC_TAG"
           PROMOTION_STATUS=$?
           set -e
@@ -233,9 +259,9 @@ jobs:
         run: |
           git worktree add decision-ledger origin/release-ledger
           mkdir -p decision-ledger/events decision-ledger/decisions
-          cp release-events.jsonl "decision-ledger/events/v${{ inputs.version }}.jsonl"
+          cp release-events.jsonl "decision-ledger/events/v$RELEASE_VERSION.jsonl"
           cp promotion-decision.json \
-            "decision-ledger/decisions/v${{ inputs.version }}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.json"
+            "decision-ledger/decisions/v$RELEASE_VERSION-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.json"
           (
             cd decision-ledger
             git config user.name guardscan-release-bot
@@ -246,7 +272,7 @@ jobs:
             else
               DIFF_STATUS=$?
               if [ "$DIFF_STATUS" -ne 1 ]; then exit "$DIFF_STATUS"; fi
-              git commit -m "promotion decision: v${{ inputs.version }}"
+              git commit -m "promotion decision: v$RELEASE_VERSION"
             fi
             git push origin HEAD:release-ledger
           )
@@ -261,11 +287,18 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
           RELEASE_PR: ${{ inputs.release_pr }}
+          SOURCE_MERGE_SHA: ${{ steps.source.outputs.merge_sha }}
         run: |
           STABLE_VERSION="$(node -p 'require("./promotion-decision.json").stable.version')"
-          gh pr merge "$RELEASE_PR" \
-            --repo "${GITHUB_REPOSITORY}" \
-            --auto --squash --match-head-commit "${{ steps.source.outputs.head_sha }}"
+          STATE="$(gh pr view "$RELEASE_PR" --repo "${GITHUB_REPOSITORY}" --json state --jq .state)"
+          if [ "$STATE" = OPEN ]; then
+            gh pr merge "$RELEASE_PR" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --auto --squash --match-head-commit "${{ steps.source.outputs.head_sha }}"
+          elif [ "$STATE" != MERGED ]; then
+            echo 'Release PR was closed without merging.' >&2
+            exit 1
+          fi
           for ATTEMPT in $(seq 1 60); do
             STATE="$(gh pr view "$RELEASE_PR" --repo "${GITHUB_REPOSITORY}" --json state --jq .state)"
             if [ "$STATE" = MERGED ]; then break; fi
@@ -282,6 +315,10 @@ jobs:
               exit 1
             }
           MERGE_SHA="$(jq -er '.mergeCommit.oid' <<< "$MERGED_PR")"
+          if [ -n "$SOURCE_MERGE_SHA" ] && [ "$SOURCE_MERGE_SHA" != "$MERGE_SHA" ]; then
+            echo 'Previously merged release PR changed merge identity.' >&2
+            exit 1
+          fi
           git fetch origin "$MERGE_SHA"
           git switch --detach "$MERGE_SHA"
           test "$(node -p 'require("./cli/package.json").version')" = "$STABLE_VERSION"
@@ -319,7 +356,7 @@ jobs:
       - name: Select build result
         id: result
         run: |
-          if [ "${{ inputs.action }}" = candidate ]; then
+          if [ "$RELEASE_ACTION" = candidate ]; then
             echo "ref=${{ steps.candidate.outputs.ref }}" >> "$GITHUB_OUTPUT"
             echo "tag=${{ steps.candidate.outputs.tag }}" >> "$GITHUB_OUTPUT"
             echo "channel=rc" >> "$GITHUB_OUTPUT"
@@ -329,13 +366,17 @@ jobs:
             echo "channel=stable" >> "$GITHUB_OUTPUT"
           fi
           echo "build=true" >> "$GITHUB_OUTPUT"
-          echo "release_pr=${{ inputs.release_pr }}" >> "$GITHUB_OUTPUT"
+          echo "release_pr=$RELEASE_PR" >> "$GITHUB_OUTPUT"
           echo "source_pr_head=${{ steps.source.outputs.head_sha }}" >> "$GITHUB_OUTPUT"
 
   build:
     name: Build exact tagged release
     if: vars.RELEASE_AUTOMATION_ENABLED == 'true' && needs.prepare.outputs.build == 'true'
     needs: [prepare]
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     uses: ./.github/workflows/release-build.yml
     with:
       ref: ${{ needs.prepare.outputs.ref }}
@@ -347,6 +388,10 @@ jobs:
     name: Publish every automated channel
     if: vars.RELEASE_AUTOMATION_ENABLED == 'true' && needs.prepare.outputs.build == 'true'
     needs: [prepare, build]
+    permissions:
+      contents: write
+      actions: read
+      id-token: write
     uses: ./.github/workflows/release-publish.yml
     with:
       ref: ${{ needs.prepare.outputs.ref }}
@@ -383,6 +428,11 @@ jobs:
         with:
           name: release-catalog-publication-${{ needs.prepare.outputs.tag }}
           path: catalog-publication
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.RELEASE_NODE_VERSION }}
+      - working-directory: cli
+        run: npm ci
       - name: Fetch ledger, append chained events, and push
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
@@ -519,8 +569,8 @@ jobs:
           active.trains = active.trains.filter(train => train.version !== process.env.RELEASE_TAG.slice(1));
           if (process.env.RELEASE_CHANNEL === 'stable') {
             active.trains = active.trains.filter(train => !(
-              train.channel === 'rc'
-              && train.releasePr === Number(process.env.RELEASE_PR)
+              train.channel === 'stable' || (train.channel === 'rc'
+                && train.releasePr === Number(process.env.RELEASE_PR))
             ));
           }
           active.trains.push({
@@ -551,6 +601,7 @@ jobs:
     if: github.event_name == 'workflow_dispatch' && vars.RELEASE_AUTOMATION_ENABLED == 'true' && inputs.action == 'reconcile'
     runs-on: ubuntu-24.04
     steps:
+      - *validate-dispatch
       - name: Create short-lived release app token
         id: app
         uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
@@ -571,10 +622,10 @@ jobs:
           GH_TOKEN: ${{ steps.app.outputs.token }}
         run: |
           git fetch origin release-ledger
-          git show "origin/release-ledger:events/v${{ inputs.version }}.jsonl" > release-events.jsonl
+          git show "origin/release-ledger:events/v$RELEASE_VERSION.jsonl" > release-events.jsonl
           node cli/scripts/release/index.js reconcile \
             --ledger release-events.jsonl \
-            --tag "v${{ inputs.version }}" > reconciliation.json
+            --tag "v$RELEASE_VERSION" > reconciliation.json
           cat reconciliation.json
       - name: Trigger promotion when the machine policy is eligible
         if: contains(inputs.version, '-rc.')
@@ -601,8 +652,8 @@ jobs:
             gh workflow run release-train.yml \
               --repo "${GITHUB_REPOSITORY}" \
               -f action=promote \
-              -f version="${{ inputs.version }}" \
-              -f release_pr="${{ inputs.release_pr }}"
+              -f version="$RELEASE_VERSION" \
+              -f release_pr="$RELEASE_PR"
           fi
 
   rollback:
@@ -614,6 +665,7 @@ jobs:
       queue: max
       cancel-in-progress: false
     steps:
+      - *validate-dispatch
       - name: Create short-lived release app token
         id: app
         uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
@@ -636,16 +688,25 @@ jobs:
           RELEASE_VERSION: ${{ inputs.version }}
         run: |
           git fetch origin release-ledger
-          git show "origin/release-ledger:events/v${{ inputs.version }}.jsonl" > release-events.jsonl
+          git show "origin/release-ledger:events/v$RELEASE_VERSION.jsonl" > release-events.jsonl
+          ROLLBACK_TIMESTAMP="$(node - <<'NODE'
+          const {readEvents} = require('./cli/scripts/release/events');
+          const events = readEvents('release-events.jsonl');
+          const key = `rollback:${process.env.RELEASE_VERSION}:${process.env.GITHUB_RUN_ID}`;
+          const existing = events.find(event => event.idempotencyKey === key);
+          const latest = events.length ? Date.parse(events[events.length - 1].timestamp) : 0;
+          process.stdout.write(existing?.timestamp || new Date(Math.max(Date.now(), latest)).toISOString());
+          NODE
+          )"
           ARGS=(--ledger release-events.jsonl \
-            --timestamp "$(date -u +%Y-%m-%dT%H:%M:%S.000Z)" \
-            --idempotency-key "rollback:${{ inputs.version }}:${GITHUB_RUN_ID}" \
-            --tag "v${{ inputs.version }}")
-          if [ -n "${{ inputs.known_good }}" ]; then ARGS+=(--known-good "${{ inputs.known_good }}"); fi
+            --timestamp "$ROLLBACK_TIMESTAMP" \
+            --idempotency-key "rollback:$RELEASE_VERSION:${GITHUB_RUN_ID}" \
+            --tag "v$RELEASE_VERSION")
+          if [ -n "$KNOWN_GOOD" ]; then ARGS+=(--known-good "$KNOWN_GOOD"); fi
           node cli/scripts/release/index.js rollback "${ARGS[@]}" > rollback-plan.json
           cat rollback-plan.json
           git worktree add ledger-branch origin/release-ledger
-          cp release-events.jsonl "ledger-branch/events/v${{ inputs.version }}.jsonl"
+          cp release-events.jsonl "ledger-branch/events/v$RELEASE_VERSION.jsonl"
           node - <<'NODE'
           const fs = require('fs');
           const file = 'ledger-branch/active-versions.json';
@@ -659,13 +720,13 @@ jobs:
             cd ledger-branch
             git config user.name guardscan-release-bot
             git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-            git add "events/v${{ inputs.version }}.jsonl" active-versions.json
+            git add "events/v$RELEASE_VERSION.jsonl" active-versions.json
             if git diff --cached --quiet; then
               echo 'Rollback start and train deactivation already persisted.'
             else
               DIFF_STATUS=$?
               if [ "$DIFF_STATUS" -ne 1 ]; then exit "$DIFF_STATUS"; fi
-              git commit -m "rollback started and train deactivated: v${{ inputs.version }}"
+              git commit -m "rollback started and train deactivated: v$RELEASE_VERSION"
             fi
             git push origin HEAD:release-ledger
           )

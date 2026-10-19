@@ -18,6 +18,12 @@ function workflowSource(filename: string): string {
   return fs.readFileSync(path.join(workflowRoot, filename), 'utf8');
 }
 
+function assertActionPins(source: string): void {
+  for (const match of source.matchAll(/^\s*(?:-\s+)?uses:\s+([^./\s][^@\s]+)@([^\s#]+)/gm)) {
+    expect(match[2]).toMatch(/^[a-f0-9]{40}$/);
+  }
+}
+
 function stepCommands(job: any): string {
   return (job?.steps || []).map((step: any) => `${step.name || ''}\n${step.run || ''}`).join('\n');
 }
@@ -337,9 +343,14 @@ describe('zero-touch release workflow contracts', () => {
       const source = workflowSource(filename);
       expect(yaml.load(source)).toBeTruthy();
       expect(source).not.toContain('pull_request_target');
-      for (const match of source.matchAll(/^\s*uses:\s+([^./\s][^@\s]+)@([^\s#]+)/gm)) {
-        expect(match[2]).toMatch(/^[a-f0-9]{40}$/);
-      }
+      assertActionPins(source);
+    }
+  });
+
+  it('rejects mutable action references even when uses is the first step key', () => {
+    for (const prefix of ['      - uses: ', '        uses: ']) {
+      expect(() => assertActionPins(prefix + 'actions/checkout@v4')).toThrow();
+      expect(() => assertActionPins(prefix + 'actions/checkout@' + 'a'.repeat(40))).not.toThrow();
     }
   });
 
@@ -398,7 +409,7 @@ describe('zero-touch release workflow contracts', () => {
     expect(build).toContain('release-manifest.json');
     expect(publish).toContain('--provenance');
     expect(publish).toContain('pypa/gh-action-pypi-publish@');
-    expect(publish).toContain('wingetcreate submit');
+    expect(publish).toContain('& $creator submit');
     expect(publish).toContain('choco push');
   });
 

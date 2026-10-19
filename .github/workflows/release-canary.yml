@@ -34,19 +34,35 @@ jobs:
         id: matrix
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
+          REQUESTED_VERSION: ${{ inputs.version }}
         run: |
-          if [ -n "${{ inputs.version }}" ]; then
-            printf '{"trains":[{"version":"%s","releasePr":0,"channel":"%s"}]}\n' \
-              "${{ inputs.version }}" \
-              "$([[ '${{ inputs.version }}' == *-rc.* ]] && echo rc || echo stable)" \
-              > active.json
+          if [ -n "$REQUESTED_VERSION" ]; then
+            node - <<'NODE'
+          const fs = require('fs');
+          const version = process.env.REQUESTED_VERSION;
+          if (version.length > 256 || !/^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-rc\.(0|[1-9][0-9]*))?$/.test(version)) {
+            throw new Error('Invalid canary release version');
+          }
+          fs.writeFileSync('active.json', JSON.stringify({trains: [{
+            version, releasePr: 0, channel: version.includes('-rc.') ? 'rc' : 'stable',
+          }]}));
+          NODE
           else
             gh api \
               -H "Accept: application/vnd.github.raw+json" \
               "repos/${GITHUB_REPOSITORY}/contents/active-versions.json?ref=release-ledger" \
               > active.json
           fi
-          echo "trains=$(node -p 'JSON.stringify(require("./active.json").trains || [])')" >> "$GITHUB_OUTPUT"
+          node - <<'NODE' >> "$GITHUB_OUTPUT"
+          const trains = require('./active.json').trains;
+          if (!Array.isArray(trains) || trains.some(train =>
+            typeof train.version !== 'string' || train.version.length > 256
+            || !/^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-rc\.(0|[1-9][0-9]*))?$/.test(train.version)
+            || train.channel !== (train.version.includes('-rc.') ? 'rc' : 'stable')
+            || !Number.isSafeInteger(train.releasePr) || train.releasePr < 0
+          )) throw new Error('Invalid canary release version or active train metadata');
+          console.log(`trains=${JSON.stringify(trains)}`);
+          NODE
 
   package-managers:
     name: ${{ matrix.manager }} canary for ${{ matrix.train.version }}
@@ -513,12 +529,15 @@ jobs:
             scoop bucket add guardscan-preview (Resolve-Path preview-bucket)
           }
           scoop install guardscan
+          if ($LASTEXITCODE -ne 0) { throw 'Scoop installation failed' }
           $installedVersion = (& guardscan --version | Out-String).Trim()
           if ($LASTEXITCODE -ne 0 -or $installedVersion -ne $env:VERSION) {
             throw 'Scoop installed version does not match the release train'
           }
           scoop update guardscan
+          if ($LASTEXITCODE -ne 0) { throw 'Scoop update failed' }
           scoop uninstall guardscan
+          if ($LASTEXITCODE -ne 0) { throw 'Scoop uninstall failed' }
           node -e '
             const fs = require("fs");
             const report = JSON.parse(fs.readFileSync("report.json"));
