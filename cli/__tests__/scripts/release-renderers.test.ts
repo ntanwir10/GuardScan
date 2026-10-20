@@ -2,6 +2,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import yaml from 'js-yaml';
+import {spawnSync} from 'child_process';
 
 const {
   MARKER_FILE,
@@ -141,6 +142,22 @@ function makeManifest(): Record<string, any> {
 }
 
 describe('release adapter rendering', () => {
+  it('passes the exact rendered Chocolatey package file names through retry preflight', () => {
+    const {files} = renderAdapters(makeManifest(), 'chocolatey');
+    const run = spawnSync(process.platform === 'win32' ? 'python' : 'python3', ['-c', [
+      'import importlib.util, io, json, sys, zipfile',
+      'spec = importlib.util.spec_from_file_location("preflight", sys.argv[1])',
+      'module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)',
+      'data = io.BytesIO()',
+      'with zipfile.ZipFile(data, "w") as archive:',
+      '    for name, content in json.load(sys.stdin).items(): archive.writestr(name.removeprefix("chocolatey/"), content)',
+      'module.package_inventory(data.getvalue(), "1.2.3")',
+    ].join('\n'), path.resolve(__dirname, '../../scripts/release/chocolatey-preflight.py')], {
+      input: JSON.stringify(files), encoding: 'utf8', timeout: 10000,
+    });
+    if (run.status !== 0) throw new Error(run.stderr || String(run.error));
+    expect(run.status).toBe(0);
+  });
   it('renders deterministic native adapters and a fail-closed PyPI publication descriptor', () => {
     const manifest = makeManifest();
     const rendered = renderAdapters(manifest, 'pypi,chocolatey,winget,scoop,homebrew');

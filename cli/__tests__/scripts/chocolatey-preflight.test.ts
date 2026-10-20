@@ -15,7 +15,7 @@ describe('Chocolatey publication idempotency', () => {
       '    data = io.BytesIO()',
       '    with zipfile.ZipFile(data, "w") as archive:',
       '        archive.writestr("guardscan.nuspec", f"<package><metadata><id>{identity}</id><version>{version}</version></metadata></package>")',
-      '        archive.writestr("tools/chocolateyinstall.ps1", content)',
+      '        archive.writestr("tools/chocolateyInstall.ps1", content)',
       `        archive.writestr(f"package/services/metadata/core-properties/{guid}.psmdcp", '<coreProperties xmlns="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" />')`,
       '        if extra: archive.writestr("tools/extra.ps1", "unexpected")',
       '    return data.getvalue()',
@@ -30,7 +30,7 @@ describe('Chocolatey publication idempotency', () => {
       '        else: raise AssertionError("conflicting package accepted")',
       '    def failure(_version): raise urllib.error.HTTPError("https://community.chocolatey.org", 500, "error", {}, None)',
       '    try: module.preflight(local, "1.2.3", failure)',
-      '    except urllib.error.HTTPError: pass',
+      '    except module.RegistryUnavailable: pass',
       '    else: raise AssertionError("server failure became a publication request")',
       '    with patch("urllib.request.urlopen", side_effect=urllib.error.HTTPError("https://community.chocolatey.org", 503, "temporary", {}, None)), contextlib.redirect_stderr(io.StringIO()):',
       '        sys.argv = [helper, "--package", str(local), "--version", "1.2.3"]',
@@ -43,6 +43,42 @@ describe('Chocolatey publication idempotency', () => {
     });
     if (result.status !== 0) throw new Error(result.stderr || result.stdout || String(result.error));
     expect(result.stdout).toContain('regressions passed');
+  });
+
+  it('classifies fetch-only dropped connections and truncated responses as retryable, not local conflicts', () => {
+    const script = [
+      'import http.client, importlib.util, io, pathlib, sys, tempfile, urllib.error, zipfile',
+      'spec = importlib.util.spec_from_file_location("preflight", sys.argv[1])',
+      'module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)',
+      'data = io.BytesIO()',
+      'with zipfile.ZipFile(data, "w") as archive:',
+      '    archive.writestr("guardscan.nuspec", "<package><metadata><id>guardscan</id><version>1.2.3</version></metadata></package>")',
+      '    archive.writestr("tools/chocolateyInstall.ps1", "installer")',
+      'with tempfile.TemporaryDirectory() as root:',
+      '    local = pathlib.Path(root) / "package.nupkg"; local.write_bytes(data.getvalue())',
+      '    for failure in [ConnectionResetError("reset"), http.client.RemoteDisconnected("closed"), http.client.IncompleteRead(b"part", 42), urllib.error.HTTPError("url", 503, "unavailable", {}, None)]:',
+      '        def fetch(_version): raise failure',
+      '        try: module.preflight(local, "1.2.3", fetch)',
+      '        except module.RegistryUnavailable: pass',
+      '        else: raise AssertionError("transport failure was not retryable")',
+      '    try: module.preflight(local, "1.2.3", lambda _: b"truncated ZIP")',
+      '    except module.RegistryUnavailable: pass',
+      '    else: raise AssertionError("truncated remote body was treated as a payload conflict")',
+      '    for status in [401, 403, 409]:',
+      '        def fatal(_version): raise urllib.error.HTTPError("url", status, "fatal", {}, None)',
+      '        try: module.preflight(local, "1.2.3", fatal)',
+      '        except urllib.error.HTTPError: pass',
+      '        else: raise AssertionError("fatal HTTP status was retried")',
+      '    local.write_bytes(b"broken local ZIP")',
+      '    try: module.preflight(local, "1.2.3", lambda _: data.getvalue())',
+      '    except zipfile.BadZipFile: pass',
+      '    else: raise AssertionError("local corruption was classified as network failure")',
+      'print("fetch-only retry boundary passed")',
+    ].join('\n');
+    const result = spawnSync(process.platform === 'win32' ? 'python' : 'python3', ['-c', script,
+      path.resolve(__dirname, '../../scripts/release/chocolatey-preflight.py')], {encoding: 'utf8', timeout: 10000});
+    if (result.status !== 0) throw new Error(result.stderr || result.stdout || String(result.error));
+    expect(result.stdout).toContain('fetch-only retry boundary passed');
   });
 
   it('preflights before push and accepts retry/race success only with matching remote payloads', () => {

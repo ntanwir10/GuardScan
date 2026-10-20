@@ -400,6 +400,10 @@ jobs:
     name: Publish every automated channel
     if: vars.RELEASE_AUTOMATION_ENABLED == 'true' && needs.prepare.outputs.build == 'true'
     needs: [prepare, build]
+    concurrency:
+      group: release-publication-${{ needs.prepare.outputs.channel }}
+      queue: max
+      cancel-in-progress: false
     permissions:
       contents: write
       actions: read
@@ -440,6 +444,11 @@ jobs:
         with:
           name: release-catalog-publication-${{ needs.prepare.outputs.tag }}
           path: catalog-publication
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        if: needs.prepare.outputs.channel == 'stable'
+        with:
+          name: release-winget-${{ needs.prepare.outputs.tag }}
+          path: winget-publication
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: ${{ env.RELEASE_NODE_VERSION }}
@@ -557,6 +566,18 @@ jobs:
             });
           }
           if (process.env.RELEASE_CHANNEL === 'stable') {
+            const winget = JSON.parse(fs.readFileSync('winget-publication/winget-submission.json', 'utf8'));
+            if (winget.schemaVersion !== 'guardscan.winget-submission.v1'
+                || winget.tag !== tag || winget.repository !== 'microsoft/winget-pkgs'
+                || !Number.isSafeInteger(winget.pullRequest) || winget.pullRequest < 1
+                || !/^[a-f0-9]{40}$/.test(winget.headCommit || '')
+                || !/^[a-f0-9]{64}$/.test(winget.manifestSha256 || '')
+                || !['OPEN', 'MERGED'].includes(winget.state)
+                || winget.url !== `https://github.com/microsoft/winget-pkgs/pull/${winget.pullRequest}`) {
+              throw new Error('WinGet submission evidence is invalid or belongs to another train');
+            }
+            // OPEN -> MERGED is not a new submission. Keep retry payloads immutable.
+            const {state: submissionState, ...wingetIdentity} = winget;
             for (const channel of ['winget', 'chocolatey']) {
               const idempotencyKey = `submitted:${channel}:${tag}`;
               appendEvent(ledger, {
@@ -564,8 +585,9 @@ jobs:
                 idempotencyKey,
                 payload: {
                   artifactIds: artifactIds.scoop,
-                  remoteIdentity: `${channel}:${tag}`,
-                  remoteDigest: manifestSha256,
+                  remoteIdentity: channel === 'winget' ? `${winget.url}@${winget.headCommit}` : `${channel}:${tag}`,
+                  remoteDigest: channel === 'winget' ? winget.manifestSha256 : manifestSha256,
+                  ...(channel === 'winget' ? {submission: wingetIdentity} : {}),
                 },
               });
             }

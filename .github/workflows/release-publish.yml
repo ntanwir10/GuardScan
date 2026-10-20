@@ -29,10 +29,48 @@ jobs:
       contents: write
       actions: read
     steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.RELEASE_NODE_VERSION }}
+      - working-directory: cli
+        run: npm ci
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: release-payload-${{ inputs.tag }}
           path: payload
+      - name: Reuse existing immutable tag payload
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          if gh api "repos/${GITHUB_REPOSITORY}/releases/tags/$RELEASE_TAG" \
+            > "$RUNNER_TEMP/existing-release.json" 2> "$RUNNER_TEMP/release-lookup-error"; then
+            jq -e --arg tag "$RELEASE_TAG" '
+              .tag_name == $tag and
+              ([.assets[].name] | length == (unique | length)) and
+              all(.assets[]; .name | test("^[A-Za-z0-9][A-Za-z0-9._+~-]*$"))
+            ' "$RUNNER_TEMP/existing-release.json" >/dev/null
+            if [ "$(jq '.assets | length' "$RUNNER_TEMP/existing-release.json")" -gt 0 ]; then
+              # Never replace already published run-specific signatures/manifests with a rebuild.
+              jq -e '[.assets[].name] | index("release-manifest.json") != null and
+                index("SHA256SUMS") != null and index("SHA256SUMS.sigstore.json") != null' \
+                "$RUNNER_TEMP/existing-release.json" >/dev/null || {
+                  echo 'Existing draft has incomplete canonical evidence; refusing to rebuild over it.' >&2
+                  exit 1
+                }
+              mkdir canonical-payload
+              gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --dir canonical-payload
+              mv payload rebuilt-payload
+              mv canonical-payload payload
+            fi
+          elif ! grep -q 'HTTP 404' "$RUNNER_TEMP/release-lookup-error"; then
+            echo 'Could not determine immutable tag payload state; refusing publication.' >&2
+            exit 1
+          fi
       - uses: sigstore/cosign-installer@d58896d6a1865668819e1d91763c7751a165e159 # v3.9.2
       - name: Authenticate release-build producer and verify payload
         id: release-build-identity
@@ -63,6 +101,7 @@ jobs:
             --certificate-github-workflow-sha "$BUILD_WORKFLOW_SHA" \
             --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
             payload/SHA256SUMS
+          node cli/scripts/release/checksum-inventory.js payload
           (cd payload && sha256sum --check SHA256SUMS)
           TAG_SHA="$(gh api "repos/${GITHUB_REPOSITORY}/commits/v$VERSION" --jq .sha)"
           jq -e --arg repository "$GITHUB_REPOSITORY" --arg version "$VERSION" \
@@ -79,6 +118,10 @@ jobs:
               exit 1
             }
           echo "workflow_sha=$BUILD_WORKFLOW_SHA" >> "$GITHUB_OUTPUT"
+      - name: Restore npm artifact from authenticated canonical payload
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: node cli/scripts/release/restore-npm-payload.js payload canonical-npm "$RELEASE_TAG"
       - name: Create or reuse draft and upload only missing identical assets
         env:
           GH_TOKEN: ${{ github.token }}
@@ -167,6 +210,20 @@ jobs:
           if [ "$(gh release view "${{ inputs.tag }}" --repo "${{ github.repository }}" --json isDraft --jq .isDraft)" = true ]; then
             gh release edit "${{ inputs.tag }}" --repo "${{ github.repository }}" --draft=false
           fi
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-payload-${{ inputs.tag }}
+          path: payload/
+          overwrite: true
+          if-no-files-found: error
+          retention-days: 30
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-npm-${{ inputs.tag }}
+          path: canonical-npm/
+          overwrite: true
+          if-no-files-found: error
+          retention-days: 30
 
   npm:
     name: npm trusted publication
@@ -610,17 +667,39 @@ jobs:
         shell: pwsh
         env:
           WINGET_GITHUB_TOKEN: ${{ secrets.WINGET_GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.WINGET_GITHUB_TOKEN }}
+          RELEASE_VERSION: ${{ inputs.tag }}
         run: |
+          $installer = Get-ChildItem adapters\winget -Filter '*.installer.yaml' -Recurse | Select-Object -First 1
+          if ($null -eq $installer) { throw 'Rendered WinGet installer manifest is missing' }
+          function Get-SubmissionState {
+            $state = & node cli/scripts/release/winget-submission.js $installer.Directory.FullName $env:RELEASE_VERSION winget-submission.json
+            if ($LASTEXITCODE -ne 0) { throw 'WinGet exact-state verification failed' }
+            return ($state | ConvertFrom-Json)
+          }
+          $state = Get-SubmissionState
+          if (-not $state.submitRequired) { exit 0 }
           $creator = Join-Path $env:RUNNER_TEMP 'wingetcreate.exe'
           Invoke-WebRequest -Uri 'https://github.com/microsoft/winget-create/releases/download/v1.12.13.0/wingetcreate.exe' -OutFile $creator
           $expectedHash = '24042bd37915805615e6cf969ac57c6439124c3fe85823327f5f3fb24bd9ffea'
           if ((Get-FileHash -LiteralPath $creator -Algorithm SHA256).Hash.ToLowerInvariant() -ne $expectedHash) {
             throw 'WinGetCreate digest mismatch'
           }
-          $installer = Get-ChildItem adapters\winget -Filter '*.installer.yaml' -Recurse | Select-Object -First 1
-          if ($null -eq $installer) { throw 'Rendered WinGet installer manifest is missing' }
           & $creator submit $installer.Directory.FullName --token $env:WINGET_GITHUB_TOKEN
-          if ($LASTEXITCODE -ne 0) { throw 'WinGet submission failed' }
+          $submitStatus = $LASTEXITCODE
+          if ($submitStatus -ne 0) { Write-Warning 'WinGet submission failed; verifying exact remote state.' }
+          for ($attempt = 0; $attempt -lt 6; $attempt++) {
+            $state = Get-SubmissionState
+            if (-not $state.submitRequired) { exit 0 }
+            if ($attempt -lt 5) { Start-Sleep -Seconds 10 }
+          }
+          throw "WinGet submission did not converge to a matching PR (submit exit $submitStatus)"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-winget-${{ inputs.tag }}
+          path: winget-submission.json
+          overwrite: true
+          if-no-files-found: error
 
   chocolatey:
     name: Chocolatey submission

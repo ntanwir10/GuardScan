@@ -4,6 +4,7 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const {spawnSync} = require('child_process');
+const semver = require('semver');
 const {readJson, resolveGitTimestamp} = require('./lib');
 
 const METADATA_FILE = 'npm-artifact.json';
@@ -164,6 +165,12 @@ function buildNpmArtifact(source, outputDir, options = {}) {
 }
 
 function classifyNpmRemote(localArtifact, remoteIntegrity, options = {}) {
+  if (options.expectedDistTag && options.taggedVersion !== undefined) {
+    if (!semver.valid(options.taggedVersion)) throw new Error('npm dist-tag has an invalid version');
+    if (semver.gt(options.taggedVersion, localArtifact.version)) {
+      throw new Error(`refusing to move npm ${options.expectedDistTag} backwards from ${options.taggedVersion}`);
+    }
+  }
   if (remoteIntegrity === undefined) {
     return {exists: false, matching: false, publishRequired: true};
   }
@@ -196,17 +203,19 @@ function queryNpmRemote(localArtifact, options = {}) {
     maxBuffer: 1024 * 1024,
   });
   if (result.error) throw result.error;
-  if (result.status !== 0) {
-    if (/\bE404\b|404 Not Found/i.test(result.stderr)) return classifyNpmRemote(localArtifact, undefined);
-    throw new Error(`npm registry preflight failed: ${result.stderr.trim()}`);
-  }
   let integrity;
-  try {
-    integrity = JSON.parse(result.stdout);
-  } catch {
-    throw new Error('npm registry returned invalid integrity JSON');
+  if (result.status !== 0) {
+    if (!/\bE404\b|404 Not Found/i.test(result.stderr)) {
+      throw new Error(`npm registry preflight failed: ${result.stderr.trim()}`);
+    }
+  } else {
+    try {
+      integrity = JSON.parse(result.stdout);
+    } catch {
+      throw new Error('npm registry returned invalid integrity JSON');
+    }
+    if (typeof integrity !== 'string') throw new Error('npm registry returned no integrity for an existing version');
   }
-  if (typeof integrity !== 'string') throw new Error('npm registry returned no integrity for an existing version');
   if (!options.expectedDistTag) return classifyNpmRemote(localArtifact, integrity);
   if (!/^[a-z][a-z0-9._-]{0,63}$/.test(options.expectedDistTag)) {
     throw new Error('npm expected dist-tag is invalid');
@@ -222,10 +231,12 @@ function queryNpmRemote(localArtifact, options = {}) {
     maxBuffer: 1024 * 1024,
   });
   if (tags.error) throw tags.error;
-  if (tags.status !== 0) throw new Error(`npm dist-tag preflight failed: ${tags.stderr.trim()}`);
+  if (tags.status !== 0 && !(integrity === undefined && /\bE404\b|404 Not Found/i.test(tags.stderr))) {
+    throw new Error(`npm dist-tag preflight failed: ${tags.stderr.trim()}`);
+  }
   let distTags;
   try {
-    distTags = JSON.parse(tags.stdout);
+    distTags = tags.status !== 0 ? {} : JSON.parse(tags.stdout);
   } catch {
     throw new Error('npm registry returned invalid dist-tag JSON');
   }

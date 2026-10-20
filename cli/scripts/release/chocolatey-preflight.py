@@ -1,6 +1,7 @@
 """Fail-closed Chocolatey package retry check; no credentials or third-party modules."""
 import argparse
 import hashlib
+import http.client
 import io
 import json
 import pathlib
@@ -14,6 +15,10 @@ import zipfile
 MAX_PACKAGE_BYTES = 16 * 1024 * 1024
 MAX_EXPANDED_BYTES = 8 * 1024 * 1024
 CORE_PROPERTIES = re.compile(r"package/services/metadata/core-properties/[0-9a-fA-F]{32}\.psmdcp")
+
+
+class RegistryUnavailable(Exception):
+    """A failed remote fetch, never a local package error or payload conflict."""
 
 
 def package_inventory(data, version):
@@ -70,7 +75,7 @@ def package_inventory(data, version):
                 release = document.find('.//{*}metadata/{*}version')
                 if identity is None or (identity.text or '').lower() != 'guardscan' or release is None or release.text != version:
                     raise ValueError("Chocolatey package identity/version mismatch")
-        if 'guardscan.nuspec' not in inventory or 'tools/chocolateyinstall.ps1' not in inventory:
+        if 'guardscan.nuspec' not in inventory or 'tools/chocolateyInstall.ps1' not in inventory:
             raise ValueError("Chocolatey package lacks the required identity or installer")
     return inventory
 
@@ -94,10 +99,18 @@ def preflight(package, version, fetch=fetch_package):
     try:
         remote = fetch(version)
     except urllib.error.HTTPError as error:
-        if error.code != 404:
-            raise
-        return {'publishRequired': True, 'payloadDigest': digest}
-    if package_inventory(remote, version) != local:
+        if error.code == 404:
+            return {'publishRequired': True, 'payloadDigest': digest}
+        if error.code in (429, 500, 502, 503, 504):
+            raise RegistryUnavailable("Temporary registry HTTP failure") from error
+        raise
+    except (OSError, urllib.error.URLError, http.client.HTTPException) as error:
+        raise RegistryUnavailable("Registry transport failure") from error
+    try:
+        remote_inventory = package_inventory(remote, version)
+    except zipfile.BadZipFile as error:
+        raise RegistryUnavailable("Incomplete or corrupt registry download") from error
+    if remote_inventory != local:
         raise ValueError("Existing Chocolatey version has conflicting package payloads")
     return {'publishRequired': False, 'payloadDigest': digest}
 
@@ -109,9 +122,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
     try:
         print(json.dumps(preflight(args.package, args.version)))
-    except (urllib.error.URLError, TimeoutError) as error:
-        if isinstance(error, urllib.error.HTTPError) and error.code not in (429, 500, 502, 503, 504):
-            raise
+    except RegistryUnavailable:
         # Pre-push remains fail-closed; only post-push polling may retry this code.
         print('Chocolatey registry is temporarily unavailable', file=sys.stderr)
         sys.exit(75)
