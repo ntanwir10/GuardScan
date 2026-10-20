@@ -10,6 +10,8 @@ const PACKAGE = 'NaumanTanwir.GuardScan';
 const LIMIT = 1024 * 1024;
 const shaPattern = /^[a-f0-9]{40}$/;
 
+class VerificationUnavailable extends Error {}
+
 function canonical(value) {
   if (Array.isArray(value)) return value.map(canonical);
   if (value && typeof value === 'object') {
@@ -27,10 +29,24 @@ function document(bytes, version) {
   return canonical(value);
 }
 
-function githubApi(endpoint) {
-  return JSON.parse(execFileSync('gh', ['api', endpoint], {
-    encoding: 'utf8', timeout: 60000, maxBuffer: 8 * LIMIT, windowsHide: true,
-  }));
+function githubApi(endpoint, execute = execFileSync) {
+  let output;
+  try {
+    output = execute('gh', ['api', endpoint], {
+      encoding: 'utf8', timeout: 60000, maxBuffer: 8 * LIMIT, windowsHide: true,
+    });
+  } catch (error) {
+    const detail = String(error.stderr || error.message || '');
+    const status = /HTTP (\d{3})/.exec(detail)?.[1];
+    const transient = status
+      ? status === '429' || /^5\d\d$/.test(status)
+        || (status === '403' && /API rate limit exceeded|secondary rate limit/i.test(detail))
+      : error.code === 'ETIMEDOUT'
+        || /error connecting to api\.github\.com|connection reset|TLS handshake timeout|i\/o timeout/i.test(detail);
+    if (transient) throw new VerificationUnavailable('WinGet API temporarily unavailable');
+    throw new Error('WinGet API request failed');
+  }
+  return JSON.parse(output);
 }
 
 function findSubmission(directory, tag, {api = githubApi} = {}) {
@@ -51,7 +67,8 @@ function findSubmission(directory, tag, {api = githubApi} = {}) {
   const digest = crypto.createHash('sha256').update(JSON.stringify(local)).digest('hex');
   const q = encodeURIComponent(`repo:${REPOSITORY} is:pr "${PACKAGE}" "${version}" in:title`);
   const search = api(`search/issues?q=${q}&per_page=100`);
-  if (search.incomplete_results || !Number.isSafeInteger(search.total_count)
+  if (search.incomplete_results === true) throw new VerificationUnavailable('WinGet submission search temporarily incomplete');
+  if (search.incomplete_results !== false || !Number.isSafeInteger(search.total_count)
       || search.total_count > 100 || search.items?.length !== search.total_count) {
     throw new Error('WinGet submission search is incomplete');
   }
@@ -89,7 +106,7 @@ function findSubmission(directory, tag, {api = githubApi} = {}) {
     if (JSON.stringify(ordered) !== JSON.stringify(local)) throw new Error('Existing WinGet PR has conflicting manifest payloads');
     const after = api(endpoint);
     if (after.head?.sha !== pr.head.sha || (after.state !== 'open' && !after.merged)) {
-      throw new Error('WinGet PR head/state changed during verification');
+      throw new VerificationUnavailable('WinGet PR head/state changed during verification');
     }
     matches.push({schemaVersion: 'guardscan.winget-submission.v1', tag: `v${version}`,
       repository: REPOSITORY, pullRequest: item.number, headCommit: pr.head.sha,
@@ -102,11 +119,17 @@ function findSubmission(directory, tag, {api = githubApi} = {}) {
 
 if (require.main === module) {
   const [directory, tag, evidence] = process.argv.slice(2);
-  const result = findSubmission(directory, tag);
-  if (!result.submitRequired && evidence) {
-    fs.writeFileSync(evidence, JSON.stringify(result.submission, null, 2) + '\n');
+  try {
+    const result = findSubmission(directory, tag);
+    if (!result.submitRequired && evidence) {
+      fs.writeFileSync(evidence, JSON.stringify(result.submission, null, 2) + '\n');
+    }
+    process.stdout.write(JSON.stringify(result) + '\n');
+  } catch (error) {
+    if (!(error instanceof VerificationUnavailable)) throw error;
+    process.stderr.write('WinGet verification temporarily unavailable\n');
+    process.exitCode = 75;
   }
-  process.stdout.write(JSON.stringify(result) + '\n');
 }
 
-module.exports = {findSubmission};
+module.exports = {findSubmission, githubApi, VerificationUnavailable};

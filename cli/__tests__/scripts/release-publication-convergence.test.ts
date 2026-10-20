@@ -15,6 +15,16 @@ describe('publication convergence', () => {
     });
   });
 
+  it('blocks backwards or unrecoverable npm tag state before other channels can publish', () => {
+    const job = workflow('release-publish.yml').jobs.github;
+    const gate = job.steps.findIndex((s: any) => s.name === 'Check shared mutable tag state before publication');
+    const effects = job.steps.findIndex((s: any) => s.name === 'Create or reuse draft and upload only missing identical assets');
+    expect(gate).toBeGreaterThan(-1);
+    expect(gate).toBeLessThan(effects);
+    expect(job.steps[gate].run).toContain('release:npm-preflight');
+    expect(job.steps[gate].run).toContain('dist-tag-repair-required=true');
+  });
+
   it('rejects moving a shared npm tag backwards even if an older version is absent', () => {
     const {classifyNpmRemote} = require('../../scripts/release/npm-artifact');
     const artifact = {version: '1.2.3-rc.1', integrity: 'sha512-test'};
@@ -107,6 +117,23 @@ describe('publication convergence', () => {
     expect(job.steps.some((s: any) => s.with?.name === 'release-winget-${{ inputs.tag }}')).toBe(true);
   });
 
+  it('retries only classified transient WinGet verification failures after, never before, submission', () => {
+    const {githubApi, VerificationUnavailable} = require('../../scripts/release/winget-submission');
+    for (const detail of ['gh: HTTP 503', 'gh: HTTP 429', 'error connecting to api.github.com']) {
+      expect(() => githubApi('fixture', () => { throw Object.assign(new Error('request failed'), {stderr: detail}); }))
+        .toThrow(VerificationUnavailable);
+    }
+    for (const detail of ['gh: HTTP 401', 'gh: HTTP 403']) {
+      expect(() => githubApi('fixture', () => { throw Object.assign(new Error('request failed'), {stderr: detail}); }))
+        .not.toThrow(VerificationUnavailable);
+    }
+    const submit = workflow('release-publish.yml').jobs.winget.steps.find((s: any) => s.name === 'Submit WinGet manifests');
+    expect(submit.run).toContain('catch [System.IO.IOException]');
+    expect(submit.run).toContain('$verifyStatus -eq 75');
+    expect(submit.run.indexOf('catch [System.IO.IOException]')).toBeGreaterThan(submit.run.indexOf('& $creator submit'));
+    expect(submit.run).not.toMatch(/catch\s*\{/);
+  });
+
   it('restores npm metadata from the original signed manifest and detects altered bytes', () => {
     const {restoreNpmPayload} = require('../../scripts/release/restore-npm-payload');
     const crypto = require('crypto');
@@ -158,7 +185,7 @@ describe('publication convergence', () => {
       if (options.extra) files.push({filename: 'unrelated.yaml', status: 'added', sha: 'c'.repeat(40)});
       const api = (endpoint: string) => {
         if (endpoint.startsWith('search/issues?')) return {total_count: options.absent ? 0 : 1,
-          incomplete_results: false, items: options.absent ? [] : [{number: 123}]};
+          incomplete_results: !!options.incomplete, items: options.absent ? [] : [{number: 123}]};
         if (endpoint.includes('/files?')) return files;
         if (endpoint.includes('/git/blobs/')) return blobs[endpoint.split('/').pop()!];
         reads++;
@@ -175,6 +202,10 @@ describe('publication convergence', () => {
       expect(check({closed: true}).submitRequired).toBe(true);
       expect(check({absent: true}).submitRequired).toBe(true);
       for (const options of [{conflict: true}, {extra: true}, {race: true}]) expect(() => check(options)).toThrow();
+      const {VerificationUnavailable} = require('../../scripts/release/winget-submission');
+      expect(() => check({incomplete: true})).toThrow(VerificationUnavailable);
+      expect(() => check({race: true})).toThrow(VerificationUnavailable);
+      expect(() => check({conflict: true})).not.toThrow(VerificationUnavailable);
     } finally { fs.rmSync(root, {recursive: true, force: true}); }
   });
 });

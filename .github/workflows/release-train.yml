@@ -666,20 +666,45 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
         run: |
-          ELIGIBLE="$(node - <<'NODE'
+          CURRENT_HEAD="$(gh pr view "$RELEASE_PR" \
+            --repo "${GITHUB_REPOSITORY}" --json headRefOid --jq .headRefOid)"
+          ELIGIBLE="$(CURRENT_HEAD="$CURRENT_HEAD" node - <<'NODE'
+          const fs = require('fs');
           const {readEvents, materializeReleaseState} = require('./cli/scripts/release/events');
+          const {createPromotionDecision} = require('./cli/scripts/release/promotion');
           const events = readEvents('release-events.jsonl');
           const state = materializeReleaseState(events);
-          const channels = ['npm', 'pnpm', 'yarn', 'bun', 'github', 'homebrew', 'scoop', 'pypi'];
-          const enough = channels.every(channel => {
-            const samples = state.canaries[channel] || [];
-            return samples.length >= 24 && samples.every(sample => sample.status === 'passed');
-          });
-          const noIncidents = Object.values(state.incidents).every(incident => incident.status !== 'open');
+          const candidate = JSON.parse(fs.readFileSync('.release-candidate.json', 'utf8'));
+          const started = events.find(event => event.type === 'train_started');
+          if (candidate.sourcePr !== Number(process.env.RELEASE_PR)
+              || started?.payload.releasePr !== candidate.sourcePr
+              || started?.payload.sourcePrHead !== candidate.sourcePrHead) {
+            throw new Error('Promotion source PR does not match the immutable candidate and recorded train head');
+          }
           const published = events.find(event => event.type === 'channel_published' && event.channel === 'github');
-          const soaked = Boolean(published)
-            && Date.now() >= Date.parse(published.timestamp) + 24 * 60 * 60 * 1000;
-          process.stdout.write(String(enough && noIncidents && soaked));
+          if (!published || !state.manifestSha256) throw new Error('RC has no published manifest identity');
+          const canaries = Object.entries(state.canaries).flatMap(([channel, samples]) =>
+            samples.map(sample => ({channel, status: sample.status, checkedAt: sample.checkedAt}))
+          );
+          const incidents = Object.entries(state.incidents).map(([incidentId, value]) => ({incidentId, ...value}));
+          const input = {
+            rc: {
+              version: state.version,
+              tag: state.tag,
+              commit: state.commit,
+              manifestSha256: state.manifestSha256,
+              publishedAt: published.timestamp,
+              sourcePr: candidate.sourcePr,
+              sourcePrHead: candidate.sourcePrHead,
+            },
+            currentSourcePrHead: process.env.CURRENT_HEAD,
+            evaluatedAt: new Date().toISOString(),
+            requiredChannels: ['npm', 'pnpm', 'yarn', 'bun', 'github', 'homebrew', 'scoop', 'pypi'],
+            canaries,
+            incidents,
+          };
+          const decision = createPromotionDecision(input);
+          process.stdout.write(String(decision.eligible));
           NODE
           )"
           if [ "$ELIGIBLE" = true ]; then

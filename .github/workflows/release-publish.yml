@@ -147,6 +147,20 @@ jobs:
         env:
           RELEASE_TAG: ${{ inputs.tag }}
         run: node cli/scripts/release/restore-npm-payload.js payload canonical-npm "$RELEASE_TAG"
+      - name: Check shared mutable tag state before publication
+        working-directory: cli
+        env:
+          RELEASE_CHANNEL: ${{ inputs.channel }}
+        run: |
+          DIST_TAG=latest
+          if [ "$RELEASE_CHANNEL" = rc ]; then DIST_TAG=next; fi
+          : > "$RUNNER_TEMP/shared-tag-state"
+          npm run release:npm-preflight -- --artifact-dir ../canonical-npm \
+            --expected-dist-tag "$DIST_TAG" --github-output "$RUNNER_TEMP/shared-tag-state"
+          if grep -Fxq 'dist-tag-repair-required=true' "$RUNNER_TEMP/shared-tag-state"; then
+            echo 'Shared npm tag drift requires authority outside trusted publication; refusing all channel writes.' >&2
+            exit 1
+          fi
       - name: Create or reuse draft and upload only missing identical assets
         env:
           GH_TOKEN: ${{ github.token }}
@@ -359,6 +373,8 @@ jobs:
               if error.code != 404:
                   raise
               remote = {"urls": []}
+          if any(item.get("yanked") is not False for item in remote["urls"]):
+              raise SystemExit("TestPyPI release contains yanked or unknown-yank-state files")
           remote_files = {item["filename"]: item["digests"]["sha256"] for item in remote["urls"]}
           for wheel in pathlib.Path("dist").glob("*.whl"):
               digest = hashlib.sha256(wheel.read_bytes()).hexdigest()
@@ -426,6 +442,8 @@ jobs:
               if error.code != 404:
                   raise
               remote = {"urls": []}
+          if any(item.get("yanked") is not False for item in remote["urls"]):
+              raise SystemExit("PyPI release contains yanked or unknown-yank-state files")
           remote_files = {item["filename"]: item["digests"]["sha256"] for item in remote["urls"]}
           local_files = {
               wheel.name: hashlib.sha256(wheel.read_bytes()).hexdigest()
@@ -460,9 +478,12 @@ jobs:
           for attempt in range(30):
               try:
                   with urllib.request.urlopen(url, timeout=30) as response:
+                      document = json.load(response)
+                      if any(item.get("yanked") is not False for item in document["urls"]):
+                          raise SystemExit("PyPI release contains yanked or unknown-yank-state files")
                       remote = {
                           item["filename"]: item["digests"]["sha256"]
-                          for item in json.load(response)["urls"]
+                          for item in document["urls"]
                       }
               except urllib.error.HTTPError as error:
                   if error.code != 404:
@@ -550,6 +571,19 @@ jobs:
                 git push origin "$BRANCH"
               fi
               EXPECTED_HEAD="$(git rev-parse HEAD)"
+              git fetch origin main
+              PROJECTION_BASE="$(git rev-parse FETCH_HEAD)"
+              if [ -n "$PR_NUMBER" ]; then
+                PRIOR_MERGE="$(gh pr view --repo "ntanwir10/$REPO" "$PR_NUMBER" --json state,mergeCommit \
+                  --jq 'if .state == "MERGED" then .mergeCommit.oid else "" end')"
+                if [ -n "$PRIOR_MERGE" ]; then
+                  [[ "$PRIOR_MERGE" =~ ^[a-f0-9]{40}$ ]] || exit 1
+                  git fetch origin "$PRIOR_MERGE"
+                  PROJECTION_BASE="$(git rev-parse "$PRIOR_MERGE^1")"
+                fi
+              fi
+              node ../cli/scripts/release/adapter-projection.js \
+                "../$SOURCE" "$TARGET" "$EXPECTED_HEAD" "$PROJECTION_BASE"
               if [ -z "$PR_NUMBER" ]; then
                 gh pr create --repo "ntanwir10/$REPO" \
                   --base main --head "$BRANCH" \
@@ -609,6 +643,8 @@ jobs:
                 esac
                 test "${#MERGE_SHA}" -eq 40
                 git fetch origin "$MERGE_SHA"
+                node ../cli/scripts/release/adapter-projection.js \
+                  "../$SOURCE" "$TARGET" "$MERGE_SHA" "$(git rev-parse "$MERGE_SHA^1")"
                 git show "$MERGE_SHA:$TARGET" > merged-adapter-file
                 cmp --silent "../$SOURCE" merged-adapter-file || {
                   echo 'merged adapter bytes differ from the release projection' >&2
@@ -701,7 +737,9 @@ jobs:
           if ($null -eq $installer) { throw 'Rendered WinGet installer manifest is missing' }
           function Get-SubmissionState {
             $state = & node cli/scripts/release/winget-submission.js $installer.Directory.FullName $env:RELEASE_VERSION winget-submission.json
-            if ($LASTEXITCODE -ne 0) { throw 'WinGet exact-state verification failed' }
+            $verifyStatus = $LASTEXITCODE
+            if ($verifyStatus -eq 75) { throw [System.IO.IOException]::new('WinGet verification temporarily unavailable') }
+            if ($verifyStatus -ne 0) { throw 'WinGet exact-state verification failed' }
             return ($state | ConvertFrom-Json)
           }
           $state = Get-SubmissionState
@@ -716,8 +754,12 @@ jobs:
           $submitStatus = $LASTEXITCODE
           if ($submitStatus -ne 0) { Write-Warning 'WinGet submission failed; verifying exact remote state.' }
           for ($attempt = 0; $attempt -lt 6; $attempt++) {
-            $state = Get-SubmissionState
-            if (-not $state.submitRequired) { exit 0 }
+            try {
+              $state = Get-SubmissionState
+              if (-not $state.submitRequired) { exit 0 }
+            } catch [System.IO.IOException] {
+              Write-Warning 'WinGet verification temporarily unavailable; retrying.'
+            }
             if ($attempt -lt 5) { Start-Sleep -Seconds 10 }
           }
           throw "WinGet submission did not converge to a matching PR (submit exit $submitStatus)"

@@ -615,8 +615,9 @@ jobs:
                 }
                 winget install --exact --id NaumanTanwir.GuardScan --version "${{ matrix.train.version }}" --accept-package-agreements --accept-source-agreements
                 if ($LASTEXITCODE -ne 0) { throw 'WinGet installation failed' }
-                guardscan --version
+                $reportedVersion = (& guardscan --version | Out-String).Trim()
                 if ($LASTEXITCODE -ne 0) { throw 'WinGet invocation failed' }
+                if ($reportedVersion -cne '${{ matrix.train.version }}') { throw 'WinGet installed executable version mismatch' }
                 winget uninstall --exact --id NaumanTanwir.GuardScan
                 if ($LASTEXITCODE -ne 0) { throw 'WinGet uninstall failed' }
               } else {
@@ -642,8 +643,9 @@ jobs:
                 }
                 choco install guardscan --version "${{ matrix.train.version }}" --yes
                 if ($LASTEXITCODE -ne 0) { throw 'Chocolatey installation failed' }
-                guardscan --version
+                $reportedVersion = (& guardscan --version | Out-String).Trim()
                 if ($LASTEXITCODE -ne 0) { throw 'Chocolatey invocation failed' }
+                if ($reportedVersion -cne '${{ matrix.train.version }}') { throw 'Chocolatey installed executable version mismatch' }
                 choco uninstall guardscan --yes
                 if ($LASTEXITCODE -ne 0) { throw 'Chocolatey uninstall failed' }
               }

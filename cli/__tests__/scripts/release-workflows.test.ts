@@ -382,7 +382,7 @@ describe('zero-touch release workflow contracts', () => {
     expect(train).not.toContain('stable-promotion-approval');
     expect(canary).toContain('cron: "7 * * * *"');
     expect(canary).toContain('group: release-ledger');
-    expect(train).toContain('samples.length >= 24');
+    expect(train).toContain('const decision = createPromotionDecision(input)');
   });
 
   it('builds signed artifacts and publishes through isolated provider environments', () => {
