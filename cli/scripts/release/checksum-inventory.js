@@ -3,15 +3,33 @@
 const fs = require('fs');
 const crypto = require('crypto');
 const path = require('path');
-const {readBounded} = require('./lib');
 
 const SAFE_NAME = /^[A-Za-z0-9][A-Za-z0-9._+~-]*$/;
 const INVENTORY_FILES = new Set(['SHA256SUMS', 'SHA256SUMS.sigstore.json']);
 
+// This verifier runs from a sparse checkout without npm-installed dependencies.
+function readChecksums(file) {
+  const limit = 1024 * 1024;
+  const descriptor = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
+  try {
+    const stat = fs.fstatSync(descriptor);
+    if (!stat.isFile() || stat.size > limit) throw new Error('Signed checksums are not a bounded regular file');
+    const bytes = Buffer.alloc(stat.size + 1);
+    let offset = 0;
+    while (offset < bytes.length) {
+      const count = fs.readSync(descriptor, bytes, offset, bytes.length - offset, null);
+      if (count === 0) break;
+      offset += count;
+    }
+    if (offset > stat.size) throw new Error('Signed checksums changed while being read');
+    return bytes.subarray(0, offset).toString('utf8');
+  } finally { fs.closeSync(descriptor); }
+}
+
 function parseChecksumInventory(directory) {
   const entries = fs.readdirSync(directory, {withFileTypes: true});
   if (entries.some(entry => !entry.isFile())) throw new Error('Release payload contains non-regular files');
-  const lines = readBounded(path.join(directory, 'SHA256SUMS'), 'signed checksums').trimEnd().split('\n');
+  const lines = readChecksums(path.join(directory, 'SHA256SUMS')).trimEnd().split('\n');
   const checksums = new Map();
   for (const line of lines) {
     const match = /^([a-f0-9]{64})  ([A-Za-z0-9][A-Za-z0-9._+~-]*)$/.exec(line);
