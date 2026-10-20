@@ -187,12 +187,8 @@ jobs:
           echo "ref=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           echo "tag=v$RELEASE_VERSION" >> "$GITHUB_OUTPUT"
 
-      - name: Materialize machine promotion decision
+      - name: Load exact RC evidence for promotion
         if: inputs.action == 'promote'
-        id: promotion
-        env:
-          GH_TOKEN: ${{ steps.app.outputs.token }}
-          CURRENT_HEAD: ${{ steps.source.outputs.head_sha }}
         run: |
           git fetch origin release-ledger
           git show "origin/release-ledger:events/v$RELEASE_VERSION.jsonl" > release-events.jsonl
@@ -200,6 +196,40 @@ jobs:
           git fetch origin "refs/tags/$RC_TAG:refs/tags/$RC_TAG"
           git switch --detach "$RC_TAG"
           npm --prefix cli ci
+      - name: Recover original approval for an already tagged stable release
+        if: inputs.action == 'promote'
+        id: recovery
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          SOURCE_MERGE_SHA: ${{ steps.source.outputs.merge_sha }}
+        run: |
+          CURRENT_HEAD="$(gh pr view "$RELEASE_PR" \
+            --repo "${GITHUB_REPOSITORY}" --json headRefOid --jq .headRefOid)"
+          RECOVERED="$(CURRENT_HEAD="$CURRENT_HEAD" node - <<'NODE'
+          const fs = require('fs');
+          const {readEvents} = require('./cli/scripts/release/events');
+          const {recoverPromotionApproval} = require('./cli/scripts/release/promotion-recovery');
+          const recovered = recoverPromotionApproval({
+            repository: process.cwd(),
+            events: readEvents('release-events.jsonl'),
+            candidate: JSON.parse(fs.readFileSync('.release-candidate.json', 'utf8')),
+            sourcePr: Number(process.env.RELEASE_PR),
+            currentHead: process.env.CURRENT_HEAD,
+            mergeCommit: process.env.SOURCE_MERGE_SHA,
+          });
+          if (recovered) fs.writeFileSync('promotion-decision.json', recovered.text);
+          process.stdout.write(recovered ? 'true' : 'false');
+          NODE
+          )"
+          echo "recovered=$RECOVERED" >> "$GITHUB_OUTPUT"
+      - name: Materialize machine promotion decision
+        if: inputs.action == 'promote' && steps.recovery.outputs.recovered != 'true'
+        id: promotion
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          CURRENT_HEAD: ${{ steps.source.outputs.head_sha }}
+        run: |
+          RC_TAG="v$RELEASE_VERSION"
           CURRENT_HEAD="$(gh pr view "$RELEASE_PR" \
             --repo "${GITHUB_REPOSITORY}" --json headRefOid --jq .headRefOid)"
           node - <<'NODE'
@@ -253,7 +283,7 @@ jobs:
           fi
           echo "status=$PROMOTION_STATUS" >> "$GITHUB_OUTPUT"
       - name: Persist the machine promotion decision before applying its result
-        if: inputs.action == 'promote'
+        if: inputs.action == 'promote' && steps.recovery.outputs.recovered != 'true'
         env:
           RELEASE_APP_TOKEN: ${{ steps.app.outputs.token }}
         run: |

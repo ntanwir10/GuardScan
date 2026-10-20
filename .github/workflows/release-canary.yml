@@ -411,11 +411,20 @@ jobs:
         run: |
           PYPI_VERSION="${VERSION/-rc./rc}"
           python -m pip install --no-deps "guardscan-cli==$PYPI_VERSION"
-          guardscan --version
+          PIP_REPORTED_VERSION="$(guardscan --version)"
+          test "$PIP_REPORTED_VERSION" = "$VERSION"
           python -m pip uninstall -y guardscan-cli
           python -m pip install pipx
+          export PIPX_BIN_DIR="$RUNNER_TEMP/pipx-bin"
+          mkdir -p "$PIPX_BIN_DIR"
           python -m pipx install --pip-args=--no-deps "guardscan-cli==$PYPI_VERSION"
-          python -m pipx runpip guardscan-cli show guardscan-cli
+          PIPX_APP="$PIPX_BIN_DIR/guardscan"
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            PIPX_APP="$PIPX_APP.exe"
+          fi
+          test -x "$PIPX_APP"
+          PIPX_REPORTED_VERSION="$("$PIPX_APP" --version)"
+          test "$PIPX_REPORTED_VERSION" = "$VERSION"
           python -m pipx uninstall guardscan-cli
           python - <<'PY'
           import json
@@ -627,14 +636,17 @@ jobs:
                 $availabilityText = $availability | Out-String
                 $escapedVersion = [regex]::Escape('${{ matrix.train.version }}')
                 $exactVersion = $availabilityText -match "(?im)^\s*guardscan\s+$escapedVersion(?:\s|$)"
-                if ($availabilityStatus -ne 0) {
-                  if ($availabilityText -match '(?im)^\s*(Unable to find package .guardscan.|0 packages found\.)\s*$') {
+                $noResult = $availabilityText -match '(?im)^\s*(Unable to find package .guardscan.|0 packages found\.)\s*$'
+                if ($availabilityStatus -eq 0) {
+                  if ($noResult) {
                     $notPublic = $true
-                  } else {
-                    throw "Unexpected moderated registry error: Chocolatey availability query exited ${availabilityStatus}: $availabilityText"
+                  } elseif (-not $exactVersion) {
+                    throw 'Unexpected moderated registry error: Chocolatey did not confirm the exact package version'
                   }
-                } elseif (-not $exactVersion) {
-                  throw 'Unexpected moderated registry error: Chocolatey did not confirm the exact package version'
+                } elseif ($availabilityStatus -eq 2 -and $noResult) {
+                  $notPublic = $true
+                } else {
+                  throw "Unexpected moderated registry error: Chocolatey availability query exited ${availabilityStatus}: $availabilityText"
                 }
                 if ($notPublic) {
                   $report.status = 'pending'
