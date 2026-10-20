@@ -65,10 +65,36 @@ describe('publication convergence', () => {
     }
     for (const build of Object.values(workflow('release-build.yml').jobs) as any[]) {
       for (const upload of (build.steps || []).filter((s: any) => s.uses?.startsWith('actions/upload-artifact@'))) {
-        expect(upload.with.overwrite).toBe(true);
+        expect(upload.with.overwrite).toBe(upload.with.name.startsWith('release-canonical-') ? false : true);
       }
     }
+    const canonical = Object.values(workflow('release-build.yml').jobs).flatMap((build: any) => build.steps || [])
+      .find((s: any) => s.with?.name?.startsWith('release-canonical-')) as any;
+    expect(canonical).toBeTruthy();
+    expect(canonical.with.name).toContain('${{ github.run_id }}-${{ github.run_attempt }}');
+    expect(job.steps[select].run).toContain('gh release view');
+    expect(job.steps[select].run).toContain('gh run download');
+    expect(job.steps[select].run.indexOf('.head_branch == "main"'))
+      .toBeLessThan(job.steps[select].run.indexOf('gh run download'));
     expect(job.steps.some((s: any) => s.run?.includes('restore-npm-payload.js'))).toBe(true);
+  });
+
+  it('recovers the original payload from a durable draft pointer and rejects substituted attempts or manifests', () => {
+    const {createPointer, parsePointer, formatPointer, verifyCanonical} = require('../../scripts/release/canonical-payload');
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'draft-pointer-'));
+    const manifest = {tag: 'v1.2.3', producer: {runId: '123', runAttempt: 1, sourceRef: 'refs/tags/v1.2.3'}};
+    try {
+      fs.writeFileSync(path.join(root, 'release-manifest.json'), JSON.stringify(manifest));
+      const pointer = createPointer(root, 'v1.2.3');
+      expect(pointer.artifact).toBe('release-canonical-v1.2.3-123-1');
+      expect(parsePointer('Generated notes\n' + formatPointer(pointer), 'v1.2.3')).toEqual(pointer);
+      expect(() => verifyCanonical(root, pointer)).not.toThrow();
+      expect(() => parsePointer(formatPointer(pointer) + '\n' + formatPointer(pointer), 'v1.2.3')).toThrow();
+      expect(() => parsePointer(formatPointer({...pointer, artifact: 'other-artifact'}), 'v1.2.3')).toThrow();
+      expect(() => parsePointer(formatPointer(pointer), 'v1.2.4')).toThrow();
+      fs.writeFileSync(path.join(root, 'release-manifest.json'), JSON.stringify({...manifest, producer: {...manifest.producer, runAttempt: 2}}));
+      expect(() => verifyCanonical(root, pointer)).toThrow();
+    } finally { fs.rmSync(root, {recursive: true, force: true}); }
   });
 
   it('requires WinGet exact-state preflight and postflight instead of trusting the submit exit code', () => {

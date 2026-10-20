@@ -47,14 +47,36 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ inputs.tag }}
         run: |
-          if gh api "repos/${GITHUB_REPOSITORY}/releases/tags/$RELEASE_TAG" \
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json tagName,assets,isDraft,body \
             > "$RUNNER_TEMP/existing-release.json" 2> "$RUNNER_TEMP/release-lookup-error"; then
             jq -e --arg tag "$RELEASE_TAG" '
-              .tag_name == $tag and
+              .tagName == $tag and
               ([.assets[].name] | length == (unique | length)) and
               all(.assets[]; .name | test("^[A-Za-z0-9][A-Za-z0-9._+~-]*$"))
             ' "$RUNNER_TEMP/existing-release.json" >/dev/null
-            if [ "$(jq '.assets | length' "$RUNNER_TEMP/existing-release.json")" -gt 0 ]; then
+            node cli/scripts/release/canonical-payload.js pointer \
+              "$RUNNER_TEMP/existing-release.json" "$RELEASE_TAG" > "$RUNNER_TEMP/canonical-pointer.json"
+            if [ "$(jq '.isDraft' "$RUNNER_TEMP/existing-release.json")" = true ] \
+              && [ "$(jq 'type' "$RUNNER_TEMP/canonical-pointer.json")" = '"object"' ]; then
+              # The draft body was written before the first asset side effect. Its immutable
+              # artifact survives partial uploads and newer attempts of the same workflow.
+              RUN_ID="$(jq -r '.runId' "$RUNNER_TEMP/canonical-pointer.json")"
+              ATTEMPT="$(jq -r '.runAttempt' "$RUNNER_TEMP/canonical-pointer.json")"
+              ARTIFACT="$(jq -r '.artifact' "$RUNNER_TEMP/canonical-pointer.json")"
+              gh api "repos/${GITHUB_REPOSITORY}/actions/runs/$RUN_ID/attempts/$ATTEMPT" \
+                > "$RUNNER_TEMP/canonical-producer.json"
+              jq -e --arg repository "$GITHUB_REPOSITORY" --arg run_id "$RUN_ID" --arg attempt "$ATTEMPT" '
+                ((.path | split("@")[0]) == ".github/workflows/release-train.yml") and
+                .event == "workflow_dispatch" and .head_branch == "main" and
+                (.repository.full_name | ascii_downcase) == ($repository | ascii_downcase) and
+                (.head_repository.full_name | ascii_downcase) == ($repository | ascii_downcase) and
+                (.id | tostring) == $run_id and (.run_attempt | tostring) == $attempt
+              ' "$RUNNER_TEMP/canonical-producer.json" >/dev/null
+              gh run download "$RUN_ID" --repo "$GITHUB_REPOSITORY" --name "$ARTIFACT" --dir canonical-payload
+              node cli/scripts/release/canonical-payload.js verify canonical-payload "$RUNNER_TEMP/canonical-pointer.json"
+              mv payload rebuilt-payload
+              mv canonical-payload payload
+            elif [ "$(jq '.assets | length' "$RUNNER_TEMP/existing-release.json")" -gt 0 ]; then
               # Never replace already published run-specific signatures/manifests with a rebuild.
               jq -e '[.assets[].name] | index("release-manifest.json") != null and
                 index("SHA256SUMS") != null and index("SHA256SUMS.sigstore.json") != null' \
@@ -64,10 +86,13 @@ jobs:
                 }
               mkdir canonical-payload
               gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --dir canonical-payload
+              if [ "$(jq 'type' "$RUNNER_TEMP/canonical-pointer.json")" = '"object"' ]; then
+                node cli/scripts/release/canonical-payload.js verify canonical-payload "$RUNNER_TEMP/canonical-pointer.json"
+              fi
               mv payload rebuilt-payload
               mv canonical-payload payload
             fi
-          elif ! grep -q 'HTTP 404' "$RUNNER_TEMP/release-lookup-error"; then
+          elif ! grep -Eq '^release not found$|HTTP 404' "$RUNNER_TEMP/release-lookup-error"; then
             echo 'Could not determine immutable tag payload state; refusing publication.' >&2
             exit 1
           fi
@@ -129,10 +154,12 @@ jobs:
           if ! gh release view "${{ inputs.tag }}" --repo "${{ github.repository }}" >/dev/null 2>&1; then
             PRERELEASE=()
             if [ "${{ inputs.channel }}" = rc ]; then PRERELEASE+=(--prerelease); fi
+            node cli/scripts/release/canonical-payload.js notes payload "${{ inputs.tag }}" > "$RUNNER_TEMP/canonical-release-notes"
             gh release create "${{ inputs.tag }}" \
               --repo "${{ github.repository }}" \
               --verify-tag --draft "${PRERELEASE[@]}" \
               --title "GuardScan ${{ inputs.tag }}" \
+              --notes-file "$RUNNER_TEMP/canonical-release-notes" \
               --generate-notes
           fi
           RELEASE_JSON="$(gh release view "${{ inputs.tag }}" \
