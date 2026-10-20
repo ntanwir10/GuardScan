@@ -191,24 +191,37 @@ describe('release workflow safety', () => {
     const script = promotion.match(/node - <<'NODE'\n([\s\S]*?)\nNODE/)?.[1];
     expect(script).toBeTruthy();
     const publishedAt = Date.parse('2026-10-01T00:00:00.000Z');
-    const canaries = Object.fromEntries(['npm', 'pnpm', 'yarn', 'bun', 'github', 'homebrew', 'scoop', 'pypi']
-      .map(channel => [channel, Array.from({length: 24}, () => ({status: 'passed'}))]));
     const evaluate = (now: number, published = true) => {
       let output = '';
+      const head = 'a'.repeat(40);
+      const events = [{type: 'train_started', payload: {releasePr: 42, sourcePrHead: head}},
+        ...(published ? [{type: 'channel_published', channel: 'github', timestamp: new Date(publishedAt).toISOString()}] : [])];
+      const canaries = Object.fromEntries(['npm', 'pnpm', 'yarn', 'bun', 'github', 'homebrew', 'scoop', 'pypi']
+        .map(channel => [channel, Array.from({length: 24}, (_, index) => ({
+          status: 'passed', checkedAt: new Date(index === 0 ? publishedAt : now).toISOString(),
+        }))]));
+      class FixedDate extends Date {
+        constructor(value?: string | number) { super(value === undefined ? now : value); }
+        static now() { return now; }
+      }
       vm.runInNewContext(script!, {
-        require: () => ({
-          readEvents: () => published ? [{
-            type: 'channel_published', channel: 'github', timestamp: new Date(publishedAt).toISOString(),
-          }] : [],
-          materializeReleaseState: () => ({canaries, incidents: {}}),
-        }),
-        Date: {now: () => now, parse: Date.parse},
-        process: {stdout: {write: (value: string) => { output += value; }}},
+        require: (name: string) => {
+          if (name === 'fs') return {readFileSync: () => JSON.stringify({sourcePr: 42, sourcePrHead: head})};
+          if (name.endsWith('/promotion')) return require('../../scripts/release/promotion');
+          return {readEvents: () => events, materializeReleaseState: () => ({
+            version: '1.2.3-rc.1', tag: 'v1.2.3-rc.1', commit: head,
+            manifestSha256: 'b'.repeat(64), canaries, incidents: {},
+          })};
+        },
+        Date: FixedDate,
+        process: {env: {CURRENT_HEAD: head, RELEASE_PR: '42'},
+          stdout: {write: (value: string) => { output += value; }}},
       });
       return output;
     };
     expect(evaluate(publishedAt + 23 * 60 * 60 * 1000)).toBe('false');
     expect(evaluate(publishedAt + 24 * 60 * 60 * 1000)).toBe('true');
-    expect(evaluate(publishedAt + 48 * 60 * 60 * 1000, false)).toBe('false');
+    expect(() => evaluate(publishedAt + 48 * 60 * 60 * 1000, false))
+      .toThrow('RC has no published manifest identity');
   });
 });
