@@ -24,11 +24,15 @@ describe('final release evidence boundaries', () => {
           ...(yanked === undefined ? {} : {yanked})}]};
         const harness = [
           'import io, json, os, pathlib, sys, tempfile, time, urllib.request',
+          'previous = os.getcwd()',
           'with tempfile.TemporaryDirectory() as root:',
-          '    os.chdir(root); pathlib.Path("dist").mkdir(); pathlib.Path("dist/guardscan.whl").write_bytes(b"wheel")',
-          '    urllib.request.urlopen = lambda *args, **kwargs: io.StringIO(sys.argv[2])',
-          '    time.sleep = lambda _: None',
-          '    exec(sys.argv[1])',
+          '    try:',
+          '        os.chdir(root); pathlib.Path("dist").mkdir(); pathlib.Path("dist/guardscan.whl").write_bytes(b"wheel")',
+          '        urllib.request.urlopen = lambda *args, **kwargs: io.StringIO(sys.argv[2])',
+          '        time.sleep = lambda _: None',
+          '        exec(sys.argv[1])',
+          '    finally:',
+          '        os.chdir(previous)',
         ].join('\n');
         const result = spawnSync(process.platform === 'win32' ? 'python' : 'python3', ['-c', harness, script, JSON.stringify(document)], {
           encoding: 'utf8', timeout: 10000,
@@ -46,6 +50,17 @@ describe('final release evidence boundaries', () => {
     expect(step.run.match(/\$reportedVersion = \(& guardscan --version \| Out-String\)\.Trim\(\)/g)).toHaveLength(2);
     expect(step.run.match(/\$reportedVersion -cne '\$\{\{ matrix.train.version \}\}'/g)).toHaveLength(2);
     expect(step.run.indexOf('reportedVersion -cne')).toBeLessThan(step.run.indexOf("$report.status = 'passed'"));
+  });
+
+  it('refreshes installed WinGet paths without discarding process-only tools before invocation', () => {
+    const step = workflow('release-canary.yml').jobs.moderated.steps.find((s: any) => (
+      s.name === 'Poll, install, invoke, and uninstall public moderated channels'
+    ));
+    const winget = step.run.slice(step.run.indexOf('winget install --exact'), step.run.indexOf('winget uninstall --exact'));
+    const refresh = "$env:PATH = @([Environment]::GetEnvironmentVariable('Path', 'Machine'), [Environment]::GetEnvironmentVariable('Path', 'User'), $env:PATH) -join ';'";
+    expect(winget).toContain(refresh);
+    expect(winget.indexOf(refresh)).toBeGreaterThan(winget.indexOf("throw 'WinGet installation failed'"));
+    expect(winget.indexOf(refresh)).toBeLessThan(winget.indexOf('& guardscan --version'));
   });
 
   it('verifies the complete immutable adapter projection, not only matching target bytes', () => {

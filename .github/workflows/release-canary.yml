@@ -615,6 +615,7 @@ jobs:
                 }
                 winget install --exact --id NaumanTanwir.GuardScan --version "${{ matrix.train.version }}" --accept-package-agreements --accept-source-agreements
                 if ($LASTEXITCODE -ne 0) { throw 'WinGet installation failed' }
+                $env:PATH = @([Environment]::GetEnvironmentVariable('Path', 'Machine'), [Environment]::GetEnvironmentVariable('Path', 'User'), $env:PATH) -join ';'
                 $reportedVersion = (& guardscan --version | Out-String).Trim()
                 if ($LASTEXITCODE -ne 0) { throw 'WinGet invocation failed' }
                 if ($reportedVersion -cne '${{ matrix.train.version }}') { throw 'WinGet installed executable version mismatch' }
