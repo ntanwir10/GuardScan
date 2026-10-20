@@ -285,7 +285,7 @@ jobs:
           test -f "release/$ARCHIVE_NAME"
           test -f release/release-manifest.json
           ARCHIVE_SHA="$(awk -v name="$ARCHIVE_NAME" '$2 == name {print $1}' release/SHA256SUMS)"
-          (cd release && sha256sum --check --ignore-missing SHA256SUMS)
+          node cli/scripts/release/checksum-inventory.js release "$ARCHIVE_NAME" release-manifest.json
           TAG_SHA="$(gh api "repos/${GITHUB_REPOSITORY}/commits/v$VERSION" --jq .sha)"
           jq -e --arg repository "$GITHUB_REPOSITORY" --arg version "$VERSION" \
             --arg archive "$ARCHIVE_NAME" --arg archive_sha "$ARCHIVE_SHA" \
@@ -343,14 +343,16 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ matrix.train.version }}
           TARGET: ${{ matrix.target.id }}
+          ARCHIVE: ${{ matrix.target.archive }}
         run: |
           codesign --verify --deep --strict --verbose=2 executable/guardscan
+          ARCHIVE_NAME="guardscan-$VERSION-$TARGET.$ARCHIVE"
           DMG_NAME="$TARGET.stapled-notarization.dmg"
           gh release download "v$VERSION" --repo "$GITHUB_REPOSITORY" \
             --dir release --pattern "$DMG_NAME"
           ENTRY_COUNT="$(awk -v name="$DMG_NAME" '$2 == name && $1 ~ /^[a-f0-9]{64}$/ {count++} END {print count + 0}' release/SHA256SUMS)"
           test "$ENTRY_COUNT" -eq 1
-          (cd release && sha256sum --check --ignore-missing SHA256SUMS)
+          node cli/scripts/release/checksum-inventory.js release "$ARCHIVE_NAME" release-manifest.json "$DMG_NAME"
           xcrun stapler validate "release/$DMG_NAME"
           spctl --assess --type open --context context:primary-signature --verbose=4 "release/$DMG_NAME"
           MOUNT_POINT="$RUNNER_TEMP/guardscan-notarization-mount"

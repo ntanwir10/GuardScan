@@ -20,7 +20,7 @@ function assertNotTerminal(events) {
   }
 }
 
-// Only a stable tag already bound to the actual merged PR may reuse approval.
+// Only an authenticated merged PR (and matching stable tag when present) may reuse approval.
 // Fresh promotions always evaluate the complete, current machine policy.
 function recoverPromotionApproval(input, git = (...args) => execFileSync('git', args, {
   cwd: input.repository, maxBuffer: args[0] === 'show' ? MAX_LEDGER_BYTES : MAX_APPROVAL_BYTES,
@@ -40,17 +40,20 @@ function recoverPromotionApproval(input, git = (...args) => execFileSync('git', 
   let remote;
   try { remote = git('ls-remote', '--exit-code', 'origin', ref, `${ref}^{}`).toString('utf8'); }
   catch (error) {
-    if (error.status === 2) return undefined;
-    throw error;
+    if (error.status !== 2) throw error;
+    if (mergeCommit === '' || mergeCommit === undefined) return undefined;
   }
-  const entries = remote.trim().split('\n').map(line => line.split(/\s+/));
-  if (entries.length > 2 || entries.some(([sha, name, extra]) => (
-    !/^[a-f0-9]{40}$/.test(sha) || ![ref, `${ref}^{}`].includes(name) || extra !== undefined
-  )) || entries.filter(([, name]) => name === ref).length !== 1
-      || entries.filter(([, name]) => name === `${ref}^{}`).length > 1) {
-    throw new Error('Stable tag identity response is malformed');
+  let tagCommit = mergeCommit;
+  if (remote !== undefined) {
+    const entries = remote.trim().split('\n').map(line => line.split(/\s+/));
+    if (entries.length > 2 || entries.some(([sha, name, extra]) => (
+      !/^[a-f0-9]{40}$/.test(sha) || ![ref, `${ref}^{}`].includes(name) || extra !== undefined
+    )) || entries.filter(([, name]) => name === ref).length !== 1
+        || entries.filter(([, name]) => name === `${ref}^{}`).length > 1) {
+      throw new Error('Stable tag identity response is malformed');
+    }
+    tagCommit = (entries.find(([, name]) => name === `${ref}^{}`) || entries[0])[0];
   }
-  const tagCommit = (entries.find(([, name]) => name === `${ref}^{}`) || entries[0])[0];
   if (!/^[a-f0-9]{40}$/.test(mergeCommit || '') || tagCommit !== mergeCommit) {
     throw new Error('Stable tag is not bound to the exact merged source PR commit');
   }

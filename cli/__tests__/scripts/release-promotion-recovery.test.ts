@@ -62,10 +62,21 @@ describe('immutable stable promotion approval recovery', () => {
 
   it('keeps the ordinary full policy path when no stable tag exists', () => {
     const f = fixture();
-    expect(recover(f.input, (...args: string[]) => {
+    expect(recover({...f.input, mergeCommit: ''}, (...args: string[]) => {
       if (args[0] === 'ls-remote') throw Object.assign(new Error('no tag'), {status: 2});
       return f.git(...args);
     })).toBeUndefined();
+  });
+
+  it('recovers approval after the authenticated PR merge even before the stable tag push', () => {
+    const f = fixture();
+    const git = (...args: string[]) => {
+      if (args[0] === 'ls-remote') throw Object.assign(new Error('no tag'), {status: 2});
+      return f.git(...args);
+    };
+    f.append('canary_recorded', {status: 'failed', checkedAt: evaluatedAt}, 'github');
+    expect(recover(f.input, git)).toEqual({text: f.text, decision: f.decision});
+    expect(() => recover({...f.input, mergeCommit: 'invalid'}, git)).toThrow(/merge|tag/i);
   });
 
   it('does not confuse remote lookup failure with an absent stable tag', () => {
@@ -111,7 +122,7 @@ describe('immutable stable promotion approval recovery', () => {
     expect(f.calls.some(args => args[0] === 'show')).toBe(false);
   });
 
-  it('reads the exact protected approval blob and remote tag using real Git', () => {
+  it.each([false, true])('reads real Git lightweight/annotated tags and rejects peeled identity drift (annotated=%s)', annotated => {
     const f = fixture();
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'promotion-recovery-'));
     const git = (...args: string[]) => {
@@ -127,11 +138,19 @@ describe('immutable stable promotion approval recovery', () => {
       fs.writeFileSync(path.join(root, 'decisions/v1.2.3-rc.1-123-1.json'), f.text);
       git('add', '.'); git('-c', 'commit.gpgsign=false', 'commit', '-m', 'protected approval fixture');
       const commit = git('rev-parse', 'HEAD');
-      git('tag', 'v1.2.3', commit);
+      if (annotated) git('-c', 'tag.gpgSign=false', 'tag', '-a', '-m', 'stable', 'v1.2.3', commit);
+      else git('tag', 'v1.2.3', commit);
       git('update-ref', 'refs/remotes/origin/release-ledger', commit);
       git('remote', 'add', 'origin', root);
       expect(recover({...f.input, repository: root, mergeCommit: commit}, undefined))
         .toEqual({text: f.text, decision: f.decision});
+      fs.writeFileSync(path.join(root, 'unrelated.txt'), 'different merge\n');
+      git('add', '.'); git('-c', 'commit.gpgsign=false', 'commit', '-m', 'different merge');
+      const different = git('rev-parse', 'HEAD');
+      if (annotated) git('-c', 'tag.gpgSign=false', 'tag', '-f', '-a', '-m', 'different stable', 'v1.2.3', different);
+      else git('tag', '-f', 'v1.2.3', different);
+      expect(() => recover({...f.input, repository: root, mergeCommit: commit}, undefined))
+        .toThrow(/merged source PR commit/);
     } finally { fs.rmSync(root, {recursive: true, force: true}); }
   });
 

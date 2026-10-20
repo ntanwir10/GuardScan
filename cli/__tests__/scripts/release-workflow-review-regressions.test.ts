@@ -75,7 +75,7 @@ describe('release workflow review regressions', () => {
     expect(verifyIdentity).toBeLessThan(verifyManifest);
     expect(verifyManifest).toBeLessThan(extract);
     expect(steps[verifyIdentity].run).toContain('cosign verify-blob');
-    expect(steps[verifyManifest].run).toContain('sha256sum --check');
+    expect(steps[verifyManifest].run).toContain('checksum-inventory.js release "$ARCHIVE_NAME" release-manifest.json');
     const manifestBinding = steps[verifyManifest].run as string;
     expect(manifestBinding).toContain('ENTRY_COUNT');
     expect(manifestBinding).toContain('ARCHIVE_NAME="guardscan-$VERSION-$TARGET.$ARCHIVE"');

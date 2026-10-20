@@ -107,11 +107,11 @@ describe('release workflow safety', () => {
       'Verify macOS signing and Gatekeeper').run as string;
     expect(canary).not.toContain('spctl --assess --type execute');
     for (const required of [
-      '$TARGET.stapled-notarization.dmg', 'ENTRY_COUNT', 'sha256sum --check',
+      '$TARGET.stapled-notarization.dmg', 'ENTRY_COUNT', 'checksum-inventory.js release "$ARCHIVE_NAME" release-manifest.json "$DMG_NAME"',
       'stapler validate', 'spctl --assess --type open',
       'hdiutil attach', 'hdiutil detach', 'cmp "$MOUNT_POINT/guardscan" executable/guardscan',
     ]) expect(canary).toContain(required);
-    expect(canary.indexOf('sha256sum --check')).toBeLessThan(canary.indexOf('hdiutil attach'));
+    expect(canary.indexOf('checksum-inventory.js')).toBeLessThan(canary.indexOf('hdiutil attach'));
   });
 
   it('accepts exact Release Please and legacy release branches without a wildcard trust expansion', () => {

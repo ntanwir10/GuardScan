@@ -58,8 +58,7 @@ jobs:
               "$RUNNER_TEMP/existing-release.json" "$RELEASE_TAG" > "$RUNNER_TEMP/canonical-pointer.json"
             if [ "$(jq '.isDraft' "$RUNNER_TEMP/existing-release.json")" = true ] \
               && [ "$(jq 'type' "$RUNNER_TEMP/canonical-pointer.json")" = '"object"' ]; then
-              # The draft body was written before the first asset side effect. Its immutable
-              # artifact survives partial uploads and newer attempts of the same workflow.
+              # Authenticate the pointer producer before either immutable recovery path.
               RUN_ID="$(jq -r '.runId' "$RUNNER_TEMP/canonical-pointer.json")"
               ATTEMPT="$(jq -r '.runAttempt' "$RUNNER_TEMP/canonical-pointer.json")"
               ARTIFACT="$(jq -r '.artifact' "$RUNNER_TEMP/canonical-pointer.json")"
@@ -72,10 +71,36 @@ jobs:
                 (.head_repository.full_name | ascii_downcase) == ($repository | ascii_downcase) and
                 (.id | tostring) == $run_id and (.run_attempt | tostring) == $attempt
               ' "$RUNNER_TEMP/canonical-producer.json" >/dev/null
-              gh run download "$RUN_ID" --repo "$GITHUB_REPOSITORY" --name "$ARTIFACT" --dir canonical-payload
-              node cli/scripts/release/canonical-payload.js verify canonical-payload "$RUNNER_TEMP/canonical-pointer.json"
-              mv payload rebuilt-payload
-              mv canonical-payload payload
+              if gh run download "$RUN_ID" --repo "$GITHUB_REPOSITORY" --name "$ARTIFACT" \
+                --dir canonical-artifact-download 2> "$RUNNER_TEMP/canonical-artifact-download-error"; then
+                node cli/scripts/release/canonical-payload.js verify \
+                  canonical-artifact-download "$RUNNER_TEMP/canonical-pointer.json"
+                mv payload rebuilt-payload
+                mv canonical-artifact-download payload
+              else
+                DOWNLOAD_ERROR="$(cat "$RUNNER_TEMP/canonical-artifact-download-error")"
+                case "$DOWNLOAD_ERROR" in
+                  'no valid artifacts found to download'|'no artifact matches any of the names or patterns provided') ;;
+                  *)
+                    echo 'Canonical artifact download failed for a reason other than artifact unavailability; refusing publication.' >&2
+                    exit 1
+                    ;;
+                esac
+                # Keep any partial artifact download isolated. Only a complete draft asset set
+                # that matches the original pointer may recover an unavailable artifact.
+                jq -e '[.assets[].name] | index("release-manifest.json") != null and
+                  index("SHA256SUMS") != null and index("SHA256SUMS.sigstore.json") != null' \
+                  "$RUNNER_TEMP/existing-release.json" >/dev/null || {
+                    echo 'Existing draft has incomplete canonical evidence; refusing recovery.' >&2
+                    exit 1
+                  }
+                mkdir canonical-draft-assets
+                gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --dir canonical-draft-assets
+                node cli/scripts/release/canonical-payload.js verify \
+                  canonical-draft-assets "$RUNNER_TEMP/canonical-pointer.json"
+                mv payload rebuilt-payload
+                mv canonical-draft-assets payload
+              fi
             elif [ "$(jq '.assets | length' "$RUNNER_TEMP/existing-release.json")" -gt 0 ]; then
               # Never replace already published run-specific signatures/manifests with a rebuild.
               jq -e '[.assets[].name] | index("release-manifest.json") != null and
