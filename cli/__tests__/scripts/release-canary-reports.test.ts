@@ -50,7 +50,10 @@ describe('complete release canary coverage', () => {
         version: '1.2.3', tag: 'v1.2.3', commit: 'a'.repeat(40), timestamp,
         type: index === 0 ? 'train_started' : 'canary_recorded',
         idempotencyKey: 'sample:' + index, ...(index > 0 ? {channel: 'github'} : {}),
-        payload: {note: 'a'.repeat(4096)},
+        payload: index === 0
+          ? {channels: ['github'], note: 'a'.repeat(4096)}
+          : {status: 'passed', checkedAt: timestamp, target: 'linux-x64-glibc',
+            evidenceUrl, note: 'a'.repeat(4096)},
       }, events.at(-1)));
       fs.writeFileSync(file, events.map(event => JSON.stringify(event) + '\n').join(''));
       expect(fs.statSync(file).size).toBeGreaterThan(1024 * 1024);

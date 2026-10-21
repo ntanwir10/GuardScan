@@ -118,27 +118,42 @@ describe('release workflow safety', () => {
     const run = namedStep(load('release-train.yml').jobs.prepare,
       'Validate request and resolve unchanged release PR head').run as string;
     expect(run).toContain('release-please--branches--main');
-    const predicate = run.match(/jq -e --arg repository[\s\S]*?'\n?([\s\S]*?)' <<< "\$PR_DETAILS"/)?.[1];
+    const predicate = run.match(/HEAD_SHA="\$\(node - <<'NODE'\n([\s\S]*?)\nNODE/)?.[1];
     expect(predicate).toBeTruthy();
-    const check = (head: string, extra: Record<string, unknown> = {}, action = 'candidate') => spawnSync('jq', [
-      '-e', '--arg', 'repository', 'ntanwir10/guardscan', '--arg', 'branch', 'release/1.2.3',
-      '--arg', 'release_please_branch', 'release-please--branches--main', '--arg', 'action', action, predicate!,
-    ], {input: JSON.stringify({
-      state: 'OPEN', baseRefName: 'main', headRefName: head, headRefOid: 'a'.repeat(40),
-      headRepository: {nameWithOwner: 'ntanwir10/GuardScan'}, ...extra,
-    }), encoding: 'utf8'});
+    const check = (head: string, extra: Record<string, unknown> = {}, action = 'candidate') => {
+      const pr = {state: 'open', base: {ref: 'main'},
+        head: {ref: head, sha: 'a'.repeat(40), repo: {full_name: 'ntanwir10/GuardScan'}}, ...extra};
+      let output = '';
+      try {
+        vm.runInNewContext(predicate!, {
+          require: (name: string) => {
+            if (name !== './release-pr.json') throw new Error('Unexpected dependency ' + name);
+            return pr;
+          },
+          process: {env: {GITHUB_REPOSITORY: 'ntanwir10/guardscan', REQUEST_VERSION: '1.2.3-rc.1',
+            REQUEST_ACTION: action}, stdout: {write: (value: string) => { output += value; }}},
+        });
+        expect(output).toBe('a'.repeat(40));
+        return {status: 0};
+      } catch { return {status: 1}; }
+    };
     for (const branch of ['release/1.2.3', 'release-please--branches--main']) {
       expect(check(branch).status).toBe(0);
     }
     for (const branch of ['release/1.2.4', 'release-please--branches--main--attacker', 'feature/unsafe']) {
       expect(check(branch).status).not.toBe(0);
     }
-    expect(check('release-please--branches--main', {headRepository: {nameWithOwner: 'attacker/GuardScan'}}).status)
+    expect(check('release-please--branches--main', {head: {ref: 'release-please--branches--main',
+      sha: 'a'.repeat(40), repo: {full_name: 'attacker/GuardScan'}}}).status)
       .not.toBe(0);
-    const merged = {state: 'MERGED', mergeCommit: {oid: 'b'.repeat(40)}};
+    expect(check('release/1.2.3', {base: {ref: 'attacker'}}).status).not.toBe(0);
+    expect(check('release/1.2.3', {head: {ref: 'release/1.2.3', sha: 'invalid',
+      repo: {full_name: 'ntanwir10/GuardScan'}}}).status).not.toBe(0);
+    const merged = {state: 'closed', merged: true, merge_commit_sha: 'b'.repeat(40)};
     expect(check('release/1.2.3', merged, 'promote').status).toBe(0);
     expect(check('release/1.2.3', merged, 'candidate').status).not.toBe(0);
-    expect(check('release/1.2.3', {...merged, mergeCommit: {oid: 'invalid'}}, 'promote').status).not.toBe(0);
+    expect(check('release/1.2.3', {...merged, merge_commit_sha: 'invalid'}, 'promote').status).not.toBe(0);
+    expect(check('release/1.2.3', {...merged, merged: false}, 'promote').status).not.toBe(0);
   });
 
   it('requires visible matching npm bytes and tag, allowing bounded propagation retries', () => {
@@ -178,8 +193,8 @@ describe('release workflow safety', () => {
   });
 
   it('configures app-token Git authentication before cloning or pushing adapter repositories', () => {
-    const publication = namedStep(load('release-publish.yml').jobs.adapters,
-      'Push deterministic adapter branches and open PRs');
+    const publication = namedStep(load('release-publish.yml').jobs.catalog,
+      'Push one deterministic catalog update');
     expect(publication.run).toContain('gh auth setup-git --hostname github.com');
     expect(publication.run.indexOf('gh auth setup-git')).toBeLessThan(publication.run.indexOf('gh repo clone'));
     expect(publication.env.GH_TOKEN).toBe('${{ steps.app.outputs.token }}');

@@ -235,7 +235,9 @@ describe('zero-touch release workflow contracts', () => {
     const workflow = yaml.load(source) as any;
     expect(workflow).toBeTruthy();
     expect(source).not.toMatch(/^\s+tags:/m);
-    expect(source).not.toContain('"release/**"');
+    expect(workflow.on.push.branches).toEqual(['main', 'develop']);
+    expect(workflow.on.pull_request.branches).toEqual(['main', 'develop', 'release/**', 'review/**']);
+    expect(workflow.permissions).toEqual({contents: 'read'});
     expect(source).toContain('group: ci-${{ github.event.pull_request.number || github.ref }}');
     expect(source).toContain('cancel-in-progress: true');
     expect(source).not.toContain('npm publish');
@@ -452,9 +454,9 @@ describe('zero-touch release workflow contracts', () => {
     expect(train).toMatch(
       /build:\n[\s\S]*?permissions:\n\s+contents: read\n\s+id-token: write\n\s+attestations: write/
     );
-    expect(train).toMatch(
-      /publish:\n[\s\S]*?permissions:\n\s+actions: read\n\s+contents: write\n\s+id-token: write/
-    );
+    expect((yaml.load(train) as any).jobs.publish.permissions).toEqual({
+      actions: 'read', contents: 'write', 'id-token': 'write',
+    });
   });
 
   it('fails closed and persists an idempotent repository-side rollback recovery', () => {
@@ -500,9 +502,10 @@ describe('zero-touch release workflow contracts', () => {
     expect(train).toContain('git -C catalog-rollback rev-parse "$CATALOG_MERGE_SHA:$CATALOG_PATH"');
     expect(train).toContain('echo "commit=$CATALOG_MERGE_SHA" >> "$GITHUB_OUTPUT"');
     expect(train).toContain('EXPECTED_BASE="$(node -p \'require("./promotion-decision.json").stable.sourcePrBase\')"');
-    expect(train).toContain('CURRENT_BASE="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$REQUEST_RELEASE_PR" --jq .base.sha)"');
-    expect(train).toContain('--squash --match-head-commit "$EXPECTED_HEAD"');
-    expect(train).not.toContain('--auto --squash --match-head-commit "$EXPECTED_HEAD"');
+    expect(train).toContain('CURRENT_BASE="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$RELEASE_PR" --jq .base.sha)"');
+    expect(train).toContain('test "$CURRENT_BASE" = "$EXPECTED_BASE"');
+    expect(train).toContain('--squash --match-head-commit "${{ steps.source.outputs.head_sha }}"');
+    expect(train).not.toContain('--auto --squash --match-head-commit');
     expect(train).toContain('const canonicalEntries = entries => entries.sort(([left], [right])');
     expect(train).toContain('npm: Object.fromEntries(canonicalEntries(');
     expect(train).toContain('pypi: Object.fromEntries(canonicalEntries(');
@@ -549,23 +552,30 @@ describe('zero-touch release workflow contracts', () => {
     expect(train).not.toMatch(/Persist refetched catalog publication evidence\n\s+if:[^\n]+\n\s+env:\s*\n/);
   });
 
-  it('uses default-branch canary tooling while every matrix entry verifies its own version', () => {
+  it('pins each canary train implementation to its immutable ledger identity and verifies its own version', () => {
     const canary = workflowSource('release-canary.yml');
     expect(canary).not.toContain('implementation_ref');
     expect(canary).not.toContain('trains[0]');
-    expect(canary).toContain('ref: ${{ github.event.repository.default_branch }}');
+    const record = (yaml.load(canary) as any).jobs.record;
+    expect(record.strategy.matrix.train).toBe('${{ fromJSON(needs.discover.outputs.trains) }}');
+    const checkout = record.steps.find((step: any) => step.name === 'Checkout exact train implementation');
+    expect(checkout.with.ref).toBe('v${{ matrix.train.version }}');
+    expect(stepCommands(record)).toContain('if (commit !== checkoutCommit) throw new Error');
+    expect(stepCommands(record)).toContain("['rev-parse', 'HEAD']");
+    expect(stepCommands(record)).toContain('origin/release-ledger:events/${tag}.jsonl');
     expect(canary).toContain('VERSION: ${{ matrix.train.version }}');
     expect(canary).toContain('version = \'${{ matrix.train.version }}\'');
     expect(canary).toContain('assert_version guardscan --version');
     expect(canary).toContain('test "$ACTUAL_VERSION" = "$VERSION"');
     expect(canary).toContain('test "$(guardscan --version | tr -d \'\\r\')" = "$VERSION"');
-    expect(canary).toContain('test "$("$PIPX_GUARDSCAN" --version | tr -d \'\\r\')" = "$VERSION"');
+    expect(canary).toContain('PIPX_REPORTED_VERSION="$("$PIPX_APP" --version | tr -d \'\\r\')"');
+    expect(canary).toContain('test "$PIPX_REPORTED_VERSION" = "$VERSION"');
     expect(canary).toContain('$installedVersion -ne $env:VERSION');
     expect(canary).toContain('const expectedTargetCounts = {');
     expect(canary).toContain('resolved.length === expectedCount');
     expect(canary).toContain("type === 'channel_failed'");
     expect(canary).toContain("error: 'one or more current public canary targets failed'");
-    expect(canary).toContain('const versionAggregateTimestamp = versionReports');
+    expect(canary).toContain('const versionAggregateTimestamp = reports');
     expect(canary).toContain('canaryChannelEventType(state, channel, passed, complete)');
     expect(canary).not.toContain("? ['channel_accepted', 'channel_verified']");
     const train = workflowSource('release-train.yml');
@@ -577,16 +587,17 @@ describe('zero-touch release workflow contracts', () => {
     expect(train).toContain('if [ "$CATALOG_RECONCILE" != true ] && [ "$CATALOG_CLASSIFICATION" != exact ]; then');
     expect(canary).not.toContain('{remoteIdentity: `${channel}:${version}`}');
     expect(canary).toContain("if: inputs.version == '' || vars.RELEASE_AUTOMATION_ENABLED == 'true'");
-    expect(canary).toMatch(
-      /record:\n[\s\S]*?if: >-\n\s+always\(\)\n\s+&& vars\.RELEASE_AUTOMATION_ENABLED == 'true'/
-    );
+    expect(record.if).toContain("always() && vars.RELEASE_AUTOMATION_ENABLED == 'true'");
   });
 
   it('keeps undiscovered moderated packages pending and fails discovered lifecycle errors', () => {
     const canary = workflowSource('release-canary.yml');
-    expect(canary).toContain('$discovered = $false');
-    expect(canary).toContain('$discovered = $true');
-    expect(canary).toContain("if ($discovered) { $report.status = 'failed' }");
+    expect(canary).toContain('$notPublic = $false');
+    expect(canary).toContain('$notPublic = $true');
+    expect(canary.match(/\$report.reason = 'not_public'/g)).toHaveLength(2);
+    expect(canary).toContain("$report.status = 'failed'");
+    expect(canary).toContain('throw "Unexpected moderated registry error: $unexpectedFailure"');
+    expect(canary).toContain("$availabilityStatus -eq 2 -and $noResult");
     expect(canary).not.toContain("throw 'WinGet package is not public yet'");
     expect(canary).not.toContain("throw 'Chocolatey package is not public yet'");
     expect(canary).not.toContain("-notmatch 'not found|No package found|Unable to find'");
@@ -632,7 +643,7 @@ describe('zero-touch release workflow contracts', () => {
     expect(train).toContain('gh pr ready "$REQUEST_RELEASE_PR"');
     expect(train.indexOf('gh pr ready "$REQUEST_RELEASE_PR"'))
       .toBeLessThan(train.indexOf('Derive bot-owned RC commit from exact stable PR head'));
-    expect(train).toContain('--match-head-commit "$EXPECTED_HEAD"');
+    expect(train).toContain('--match-head-commit "${{ steps.source.outputs.head_sha }}"');
     expect(train).not.toContain('gh pr ready "${{ inputs.release_pr }}"');
   });
 
@@ -665,18 +676,28 @@ describe('zero-touch release workflow contracts', () => {
     expect(build).toContain('npm run test:package');
     expect(build).toContain('npm run test:package-manager');
     expect(publish).toContain('--provenance');
-    expect(publish).toContain('RELEASE_NPM_VERSION: 11.5.2');
+    expect(publish).toContain('RELEASE_NPM_VERSION: 11.21.0');
     expect(publish).toContain('npm install --global "npm@${RELEASE_NPM_VERSION}"');
     expect(publish).toContain('pypa/gh-action-pypi-publish@');
-    expect(publish).toContain('& $creator submit');
+    expect(publish).toContain('& .\\wingetcreate.exe submit');
+    expect(publish.indexOf("throw 'Pinned wingetcreate executable failed SHA-256 verification'"))
+      .toBeLessThan(publish.indexOf('& .\\wingetcreate.exe submit'));
     expect(publish).toContain('cp payload/*.whl dist/');
     expect(publish).toContain('Verify complete TestPyPI file set');
     expect(publish).toContain('Verify complete PyPI file set');
     expect(publish).toContain('remote == local');
     expect(publish).not.toContain('try:\n          try:');
     expect(publish).toContain('choco push');
-    expect(combined).toContain('/.github/workflows/release-train.yml@');
-    expect(combined).not.toContain('/.github/workflows/release-build.yml@');
+    const producer = (yaml.load(publish) as any).jobs.github.steps.find((step: any) => (
+      step.name === 'Authenticate release-build producer and verify payload'
+    )).run;
+    expect(producer).toContain('((.path | split("@")[0]) == ".github/workflows/release-train.yml")');
+    expect(producer).toContain('.event == "workflow_dispatch" and .head_branch == "main"');
+    expect(producer).toContain('(.head_repository.full_name | ascii_downcase) == ($repository | ascii_downcase)');
+    expect(producer).toContain('/.github/workflows/release-build.yml@refs/heads/main');
+    expect(producer).toContain('--certificate-github-workflow-sha "$BUILD_WORKFLOW_SHA"');
+    expect(producer).toContain('.producer.runId == $run_id and (.producer.runAttempt | tostring) == $attempt');
+    expect(producer).toContain('.commit == $tag_sha');
   });
 
   it('binds moderated submissions to exact provider evidence and fail-closed preflights', () => {
@@ -691,11 +712,17 @@ describe('zero-touch release workflow contracts', () => {
     );
     expect(publish).not.toContain('dotnet tool install --global wingetcreate');
     expect(publish).toContain('Pinned wingetcreate executable failed SHA-256 verification');
-    expect(publish).toContain('repos/microsoft/winget-pkgs/contents/${manifestPath}');
-    expect(publish).toContain('repos/microsoft/winget-pkgs/pulls/$($pullRequest.number)/files');
+    expect(publish).toContain("'cli/scripts/release/winget-submission.js', $manifestDirectory, $env:RELEASE_TAG");
+    expect(publish).toContain("Get-WinGetState '--public'");
+    const wingetHelper = fs.readFileSync(path.resolve(__dirname, '../../scripts/release/winget-submission.js'), 'utf8');
+    expect(wingetHelper).toContain('contents/${prefix.slice(0, -1)}?ref=${commit}');
+    expect(wingetHelper).toContain('api(`${endpoint}/files?per_page=100`)');
+    expect(wingetHelper).toContain('api(`repos/${REPOSITORY}/git/blobs/${file.sha}`)');
+    expect(wingetHelper).toContain("throw new Error('WinGet manifest blob digest mismatch')");
     expect(publish).toContain('https://community.chocolatey.org/api/v2/package/guardscan/$version');
-    expect(publish).toContain("throw 'WinGet public manifest integrity conflict'");
-    expect(publish).toContain("throw 'Chocolatey public package integrity conflict'");
+    expect(publish).toContain("throw 'WinGet public manifest integrity conflict or verification unavailable'");
+    expect(publish).toContain('python cli/scripts/release/chocolatey-preflight.py --package $package.FullName --version $version');
+    expect(publish).toContain("throw 'Chocolatey public package integrity conflict or verification unavailable'");
     expect(publish).toContain('protected release ledger prevents a blind duplicate');
     expect(publish.match(/throw 'Unable to fetch protected release ledger'/g)).toHaveLength(2);
     expect(train).toContain('release-winget-evidence-${{ needs.prepare.outputs.tag }}');
@@ -716,7 +743,7 @@ describe('zero-touch release workflow contracts', () => {
     const canary = workflowSource('release-canary.yml');
     const publish = workflowSource('release-publish.yml');
     expect(canary).toContain('$installedVersion = (& guardscan --version | Out-String).Trim()');
-    expect(canary).toContain('$installedVersion -ne \'${{ matrix.train.version }}\'');
+    expect(canary.match(/\$reportedVersion -cne '\$\{\{ matrix.train.version \}\}'/g)).toHaveLength(2);
     expect(publish.match(/\$installedVersion -ne '\$\{\{ inputs\.tag \}\}'\.TrimStart\('v'\)/g))
       .toHaveLength(2);
     expect(publish).toContain('WinGet is unavailable on the selected Windows runner');
@@ -779,20 +806,28 @@ describe('zero-touch release workflow contracts', () => {
     expect(publish).toContain('headRefOid');
     expect(publish).toContain('mergeCommit');
     expect(publish).toContain('git show "$MERGE_SHA:$TARGET"');
-    const adapterMergePolling = publish.slice(
-      publish.indexOf('for ATTEMPT in $(seq 1 60)'),
-      publish.indexOf('FILE_SHA256=')
-    );
-    expect(adapterMergePolling).toContain("pr.state !== 'MERGED' || pr.baseRefName !== 'main'");
-    expect(adapterMergePolling).toContain('pr.headRefOid !== process.env.EXPECTED_HEAD');
-    expect(adapterMergePolling).toContain('process.env.REPO}`.toLowerCase()');
-    expect(publish).toContain('release-catalog-publication-${{ inputs.tag }}');
-    expect(train).toContain('release-catalog-publication-${{ needs.prepare.outputs.tag }}');
-    expect(train).toContain('catalog.state !== \'MERGED\'');
-    const mergePolling = publish.slice(
-      publish.indexOf('for ATTEMPT in $(seq 1 60)'),
-      publish.indexOf('CATALOG_COMMIT="$MERGE_SHA"')
-    );
+    const catalogJob = (yaml.load(publish) as any).jobs.catalog;
+    const catalogRun = catalogJob.steps.find((step: any) => step.name === 'Push one deterministic catalog update').run;
+    const validator = catalogRun.match(/validate_pr_details\(\) \{[\s\S]*?node - <<'NODE'\n([\s\S]*?)\nNODE/)[1];
+    const head = 'a'.repeat(40);
+    const valid = {baseRefName: 'main', headRepository: {nameWithOwner: 'ntanwir10/homebrew-tap'},
+      headRefOid: head, state: 'MERGED', mergeCommit: {oid: 'b'.repeat(40)}};
+    const validate = (pr: any) => spawnSync(process.execPath, ['-e', validator], {
+      encoding: 'utf8', env: {...process.env, PR_DETAILS: JSON.stringify(pr), EXPECTED_HEAD: head,
+        CATALOG_REPOSITORY: 'ntanwir10/homebrew-tap'},
+    });
+    expect(validate(valid).status).toBe(0);
+    expect(validate({...valid, state: 'OPEN', mergeCommit: null}).status).toBe(0);
+    for (const invalid of [
+      {...valid, baseRefName: 'other'}, {...valid, headRepository: {nameWithOwner: 'attacker/tap'}},
+      {...valid, headRefOid: 'c'.repeat(40)}, {...valid, headRefOid: 'invalid'},
+      {...valid, state: 'CLOSED'}, {...valid, mergeCommit: null},
+    ]) expect(validate(invalid).status).not.toBe(0);
+    expect(catalogRun).toContain('if [ "$RELEASE_CHANNEL" = stable ]; then test "$PR_STATE" = MERGED; fi');
+    expect(catalogRun).toContain('validate_pr_details');
+    expect(publish).toContain("schemaVersion: 'guardscan.catalog-publication.v1'");
+    expect(train).toContain("catalogResult.schemaVersion !== 'guardscan.catalog-publication.v1'");
+    const mergePolling = catalogRun;
     expect(mergePolling).toContain("!['OPEN', 'MERGED'].includes(pr.state)");
     expect(mergePolling).toContain('pr.headRefOid !== expectedHead');
     expect(mergePolling).toContain('pr.headRepository?.nameWithOwner !== process.env.CATALOG_REPOSITORY');

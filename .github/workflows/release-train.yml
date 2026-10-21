@@ -491,7 +491,7 @@ jobs:
             fi
             gh pr merge "$RELEASE_PR" \
               --repo "${GITHUB_REPOSITORY}" \
-              --auto --squash --match-head-commit "${{ steps.source.outputs.head_sha }}"
+              --squash --match-head-commit "${{ steps.source.outputs.head_sha }}"
           elif [ "$STATE" != MERGED ]; then
             echo 'Release PR was closed without merging.' >&2
             exit 1
@@ -686,7 +686,7 @@ jobs:
           const fs = require('fs');
           const cp = require('child_process');
           const path = require('path');
-          const {appendEvent, readEvents} = require('./cli/scripts/release/events');
+          const {appendEvent, monotonicLedgerTimestamp, readEvents} = require('./cli/scripts/release/events');
           const {
             assertDocumentMatchesSource,
             releaseTrainChannels,
@@ -751,9 +751,7 @@ jobs:
             }
           }
           const now = new Date().toISOString();
-          const timestampFor = idempotencyKey => (
-            readEvents(ledger).find(event => event.idempotencyKey === idempotencyKey)?.timestamp || now
-          );
+          const timestampFor = idempotencyKey => monotonicLedgerTimestamp(readEvents(ledger), now, idempotencyKey);
           const base = {version, tag, commit};
           if (readEvents(ledger).length === 0) {
             const idempotencyKey = `train:${tag}`;
@@ -1084,6 +1082,21 @@ jobs:
           )"
           test "$MANIFEST_SHA256" = "$LEDGER_MANIFEST_SHA256"
           SOURCE_COMMIT="$(git rev-parse HEAD)"
+          node cli/scripts/release/index.js catalog \
+            --manifest catalog-verification/release-manifest.json \
+            --output-dir catalog-verification/rendered \
+            --manifest-url "https://github.com/${GITHUB_REPOSITORY}/releases/download/v$RELEASE_VERSION/release-manifest.json" \
+            --manifest-sha256 "$MANIFEST_SHA256" \
+            --generator-repository "$GITHUB_REPOSITORY" \
+            --generator-commit "$SOURCE_COMMIT"
+          validate_catalog_pr() {
+            PR_DETAILS="$(gh pr view --repo ntanwir10/homebrew-tap "$PR_NUMBER" \
+              --json state,baseRefName,headRefOid,headRepository,mergeCommit)"
+            export PR_DETAILS EXPECTED_HEAD REQUIRE_MERGED
+            node -e 'require("./cli/scripts/release/adapter-projection").validateCatalogPullRequest(JSON.parse(process.env.PR_DETAILS), process.env.EXPECTED_HEAD, process.env.REQUIRE_MERGED === "true")'
+            PR_STATE="$(node -p 'JSON.parse(process.env.PR_DETAILS).state')"
+            MERGE_SHA="$(node -p 'JSON.parse(process.env.PR_DETAILS).mergeCommit?.oid || ""')"
+          }
           node cli/scripts/release/index.js catalog-status \
             --manifest catalog-verification/release-manifest.json \
             --catalog-root catalog-checkout \
@@ -1164,11 +1177,36 @@ jobs:
               PR_NUMBER="$(gh pr list --repo ntanwir10/homebrew-tap \
                 --head "$UPDATE_BRANCH" --state all --limit 1 --json number --jq '.[0].number')"
             fi
+            EXPECTED_HEAD="$(git -C catalog-checkout rev-parse HEAD)"
+            REQUIRE_MERGED=false
+            validate_catalog_pr
+            git -C catalog-checkout fetch origin main
+            PROJECTION_BASE="$(git -C catalog-checkout rev-parse origin/main)"
+            if [ "$PR_STATE" = MERGED ]; then
+              git -C catalog-checkout fetch origin "$MERGE_SHA"
+              PROJECTION_BASE="$(git -C catalog-checkout rev-parse "$MERGE_SHA^1")"
+            fi
+            node -e 'require("./cli/scripts/release/adapter-projection").verifyCatalogProjection(...process.argv.slice(1))' \
+              catalog-checkout catalog-verification/rendered catalog/homebrew-tap/.github/workflows/verify.yml \
+              "$EXPECTED_HEAD" "$PROJECTION_BASE"
             if [ "$ACTIVE_CHANNEL" = stable ]; then
-              PR_STATE="$(gh pr view --repo ntanwir10/homebrew-tap "$PR_NUMBER" --json state --jq .state)"
               if [ "$PR_STATE" != MERGED ]; then
-                gh pr merge --repo ntanwir10/homebrew-tap "$PR_NUMBER" --auto --squash
+                gh pr merge --repo ntanwir10/homebrew-tap "$PR_NUMBER" --squash --match-head-commit "$EXPECTED_HEAD"
               fi
+              for ATTEMPT in $(seq 1 60); do
+                REQUIRE_MERGED=false
+                validate_catalog_pr
+                if [ "$PR_STATE" = MERGED ]; then break; fi
+                sleep 10
+              done
+              REQUIRE_MERGED=true
+              validate_catalog_pr
+              git -C catalog-checkout fetch origin "$MERGE_SHA"
+              git -C catalog-checkout fetch origin main
+              git -C catalog-checkout merge-base --is-ancestor "$MERGE_SHA" origin/main
+              node -e 'require("./cli/scripts/release/adapter-projection").verifyCatalogProjection(...process.argv.slice(1))' \
+                catalog-checkout catalog-verification/rendered catalog/homebrew-tap/.github/workflows/verify.yml \
+                "$MERGE_SHA" "$(git -C catalog-checkout rev-parse "$MERGE_SHA^1")"
             fi
             echo "exact=false" >> "$GITHUB_OUTPUT"
             echo "Catalog is converging through PR #$PR_NUMBER; verification remains pending."
@@ -1193,6 +1231,34 @@ jobs:
           case "$CATALOG_PULL_REQUEST" in
             ''|*[!0-9]*) echo "Catalog publication evidence has no pull request" >&2; exit 1 ;;
           esac
+          PR_NUMBER="$CATALOG_PULL_REQUEST"
+          PR_DETAILS="$(gh pr view --repo ntanwir10/homebrew-tap "$PR_NUMBER" \
+            --json state,baseRefName,headRefOid,headRepository,mergeCommit)"
+          export PR_DETAILS
+          EXPECTED_HEAD="$(node -p 'JSON.parse(process.env.PR_DETAILS).headRefOid')"
+          REQUIRE_MERGED=false
+          if [ "$ACTIVE_CHANNEL" = stable ]; then REQUIRE_MERGED=true; fi
+          validate_catalog_pr
+          if [ "$PR_STATE" = MERGED ]; then
+            git -C catalog-checkout fetch origin "$MERGE_SHA"
+            git -C catalog-checkout fetch origin main
+            git -C catalog-checkout merge-base --is-ancestor "$MERGE_SHA" origin/main
+            CATALOG_COMMIT="$MERGE_SHA"
+            PROJECTION_BASE="$(git -C catalog-checkout rev-parse "$MERGE_SHA^1")"
+          else
+            test "$CATALOG_COMMIT" = "$EXPECTED_HEAD"
+            git -C catalog-checkout fetch origin main
+            PROJECTION_BASE="$(git -C catalog-checkout rev-parse origin/main)"
+          fi
+          git -C catalog-checkout fetch origin "$EXPECTED_HEAD"
+          node -e 'require("./cli/scripts/release/adapter-projection").verifyCatalogProjection(...process.argv.slice(1))' \
+            catalog-checkout catalog-verification/rendered catalog/homebrew-tap/.github/workflows/verify.yml \
+            "$CATALOG_COMMIT" "$PROJECTION_BASE"
+          if [ "$PR_STATE" = MERGED ]; then
+            node -e 'require("./cli/scripts/release/adapter-projection").verifyCatalogProjection(...process.argv.slice(1))' \
+              catalog-checkout catalog-verification/rendered catalog/homebrew-tap/.github/workflows/verify.yml \
+              "$EXPECTED_HEAD" "$PROJECTION_BASE"
+          fi
           export ACTIVE_CHANNEL CATALOG_COMMIT CATALOG_PULL_REQUEST CATALOG_REF MANIFEST_SHA256 SOURCE_COMMIT
           node - <<'NODE'
           const fs = require('fs');
@@ -1216,7 +1282,7 @@ jobs:
         run: |
           node - <<'NODE'
           const fs = require('fs');
-          const {appendEvent, materializeReleaseState, readEvents} = require('./cli/scripts/release/events');
+          const {appendEvent, materializeReleaseState, monotonicLedgerTimestamp, readEvents} = require('./cli/scripts/release/events');
           const {shouldPublishCatalogChannel} = require('./cli/scripts/release/distribution-guards');
           const evidence = require('./catalog-verification/evidence.json');
           const tag = `v${process.env.RELEASE_VERSION}`;
@@ -1236,12 +1302,11 @@ jobs:
               throw new Error(`catalog evidence has no valid digest for ${catalogPath}`);
             }
             const idempotencyKey = `catalog-published:${channel}:${tag}:${evidence.commit}:${evidence.lockSha256}`;
-            const existing = events.find(event => event.idempotencyKey === idempotencyKey);
             appendEvent('release-events.jsonl', {
               version: process.env.RELEASE_VERSION,
               tag,
               commit,
-              timestamp: existing?.timestamp || timestamp,
+              timestamp: monotonicLedgerTimestamp(readEvents('release-events.jsonl'), timestamp, idempotencyKey),
               type: 'channel_published',
               channel,
               idempotencyKey,
@@ -1670,9 +1735,18 @@ jobs:
           git -C catalog-rollback switch -c "$CATALOG_BRANCH" "$CATALOG_BASE"
           git -C catalog-rollback restore --source "$KNOWN_GOOD_CATALOG_COMMIT" -- \
             Formula/guardscan.rb bucket/guardscan.json channel-lock.json
+          test ! -L catalog-rollback/.github
+          test ! -L catalog-rollback/.github/workflows
+          mkdir -p catalog-rollback/.github/workflows catalog-rollback-trusted/Formula catalog-rollback-trusted/bucket
+          rm -f catalog-rollback/.github/workflows/verify.yml
+          cp catalog/homebrew-tap/.github/workflows/verify.yml catalog-rollback/.github/workflows/verify.yml
+          for CATALOG_PATH in Formula/guardscan.rb bucket/guardscan.json channel-lock.json; do
+            git -C catalog-rollback show "$KNOWN_GOOD_CATALOG_COMMIT:$CATALOG_PATH" > "catalog-rollback-trusted/$CATALOG_PATH"
+          done
           git -C catalog-rollback config user.name guardscan-release-bot
           git -C catalog-rollback config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git -C catalog-rollback add Formula/guardscan.rb bucket/guardscan.json channel-lock.json
+          git -C catalog-rollback add .github/workflows/verify.yml
           if ! git -C catalog-rollback diff --cached --quiet; then
             git -C catalog-rollback commit \
               -m "rollback GuardScan v$DEFECTIVE_VERSION catalog to v$KNOWN_GOOD_VERSION"
@@ -1713,6 +1787,7 @@ jobs:
             node - <<'NODE'
             const actual = process.env.CATALOG_CHANGED_FILES.split('\n').filter(Boolean).sort();
             const allowed = ['Formula/guardscan.rb', 'bucket/guardscan.json', 'channel-lock.json'];
+            allowed.push('.github/workflows/verify.yml');
             if (actual.some(file => !allowed.includes(file))) {
               throw new Error(`catalog rollback branch contains unreviewed paths: ${actual.join(', ')}`);
             }
@@ -1804,8 +1879,22 @@ jobs:
           CATALOG_PR_STATE="$(node -p 'JSON.parse(process.env.CATALOG_PR_INFO).state')"
           CATALOG_PR="$(node -p 'String(JSON.parse(process.env.CATALOG_PR_INFO).number)')"
           CATALOG_MERGE_SHA="$(node -p 'JSON.parse(process.env.CATALOG_PR_INFO).mergeCommit')"
+          CATALOG_PR_DETAILS="$(gh pr view --repo ntanwir10/homebrew-tap "$CATALOG_PR" \
+            --json state,baseRefName,headRefOid,headRepository,mergeCommit)"
+          export CATALOG_PR_DETAILS CATALOG_HEAD
+          node -e 'require("./cli/scripts/release/adapter-projection").validateCatalogPullRequest(JSON.parse(process.env.CATALOG_PR_DETAILS), process.env.CATALOG_HEAD)'
+          CATALOG_PR_STATE="$(node -p 'JSON.parse(process.env.CATALOG_PR_DETAILS).state')"
+          CATALOG_MERGE_SHA="$(node -p 'JSON.parse(process.env.CATALOG_PR_DETAILS).mergeCommit?.oid || ""')"
+          PROJECTION_BASE="$CATALOG_BASE"
+          if [ "$CATALOG_PR_STATE" = MERGED ]; then
+            git -C catalog-rollback fetch origin "$CATALOG_MERGE_SHA"
+            PROJECTION_BASE="$(git -C catalog-rollback rev-parse "$CATALOG_MERGE_SHA^1")"
+          fi
+          node -e 'require("./cli/scripts/release/adapter-projection").verifyCatalogProjection(...process.argv.slice(1))' \
+            catalog-rollback catalog-rollback-trusted catalog/homebrew-tap/.github/workflows/verify.yml \
+            "$CATALOG_HEAD" "$PROJECTION_BASE"
           if [ "$CATALOG_PR_STATE" = OPEN ]; then
-            gh pr merge --repo ntanwir10/homebrew-tap "$CATALOG_PR" --squash
+            gh pr merge --repo ntanwir10/homebrew-tap "$CATALOG_PR" --squash --match-head-commit "$CATALOG_HEAD"
             for ATTEMPT in $(seq 1 60); do
               CATALOG_PR_STATE="$(gh pr view --repo ntanwir10/homebrew-tap "$CATALOG_PR" --json state --jq .state)"
               if [ "$CATALOG_PR_STATE" = MERGED ]; then break; fi
@@ -1821,6 +1910,24 @@ jobs:
           esac
           test "${#CATALOG_MERGE_SHA}" = 40
           git -C catalog-rollback fetch origin "$CATALOG_MERGE_SHA"
+          CATALOG_PR_DETAILS="$(gh pr view --repo ntanwir10/homebrew-tap "$CATALOG_PR" \
+            --json state,baseRefName,headRefOid,headRepository,mergeCommit)"
+          export CATALOG_PR_DETAILS CATALOG_HEAD CATALOG_MERGE_SHA
+          node - <<'NODE'
+          const {validateCatalogPullRequest} = require('./cli/scripts/release/adapter-projection');
+          const pr = validateCatalogPullRequest(JSON.parse(process.env.CATALOG_PR_DETAILS), process.env.CATALOG_HEAD, true);
+          if (pr.mergeCommit.oid !== process.env.CATALOG_MERGE_SHA) throw new Error('catalog rollback merge identity changed');
+          NODE
+          git -C catalog-rollback fetch origin main
+          git -C catalog-rollback merge-base --is-ancestor "$CATALOG_MERGE_SHA" origin/main
+          PROJECTION_BASE="$(git -C catalog-rollback rev-parse "$CATALOG_MERGE_SHA^1")"
+          git -C catalog-rollback fetch origin "$CATALOG_HEAD"
+          node -e 'require("./cli/scripts/release/adapter-projection").verifyCatalogProjection(...process.argv.slice(1))' \
+            catalog-rollback catalog-rollback-trusted catalog/homebrew-tap/.github/workflows/verify.yml \
+            "$CATALOG_HEAD" "$PROJECTION_BASE"
+          node -e 'require("./cli/scripts/release/adapter-projection").verifyCatalogProjection(...process.argv.slice(1))' \
+            catalog-rollback catalog-rollback-trusted catalog/homebrew-tap/.github/workflows/verify.yml \
+            "$CATALOG_MERGE_SHA" "$PROJECTION_BASE"
           for CATALOG_PATH in Formula/guardscan.rb bucket/guardscan.json channel-lock.json; do
             test "$(git -C catalog-rollback rev-parse "$CATALOG_MERGE_SHA:$CATALOG_PATH")" = \
               "$(git -C catalog-rollback rev-parse "$KNOWN_GOOD_CATALOG_COMMIT:$CATALOG_PATH")"
@@ -1840,7 +1947,7 @@ jobs:
         run: |
           node - <<'NODE'
           const fs = require('fs');
-          const {appendEvent, readEvents, materializeReleaseState} = require('./cli/scripts/release/events');
+          const {appendEvent, readEvents, materializeReleaseState, monotonicLedgerTimestamp} = require('./cli/scripts/release/events');
           const events = readEvents('release-events.jsonl');
           const state = materializeReleaseState(events);
           const now = new Date().toISOString();
@@ -1876,24 +1983,22 @@ jobs:
             version: state.version,
             tag: state.tag,
             commit: state.commit,
-            timestamp: existingCompletion?.timestamp || now,
+            timestamp: monotonicLedgerTimestamp(readEvents('release-events.jsonl'), now, completionKey),
             type: 'rollback_repository_completed',
             idempotencyKey: completionKey,
             payload: evidence,
           });
-          const refreshed = readEvents('release-events.jsonl');
           for (const [channel, channelState] of Object.entries(state.channels)) {
             if (!['github', 'pnpm', 'yarn', 'bun', 'homebrew', 'scoop'].includes(channel)
                 || !['published', 'submitted', 'accepted', 'verified', 'failed'].includes(channelState.status)) {
               continue;
             }
             const key = `rollback-superseded:${channel}:${process.env.DEFECTIVE_VERSION}`;
-            const existing = refreshed.find(event => event.idempotencyKey === key);
             appendEvent('release-events.jsonl', {
               version: state.version,
               tag: state.tag,
               commit: state.commit,
-              timestamp: existing?.timestamp || now,
+              timestamp: monotonicLedgerTimestamp(readEvents('release-events.jsonl'), now, key),
               type: 'superseded',
               channel,
               idempotencyKey: key,

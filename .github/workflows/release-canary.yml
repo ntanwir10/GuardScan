@@ -666,8 +666,8 @@ jobs:
                   } else {
                     throw "Unexpected moderated registry error: WinGet availability query exited ${availabilityStatus}: $availabilityText"
                   }
-                } elseif ($availabilityText -notmatch '(?im)^\s*Id\s*:\s*NaumanTanwir\.GuardScan\s*$'
-                    -or $availabilityText -notmatch '(?im)^\s*Version\s*:\s*${{ matrix.train.version }}\s*$') {
+                } elseif ($availabilityText -notmatch '(?im)^\s*Id\s*:\s*NaumanTanwir\.GuardScan\s*$' -or
+                    $availabilityText -notmatch '(?im)^\s*Version\s*:\s*${{ matrix.train.version }}\s*$') {
                   throw 'Unexpected moderated registry error: WinGet did not confirm the exact package and version'
                 }
                 if ($notPublic) {

@@ -18,7 +18,7 @@ permissions:
 
 env:
   RELEASE_NODE_VERSION: 22.23.1
-  RELEASE_NPM_VERSION: 11.5.2
+  RELEASE_NPM_VERSION: 11.21.0
   RELEASE_WINGETCREATE_VERSION: 1.12.13.0
   RELEASE_WINGETCREATE_SHA256: 24042bd37915805615e6cf969ac57c6439124c3fe85823327f5f3fb24bd9ffea
 
@@ -347,7 +347,9 @@ jobs:
           node-version: ${{ env.RELEASE_NODE_VERSION }}
           registry-url: https://registry.npmjs.org
       - name: Install OIDC-compatible npm
-        run: npm install --global npm@11.21.0
+        run: |
+          npm install --global "npm@${RELEASE_NPM_VERSION}"
+          test "$(npm --version)" = "$RELEASE_NPM_VERSION"
       - working-directory: cli
         run: npm ci
       - name: Verify and classify registry state
@@ -498,9 +500,12 @@ jobs:
           for attempt in range(30):
               try:
                   with urllib.request.urlopen(url, timeout=30) as response:
+                      document = json.load(response)
+                      if any(item.get("yanked") is not False for item in document["urls"]):
+                          raise SystemExit("TestPyPI release contains yanked or unknown-yank-state files")
                       remote = {
                           item["filename"]: item["digests"]["sha256"]
-                          for item in json.load(response)["urls"]
+                          for item in document["urls"]
                       }
               except urllib.error.HTTPError as error:
                   if error.code != 404:
@@ -789,6 +794,7 @@ jobs:
           RELEASE_TAG: ${{ inputs.tag }}
         run: |
           CATALOG_REPOSITORY="ntanwir10/homebrew-tap"
+          gh auth setup-git --hostname github.com
           if [ "$RELEASE_CHANNEL" = rc ]; then
             BRANCH="channel-preview/$RELEASE_TAG"
           else
@@ -910,8 +916,17 @@ jobs:
                 --json state,headRefOid,baseRefName,headRepository,mergeCommit)"
               validate_pr_details
               PR_STATE="$(node -p 'JSON.parse(process.env.PR_DETAILS).state')"
+              git fetch origin main
+              PROJECTION_BASE="$(git rev-parse FETCH_HEAD)"
+              if [ "$PR_STATE" = MERGED ]; then
+                MERGE_SHA="$(node -p 'JSON.parse(process.env.PR_DETAILS).mergeCommit.oid')"
+                git fetch origin "$MERGE_SHA"
+                PROJECTION_BASE="$(git rev-parse "$MERGE_SHA^1")"
+              fi
+              node -e 'require("../cli/scripts/release/adapter-projection").verifyCatalogProjection(process.cwd(), "../catalog-output", "../catalog/homebrew-tap/.github/workflows/verify.yml", ...process.argv.slice(1))' \
+                "$EXPECTED_HEAD" "$PROJECTION_BASE"
               if [ "$RELEASE_CHANNEL" = stable ] && [ "$PR_STATE" != MERGED ]; then
-                gh pr merge --repo "$CATALOG_REPOSITORY" "$PR_NUMBER" --auto --squash
+                gh pr merge --repo "$CATALOG_REPOSITORY" "$PR_NUMBER" --squash --match-head-commit "$EXPECTED_HEAD"
                 for ATTEMPT in $(seq 1 60); do
                   PR_DETAILS="$(gh pr view --repo "$CATALOG_REPOSITORY" "$PR_NUMBER" \
                     --json state,headRefOid,baseRefName,headRepository,mergeCommit)"
@@ -927,9 +942,21 @@ jobs:
             validate_pr_details
             PR_STATE="$(node -p 'JSON.parse(process.env.PR_DETAILS).state')"
             if [ "$RELEASE_CHANNEL" = stable ]; then test "$PR_STATE" = MERGED; fi
+            git fetch origin "$EXPECTED_HEAD"
+            git fetch origin main
+            PROJECTION_BASE="$(git rev-parse FETCH_HEAD)"
             if [ "$PR_STATE" = MERGED ]; then
               MERGE_SHA="$(node -p 'JSON.parse(process.env.PR_DETAILS).mergeCommit.oid')"
               git fetch origin "$MERGE_SHA"
+              PROJECTION_BASE="$(git rev-parse "$MERGE_SHA^1")"
+            fi
+            node -e 'require("../cli/scripts/release/adapter-projection").verifyCatalogProjection(process.cwd(), "../catalog-output", "../catalog/homebrew-tap/.github/workflows/verify.yml", ...process.argv.slice(1))' \
+              "$EXPECTED_HEAD" "$PROJECTION_BASE"
+            if [ "$PR_STATE" = MERGED ]; then
+              MERGE_SHA="$(node -p 'JSON.parse(process.env.PR_DETAILS).mergeCommit.oid')"
+              git fetch origin "$MERGE_SHA"
+              node -e 'require("../cli/scripts/release/adapter-projection").verifyCatalogProjection(process.cwd(), "../catalog-output", "../catalog/homebrew-tap/.github/workflows/verify.yml", ...process.argv.slice(1))' \
+                "$MERGE_SHA" "$(git rev-parse "$MERGE_SHA^1")"
               if [ "$MAIN_ALREADY_CURRENT" = true ]; then
                 git merge-base --is-ancestor "$MERGE_SHA" HEAD
               fi
@@ -1003,7 +1030,9 @@ jobs:
           if ($null -eq (Get-Command winget -ErrorAction SilentlyContinue)) {
             throw 'WinGet is unavailable on the selected Windows runner'
           }
-          $installer = Get-ChildItem adapters\winget -Filter '*.installer.yaml' -Recurse | Select-Object -First 1
+          $installers = @(Get-ChildItem adapters\winget -Filter '*.installer.yaml' -Recurse)
+          if ($installers.Count -ne 1) { throw 'Expected exactly one rendered WinGet installer manifest' }
+          $installer = $installers[0]
           if ($null -eq $installer) { throw 'Rendered WinGet installer manifest is missing' }
           $manifestDirectory = $installer.Directory.FullName
           winget validate --manifest $manifestDirectory
@@ -1031,7 +1060,9 @@ jobs:
           $version = $env:RELEASE_TAG.TrimStart('v')
           $packageIdentity = "NaumanTanwir.GuardScan@$version"
           $manifestPath = "manifests/n/NaumanTanwir/GuardScan/$version"
-          $installer = Get-ChildItem adapters\winget -Filter '*.installer.yaml' -Recurse | Select-Object -First 1
+          $installers = @(Get-ChildItem adapters\winget -Filter '*.installer.yaml' -Recurse)
+          if ($installers.Count -ne 1) { throw 'Expected exactly one rendered WinGet installer manifest' }
+          $installer = $installers[0]
           if ($null -eq $installer) { throw 'Rendered WinGet installer manifest is missing' }
           $manifestDirectory = $installer.Directory.FullName
           $localFiles = [ordered]@{}
@@ -1044,6 +1075,7 @@ jobs:
           $manifestDigest = (Get-FileHash winget-digest-input.txt -Algorithm SHA256).Hash.ToLowerInvariant()
 
           function Write-WinGetEvidence($state, $remoteIdentity, $pullRequest, $commit, $publicBytesVerified, $reason = $null) {
+            if ($null -eq $script:verifiedWinGet) { throw 'Authenticated WinGet file evidence is required' }
             $evidence = [ordered]@{
               schemaVersion = 'guardscan.moderated-submission.v1'
               channel = 'winget'
@@ -1052,78 +1084,44 @@ jobs:
               state = $state
               packageIdentity = $packageIdentity
               remoteIdentity = $remoteIdentity
-              remoteDigest = $manifestDigest
-              files = $localFiles
+              remoteDigest = $script:verifiedWinGet.remoteDigest
+              files = $script:verifiedWinGet.files
               provider = [ordered]@{
                 repository = 'microsoft/winget-pkgs'
                 path = $manifestPath
                 pullRequest = $pullRequest
                 commit = $commit
                 publicBytesVerified = $publicBytesVerified
-                pendingStateQuery = 'digest-bound open pull request, then protected release ledger'
+                pendingStateQuery = 'complete digest-bound provider search, then protected release ledger'
               }
-              checkedAt = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.fffZ')
             }
             if (-not [string]::IsNullOrWhiteSpace($reason)) { $evidence.reason = $reason }
             $evidence | ConvertTo-Json -Depth 8 | Out-File winget-evidence.json -Encoding utf8
           }
 
-          function Assert-WinGetRemoteFiles($remoteFiles) {
-            $expectedNames = @($localFiles.Keys | Sort-Object)
-            $actualNames = @($remoteFiles | ForEach-Object { Split-Path $_.filename -Leaf } | Sort-Object)
-            if (Compare-Object $expectedNames $actualNames) {
-              throw 'WinGet public manifest integrity conflict'
-            }
-            foreach ($remoteFile in $remoteFiles) {
-              $name = Split-Path $remoteFile.filename -Leaf
-              $destination = Join-Path $env:RUNNER_TEMP "winget-remote-$name"
-              Invoke-WebRequest $remoteFile.raw_url -OutFile $destination
-              $remoteDigest = (Get-FileHash $destination -Algorithm SHA256).Hash.ToLowerInvariant()
-              if ($remoteDigest -ne $localFiles[$name]) {
-                throw 'WinGet public manifest integrity conflict'
+          function Get-WinGetState($mode = $null, $retryUnavailable = $false) {
+              $arguments = @('cli/scripts/release/winget-submission.js', $manifestDirectory, $env:RELEASE_TAG, 'winget-provider.json')
+              if ($null -ne $mode) { $arguments += [string]$mode }
+              $result = & node @arguments
+              if ($LASTEXITCODE -eq 0) {
+                $state = $result | Out-String | ConvertFrom-Json
+                $script:verifiedWinGet = if ($state.publicExact) { $state.publication } else { $state.submission }
+                return $state
               }
-            }
+              if ($LASTEXITCODE -eq 75 -and $retryUnavailable) { throw [System.IO.IOException]::new('WinGet verification temporarily unavailable') }
+              throw 'WinGet public manifest integrity conflict or verification unavailable'
+          }
+          function Find-WinGetPullRequest($retryUnavailable = $false) {
+            $result = Get-WinGetState $null $retryUnavailable
+            if ($result.submitRequired) { return $null }
+            return $result.submission
           }
 
-          function Find-WinGetPullRequest($submitter, $title) {
-            $query = "repo:microsoft/winget-pkgs is:pr is:open author:$submitter in:title `"$title`""
-            $search = gh api --method GET search/issues -f q="$query" -f per_page=20
-            if ($LASTEXITCODE -ne 0) { throw 'Unable to query pending WinGet pull requests reliably' }
-            $match = ($search | Out-String | ConvertFrom-Json).items |
-              Where-Object { $_.title -eq $title } |
-              Sort-Object updated_at -Descending |
-              Select-Object -First 1
-            if ($null -eq $match) { return $null }
-            $pull = gh api "repos/microsoft/winget-pkgs/pulls/$($match.number)"
-            if ($LASTEXITCODE -ne 0) { throw 'Unable to read pending WinGet pull request' }
-            return ($pull | Out-String | ConvertFrom-Json)
-          }
-
-          function Assert-WinGetPullRequest($pullRequest) {
-            $pullFiles = gh api "repos/microsoft/winget-pkgs/pulls/$($pullRequest.number)/files?per_page=100"
-            if ($LASTEXITCODE -ne 0) { throw 'Unable to read pending WinGet pull request files' }
-            $remoteFiles = @($pullFiles | Out-String | ConvertFrom-Json |
-              Where-Object { $_.filename -like "$manifestPath/*" })
-            Assert-WinGetRemoteFiles $remoteFiles
-          }
-
-          $publicListing = gh api "repos/microsoft/winget-pkgs/contents/${manifestPath}?ref=master" 2>&1
-          $publicStatus = $LASTEXITCODE
-          if ($publicStatus -eq 0) {
-            $entries = @($publicListing | Out-String | ConvertFrom-Json)
-            $remoteFiles = @($entries | ForEach-Object {
-              [pscustomobject]@{ filename = "$manifestPath/$($_.name)"; raw_url = $_.download_url }
-            })
-            Assert-WinGetRemoteFiles $remoteFiles
-            $catalogCommit = (gh api --method GET repos/microsoft/winget-pkgs/commits -f path="$manifestPath" -f per_page=1 --jq '.[0].sha').Trim()
-            if ($LASTEXITCODE -ne 0 -or $catalogCommit -notmatch '^[a-f0-9]{40}$') {
-              throw 'Unable to resolve exact public WinGet catalog commit'
-            }
+          $publicState = Get-WinGetState '--public'
+          if ($publicState.publicExact) {
+            $catalogCommit = $publicState.publication.headCommit
             Write-WinGetEvidence 'public-exact' "github:microsoft/winget-pkgs@$catalogCommit#$manifestPath" $null $catalogCommit $true
             exit 0
-          }
-          if (($publicListing | Out-String) -notmatch 'HTTP 404') {
-            throw 'Unable to query public WinGet catalog reliably'
           }
 
           git fetch origin release-ledger
@@ -1141,9 +1139,6 @@ jobs:
                 )
               } | Select-Object -Last 1
             if ($null -ne $existing) {
-              if ($existing.payload.remoteDigest -ne $manifestDigest) {
-                throw 'WinGet protected-ledger digest conflicts with rendered manifests'
-              }
               if ($null -eq $existing.payload.submission) {
                 throw 'WinGet protected-ledger evidence is incomplete'
               }
@@ -1151,40 +1146,35 @@ jobs:
               if ($null -eq $recordedPull -or $recordedPull -le 0) {
                 throw 'WinGet protected-ledger pull request identity is invalid'
               }
-              $pullJson = gh api "repos/microsoft/winget-pkgs/pulls/$recordedPull"
-              if ($LASTEXITCODE -ne 0) { throw 'Unable to query recorded WinGet pull request' }
-              $pullRequest = ($pullJson | Out-String | ConvertFrom-Json)
-              $remoteIdentity = "github:microsoft/winget-pkgs/pull/$($pullRequest.number)@$($pullRequest.head.sha)#$manifestPath"
-              if ($pullRequest.merged) {
-                Assert-WinGetPullRequest $pullRequest
-                Write-WinGetEvidence 'accepted' $remoteIdentity $($pullRequest.number) $($pullRequest.head.sha) $false
+              $pullRequest = (Get-WinGetState $recordedPull).submission
+              if ($null -eq $pullRequest) { throw 'Recorded WinGet pull request cannot be verified' }
+              if ($existing.payload.remoteDigest -ne $pullRequest.remoteDigest) {
+                throw 'WinGet protected-ledger digest conflicts with authenticated provider manifests'
+              }
+              $remoteIdentity = "github:microsoft/winget-pkgs/pull/$($pullRequest.pullRequest)@$($pullRequest.headCommit)#$manifestPath"
+              if ($pullRequest.state -eq 'MERGED') {
+                Write-WinGetEvidence 'accepted' $remoteIdentity $($pullRequest.pullRequest) $($pullRequest.headCommit) $false
                 exit 0
               }
-              if ($pullRequest.state -eq 'closed') {
-                $labels = @($pullRequest.labels | ForEach-Object { $_.name } | Sort-Object) -join ','
-                $reason = "provider pull request closed without merge; labels=$labels"
-                Write-WinGetEvidence 'rejected' $remoteIdentity $($pullRequest.number) $($pullRequest.head.sha) $false $reason
+              if ($pullRequest.state -eq 'CLOSED') {
+                $reason = 'provider pull request closed without merge'
+                Write-WinGetEvidence 'rejected' $remoteIdentity $($pullRequest.pullRequest) $($pullRequest.headCommit) $false $reason
                 exit 0
               }
-              Assert-WinGetPullRequest $pullRequest
               $state = if ($existing.type -in @('channel_rejected', 'channel_corrected')) {
                 'resubmitted'
               } else { 'pending-ledger' }
-              Write-WinGetEvidence $state $remoteIdentity $($pullRequest.number) $($pullRequest.head.sha) $false
+              Write-WinGetEvidence $state $remoteIdentity $($pullRequest.pullRequest) $($pullRequest.headCommit) $false
               Write-Host 'WinGet provider state was resolved from the recorded pull request; the protected release ledger prevents a blind duplicate.'
               exit 0
             }
           }
 
-          $submitter = (gh api user --jq .login).Trim()
-          if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($submitter)) {
-            throw 'Unable to resolve WinGet submitting identity'
-          }
           $pullTitle = "GuardScan $version [$($manifestDigest.Substring(0, 12))]"
-          $pullRequest = Find-WinGetPullRequest $submitter $pullTitle
+          $pullRequest = Find-WinGetPullRequest
           if ($null -ne $pullRequest) {
-            Assert-WinGetPullRequest $pullRequest
-            Write-WinGetEvidence 'pending' "github:microsoft/winget-pkgs/pull/$($pullRequest.number)@$($pullRequest.head.sha)#$manifestPath" $($pullRequest.number) $($pullRequest.head.sha) $false
+            $state = if ($pullRequest.state -eq 'MERGED') { 'accepted' } else { 'pending' }
+            Write-WinGetEvidence $state "github:microsoft/winget-pkgs/pull/$($pullRequest.pullRequest)@$($pullRequest.headCommit)#$manifestPath" $($pullRequest.pullRequest) $($pullRequest.headCommit) $false
             exit 0
           }
 
@@ -1194,16 +1184,22 @@ jobs:
           if ($wingetCreateDigest -ne $env:RELEASE_WINGETCREATE_SHA256) {
             throw 'Pinned wingetcreate executable failed SHA-256 verification'
           }
-          & .\wingetcreate.exe submit --prtitle "$pullTitle" --no-open --token $env:WINGET_GITHUB_TOKEN $manifestDirectory
-          if ($LASTEXITCODE -ne 0) { throw 'WinGet submission failed' }
+          $submitStatus = 1
+          try {
+            & .\wingetcreate.exe submit --prtitle "$pullTitle" --no-open --token $env:WINGET_GITHUB_TOKEN $manifestDirectory
+            $submitStatus = $LASTEXITCODE
+          } catch [System.IO.IOException] {
+            Write-Host 'WinGet submission transport outcome is unknown; verifying exact provider state.'
+          }
           for ($attempt = 0; $attempt -lt 30; $attempt += 1) {
-            $pullRequest = Find-WinGetPullRequest $submitter $pullTitle
+            try { $pullRequest = Find-WinGetPullRequest $true }
+            catch [System.IO.IOException] { $pullRequest = $null }
             if ($null -ne $pullRequest) { break }
             Start-Sleep -Seconds 10
           }
-          if ($null -eq $pullRequest) { throw 'Submitted WinGet pull request identity did not become queryable' }
-          Assert-WinGetPullRequest $pullRequest
-          Write-WinGetEvidence 'submitted' "github:microsoft/winget-pkgs/pull/$($pullRequest.number)@$($pullRequest.head.sha)#$manifestPath" $($pullRequest.number) $($pullRequest.head.sha) $false
+          if ($null -eq $pullRequest) { throw "Submitted WinGet pull request identity did not become queryable (submit status $submitStatus)" }
+          $state = if ($pullRequest.state -eq 'MERGED') { 'accepted' } else { 'submitted' }
+          Write-WinGetEvidence $state "github:microsoft/winget-pkgs/pull/$($pullRequest.pullRequest)@$($pullRequest.headCommit)#$manifestPath" $($pullRequest.pullRequest) $($pullRequest.headCommit) $false
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: release-winget-evidence-${{ inputs.tag }}
@@ -1228,6 +1224,9 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: ${{ env.RELEASE_NODE_VERSION }}
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
       - working-directory: cli
         run: npm ci
       - working-directory: cli
@@ -1259,9 +1258,16 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $version = $env:RELEASE_TAG.TrimStart('v')
-          $package = Get-ChildItem local-feed\*.nupkg | Select-Object -First 1
-          if ($null -eq $package) { throw 'Chocolatey package is missing' }
-          $packageDigest = (Get-FileHash $package.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          $package = Get-Item -LiteralPath "local-feed/guardscan.$version.nupkg"
+          if ($package.PSIsContainer) { throw 'Chocolatey package is not a regular file' }
+          function Get-PublicationState($retryUnavailable = $false) {
+              $result = & python cli/scripts/release/chocolatey-preflight.py --package $package.FullName --version $version
+              if ($LASTEXITCODE -eq 0) { return ($result | Out-String | ConvertFrom-Json) }
+              if ($LASTEXITCODE -eq 75 -and $retryUnavailable) { throw [System.IO.IOException]::new('Chocolatey verification temporarily unavailable') }
+              throw 'Chocolatey public package integrity conflict or verification unavailable'
+          }
+          $publicationState = Get-PublicationState
+          $packageDigest = $publicationState.payloadDigest
           $packageIdentity = "guardscan@$version"
           $publicUrl = "https://community.chocolatey.org/api/v2/package/guardscan/$version"
 
@@ -1281,27 +1287,12 @@ jobs:
                 publicBytesVerified = $publicBytesVerified
                 pendingStateQuery = 'public package bytes only; protected release ledger prevents a blind duplicate after recorded submission'
               }
-              checkedAt = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.fffZ')
             }
             if (-not [string]::IsNullOrWhiteSpace($reason)) { $evidence.reason = $reason }
             $evidence | ConvertTo-Json -Depth 8 | Out-File chocolatey-evidence.json -Encoding utf8
           }
 
-          $public = $false
-          try {
-            Invoke-WebRequest $publicUrl -OutFile public-guardscan.nupkg
-            $public = $true
-          } catch {
-            $statusCode = if ($null -ne $_.Exception.Response) {
-              [int]$_.Exception.Response.StatusCode
-            } else { 0 }
-            if ($statusCode -ne 404) { throw 'Unable to query public Chocolatey package reliably' }
-          }
-          if ($public) {
-            $publicDigest = (Get-FileHash public-guardscan.nupkg -Algorithm SHA256).Hash.ToLowerInvariant()
-            if ($publicDigest -ne $packageDigest) {
-              throw 'Chocolatey public package integrity conflict'
-            }
+          if (-not $publicationState.publishRequired) {
             Write-ChocolateyEvidence 'public-exact' $publicUrl $true
             exit 0
           }
@@ -1352,8 +1343,25 @@ jobs:
             }
           }
 
-          choco push $package.FullName --source https://push.chocolatey.org/ --api-key $env:CHOCO_API_KEY
-          if ($LASTEXITCODE -ne 0) { throw 'Chocolatey submission failed' }
+          $submitStatus = 1
+          try {
+            choco push $package.FullName --source https://push.chocolatey.org/ --api-key $env:CHOCO_API_KEY
+            $submitStatus = $LASTEXITCODE
+          } catch [System.IO.IOException] {
+            Write-Host 'Chocolatey submission transport outcome is unknown; verifying exact provider state.'
+          }
+          if ($submitStatus -ne 0) {
+            for ($attempt = 0; $attempt -lt 30; $attempt += 1) {
+              try { $publicationState = Get-PublicationState $true }
+              catch [System.IO.IOException] { Start-Sleep -Seconds 10; continue }
+              if (-not $publicationState.publishRequired) {
+                Write-ChocolateyEvidence 'public-exact' $publicUrl $true
+                exit 0
+              }
+              Start-Sleep -Seconds 10
+            }
+            throw 'Chocolatey package did not converge after failed submission'
+          }
           Write-ChocolateyEvidence 'submitted' "chocolatey:$packageIdentity" $false
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:

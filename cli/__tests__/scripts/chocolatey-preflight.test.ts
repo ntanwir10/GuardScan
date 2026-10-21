@@ -83,12 +83,19 @@ describe('Chocolatey publication idempotency', () => {
 
   it('preflights before push and accepts retry/race success only with matching remote payloads', () => {
     const workflow: any = yaml.load(fs.readFileSync(path.resolve(__dirname, '../../../.github/workflows/release-publish.yml'), 'utf8'));
-    const submit = workflow.jobs.chocolatey.steps.find((step: any) => step.name === 'Submit Chocolatey package');
-    expect(submit.env.RELEASE_VERSION).toBe('${{ inputs.tag }}');
+    const submit = workflow.jobs.chocolatey.steps.find((step: any) => step.name === 'Preflight and submit Chocolatey package with exact evidence');
+    expect(submit.env.RELEASE_TAG).toBe('${{ inputs.tag }}');
+    expect(submit.run).toContain("$version = $env:RELEASE_TAG.TrimStart('v')");
     expect(submit.run).toContain('chocolatey-preflight.py');
-    expect(submit.run.indexOf('Get-PublicationState')).toBeLessThan(submit.run.indexOf('choco push'));
+    const preflight = submit.run.indexOf('$publicationState = Get-PublicationState\n');
+    const push = submit.run.indexOf('choco push');
+    expect(preflight).toBeGreaterThan(-1);
+    expect(push).toBeGreaterThan(preflight);
     expect(submit.run).toContain('publishRequired');
     expect(submit.run).toContain('Chocolatey package did not converge');
     expect(submit.run).toContain('catch [System.IO.IOException]');
+    expect(submit.run).toContain('$LASTEXITCODE -eq 75 -and $retryUnavailable');
+    expect(submit.run.indexOf('Get-PublicationState $true')).toBeGreaterThan(submit.run.indexOf('choco push'));
+    expect(submit.run).toContain('$packageDigest = $publicationState.payloadDigest');
   });
 });
