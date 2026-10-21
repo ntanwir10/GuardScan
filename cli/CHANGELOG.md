@@ -5,6 +5,16 @@ All notable changes to GuardScan will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - Unreleased
+
+### Added
+- Added fail-closed release-train and catalog-integrity tooling.
+
+### Changed
+- Improved scan coverage reporting, offline safeguards, and privacy-safe local state handling.
+
+This entry is unreleased and does not assert publication, tagging, or release-automation enablement.
+
 ## [1.0.5] - 2025-12-09
 
 ### Added

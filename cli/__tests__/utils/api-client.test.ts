@@ -21,6 +21,12 @@ describe('telemetry acknowledgement boundary', () => {
     jest.mocked(axios.create).mockReturnValue({post} as unknown as AxiosInstance);
   });
 
+  it('disables HTTP redirects so telemetry cannot be forwarded to another origin', () => {
+    new APIClient('https://telemetry.example.test');
+
+    expect(axios.create).toHaveBeenCalledWith(expect.objectContaining({maxRedirects: 0}));
+  });
+
   it.each([
     [{accepted: 1, acceptedEventIds: ['outside-batch']}, 'reference requested events'],
     [{accepted: 2, acceptedEventIds: ['first', 'first']}, 'must be unique'],

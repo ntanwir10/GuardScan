@@ -1,0 +1,91 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://guardscancli.com/schemas/guardscan.release-state.v1.schema.json",
+  "title": "GuardScan release publication state",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "version", "tag", "commit", "updatedAt", "channels"],
+  "properties": {
+    "schemaVersion": { "const": "guardscan.release-state.v1" },
+    "version": { "$ref": "#/definitions/semver" },
+    "tag": { "$ref": "#/definitions/versionTag" },
+    "commit": { "$ref": "#/definitions/commit" },
+    "updatedAt": { "type": "string", "format": "date-time" },
+    "manifestSha256": { "$ref": "#/definitions/sha256" },
+    "channels": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": {
+        "enum": ["npm", "github", "homebrew", "scoop", "winget", "chocolatey", "pypi"]
+      },
+      "additionalProperties": { "$ref": "#/definitions/channelState" }
+    }
+  },
+  "definitions": {
+    "semver": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$"
+    },
+    "versionTag": {
+      "type": "string",
+      "pattern": "^v(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$"
+    },
+    "commit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "channelState": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "artifactIds", "updatedAt"],
+      "properties": {
+        "status": {
+          "enum": [
+            "planned",
+            "built",
+            "tested",
+            "signed",
+            "uploaded",
+            "published",
+            "verified",
+            "failed",
+            "skipped"
+          ]
+        },
+        "artifactIds": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1, "maxLength": 200 }
+        },
+        "remoteIdentity": { "type": "string", "minLength": 1, "maxLength": 500 },
+        "error": { "type": "string", "minLength": 1, "maxLength": 2000 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "status": { "const": "failed" } } },
+          "then": {
+            "properties": { "error": {} },
+            "required": ["error"]
+          },
+          "else": { "not": { "required": ["error"] } }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": { "enum": ["uploaded", "published", "verified"] }
+            }
+          },
+          "then": {
+            "properties": { "remoteIdentity": {} },
+            "required": ["remoteIdentity"]
+          }
+        }
+      ]
+    }
+  }
+}

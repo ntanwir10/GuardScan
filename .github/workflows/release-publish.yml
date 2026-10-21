@@ -1,0 +1,864 @@
+name: Reusable multi-channel publication
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        type: string
+        required: true
+      tag:
+        type: string
+        required: true
+      channel:
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+env:
+  RELEASE_NODE_VERSION: 22.23.1
+
+jobs:
+  github:
+    if: vars.RELEASE_AUTOMATION_ENABLED == 'true'
+    name: Immutable GitHub release
+    runs-on: ubuntu-24.04
+    environment: ${{ inputs.channel == 'rc' && 'release-rc' || 'release-stable' }}
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.RELEASE_NODE_VERSION }}
+      - working-directory: cli
+        run: npm ci
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-payload-${{ inputs.tag }}
+          path: payload
+      - name: Reuse existing immutable tag payload
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json tagName,assets,isDraft,body \
+            > "$RUNNER_TEMP/existing-release.json" 2> "$RUNNER_TEMP/release-lookup-error"; then
+            jq -e --arg tag "$RELEASE_TAG" '
+              .tagName == $tag and
+              ([.assets[].name] | length == (unique | length)) and
+              all(.assets[]; .name | test("^[A-Za-z0-9][A-Za-z0-9._+~-]*$"))
+            ' "$RUNNER_TEMP/existing-release.json" >/dev/null
+            node cli/scripts/release/canonical-payload.js pointer \
+              "$RUNNER_TEMP/existing-release.json" "$RELEASE_TAG" > "$RUNNER_TEMP/canonical-pointer.json"
+            if [ "$(jq '.isDraft' "$RUNNER_TEMP/existing-release.json")" = true ] \
+              && [ "$(jq 'type' "$RUNNER_TEMP/canonical-pointer.json")" = '"object"' ]; then
+              # Authenticate the pointer producer before either immutable recovery path.
+              RUN_ID="$(jq -r '.runId' "$RUNNER_TEMP/canonical-pointer.json")"
+              ATTEMPT="$(jq -r '.runAttempt' "$RUNNER_TEMP/canonical-pointer.json")"
+              ARTIFACT="$(jq -r '.artifact' "$RUNNER_TEMP/canonical-pointer.json")"
+              gh api "repos/${GITHUB_REPOSITORY}/actions/runs/$RUN_ID/attempts/$ATTEMPT" \
+                > "$RUNNER_TEMP/canonical-producer.json"
+              jq -e --arg repository "$GITHUB_REPOSITORY" --arg run_id "$RUN_ID" --arg attempt "$ATTEMPT" '
+                ((.path | split("@")[0]) == ".github/workflows/release-train.yml") and
+                .event == "workflow_dispatch" and .head_branch == "main" and
+                (.repository.full_name | ascii_downcase) == ($repository | ascii_downcase) and
+                (.head_repository.full_name | ascii_downcase) == ($repository | ascii_downcase) and
+                (.id | tostring) == $run_id and (.run_attempt | tostring) == $attempt
+              ' "$RUNNER_TEMP/canonical-producer.json" >/dev/null
+              if gh run download "$RUN_ID" --repo "$GITHUB_REPOSITORY" --name "$ARTIFACT" \
+                --dir canonical-artifact-download 2> "$RUNNER_TEMP/canonical-artifact-download-error"; then
+                node cli/scripts/release/canonical-payload.js verify \
+                  canonical-artifact-download "$RUNNER_TEMP/canonical-pointer.json"
+                mv payload rebuilt-payload
+                mv canonical-artifact-download payload
+              else
+                DOWNLOAD_ERROR="$(cat "$RUNNER_TEMP/canonical-artifact-download-error")"
+                case "$DOWNLOAD_ERROR" in
+                  'no valid artifacts found to download'|'no artifact matches any of the names or patterns provided') ;;
+                  *)
+                    echo 'Canonical artifact download failed for a reason other than artifact unavailability; refusing publication.' >&2
+                    exit 1
+                    ;;
+                esac
+                # Keep any partial artifact download isolated. Only a complete draft asset set
+                # that matches the original pointer may recover an unavailable artifact.
+                jq -e '[.assets[].name] | index("release-manifest.json") != null and
+                  index("SHA256SUMS") != null and index("SHA256SUMS.sigstore.json") != null' \
+                  "$RUNNER_TEMP/existing-release.json" >/dev/null || {
+                    echo 'Existing draft has incomplete canonical evidence; refusing recovery.' >&2
+                    exit 1
+                  }
+                mkdir canonical-draft-assets
+                gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --dir canonical-draft-assets
+                node cli/scripts/release/canonical-payload.js verify \
+                  canonical-draft-assets "$RUNNER_TEMP/canonical-pointer.json"
+                mv payload rebuilt-payload
+                mv canonical-draft-assets payload
+              fi
+            elif [ "$(jq '.assets | length' "$RUNNER_TEMP/existing-release.json")" -gt 0 ]; then
+              # Never replace already published run-specific signatures/manifests with a rebuild.
+              jq -e '[.assets[].name] | index("release-manifest.json") != null and
+                index("SHA256SUMS") != null and index("SHA256SUMS.sigstore.json") != null' \
+                "$RUNNER_TEMP/existing-release.json" >/dev/null || {
+                  echo 'Existing draft has incomplete canonical evidence; refusing to rebuild over it.' >&2
+                  exit 1
+                }
+              mkdir canonical-payload
+              gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --dir canonical-payload
+              if [ "$(jq 'type' "$RUNNER_TEMP/canonical-pointer.json")" = '"object"' ]; then
+                node cli/scripts/release/canonical-payload.js verify canonical-payload "$RUNNER_TEMP/canonical-pointer.json"
+              fi
+              mv payload rebuilt-payload
+              mv canonical-payload payload
+            fi
+          elif ! grep -Eq '^release not found$|HTTP 404' "$RUNNER_TEMP/release-lookup-error"; then
+            echo 'Could not determine immutable tag payload state; refusing publication.' >&2
+            exit 1
+          fi
+      - uses: sigstore/cosign-installer@d58896d6a1865668819e1d91763c7751a165e159 # v3.9.2
+      - name: Authenticate release-build producer and verify payload
+        id: release-build-identity
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.tag }}
+        run: |
+          VERSION="${VERSION#v}"
+          PRODUCER_RUN_ID="$(jq -er '.producer.runId | select(type == "string" and test("^[1-9][0-9]{0,19}$"))' payload/release-manifest.json)"
+          PRODUCER_ATTEMPT="$(jq -er '.producer.runAttempt | select(type == "number" and floor == . and . > 0 and . <= 1000)' payload/release-manifest.json)"
+          BUILD_RUN="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/$PRODUCER_RUN_ID/attempts/$PRODUCER_ATTEMPT")"
+          jq -e --arg repository "$GITHUB_REPOSITORY" \
+            --arg run_id "$PRODUCER_RUN_ID" --arg attempt "$PRODUCER_ATTEMPT" '
+              ((.path | split("@")[0]) == ".github/workflows/release-train.yml") and
+              .event == "workflow_dispatch" and .head_branch == "main" and
+              (.repository.full_name | ascii_downcase) == ($repository | ascii_downcase) and
+              (.head_repository.full_name | ascii_downcase) == ($repository | ascii_downcase) and
+              (.id | tostring) == $run_id and (.run_attempt | tostring) == $attempt and
+              (.head_sha | test("^[a-f0-9]{40}$"))
+            ' <<< "$BUILD_RUN" >/dev/null || {
+              echo 'Authenticated release-train producer run does not match the trusted main workflow.' >&2
+              exit 1
+            }
+          BUILD_WORKFLOW_SHA="$(jq -er '.head_sha' <<< "$BUILD_RUN")"
+          cosign verify-blob \
+            --bundle payload/SHA256SUMS.sigstore.json \
+            --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release-build.yml@refs/heads/main" \
+            --certificate-github-workflow-sha "$BUILD_WORKFLOW_SHA" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            payload/SHA256SUMS
+          node cli/scripts/release/checksum-inventory.js payload
+          (cd payload && sha256sum --check SHA256SUMS)
+          TAG_SHA="$(gh api "repos/${GITHUB_REPOSITORY}/commits/v$VERSION" --jq .sha)"
+          jq -e --arg repository "$GITHUB_REPOSITORY" --arg version "$VERSION" \
+            --arg run_id "$PRODUCER_RUN_ID" --arg attempt "$PRODUCER_ATTEMPT" --arg tag_sha "$TAG_SHA" '
+              .schemaVersion == "guardscan.release-manifest.v1" and
+              .version == $version and .tag == ("v" + $version) and .commit == $tag_sha and
+              .producer.provider == "github-actions" and
+              (.producer.repository | ascii_downcase) == ($repository | ascii_downcase) and
+              .producer.workflow == ".github/workflows/release-build.yml" and
+              .producer.runId == $run_id and (.producer.runAttempt | tostring) == $attempt and
+              .producer.sourceRef == ("refs/tags/v" + $version)
+            ' payload/release-manifest.json >/dev/null || {
+              echo 'Signed release manifest does not match the exact train and immutable tag.' >&2
+              exit 1
+            }
+          echo "workflow_sha=$BUILD_WORKFLOW_SHA" >> "$GITHUB_OUTPUT"
+      - name: Restore npm artifact from authenticated canonical payload
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: node cli/scripts/release/restore-npm-payload.js payload canonical-npm "$RELEASE_TAG"
+      - name: Check shared mutable tag state before publication
+        working-directory: cli
+        env:
+          RELEASE_CHANNEL: ${{ inputs.channel }}
+        run: |
+          DIST_TAG=latest
+          if [ "$RELEASE_CHANNEL" = rc ]; then DIST_TAG=next; fi
+          : > "$RUNNER_TEMP/shared-tag-state"
+          npm run release:npm-preflight -- --artifact-dir ../canonical-npm \
+            --expected-dist-tag "$DIST_TAG" --github-output "$RUNNER_TEMP/shared-tag-state"
+          if grep -Fxq 'dist-tag-repair-required=true' "$RUNNER_TEMP/shared-tag-state"; then
+            echo 'Shared npm tag drift requires authority outside trusted publication; refusing all channel writes.' >&2
+            exit 1
+          fi
+      - name: Create or reuse draft and upload only missing identical assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! gh release view "${{ inputs.tag }}" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            PRERELEASE=()
+            if [ "${{ inputs.channel }}" = rc ]; then PRERELEASE+=(--prerelease); fi
+            node cli/scripts/release/canonical-payload.js notes payload "${{ inputs.tag }}" > "$RUNNER_TEMP/canonical-release-notes"
+            gh release create "${{ inputs.tag }}" \
+              --repo "${{ github.repository }}" \
+              --verify-tag --draft "${PRERELEASE[@]}" \
+              --title "GuardScan ${{ inputs.tag }}" \
+              --notes-file "$RUNNER_TEMP/canonical-release-notes" \
+              --generate-notes
+          fi
+          RELEASE_JSON="$(gh release view "${{ inputs.tag }}" \
+            --repo "${{ github.repository }}" --json isDraft,isPrerelease)"
+          jq -e '.isDraft | type == "boolean"' <<< "$RELEASE_JSON" >/dev/null
+          jq -e '.isPrerelease | type == "boolean"' <<< "$RELEASE_JSON" >/dev/null
+          IS_DRAFT="$(jq -r '.isDraft' <<< "$RELEASE_JSON")"
+          IS_PRERELEASE="$(jq -r '.isPrerelease' <<< "$RELEASE_JSON")"
+          EXPECTED_PRERELEASE=false
+          if [ "${{ inputs.channel }}" = rc ]; then EXPECTED_PRERELEASE=true; fi
+          if [ "$IS_PRERELEASE" != "$EXPECTED_PRERELEASE" ]; then
+            echo 'Release channel mismatch: existing release prerelease state differs from requested channel.' >&2
+            exit 1
+          fi
+          while IFS= read -r -d '' FILE; do
+            NAME="$(basename "$FILE")"
+            ASSET_JSON="$(gh release view "${{ inputs.tag }}" --repo "${{ github.repository }}" --json assets)"
+            ASSET_API_URL="$(jq -er --arg name "$NAME" --arg repository "$GITHUB_REPOSITORY" '
+              [.assets[]? | select(.name == $name)] as $matches |
+              if ($matches | length) > 1 then error("duplicate release asset name")
+              elif ($matches | length) == 0 then ""
+              else $matches[0] as $asset |
+                ("https://api.github.com/repos/" + $repository + "/releases/assets/") as $base |
+                if ($asset.id | type) != "string" or ($asset.id | length) == 0
+                    or ($asset.id | test("[[:cntrl:]]"))
+                    or ($asset.apiUrl | type) != "string"
+                then error("invalid release asset identity")
+                elif ($asset.apiUrl | startswith($base)) | not
+                then error("release asset URL is not the canonical same-repository API identity")
+                else $asset.apiUrl[($base | length):] as $databaseId |
+                  if ($databaseId | test("^[1-9][0-9]*$"))
+                  then $base + $databaseId
+                  else error("invalid release asset database ID") end
+                end
+              end
+            ' <<<"$ASSET_JSON")"
+            if [ -n "$ASSET_API_URL" ]; then
+              gh api \
+                -H "Accept: application/octet-stream" \
+                "$ASSET_API_URL" \
+                > "$RUNNER_TEMP/$NAME"
+              if ! cmp --silent "$FILE" "$RUNNER_TEMP/$NAME"; then
+                echo "::error::Release-integrity incident: $NAME already exists with different bytes"
+                exit 1
+              fi
+            else
+              if [ "$IS_DRAFT" != true ]; then
+                echo "::error::Published release is missing required immutable asset $NAME"
+                exit 1
+              fi
+              gh release upload "${{ inputs.tag }}" "$FILE" --repo "${{ github.repository }}"
+            fi
+          done < <(find payload -maxdepth 1 -type f -print0 | sort -z)
+      - name: Redownload and verify every draft asset before publication
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir redownload
+          gh release download "${{ inputs.tag }}" \
+            --repo "${{ github.repository }}" \
+            --dir redownload
+          diff -u <(find payload -maxdepth 1 -type f -printf '%f\n' | sort) \
+            <(find redownload -maxdepth 1 -type f -printf '%f\n' | sort)
+          cosign verify-blob \
+            --bundle redownload/SHA256SUMS.sigstore.json \
+            --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release-build.yml@refs/heads/main" \
+            --certificate-github-workflow-sha "${{ steps.release-build-identity.outputs.workflow_sha }}" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            redownload/SHA256SUMS
+          (cd redownload && sha256sum --check SHA256SUMS)
+      - name: Publish verified draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "$(gh release view "${{ inputs.tag }}" --repo "${{ github.repository }}" --json isDraft --jq .isDraft)" = true ]; then
+            gh release edit "${{ inputs.tag }}" --repo "${{ github.repository }}" --draft=false
+          fi
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-payload-${{ inputs.tag }}
+          path: payload/
+          overwrite: true
+          if-no-files-found: error
+          retention-days: 30
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-npm-${{ inputs.tag }}
+          path: canonical-npm/
+          overwrite: true
+          if-no-files-found: error
+          retention-days: 30
+
+  npm:
+    name: npm trusted publication
+    runs-on: ubuntu-24.04
+    needs: [github]
+    environment: npm-publish
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-npm-${{ inputs.tag }}
+          path: npm-artifact
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.RELEASE_NODE_VERSION }}
+          registry-url: https://registry.npmjs.org
+      - name: Install OIDC-compatible npm
+        run: npm install --global npm@11.21.0
+      - working-directory: cli
+        run: npm ci
+      - name: Verify and classify registry state
+        id: preflight
+        working-directory: cli
+        run: |
+          DIST_TAG=latest
+          if [ "${{ inputs.channel }}" = rc ]; then DIST_TAG=next; fi
+          npm run release:npm-preflight -- \
+            --artifact-dir ../npm-artifact \
+            --expected-dist-tag "$DIST_TAG" \
+            --github-output "$GITHUB_OUTPUT"
+      - name: Refuse existing-version dist-tag drift outside trusted-publishing authority
+        if: steps.preflight.outputs.dist-tag-repair-required == 'true'
+        run: |
+          echo 'The expected npm dist-tag points to another version; trusted publishing cannot repair it.' >&2
+          exit 1
+      - name: Publish exact tested tarball
+        if: steps.preflight.outputs.publish-required == 'true'
+        working-directory: cli
+        run: |
+          DIST_TAG=latest
+          if [ "${{ inputs.channel }}" = rc ]; then DIST_TAG=next; fi
+          npm publish "../npm-artifact/${{ steps.preflight.outputs.filename }}" \
+            --access public --provenance --tag "$DIST_TAG"
+      - name: Verify public registry integrity
+        working-directory: cli
+        run: |
+          DIST_TAG=latest
+          if [ "${{ inputs.channel }}" = rc ]; then DIST_TAG=next; fi
+          for ATTEMPT in $(seq 1 30); do
+            : > "$RUNNER_TEMP/npm-preflight-output"
+            npm run release:npm-preflight -- \
+              --artifact-dir ../npm-artifact \
+              --expected-dist-tag "$DIST_TAG" \
+              --github-output "$RUNNER_TEMP/npm-preflight-output"
+            if grep -Fxq 'publish-required=false' "$RUNNER_TEMP/npm-preflight-output" \
+              && grep -Fxq 'matching=true' "$RUNNER_TEMP/npm-preflight-output" \
+              && grep -Fxq 'dist-tag-repair-required=false' "$RUNNER_TEMP/npm-preflight-output"; then
+              break
+            fi
+            sleep 10
+          done
+          grep -Fx 'publish-required=false' "$RUNNER_TEMP/npm-preflight-output"
+          grep -Fx 'matching=true' "$RUNNER_TEMP/npm-preflight-output"
+          grep -Fx 'dist-tag-repair-required=false' "$RUNNER_TEMP/npm-preflight-output"
+
+  pypi-test:
+    name: TestPyPI trusted publication and lifecycle
+    runs-on: ubuntu-24.04
+    needs: [github]
+    environment: pypi
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-payload-${{ inputs.tag }}
+          path: payload
+      - name: Select Linux x64 wheel
+        run: |
+          mkdir dist
+          cp payload/*manylinux_2_28_x86_64.whl dist/
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.13"
+      - name: Reject conflicting TestPyPI files
+        env:
+          REGISTRY_JSON_BASE: https://test.pypi.org/pypi/guardscan-cli
+          RELEASE_VERSION: ${{ inputs.tag }}
+        run: |
+          python - <<'PY'
+          import hashlib, json, os, pathlib, urllib.error, urllib.request
+
+          version = os.environ["RELEASE_VERSION"].removeprefix("v").replace("-rc.", "rc")
+          url = f'{os.environ["REGISTRY_JSON_BASE"]}/{version}/json'
+          try:
+              with urllib.request.urlopen(url, timeout=30) as response:
+                  remote = json.load(response)
+          except urllib.error.HTTPError as error:
+              if error.code != 404:
+                  raise
+              remote = {"urls": []}
+          if any(item.get("yanked") is not False for item in remote["urls"]):
+              raise SystemExit("TestPyPI release contains yanked or unknown-yank-state files")
+          remote_files = {item["filename"]: item["digests"]["sha256"] for item in remote["urls"]}
+          for wheel in pathlib.Path("dist").glob("*.whl"):
+              digest = hashlib.sha256(wheel.read_bytes()).hexdigest()
+              if wheel.name in remote_files and remote_files[wheel.name] != digest:
+                  raise SystemExit(f"TestPyPI integrity conflict for {wheel.name}")
+          PY
+      - uses: pypa/gh-action-pypi-publish@ba38be9e461d3875417946c167d0b5f3d385a247 # v1.14.1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          packages-dir: dist
+          skip-existing: true
+          print-hash: true
+      - name: Convert release tag to PEP 440
+        id: version
+        shell: bash
+        run: |
+          VERSION="${{ inputs.tag }}"
+          VERSION="${VERSION#v}"
+          VERSION="${VERSION/-rc./rc}"
+          echo "value=$VERSION" >> "$GITHUB_OUTPUT"
+      - name: Test TestPyPI wheel through pip and pipx
+        run: |
+          python -m pip install --index-url https://test.pypi.org/simple/ \
+            --no-deps "guardscan-cli==${{ steps.version.outputs.value }}"
+          guardscan --version
+          python -m pip uninstall -y guardscan-cli
+          python -m pip install pipx
+          python -m pipx install --index-url https://test.pypi.org/simple/ \
+            --pip-args=--no-deps "guardscan-cli==${{ steps.version.outputs.value }}"
+          "$HOME/.local/bin/guardscan" --version
+          python -m pipx uninstall guardscan-cli
+
+  pypi:
+    name: PyPI trusted publication
+    runs-on: ubuntu-24.04
+    needs: [pypi-test]
+    environment: pypi
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-payload-${{ inputs.tag }}
+          path: dist
+      - name: Keep only wheel distributions
+        run: find dist -maxdepth 1 -type f ! -name '*.whl' -delete
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.13"
+      - name: Reject conflicting PyPI files
+        env:
+          REGISTRY_JSON_BASE: https://pypi.org/pypi/guardscan-cli
+          RELEASE_VERSION: ${{ inputs.tag }}
+        run: |
+          python - <<'PY'
+          import hashlib, json, os, pathlib, urllib.error, urllib.request
+
+          version = os.environ["RELEASE_VERSION"].removeprefix("v").replace("-rc.", "rc")
+          url = f'{os.environ["REGISTRY_JSON_BASE"]}/{version}/json'
+          try:
+              with urllib.request.urlopen(url, timeout=30) as response:
+                  remote = json.load(response)
+          except urllib.error.HTTPError as error:
+              if error.code != 404:
+                  raise
+              remote = {"urls": []}
+          if any(item.get("yanked") is not False for item in remote["urls"]):
+              raise SystemExit("PyPI release contains yanked or unknown-yank-state files")
+          remote_files = {item["filename"]: item["digests"]["sha256"] for item in remote["urls"]}
+          local_files = {
+              wheel.name: hashlib.sha256(wheel.read_bytes()).hexdigest()
+              for wheel in pathlib.Path("dist").glob("*.whl")
+          }
+          unexpected = sorted(set(remote_files) - set(local_files))
+          if unexpected:
+              raise SystemExit(f"PyPI has unexpected files for this version: {unexpected}")
+          for filename, digest in local_files.items():
+              if filename in remote_files and remote_files[filename] != digest:
+                  raise SystemExit(f"PyPI integrity conflict for {filename}")
+          PY
+      - uses: pypa/gh-action-pypi-publish@ba38be9e461d3875417946c167d0b5f3d385a247 # v1.14.1
+        with:
+          packages-dir: dist
+          skip-existing: true
+          print-hash: true
+      - name: Verify exact PyPI file set after publication
+        env:
+          REGISTRY_JSON_BASE: https://pypi.org/pypi/guardscan-cli
+          RELEASE_VERSION: ${{ inputs.tag }}
+        run: |
+          python - <<'PY'
+          import hashlib, json, os, pathlib, time, urllib.error, urllib.request
+
+          version = os.environ["RELEASE_VERSION"].removeprefix("v").replace("-rc.", "rc")
+          url = f'{os.environ["REGISTRY_JSON_BASE"]}/{version}/json'
+          local = {
+              wheel.name: hashlib.sha256(wheel.read_bytes()).hexdigest()
+              for wheel in pathlib.Path("dist").glob("*.whl")
+          }
+          for attempt in range(30):
+              try:
+                  with urllib.request.urlopen(url, timeout=30) as response:
+                      document = json.load(response)
+                      if any(item.get("yanked") is not False for item in document["urls"]):
+                          raise SystemExit("PyPI release contains yanked or unknown-yank-state files")
+                      remote = {
+                          item["filename"]: item["digests"]["sha256"]
+                          for item in document["urls"]
+                      }
+              except urllib.error.HTTPError as error:
+                  if error.code != 404:
+                      raise
+                  remote = {}
+              if remote == local:
+                  break
+              if set(remote) - set(local):
+                  raise SystemExit("PyPI returned unexpected files for this version")
+              if any(local.get(name) != digest for name, digest in remote.items()):
+                  raise SystemExit("PyPI returned a conflicting wheel digest")
+              if attempt == 29:
+                  raise SystemExit("PyPI did not converge to the complete release wheel set")
+              time.sleep(10)
+          PY
+
+  adapters:
+    name: Homebrew and Scoop bot PRs
+    runs-on: ubuntu-24.04
+    needs: [github]
+    permissions:
+      contents: read
+    steps:
+      - name: Create short-lived release app token
+        id: app
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        with:
+          app-id: ${{ vars.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          owner: ntanwir10
+          repositories: homebrew-tap,scoop-bucket
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.ref }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-payload-${{ inputs.tag }}
+          path: payload
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.RELEASE_NODE_VERSION }}
+      - working-directory: cli
+        run: npm ci
+      - working-directory: cli
+        run: npm run release:render -- --manifest ../payload/release-manifest.json --output-dir ../adapters
+      - name: Push deterministic adapter branches and open PRs
+        run: |
+          gh auth setup-git --hostname github.com
+          BRANCH="guardscan/${{ inputs.tag }}"
+          export BRANCH
+          mkdir -p release-evidence
+          for SPEC in "homebrew-tap:adapters/homebrew/Formula/guardscan.rb:Formula/guardscan.rb:homebrew" \
+                      "scoop-bucket:adapters/scoop/bucket/guardscan.json:bucket/guardscan.json:scoop"; do
+            IFS=: read -r REPO SOURCE TARGET CHANNEL <<< "$SPEC"
+            gh repo clone "ntanwir10/$REPO" "$REPO"
+            (
+              cd "$REPO"
+              git config user.name guardscan-release-bot
+              git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+              PR_NUMBER="$(gh pr list --repo "ntanwir10/$REPO" \
+                --head "$BRANCH" --state all --limit 1 --json number --jq '.[0].number')"
+              if git show-ref --verify --quiet "refs/remotes/origin/$BRANCH"; then
+                git switch --detach "origin/$BRANCH"
+                if [ ! -f "$TARGET" ] || ! cmp --silent "../$SOURCE" "$TARGET"; then
+                  echo "::error::Release-integrity incident: $REPO/$BRANCH differs from the rendered adapter"
+                  exit 1
+                fi
+              elif [ -n "$PR_NUMBER" ]; then
+                PR_DETAILS="$(gh pr view --repo "ntanwir10/$REPO" "$PR_NUMBER" \
+                  --json state,headRefOid,baseRefName,headRepository,mergeCommit)"
+                EXPECTED_HEAD="$(jq -er 'select(.state == "MERGED") | .headRefOid | select(test("^[a-f0-9]{40}$"))' <<< "$PR_DETAILS")"
+                git fetch origin "$EXPECTED_HEAD"
+                git show "$EXPECTED_HEAD:$TARGET" > prior-adapter-file
+                cmp --silent "../$SOURCE" prior-adapter-file || {
+                  echo 'Previously merged adapter differs from the immutable release projection.' >&2
+                  exit 1
+                }
+                git switch --detach "$EXPECTED_HEAD"
+              else
+                git switch -c "$BRANCH"
+                mkdir -p "$(dirname "$TARGET")"
+                cp "../$SOURCE" "$TARGET"
+                git add "$TARGET"
+                git commit -m "guardscan ${{ inputs.tag }}"
+                git push origin "$BRANCH"
+              fi
+              EXPECTED_HEAD="$(git rev-parse HEAD)"
+              git fetch origin main
+              PROJECTION_BASE="$(git rev-parse FETCH_HEAD)"
+              if [ -n "$PR_NUMBER" ]; then
+                PRIOR_MERGE="$(gh pr view --repo "ntanwir10/$REPO" "$PR_NUMBER" --json state,mergeCommit \
+                  --jq 'if .state == "MERGED" then .mergeCommit.oid else "" end')"
+                if [ -n "$PRIOR_MERGE" ]; then
+                  [[ "$PRIOR_MERGE" =~ ^[a-f0-9]{40}$ ]] || exit 1
+                  git fetch origin "$PRIOR_MERGE"
+                  PROJECTION_BASE="$(git rev-parse "$PRIOR_MERGE^1")"
+                fi
+              fi
+              node ../cli/scripts/release/adapter-projection.js \
+                "../$SOURCE" "$TARGET" "$EXPECTED_HEAD" "$PROJECTION_BASE"
+              if [ -z "$PR_NUMBER" ]; then
+                gh pr create --repo "ntanwir10/$REPO" \
+                  --base main --head "$BRANCH" \
+                  --title "GuardScan ${{ inputs.tag }}" \
+                  --body "Generated from immutable release-manifest.json."
+                PR_NUMBER="$(gh pr list --repo "ntanwir10/$REPO" \
+                  --head "$BRANCH" --state all --limit 1 --json number --jq '.[0].number')"
+              fi
+              PR_DETAILS="$(gh pr view --repo "ntanwir10/$REPO" "$PR_NUMBER" \
+                --json state,headRefOid,baseRefName,headRepository,mergeCommit)"
+              export EXPECTED_HEAD PR_DETAILS REPO
+              node - <<'NODE'
+          const pr = JSON.parse(process.env.PR_DETAILS);
+          if (pr.baseRefName !== 'main' || pr.headRefOid !== process.env.EXPECTED_HEAD
+              || pr.headRepository?.nameWithOwner?.toLowerCase() !== `ntanwir10/${process.env.REPO}`.toLowerCase()) {
+            throw new Error('adapter pull request is not bound to the expected repository head');
+          }
+          if (pr.state === 'CLOSED' && !pr.mergeCommit?.oid) {
+            throw new Error('adapter pull request is closed without a merge commit');
+          }
+          NODE
+              PR_STATE="$(node -p 'JSON.parse(process.env.PR_DETAILS).state')"
+              MERGE_SHA="$(node -p 'JSON.parse(process.env.PR_DETAILS).mergeCommit?.oid || ""')"
+              if [ "${{ inputs.channel }}" = stable ] && [ "$PR_STATE" != MERGED ]; then
+                gh pr merge --repo "ntanwir10/$REPO" "$PR_NUMBER" --auto --squash --match-head-commit "$EXPECTED_HEAD"
+                for ATTEMPT in $(seq 1 60); do
+                  PR_DETAILS="$(gh pr view --repo "ntanwir10/$REPO" "$PR_NUMBER" \
+                    --json state,headRefOid,baseRefName,headRepository,mergeCommit)"
+                  export PR_DETAILS
+                  PR_STATE="$(node -p 'JSON.parse(process.env.PR_DETAILS).state')"
+                  if [ "$PR_STATE" = MERGED ]; then break; fi
+                  if [ "$PR_STATE" = CLOSED ]; then
+                    echo "adapter PR #$PR_NUMBER closed without merging" >&2
+                    exit 1
+                  fi
+                  sleep 10
+                done
+                test "$PR_STATE" = MERGED
+                MERGE_SHA="$(node -p 'JSON.parse(process.env.PR_DETAILS).mergeCommit?.oid || ""')"
+                test "$(node -p 'JSON.parse(process.env.PR_DETAILS).headRefOid')" = "$EXPECTED_HEAD"
+              fi
+              if [ "$PR_STATE" = MERGED ]; then
+                export PR_DETAILS EXPECTED_HEAD REPO
+                node - <<'NODE'
+          const pr = JSON.parse(process.env.PR_DETAILS);
+          if (pr.state !== 'MERGED' || pr.baseRefName !== 'main'
+              || pr.headRefOid !== process.env.EXPECTED_HEAD
+              || pr.headRepository?.nameWithOwner?.toLowerCase() !== `ntanwir10/${process.env.REPO}`.toLowerCase()) {
+            throw new Error('merged adapter pull request no longer matches the expected repository head and base');
+          }
+          NODE
+                test "$(node -p 'JSON.parse(process.env.PR_DETAILS).headRefOid')" = "$EXPECTED_HEAD"
+                test "$PR_STATE" = MERGED
+                case "$MERGE_SHA" in
+                  [a-f0-9][a-f0-9][a-f0-9][a-f0-9]*) ;;
+                  *) echo 'merged adapter PR has no actual merge commit' >&2; exit 1 ;;
+                esac
+                test "${#MERGE_SHA}" -eq 40
+                git fetch origin "$MERGE_SHA"
+                node ../cli/scripts/release/adapter-projection.js \
+                  "../$SOURCE" "$TARGET" "$MERGE_SHA" "$(git rev-parse "$MERGE_SHA^1")"
+                git show "$MERGE_SHA:$TARGET" > merged-adapter-file
+                cmp --silent "../$SOURCE" merged-adapter-file || {
+                  echo 'merged adapter bytes differ from the release projection' >&2
+                  exit 1
+                }
+              fi
+              if [ "$PR_STATE" != MERGED ] && [ "$PR_STATE" != OPEN ]; then
+                echo "unexpected adapter PR state: $PR_STATE" >&2
+                exit 1
+              fi
+              FILE_SHA256="$(sha256sum "../$SOURCE" | cut -d ' ' -f 1)"
+              export CHANNEL EXPECTED_HEAD MERGE_SHA FILE_SHA256 PR_NUMBER PR_STATE TARGET
+              node - <<'NODE'
+          const fs = require('fs');
+          const file = '../release-evidence/catalog-publication-evidence.json';
+          const evidence = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : {
+            schemaVersion: 'guardscan.catalog-publication-evidence.v1',
+            version: process.env.RELEASE_TAG,
+            channels: {},
+          };
+          evidence.channels[process.env.CHANNEL] = {
+            repository: `ntanwir10/${process.env.REPO}`,
+            branch: process.env.BRANCH,
+            pullRequest: Number(process.env.PR_NUMBER),
+            state: process.env.PR_STATE,
+            headCommit: process.env.EXPECTED_HEAD,
+            mergeCommit: process.env.MERGE_SHA || null,
+            path: process.env.TARGET,
+            fileSha256: process.env.FILE_SHA256,
+          };
+          fs.writeFileSync(file, `${JSON.stringify(evidence, null, 2)}\n`);
+          NODE
+            )
+          done
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-catalog-publication-${{ inputs.tag }}
+          path: release-evidence/catalog-publication-evidence.json
+          if-no-files-found: error
+
+  winget:
+    name: WinGet submission
+    if: inputs.channel == 'stable'
+    runs-on: windows-2025
+    needs: [github]
+    environment: winget
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.ref }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-payload-${{ inputs.tag }}
+          path: payload
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.RELEASE_NODE_VERSION }}
+      - working-directory: cli
+        run: npm ci
+      - working-directory: cli
+        run: npm run release:render -- --manifest ../payload/release-manifest.json --output-dir ../adapters
+      - name: Validate and install WinGet local manifest
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem adapters\winget -Filter '*.installer.yaml' -Recurse | Select-Object -First 1
+          if ($null -eq $installer) { throw 'Rendered WinGet installer manifest is missing' }
+          $manifestDirectory = $installer.Directory.FullName
+          winget validate --manifest $manifestDirectory
+          if ($LASTEXITCODE -ne 0) { throw 'WinGet manifest validation failed' }
+          winget settings --enable LocalManifestFiles
+          if ($LASTEXITCODE -ne 0) { throw 'WinGet local manifest setting failed' }
+          winget install --manifest $manifestDirectory --accept-package-agreements --accept-source-agreements
+          if ($LASTEXITCODE -ne 0) { throw 'WinGet local manifest installation failed' }
+          $env:PATH = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User') + ';' + $env:PATH
+          guardscan --version
+          if ($LASTEXITCODE -ne 0) { throw 'WinGet local manifest invocation failed' }
+          winget uninstall --exact --id NaumanTanwir.GuardScan
+          if ($LASTEXITCODE -ne 0) { throw 'WinGet local manifest uninstall failed' }
+      - name: Submit WinGet manifests
+        shell: pwsh
+        env:
+          WINGET_GITHUB_TOKEN: ${{ secrets.WINGET_GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.WINGET_GITHUB_TOKEN }}
+          RELEASE_VERSION: ${{ inputs.tag }}
+        run: |
+          $installer = Get-ChildItem adapters\winget -Filter '*.installer.yaml' -Recurse | Select-Object -First 1
+          if ($null -eq $installer) { throw 'Rendered WinGet installer manifest is missing' }
+          function Get-SubmissionState {
+            $state = & node cli/scripts/release/winget-submission.js $installer.Directory.FullName $env:RELEASE_VERSION winget-submission.json
+            $verifyStatus = $LASTEXITCODE
+            if ($verifyStatus -eq 75) { throw [System.IO.IOException]::new('WinGet verification temporarily unavailable') }
+            if ($verifyStatus -ne 0) { throw 'WinGet exact-state verification failed' }
+            return ($state | ConvertFrom-Json)
+          }
+          $state = Get-SubmissionState
+          if (-not $state.submitRequired) { exit 0 }
+          $creator = Join-Path $env:RUNNER_TEMP 'wingetcreate.exe'
+          Invoke-WebRequest -Uri 'https://github.com/microsoft/winget-create/releases/download/v1.12.13.0/wingetcreate.exe' -OutFile $creator
+          $expectedHash = '24042bd37915805615e6cf969ac57c6439124c3fe85823327f5f3fb24bd9ffea'
+          if ((Get-FileHash -LiteralPath $creator -Algorithm SHA256).Hash.ToLowerInvariant() -ne $expectedHash) {
+            throw 'WinGetCreate digest mismatch'
+          }
+          & $creator submit $installer.Directory.FullName --token $env:WINGET_GITHUB_TOKEN
+          $submitStatus = $LASTEXITCODE
+          if ($submitStatus -ne 0) { Write-Warning 'WinGet submission failed; verifying exact remote state.' }
+          for ($attempt = 0; $attempt -lt 6; $attempt++) {
+            try {
+              $state = Get-SubmissionState
+              if (-not $state.submitRequired) { exit 0 }
+            } catch [System.IO.IOException] {
+              Write-Warning 'WinGet verification temporarily unavailable; retrying.'
+            }
+            if ($attempt -lt 5) { Start-Sleep -Seconds 10 }
+          }
+          throw "WinGet submission did not converge to a matching PR (submit exit $submitStatus)"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-winget-${{ inputs.tag }}
+          path: winget-submission.json
+          overwrite: true
+          if-no-files-found: error
+
+  chocolatey:
+    name: Chocolatey submission
+    if: inputs.channel == 'stable'
+    runs-on: windows-2025
+    needs: [github]
+    environment: chocolatey
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.ref }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-payload-${{ inputs.tag }}
+          path: payload
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.RELEASE_NODE_VERSION }}
+      - working-directory: cli
+        run: npm ci
+      - working-directory: cli
+        run: npm run release:render -- --manifest ../payload/release-manifest.json --output-dir ../adapters
+      - name: Pack and test Chocolatey from a local feed
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force local-feed | Out-Null
+          Push-Location adapters\chocolatey
+          choco pack guardscan.nuspec --output-directory ..\..\local-feed
+          if ($LASTEXITCODE -ne 0) { throw 'Chocolatey package creation failed' }
+          Pop-Location
+          choco install guardscan --source "$(Resolve-Path local-feed)" --yes
+          if ($LASTEXITCODE -ne 0) { throw 'Chocolatey local-feed installation failed' }
+          guardscan --version
+          if ($LASTEXITCODE -ne 0) { throw 'Chocolatey local-feed invocation failed' }
+          choco uninstall guardscan --yes
+          if ($LASTEXITCODE -ne 0) { throw 'Chocolatey local-feed uninstall failed' }
+      - name: Submit Chocolatey package
+        shell: pwsh
+        env:
+          CHOCO_API_KEY: ${{ secrets.CHOCO_API_KEY }}
+          RELEASE_VERSION: ${{ inputs.tag }}
+        run: |
+          $package = Get-ChildItem local-feed\*.nupkg | Select-Object -First 1
+          if ($null -eq $package) { throw 'Chocolatey package is missing' }
+          function Get-PublicationState {
+            $state = & python cli/scripts/release/chocolatey-preflight.py --package $package.FullName --version $env:RELEASE_VERSION
+            $preflightStatus = $LASTEXITCODE
+            if ($preflightStatus -eq 75) { throw [System.IO.IOException]::new('Chocolatey registry temporarily unavailable') }
+            if ($preflightStatus -ne 0) { throw 'Chocolatey remote integrity preflight failed' }
+            return ($state | ConvertFrom-Json)
+          }
+          $state = Get-PublicationState
+          if (-not $state.publishRequired) {
+            Write-Host 'Identical Chocolatey package already submitted.'
+            exit 0
+          }
+          choco push $package.FullName --source https://push.chocolatey.org/ --api-key $env:CHOCO_API_KEY
+          $pushStatus = $LASTEXITCODE
+          for ($attempt = 0; $attempt -lt 6; $attempt++) {
+            try {
+              $state = Get-PublicationState
+              if (-not $state.publishRequired) { exit 0 }
+            } catch [System.IO.IOException] {
+              Write-Warning 'Chocolatey registry temporarily unavailable; retrying verification.'
+            }
+            if ($attempt -lt 5) { Start-Sleep -Seconds 10 }
+          }
+          throw "Chocolatey package did not converge to matching remote payloads (push exit $pushStatus)"
