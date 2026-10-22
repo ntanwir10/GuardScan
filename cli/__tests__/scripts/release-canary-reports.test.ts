@@ -51,7 +51,7 @@ describe('complete release canary coverage', () => {
         type: index === 0 ? 'train_started' : 'canary_recorded',
         idempotencyKey: 'sample:' + index, ...(index > 0 ? {channel: 'github'} : {}),
         payload: index === 0
-          ? {channels: ['github'], note: 'a'.repeat(4096)}
+          ? {channels: ['github']}
           : {status: 'passed', checkedAt: timestamp, target: 'linux-x64-glibc',
             evidenceUrl, note: 'a'.repeat(4096)},
       }, events.at(-1)));

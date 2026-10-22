@@ -16,3 +16,13 @@ it('queues every protected release-ledger writer without dropping pending trains
   }
   expect(writers).toBeGreaterThanOrEqual(6);
 });
+
+it('queues same-version train dispatches before ledger jobs are scheduled', () => {
+  const workflow: any = yaml.load(fs.readFileSync(path.resolve(__dirname,
+    '../../../.github/workflows/release-train.yml'), 'utf8'));
+  expect(workflow.concurrency).toEqual({
+    group: "release-train-${{ inputs.version || 'scheduler' }}",
+    queue: 'max',
+    'cancel-in-progress': false,
+  });
+});

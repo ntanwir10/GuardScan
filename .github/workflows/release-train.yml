@@ -30,6 +30,7 @@ permissions:
 
 concurrency:
   group: release-train-${{ inputs.version || 'scheduler' }}
+  queue: max
   cancel-in-progress: false
 
 env:

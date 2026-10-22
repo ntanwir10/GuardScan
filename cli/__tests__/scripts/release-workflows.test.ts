@@ -780,7 +780,7 @@ describe('zero-touch release workflow contracts', () => {
     expect(source).toContain('--check');
     expect(source).toContain('runs-on: macos-15');
     expect(source).toContain('runs-on: windows-2025');
-    expect(source).toContain('brew install --formula');
+    expect(source).toContain('brew install guardscan-ci/catalog/guardscan');
     expect(source).toContain('SCOOP_INSTALL_COMMIT: b0ee913725139b816f9178163af0aecdba07a7ed');
     expect(source).toContain('SCOOP_COMMIT: b588a06e41d920d2123ec70aee682bae14935939');
     expect(source).toContain('scoop install guardscan-catalog/guardscan');
