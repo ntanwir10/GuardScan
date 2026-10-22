@@ -198,7 +198,9 @@ function validateTrainStarted(event) {
     throw new Error('release train channels must be a non-empty unique supported channel list');
   }
   const sourceFields = ['profile', 'releasePr', 'sourcePrHead', 'sourcePrBase', 'sourcePrTree'];
-  if (sourceFields.some(field => event.payload[field] !== undefined)) {
+  if (sourceFields.filter(field => field !== 'profile').some(field => (
+    Object.prototype.hasOwnProperty.call(event.payload, field)
+  ))) {
     const keys = Object.keys(event.payload).sort();
     const expected = ['channels', ...sourceFields].sort();
     if (keys.join('\n') !== expected.join('\n')
@@ -210,6 +212,10 @@ function validateTrainStarted(event) {
         ))) {
       throw new Error('release train source provenance is incomplete or invalid');
     }
+  } else if (Object.keys(event.payload).some(field => !['profile', 'channels'].includes(field))
+      || (Object.prototype.hasOwnProperty.call(event.payload, 'profile')
+        && !['node', 'native', 'full'].includes(event.payload.profile))) {
+    throw new Error('release train profile is invalid or payload contains unexpected fields');
   }
 }
 

@@ -29,16 +29,33 @@ describe('release workflow safety', () => {
     expect(canary.jobs.record.if).toContain("needs.discover.result == 'success'");
   });
 
-  it('installs pinned Scoop with admin support before the canary uses it', () => {
-    const adapters = load('release-canary.yml').jobs.adapters;
-    const setup = namedStep(adapters, 'Install Scoop for adapter canary');
+  it('installs Scoop once from the pinned source and uses only its runner-temporary root', () => {
+    const canary = load('release-canary.yml');
+    const adapters = canary.jobs.adapters;
+    const checkout = namedStep(adapters, 'Check out the pinned Scoop installer');
+    const setup = namedStep(adapters, 'Install the pinned Scoop CLI');
     const exercise = namedStep(adapters, 'Scoop install, update check, invocation, and uninstall');
+    const installers = adapters.steps.filter((candidate: any) => /(?:install\.ps1|& \$installer)/.test(candidate.run || ''));
+    expect(installers.map((candidate: any) => candidate.name)).toEqual(['Install the pinned Scoop CLI']);
+    expect(checkout.with.repository).toBe('ScoopInstaller/Install');
+    expect(checkout.with.ref).toBe('${{ env.SCOOP_INSTALL_COMMIT }}');
+    expect(checkout.with['persist-credentials']).toBe(false);
+    expect(canary.env.SCOOP_INSTALL_COMMIT).toMatch(/^[a-f0-9]{40}$/);
+    expect(canary.env.SCOOP_COMMIT).toMatch(/^[a-f0-9]{40}$/);
+    expect(adapters.steps.indexOf(checkout)).toBeLessThan(adapters.steps.indexOf(setup));
     expect(adapters.steps.indexOf(setup)).toBeLessThan(adapters.steps.indexOf(exercise));
     expect(setup.if).toBe("matrix.adapter == 'scoop'");
-    expect(setup.run).toMatch(/ScoopInstaller\/Install\/[a-f0-9]{40}\/install\.ps1/);
-    expect(setup.run).toContain('-RunAsAdmin');
+    expect(setup.run).toContain('& .\\.scoop-installer\\install.ps1 -RunAsAdmin -ScoopDir $scoopRoot');
+    expect(setup.run).toContain('checkout --detach $env:SCOOP_COMMIT');
     expect(setup.run).toContain('$LASTEXITCODE');
     expect(setup.run).toContain('GITHUB_PATH');
+    for (const run of [setup.run, exercise.run]) {
+      expect(run).toContain("$scoopRoot = Join-Path $env:RUNNER_TEMP 'scoop'");
+      expect(run).not.toContain('$env:USERPROFILE');
+    }
+    expect(exercise.run).toContain('$env:SCOOP = $scoopRoot');
+    expect(exercise.run.indexOf('$env:SCOOP = $scoopRoot')).toBeLessThan(exercise.run.indexOf('scoop config'));
+    expect(exercise.run.indexOf('$env:PATH = "$shimPath;$env:PATH"')).toBeLessThan(exercise.run.indexOf('scoop config'));
   });
 
   it('normalizes the source timestamp once for every native builder', () => {

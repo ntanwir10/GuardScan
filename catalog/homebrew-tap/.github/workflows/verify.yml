@@ -171,11 +171,16 @@ jobs:
         shell: bash
         run: |
           brew style Formula/guardscan.rb
-          brew audit --strict Formula/guardscan.rb
-          brew install --formula "$GITHUB_WORKSPACE/Formula/guardscan.rb"
+          brew tap --custom-remote guardscan-ci/catalog "$GITHUB_WORKSPACE"
+          cleanup() {
+            brew uninstall --force guardscan-ci/catalog/guardscan || true
+            brew untap guardscan-ci/catalog
+          }
+          trap cleanup EXIT
+          brew audit --strict guardscan-ci/catalog/guardscan
+          brew install guardscan-ci/catalog/guardscan
           guardscan --version
-          brew test guardscan
-          brew uninstall guardscan
+          brew test guardscan-ci/catalog/guardscan
 
   scoop:
     name: Scoop lifecycle

@@ -35,7 +35,7 @@ GuardScan telemetry service or a compatibility promise to CLI users.
 - Consent allows events to be queued locally; it does not authorize background
   delivery. Queued events remain local until an explicit successful sync or an
   explicit clear/disable/reset action.
-- After `1.1.0` is published, the retired endpoint will return `410 Gone` for
+- After stable `1.1.0` is publicly verified on every selected channel, the retired endpoint will return `410 Gone` for
   seven days without accepting, storing, or redirecting telemetry. The hosted
   route is then deleted. Ownership of the apex domain and GuardScan website is
   retained.

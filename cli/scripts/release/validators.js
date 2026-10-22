@@ -121,12 +121,8 @@ function nativeValidationPlan(
       plan.push({
         channel: 'homebrew-core',
         command: 'brew',
-        args: [
-          'audit',
-          '--strict',
-          '--new-formula',
-          path.join(outputDir, 'homebrew-core', 'Formula', 'guardscan.rb'),
-        ],
+        // File validation stays read-only; full audit requires a registered tap.
+        args: ['style', path.join(outputDir, 'homebrew-core', 'Formula', 'guardscan.rb')],
       });
     } else {
       skip('homebrew-core', 'Homebrew Core validation requires macOS or Linux');

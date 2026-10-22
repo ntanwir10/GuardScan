@@ -220,6 +220,48 @@ describe('release adapter rendering', () => {
     });
   });
 
+  it('selects the exact Homebrew URL and checksum for all four native targets', () => {
+    const manifest = makeManifest();
+    const formula = renderAdapters(manifest, 'homebrew').files['homebrew/Formula/guardscan.rb'];
+    expect(formula).not.toMatch(/on_(?:arm|intel|macos|linux) do/);
+    const harness = [
+      'require "json"',
+      'module OS; def self.mac?; ENV.fetch("FIXTURE_OS") == "darwin"; end; end',
+      'module Hardware; module CPU; def self.arm?; ENV.fetch("FIXTURE_ARCH") == "arm64"; end; end; end',
+      'class Formula',
+      '  def self.method_missing(*); end',
+      '  def self.url(value); @selected_url = value; end',
+      '  def self.sha256(value); @selected_sha = value; end',
+      '  def self.test; end',
+      '  def self.selection; [@selected_url, @selected_sha]; end',
+      'end', formula, 'puts JSON.generate(Guardscan.selection)',
+    ].join('\n');
+    for (const osName of ['darwin', 'linux']) {
+      for (const arch of ['arm64', 'x64']) {
+        const expected = manifest.artifacts.find((artifact: any) => artifact.kind === 'standalone'
+          && artifact.platform.os === osName && artifact.platform.arch === arch);
+        const result = spawnSync('ruby', ['-e', harness], {encoding: 'utf8', timeout: 10000,
+          env: {...process.env, FIXTURE_OS: osName, FIXTURE_ARCH: arch}});
+        expect(result.status).toBe(0);
+        expect(JSON.parse(result.stdout)).toEqual([expected.url, expected.sha256]);
+      }
+    }
+  });
+
+  it('audits and exercises the generated formula through a temporary qualified catalog tap', () => {
+    const workflow = yaml.load(fs.readFileSync(path.resolve(__dirname,
+      '../../../catalog/homebrew-tap/.github/workflows/verify.yml'), 'utf8')) as any;
+    const run = workflow.jobs.homebrew.steps.find((step: any) =>
+      step.name === 'Style, audit, install, invoke, test, and uninstall').run;
+    expect(run).toContain('brew tap --custom-remote guardscan-ci/catalog "$GITHUB_WORKSPACE"');
+    for (const command of ['audit --strict', 'install', 'test']) {
+      expect(run).toContain(`brew ${command} guardscan-ci/catalog/guardscan`);
+    }
+    expect(run).toContain('brew untap guardscan-ci/catalog');
+    expect(run.indexOf('trap cleanup EXIT')).toBeLessThan(run.indexOf('brew audit'));
+    expect(run).not.toMatch(/brew (?:audit|install|test)[^\n]*Formula\//);
+  });
+
   it('rejects mutable URLs, missing signatures, and PyPI plans without built wheels', () => {
     const mutable = makeManifest();
     mutable.artifacts[0].url = 'https://github.com/ntanwir10/GuardScan/releases/latest/download/guardscan.tar.gz';
@@ -376,7 +418,7 @@ describe('release adapter rendering', () => {
         expect.objectContaining({
           channel: 'homebrew-core',
           command: 'brew',
-          args: expect.arrayContaining(['audit', '--new-formula']),
+          args: ['style', path.join(output, 'homebrew-core', 'Formula', 'guardscan.rb')],
         }),
       ]);
     } finally {

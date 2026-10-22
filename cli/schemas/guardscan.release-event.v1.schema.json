@@ -201,6 +201,7 @@
       "additionalProperties": false,
       "required": ["channels"],
       "properties": {
+        "profile": { "enum": ["node", "native", "full"] },
         "channels": { "$ref": "#/definitions/releaseChannels" }
       }
     },

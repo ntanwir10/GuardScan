@@ -43,7 +43,7 @@ guardscan security --offline --no-cve
 This will:
 
 - ✅ Detect secrets in your code (API keys, passwords, tokens)
-- ✅ Scan dependencies for known vulnerabilities when OSV or a matching snapshot is available
+- ⏭️ Skip dependency vulnerability scanning (`--no-cve`); run `guardscan vuln .` online to audit dependencies
 - ✅ Check Dockerfiles for security issues
 - ✅ Analyze Infrastructure as Code (Terraform, CloudFormation, K8s)
 - ✅ Detect OWASP Top 10 vulnerabilities

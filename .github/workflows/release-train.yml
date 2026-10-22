@@ -1004,6 +1004,7 @@ jobs:
       RELEASE_PR: ${{ inputs.release_pr }}
     concurrency:
       group: release-ledger
+      queue: max
       cancel-in-progress: false
     steps:
       - *validate-dispatch

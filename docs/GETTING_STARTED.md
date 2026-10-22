@@ -318,7 +318,8 @@ guardscan security --debug
 
 ## Configuration Options
 
-Edit `~/.guardscan/config.yml`:
+Edit `~/.guardscan/config.yml` using the CLI's top-level configuration fields
+(not a nested `providers` object):
 
 ```yaml
 provider: openai
@@ -383,10 +384,6 @@ deletes the queue. Use `guardscan telemetry status` and
 ### "Configuration not found"
 
 Run `guardscan init` first.
-
-### "AI provider not configured"
-
-Run `guardscan config` and set up your provider.
 
 ### "AI provider not configured"
 

@@ -448,9 +448,7 @@ async function main(): Promise<void> {
   if (
     args.length === 0 ||
     args.includes("--help") ||
-    args.includes("-h") ||
-    args.includes("--version") ||
-    args.includes("-V")
+    args.includes("-h")
   ) {
     displayLogo("Privacy-First AI Code Review & Security Scanning");
   }

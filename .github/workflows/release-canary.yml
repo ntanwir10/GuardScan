@@ -555,18 +555,6 @@ jobs:
             report.checkedAt = new Date().toISOString();
             fs.writeFileSync("report.json", `${JSON.stringify(report)}\n`);
           '
-      - name: Install Scoop for adapter canary
-        if: matrix.adapter == 'scoop'
-        shell: pwsh
-        run: |
-          $installer = Join-Path $env:RUNNER_TEMP 'guardscan-scoop-install.ps1'
-          Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/ScoopInstaller/Install/1e2f334083d609986d8c8bc9e31ae8e87c39fab4/install.ps1' -OutFile $installer
-          & $installer -RunAsAdmin
-          if ($LASTEXITCODE -ne 0) { throw 'Scoop installation failed' }
-          $scoopRoot = if ($env:SCOOP) { $env:SCOOP } else { Join-Path $env:USERPROFILE 'scoop' }
-          $shimPath = Join-Path $scoopRoot 'shims'
-          if (-not (Test-Path $shimPath)) { throw 'Scoop shim directory is missing after installation' }
-          $shimPath | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
       - name: Scoop install, update check, invocation, and uninstall
         if: matrix.adapter == 'scoop'
         shell: pwsh
@@ -574,12 +562,13 @@ jobs:
           VERSION: ${{ matrix.train.version }}
           CHANNEL: ${{ matrix.train.channel }}
         run: |
-          scoop config installRunAsAdmin true
-          if ($LASTEXITCODE -ne 0) { throw 'Scoop admin-install configuration failed' }
-          $scoopRoot = if ($env:SCOOP) { $env:SCOOP } else { Join-Path $env:USERPROFILE 'scoop' }
+          $scoopRoot = Join-Path $env:RUNNER_TEMP 'scoop'
+          $env:SCOOP = $scoopRoot
           $shimPath = Join-Path $scoopRoot 'shims'
           if (-not (Test-Path $shimPath)) { throw 'Scoop shim directory is missing' }
           $env:PATH = "$shimPath;$env:PATH"
+          scoop config installRunAsAdmin true
+          if ($LASTEXITCODE -ne 0) { throw 'Scoop admin-install configuration failed' }
           if ($env:CHANNEL -eq 'stable') {
             scoop bucket add guardscan https://github.com/ntanwir10/homebrew-tap
             if ($LASTEXITCODE -ne 0) { throw 'Unable to add the stable GuardScan bucket' }

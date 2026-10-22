@@ -95,8 +95,9 @@ Result: Sustainable at any scale ✅
 # Create key: sk-proj-...
 
 # 2. Configure GuardScan
-edit ~/.guardscan/config.yml: providers.openai.apiKey sk-proj-...
-edit ~/.guardscan/config.yml: providers.openai.model gpt-4
+guardscan config
+# Follow the provider, API key, and model prompts. Configuration uses
+# top-level provider, apiKey, and model fields in ~/.guardscan/config.yml.
 
 # 3. Use AI features
 guardscan review src/app.ts
@@ -333,7 +334,7 @@ Options:
 2. Anthropic (Claude): https://console.anthropic.com/
 3. Ollama (Free, Local): https://ollama.ai/
 
-Or run: edit ~/.guardscan/config.yml: providers.openai.apiKey YOUR_KEY
+Or run: guardscan config
 ```
 
 ## Related Decisions

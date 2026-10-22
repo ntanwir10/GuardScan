@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import {spawnSync} from 'child_process';
 
 const {
   assertDocumentMatchesSource,
@@ -327,6 +328,42 @@ describe('release planning and state summaries', () => {
 
     fs.writeFileSync(path.join(outputDir, 'release-plan.json'), '{}\n');
     expect(() => prepareRelease(source, options)).toThrow(/conflicts with existing release-plan\.json/);
+  });
+
+  it.each(['default', 'node', 'native', 'full'])('prepares a real %s CLI ledger without inventing PR provenance', profile => {
+    const ledger = path.join(root, 'events.jsonl');
+    const result = spawnSync(process.execPath, [path.resolve(__dirname, '../../scripts/release/index.js'), 'prepare',
+      '--package-root', packageRoot, '--repository-root', root, '--commit', COMMIT,
+      '--output-dir', path.join(root, 'prepared'), ...(profile === 'default' ? [] : ['--profile', profile]), '--ledger', ledger,
+      '--timestamp', '2026-07-20T12:00:00.000Z', '--idempotency-key', 'prepare:1.2.3'], {encoding: 'utf8'});
+    if (result.status !== 0) throw new Error(result.stderr || String(result.error));
+    const event = JSON.parse(fs.readFileSync(ledger, 'utf8').trim());
+    expect(event.type).toBe('train_started');
+    expect(event.payload.profile).toBe(profile === 'default' ? 'node' : profile);
+    expect(event.payload.channels.length).toBeGreaterThan(0);
+    expect(event.payload.releasePr).toBeUndefined();
+    expect(materializeReleaseState([event]).version).toBe('1.2.3');
+    expect(() => require('../../scripts/release/lib').validateDocument('event', ledger,
+      path.resolve(__dirname, '../..'))).not.toThrow();
+  });
+
+  it('keeps generic profile validation separate from complete source-bound train provenance', () => {
+    const identity = {type: 'train_started', version: '1.2.3', tag: 'v1.2.3', commit: COMMIT,
+      timestamp: '2026-07-20T12:00:00.000Z', idempotencyKey: 'prepare:1.2.3'};
+    const complete = {channels: ['npm'], profile: 'full', releasePr: 42,
+      sourcePrHead: COMMIT, sourcePrBase: 'b'.repeat(40), sourcePrTree: 'c'.repeat(40)};
+    expect(() => createEvent({...identity, payload: complete})).not.toThrow();
+    for (const field of ['releasePr', 'sourcePrHead', 'sourcePrBase', 'sourcePrTree', 'profile']) {
+      const incomplete: Record<string, unknown> = {...complete};
+      delete incomplete[field];
+      expect(() => createEvent({...identity, payload: incomplete})).toThrow(/provenance/);
+    }
+    for (const payload of [
+      {channels: ['npm'], profile: 'unknown'}, {channels: ['npm'], profile: null},
+      {channels: ['npm'], profile: 'node', extra: true}, {...complete, profile: 'node'},
+      {...complete, releasePr: '42'}, {...complete, sourcePrTree: 'invalid'},
+      {channels: ['npm'], profile: 'node', releasePr: undefined},
+    ]) expect(() => createEvent({...identity, payload})).toThrow();
   });
 
   it('rejects release documents that drift from source or reference unknown artifacts', () => {

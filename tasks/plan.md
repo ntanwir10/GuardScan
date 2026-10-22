@@ -120,11 +120,11 @@ a contract test that checks documented invocations against `--help` output.
 
 **Dependencies:** None. **Scope:** Small, 2-3 files.
 
-#### Task 1.3 — Promote the standalone ADR from proposal to accepted evidence
+#### Task 1.3 — Record accepted standalone architecture and pending launch evidence
 
-**Description:** Define the exact evidence required to change ADR 006 from
-`Proposed` to `Accepted`. Repository feasibility can accept the architecture;
-production signing evidence remains an explicit launch gate.
+**Description:** ADR 006 is accepted on repository feasibility evidence.
+Production signing, notarization, and public channel verification remain
+explicit launch gates; architectural acceptance does not imply release readiness.
 
 **Acceptance criteria:**
 

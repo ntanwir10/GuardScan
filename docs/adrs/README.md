@@ -34,7 +34,7 @@ recoverable architecture decision.
   - **Summary**: Users provide their own AI API keys for AI features, enabling privacy, cost control, and sustainability
 
 - [ADR 006: Node.js SEA for standalone distribution](./006-node-sea-standalone-distribution.md)
-  - **Status**: Proposed
+  - **Status**: Accepted; production launch evidence remains gated
   - **Summary**: Bundle GuardScan into host-native Node.js single executables for native package managers and optional pipx wheels
 
 - [ADR 007: Retire GuardScan-Hosted Cloudflare Telemetry](./007-retire-hosted-cloudflare-telemetry.md)

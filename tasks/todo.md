@@ -7,8 +7,8 @@
 - [ ] 1.1 Merge populated `Unreleased` content into one authoritative `1.1.0` changelog section.
 - [ ] 1.1 Add a regression test and validator for split stable release notes.
 - [ ] 1.2 Correct README positional/option syntax for review, docs, test-gen, and refactor.
-- [ ] 1.2 Add a documented-command contract test for all 28 commands.
-- [ ] 1.3 Accept ADR 006 architecture with production signing evidence still gated.
+- [ ] 1.2 Add a documented-command contract test for all 29 commands, including `vuln`.
+- [x] 1.3 Accept ADR 006 architecture; production signing evidence remains a separate launch gate.
 - [ ] 1.4 Replace placeholder RAG assertions with deterministic indexing/retrieval behavior.
 - [ ] 1.4 Classify each command as offline-proven, external-tool, mocked-provider, or live-rehearsal.
 
@@ -98,7 +98,7 @@
   dispatch hint, and 30-minute reconciliation.
 - [x] Add hourly fail-closed canaries for every selected install contract and serialize protected ledger updates.
 - [x] Add release CLI interfaces for build, manifest, publish, verify, reconcile, promote, rollback, and status.
-- [x] Pass local typecheck, build, 787-test coverage suite, 53 release contracts, lint ratchet, production audit, and packed-artifact inspection.
+- [ ] Rerun the final committed-head gate after review fixes: typecheck, build, full tests, release contracts, lint ratchet, audit, and packed-artifact inspection. The earlier 787-test/53-contract result is historical, not final-head evidence.
 - [ ] Complete the one-time provider/account onboarding in `docs/RELEASE_ONBOARDING.md`.
 - [ ] Confirm hosted signing and cross-platform matrices, publish `1.1.0-rc.1`, and complete its 24-hour soak.
 - [ ] Promote and verify `1.1.0` on every public channel; moderated registries remain pending until external acceptance.
@@ -121,7 +121,7 @@
 
 ## Checkpoint B — standalone release assets
 
-- [ ] GS-DIST-201 confirm the proposed standalone-builder ADR by passing the Node SEA host matrix; the builder and CI feasibility jobs are implemented, while Bun compile remains rejected unless product runtime compatibility is separately established.
+- [ ] GS-DIST-201 complete the production launch evidence for the accepted Node SEA architecture, including the host matrix and signing/notarization; Bun compile remains rejected unless product runtime compatibility is separately established.
 - [ ] GS-DIST-202 make schemas, version metadata, dynamic modules, and optional charts safe for the selected builder.
 - [ ] GS-DIST-203 build macOS arm64/x64, Linux arm64/x64 glibc, and Windows x64 artifacts.
 - [ ] GS-DIST-204 generate a machine-readable release manifest, SHA-256 sums, per-artifact SBOMs, and attestations.
