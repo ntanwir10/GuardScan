@@ -68,6 +68,29 @@ describe('runtime capability evidence', () => {
     });
   });
 
+  it('recognizes the exact missing optional chart module error from Node SEA', async () => {
+    const evidence = await collectRuntimeCapabilities({
+      createTokenCounter: () => tokenCounter(false, 'estimated'),
+      loadChartRenderer: async () => {
+        throw Object.assign(new Error('No such built-in module: chartjs-node-canvas'),
+          {code: 'ERR_UNKNOWN_BUILTIN_MODULE'});
+      },
+    });
+    expect(evidence.chartRendering).toMatchObject({
+      dependencyAvailable: false, mode: 'unavailable', safeFallbackObserved: true,
+    });
+  });
+
+  it.each(['No such built-in module: fs', 'chartjs-node-canvas initialization corrupted'])(
+    'does not hide an unrelated SEA failure: %s', async message => {
+      const error = Object.assign(new Error(message), {code: 'ERR_UNKNOWN_BUILTIN_MODULE'});
+      await expect(collectRuntimeCapabilities({
+        createTokenCounter: () => tokenCounter(false, 'estimated'),
+        loadChartRenderer: async () => { throw error; },
+      })).rejects.toBe(error);
+    }
+  );
+
   it('fails closed when chart loading fails for an unexpected reason', async () => {
     await expect(collectRuntimeCapabilities({
       createTokenCounter: () => tokenCounter(false, 'estimated'),
