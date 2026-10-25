@@ -606,6 +606,10 @@ jobs:
       contents: read
       id-token: write
     steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: release-payload-${{ inputs.tag }}
@@ -1161,7 +1165,10 @@ jobs:
                 Write-WinGetEvidence 'rejected' $remoteIdentity $($pullRequest.pullRequest) $($pullRequest.headCommit) $false $reason
                 exit 0
               }
-              $state = if ($existing.type -in @('channel_rejected', 'channel_corrected')) {
+              if ($existing.type -eq 'channel_rejected') {
+                throw 'WinGet submission was rejected; record a correction before resubmission'
+              }
+              $state = if ($existing.type -eq 'channel_corrected') {
                 'resubmitted'
               } else { 'pending-ledger' }
               Write-WinGetEvidence $state $remoteIdentity $($pullRequest.pullRequest) $($pullRequest.headCommit) $false

@@ -29,6 +29,26 @@ describe('release workflow safety', () => {
     expect(canary.jobs.record.if).toContain("needs.discover.result == 'success'");
   });
 
+  it('checks out the pinned PyPI evidence helper before downloading publication payloads', () => {
+    const steps = load('release-publish.yml').jobs.pypi.steps;
+    const checkout = steps.findIndex((step: any) => step.uses?.startsWith('actions/checkout@'));
+    const download = steps.findIndex((step: any) => step.uses?.startsWith('actions/download-artifact@'));
+    expect(checkout).toBeGreaterThanOrEqual(0);
+    expect(checkout).toBeLessThan(download);
+    expect(steps[checkout].with).toMatchObject({ref: '${{ inputs.ref }}', 'persist-credentials': false});
+  });
+
+  it('requires a recorded WinGet correction before a rejected submission can be resubmitted', () => {
+    const run = namedStep(load('release-publish.yml').jobs.winget,
+      'Preflight and submit WinGet manifests with exact evidence').run;
+    const rejection = run.indexOf("if ($existing.type -eq 'channel_rejected') {");
+    const resubmission = run.indexOf("$state = if ($existing.type -eq 'channel_corrected')");
+    expect(rejection).toBeGreaterThan(0);
+    expect(run.slice(rejection, rejection + 200))
+      .toContain("throw 'WinGet submission was rejected; record a correction before resubmission'");
+    expect(resubmission).toBeGreaterThan(rejection);
+  });
+
   it('installs Scoop once from the pinned source and uses only its runner-temporary root', () => {
     const canary = load('release-canary.yml');
     const adapters = canary.jobs.adapters;

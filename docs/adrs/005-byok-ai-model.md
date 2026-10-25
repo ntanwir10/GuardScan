@@ -229,21 +229,12 @@ class ProviderFactory {
 ### Configuration Storage
 ```json
 {
-  "providers": {
-    "openai": {
-      "apiKey": "sk-proj-...",  // Stored locally, never sent to GuardScan
-      "model": "gpt-4",
-      "baseUrl": "https://api.openai.com/v1",
-      "maxTokens": 4096,
-      "temperature": 0.7
-    },
-    "ollama": {
-      "enabled": true,
-      "baseUrl": "http://localhost:11434",
-      "model": "codellama"
-    }
-  },
-  "defaultProvider": "openai"
+  "provider": "openai",
+  "apiKey": "sk-proj-...",
+  "model": "gpt-4",
+  "baseUrl": "https://api.openai.com/v1",
+  "maxTokens": 4096,
+  "temperature": 0.7
 }
 ```
 
@@ -252,7 +243,7 @@ class ProviderFactory {
 async function reviewCode(filePath: string): Promise<string> {
   // 1. Load config
   const config = await loadConfig();
-  const providerConfig = config.providers[config.defaultProvider];
+  const providerConfig = config;
   
   // 2. Create provider
   const provider = ProviderFactory.create(providerConfig);

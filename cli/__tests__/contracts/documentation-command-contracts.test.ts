@@ -65,6 +65,24 @@ describe('public command documentation contracts', () => {
   const quickstart = fs.readFileSync(path.join(repositoryRoot, 'QUICKSTART.md'), 'utf8');
   const changelog = fs.readFileSync(path.join(repositoryRoot, 'cli', 'CHANGELOG.md'), 'utf8');
 
+  it.each([0, 1, 2, 3, 126, 127, 137])('fails the documented pre-commit hook closed for scanner exit %s', status => {
+    const guide = fs.readFileSync(path.join(repositoryRoot, 'docs', 'GETTING_STARTED.md'), 'utf8');
+    const hook = guide.match(/### Pre-Commit Security Check\s+```bash\n([\s\S]*?)\n```/)?.[1];
+    expect(hook).toBeDefined();
+    const result = spawnSync('bash', ['-c', 'guardscan() { return "$SCANNER_FIXTURE_STATUS"; };\n' + hook], {
+      encoding: 'utf8', env: {...process.env, SCANNER_FIXTURE_STATUS: String(status)},
+    });
+    expect(result.status).toBe(status <= 2 ? status : 2);
+  });
+
+  it('uses the supported top-level BYOK configuration in the ADR example and request flow', () => {
+    const adr = fs.readFileSync(path.join(repositoryRoot, 'docs', 'adrs', '005-byok-ai-model.md'), 'utf8');
+    const example = JSON.parse(adr.match(/### Configuration Storage\s+```json\n([\s\S]*?)\n```/)?.[1] || '');
+    expect(example).toMatchObject({provider: 'openai', apiKey: 'sk-proj-...', model: 'gpt-4'});
+    expect(example.providers).toBeUndefined();
+    expect(adr).not.toContain('config.providers[config.defaultProvider]');
+  });
+
   it('keeps all prepared 1.1.0 changes in one release section', () => {
     const headings = changelog.match(/^## \[1\.1\.0\](?:\s|$)/gm) || [];
     const release = changelog.match(

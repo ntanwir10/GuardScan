@@ -220,6 +220,7 @@ case $? in
   0) exit 0 ;;
   1) echo "GuardScan policy failed; review guardscan.json." ; exit 1 ;;
   2) echo "GuardScan could not complete required coverage." ; exit 2 ;;
+  *) echo "GuardScan did not run successfully." ; exit 2 ;;
 esac
 ```
 
