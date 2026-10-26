@@ -25,12 +25,8 @@ function selectForwardFixBase(root, {mainCommit, remoteHead, pullRequests, repos
   const merged = pullRequests.some(pr => pr.state === 'MERGED' && pr.mergedAt
     && pr.baseRefName === 'main' && pr.headRefOid === remoteHead
     && pr.headRepository?.nameWithOwner?.toLowerCase() === repository.toLowerCase());
-  if (merged) {
-    git('merge-base', '--is-ancestor', parent, mainCommit);
-    return parent;
-  }
-  if (parent !== mainCommit) throw new Error('open forward-fix branch base has drifted from main');
-  return mainCommit;
+  git('merge-base', '--is-ancestor', parent, mainCommit);
+  return merged ? parent : mainCommit;
 }
 
 function restoreProductSource(root, input) {

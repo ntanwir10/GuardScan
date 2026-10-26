@@ -569,8 +569,11 @@ describe('append-only release train', () => {
         headRefOid: remoteHead, headRepository: {nameWithOwner: 'owner/repo'},
       }]};
       expect(selectForwardFixBase(root, authority)).toBe(baseCommit);
-      expect(() => selectForwardFixBase(root, {...authority, pullRequests: []})).toThrow(/drifted/);
-      expect(() => selectForwardFixBase(root, {...authority, repository: 'unrelated/repo'})).toThrow(/drifted/);
+      expect(selectForwardFixBase(root, {...authority, pullRequests: []})).toBe(mergedMain);
+      expect(selectForwardFixBase(root, {...authority, repository: 'unrelated/repo'})).toBe(mergedMain);
+      const unrelatedMain = git('commit-tree', git('rev-parse', `${knownGoodCommit}^{tree}`), '-m', 'unrelated history');
+      expect(() => selectForwardFixBase(root, {...authority, mainCommit: unrelatedMain}))
+        .toThrow();
       expect(git('ls-tree', 'HEAD', 'cli/src/product.ts')).toMatch(/^100755 blob /);
       expect(fs.readFileSync(path.join(root, 'cli/src/product.ts'), 'utf8')).toBe('known good\n');
       expect(fs.existsSync(path.join(root, 'cli/src/defective-added.ts'))).toBe(false);
@@ -586,6 +589,30 @@ describe('append-only release train', () => {
       git('switch', '--detach', baseCommit);
       expect(prepareForwardFixSource(root, input).files).toEqual(projection.files);
       git('add', '-A'); expect(git('write-tree')).toBe(firstTree);
+      git('reset', '--hard', baseCommit);
+      write('cli/scripts/release/control.js', 'updated trusted control\n');
+      write('cli/package.json', JSON.stringify({version: '1.2.0', scripts: {build: 'updated trusted'}}));
+      git('add', '.'); git('commit', '-qm', 'same defective version with updated controls');
+      const retryBase = git('rev-parse', 'HEAD');
+      expect(selectForwardFixBase(root, {...authority, mainCommit: retryBase, pullRequests: []})).toBe(retryBase);
+      const retryInput = {...input, baseCommit: retryBase};
+      prepareForwardFixSource(root, retryInput);
+      git('add', '-A');
+      const retryTree = git('write-tree');
+      const retryHead = (tree: string) => execFileSync('git', ['commit-tree', tree, '-p', retryBase, '-m', 'retry'], {
+        cwd: root, encoding: 'utf8', env: {...process.env,
+          GIT_AUTHOR_DATE: '2026-10-26T00:00:00Z', GIT_COMMITTER_DATE: '2026-10-26T00:00:00Z'},
+      }).trim();
+      const firstRetryHead = retryHead(retryTree);
+      expect(retryTree).not.toBe(firstTree);
+      expect(fs.readFileSync(path.join(root, 'cli/src/product.ts'), 'utf8')).toBe('known good\n');
+      expect(fs.readFileSync(path.join(root, 'cli/scripts/release/control.js'), 'utf8')).toBe('updated trusted control\n');
+      expect(JSON.parse(fs.readFileSync(path.join(root, 'cli/package.json'), 'utf8')).scripts).toEqual({build: 'updated trusted'});
+      git('reset', '--hard', retryBase);
+      prepareForwardFixSource(root, retryInput);
+      git('add', '-A'); expect(git('write-tree')).toBe(retryTree);
+      expect(retryHead(git('write-tree'))).toBe(firstRetryHead);
+      expect(firstRetryHead).not.toBe(remoteHead);
     } finally { fs.rmSync(root, {recursive: true, force: true}); }
   });
 
