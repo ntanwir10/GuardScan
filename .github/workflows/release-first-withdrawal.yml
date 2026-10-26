@@ -214,8 +214,15 @@ jobs:
           );
           fs.writeFileSync('catalog-withdrawal.json', `${JSON.stringify(result, null, 2)}\n`);
           NODE
-          git -C catalog-withdrawal add -A -- \
-            Formula/guardscan.rb bucket/guardscan.json channel-lock.json
+          CATALOG_PREPARED_STATE="$(node -p 'require("./catalog-withdrawal.json").state')"
+          case "$CATALOG_PREPARED_STATE" in
+            removed)
+              git -C catalog-withdrawal add -A -- \
+                Formula/guardscan.rb bucket/guardscan.json channel-lock.json
+              ;;
+            already-absent) ;;
+            *) echo "unknown catalog withdrawal state: $CATALOG_PREPARED_STATE" >&2; exit 1 ;;
+          esac
           CATALOG_CHANGED_FILES="$(git -C catalog-withdrawal diff --cached --name-status)"
           if [ -z "$CATALOG_CHANGED_FILES" ]; then
             test "$(node -p 'require("./catalog-withdrawal.json").state')" = already-absent
@@ -223,6 +230,7 @@ jobs:
             CATALOG_MERGE_SHA="$CATALOG_BASE"
             CATALOG_STATE=already-absent
           else
+            test "$CATALOG_PREPARED_STATE" = removed
             export CATALOG_CHANGED_FILES
             node - <<'NODE'
             const rows = process.env.CATALOG_CHANGED_FILES.split('\n').filter(Boolean).sort();

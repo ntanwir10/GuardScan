@@ -1603,40 +1603,74 @@ jobs:
           if git fetch origin "refs/heads/$FORWARD_FIX_BRANCH:refs/remotes/origin/$FORWARD_FIX_BRANCH"; then
             FORWARD_FIX_REMOTE_HEAD="$(git rev-parse "refs/remotes/origin/$FORWARD_FIX_BRANCH")"
           fi
-          git worktree add forward-fix-source "v$KNOWN_GOOD_VERSION"
+          git fetch origin main
+          FORWARD_FIX_MAIN="$(git rev-parse origin/main)"
+          FORWARD_FIX_PRS_BEFORE="$(gh pr list --repo "$GITHUB_REPOSITORY" \
+            --head "$FORWARD_FIX_BRANCH" --base main --state all --limit 20 \
+            --json number,state,mergedAt,headRefOid,baseRefName,headRepository)"
+          export FORWARD_FIX_MAIN FORWARD_FIX_REMOTE_HEAD FORWARD_FIX_PRS_BEFORE
+          FORWARD_FIX_BASE="$(node - <<'NODE'
+          const {selectForwardFixBase} = require('./cli/scripts/release/recovery-source');
+          process.stdout.write(selectForwardFixBase('.', {
+            mainCommit: process.env.FORWARD_FIX_MAIN,
+            remoteHead: process.env.FORWARD_FIX_REMOTE_HEAD,
+            pullRequests: JSON.parse(process.env.FORWARD_FIX_PRS_BEFORE),
+            repository: process.env.GITHUB_REPOSITORY,
+          }));
+          NODE
+          )"
+          git worktree add forward-fix-source "$FORWARD_FIX_BASE"
           git -C forward-fix-source switch -c "$FORWARD_FIX_BRANCH"
-          export FORWARD_FIX_VERSION
+          export FORWARD_FIX_VERSION FORWARD_FIX_BASE
           node - <<'NODE'
           const {prepareForwardFixSource} = require('./cli/scripts/release/recovery-source');
+          const fs = require('fs');
           const result = prepareForwardFixSource('forward-fix-source', {
             knownGoodVersion: process.env.KNOWN_GOOD_VERSION,
             defectiveVersion: process.env.DEFECTIVE_VERSION,
             forwardFixVersion: process.env.FORWARD_FIX_VERSION,
+            knownGoodCommit: process.env.KNOWN_GOOD_COMMIT,
+            baseCommit: process.env.FORWARD_FIX_BASE,
           });
+          fs.writeFileSync('forward-fix-projection.json', JSON.stringify(result));
           process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
           NODE
           git -C forward-fix-source config user.name guardscan-release-bot
           git -C forward-fix-source config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git -C forward-fix-source add cli/CHANGELOG.md cli/package.json cli/package-lock.json
+          node - <<'NODE'
+          const {execFileSync} = require('child_process');
+          const crypto = require('crypto');
+          const {files, digests} = require('./forward-fix-projection.json');
+          for (const file of files) execFileSync('git', ['-C', 'forward-fix-source', 'add', '-A', '--', file]);
+          for (const file of files) {
+            if (digests[file] === null) {
+              try {
+                execFileSync('git', ['-C', 'forward-fix-source', 'cat-file', '-e', `:${file}`], {stdio: 'pipe'});
+              } catch { continue; }
+              throw new Error(`forward-fix failed to delete ${file}`);
+            }
+            const contents = execFileSync('git', ['-C', 'forward-fix-source', 'show', `:${file}`]);
+            if (crypto.createHash('sha256').update(contents).digest('hex') !== digests[file]) {
+              throw new Error(`forward-fix source differs from its trusted projection: ${file}`);
+            }
+          }
+          NODE
           if ! git -C forward-fix-source diff --cached --quiet; then
             FORWARD_FIX_CREATED_AT="$(git show -s --format=%cI "$KNOWN_GOOD_COMMIT")"
             GIT_AUTHOR_DATE="$FORWARD_FIX_CREATED_AT" GIT_COMMITTER_DATE="$FORWARD_FIX_CREATED_AT" \
               git -C forward-fix-source commit \
               -m "fix(release): forward fix v$FORWARD_FIX_VERSION from v$KNOWN_GOOD_VERSION"
           fi
-          CHANGED_FILES="$(git -C forward-fix-source diff --name-only "$KNOWN_GOOD_COMMIT...HEAD")"
+          CHANGED_FILES="$(git -C forward-fix-source diff --name-only "$FORWARD_FIX_BASE...HEAD")"
           export CHANGED_FILES
           node - <<'NODE'
           const actual = process.env.CHANGED_FILES.split('\n').filter(Boolean).sort();
-          const expected = ['cli/CHANGELOG.md', 'cli/package-lock.json', 'cli/package.json'];
-          if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+          const expected = require('./forward-fix-projection.json').files;
+          if (actual.length === 0 || actual.some(file => !expected.includes(file))) {
             throw new Error(`forward-fix branch contains unreviewed paths: ${actual.join(', ')}`);
           }
           NODE
           FORWARD_FIX_HEAD="$(git -C forward-fix-source rev-parse HEAD)"
-          FORWARD_FIX_PRS_BEFORE="$(gh pr list --repo "$GITHUB_REPOSITORY" \
-            --head "$FORWARD_FIX_BRANCH" --base main --state all --limit 20 \
-            --json number,state,mergedAt,headRefOid,baseRefName,headRepository)"
           export FORWARD_FIX_HEAD FORWARD_FIX_PRS_BEFORE
           node - <<'NODE'
           const prs = JSON.parse(process.env.FORWARD_FIX_PRS_BEFORE || '[]');

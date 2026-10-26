@@ -782,6 +782,7 @@ jobs:
             readEvents,
           } = require('./cli/scripts/release/events');
           const {canaryChannelEventType} = require('./cli/scripts/release/distribution-guards');
+          const {acceptModeratedChannel} = require('./cli/scripts/release/moderated-acceptance');
           const {validateCanaryReports} = require('./cli/scripts/release/canary-reports');
           const files = [];
           const walk = dir => fs.readdirSync(dir, {withFileTypes: true}).forEach(entry => {
@@ -851,9 +852,10 @@ jobs:
             const resolved = channelReports.filter(({report}) => report.status !== 'pending');
             if (resolved.length === 0) continue;
             const suffix = `${process.env.GITHUB_RUN_ID}:${process.env.GITHUB_RUN_ATTEMPT}:${channel}`;
-            const state = materializeReleaseState(readEvents(ledger));
             const passed = resolved.every(({report}) => report.status === 'passed');
             const complete = resolved.length === expectedCount;
+            acceptModeratedChannel(ledger, channel, {passed, complete});
+            const state = materializeReleaseState(readEvents(ledger));
             const type = canaryChannelEventType(state, channel, passed, complete);
             if (!type) continue;
             const idempotencyKey = `${type}:${suffix}`;

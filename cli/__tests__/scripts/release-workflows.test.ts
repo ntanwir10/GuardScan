@@ -481,13 +481,15 @@ describe('zero-touch release workflow contracts', () => {
     expect(train).toContain('ROLLBACK_KEY="rollback:$DEFECTIVE_VERSION"');
     expect(train).not.toContain('ROLLBACK_KEY="rollback:$DEFECTIVE_VERSION:$GITHUB_RUN_ID"');
     expect(train).toContain('test "$(git rev-list -n 1 "v$KNOWN_GOOD_VERSION")" = "$KNOWN_GOOD_COMMIT"');
-    expect(train).toContain('git worktree add forward-fix-source "v$KNOWN_GOOD_VERSION"');
+    expect(train).toContain('git worktree add forward-fix-source "$FORWARD_FIX_BASE"');
+    expect(train).toContain("process.stdout.write(selectForwardFixBase('.', {");
     expect(train).toContain('FORWARD_FIX_CREATED_AT="$(git show -s --format=%cI "$KNOWN_GOOD_COMMIT")"');
     expect(train).toContain('merged forward-fix pull request does not match the deterministic trusted tree');
     expect(train).toContain('--force-with-lease="refs/heads/$FORWARD_FIX_BRANCH:$FORWARD_FIX_REMOTE_HEAD"');
     expect(train).toContain('forward-fix branch has a closed-unmerged pull request');
     expect(train).toContain('forward-fix pull request is not bound to the pushed head');
-    expect(train).toContain('const expected = [\'cli/CHANGELOG.md\', \'cli/package-lock.json\', \'cli/package.json\'];');
+    expect(train).toContain("const expected = require('./forward-fix-projection.json').files;");
+    expect(train).toContain('forward-fix source differs from its trusted projection');
     expect(train).toContain('git -C catalog-rollback fetch origin main');
     expect(train).toContain('git -C catalog-rollback switch -c "$CATALOG_BRANCH" "$CATALOG_BASE"');
     expect(train).toContain('--force-with-lease="refs/heads/$CATALOG_BRANCH:$CATALOG_REMOTE_HEAD"');

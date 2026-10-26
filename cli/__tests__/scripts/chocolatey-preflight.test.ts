@@ -4,6 +4,44 @@ import fs from 'fs';
 import yaml from 'js-yaml';
 
 describe('Chocolatey publication idempotency', () => {
+  it('compares rendered and NuGet-serialized nuspec metadata without weakening package payload equality', () => {
+    const script = [
+      'import importlib.util,io,pathlib,sys,tempfile,zipfile',
+      's=importlib.util.spec_from_file_location("p",sys.argv[1]);m=importlib.util.module_from_spec(s);s.loader.exec_module(m)',
+      `rendered='<package xmlns="http://schemas.microsoft.com/packaging/2015/06/nuspec.xsd"><metadata><id>guardscan</id><version>1.2.3</version><description>Exact description</description><dependencies><dependency id="safe" version="[1.0.0]" /></dependencies></metadata><files><file src="tools\\\\**" target="tools" /></files></package>'`,
+      // PackageBuilder.WriteManifest reconstructs Manifest.Create(this), then
+      // saves metadata without the source-only files packaging map.
+      `packed='''<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://schemas.microsoft.com/packaging/2013/05/nuspec.xsd">
+  <metadata>
+    <version>1.2.3</version><id>guardscan</id>
+    <dependencies><dependency version="[1.0.0]" id="safe" /></dependencies>
+    <description>Exact description</description>
+  </metadata>
+</package>'''`,
+      'def package(nuspec,installer="exact installer",extra=False):',
+      '    data=io.BytesIO()',
+      '    with zipfile.ZipFile(data,"w") as z:',
+      '        z.writestr("guardscan.nuspec",nuspec);z.writestr("tools/chocolateyInstall.ps1",installer)',
+      '        if extra: z.writestr("tools/extra.ps1","extra")',
+      '    return data.getvalue()',
+      'with tempfile.TemporaryDirectory() as root:',
+      '    local=pathlib.Path(root)/"guardscan.nupkg";local.write_bytes(package(rendered))',
+      '    result=m.preflight(local,"1.2.3",lambda _:package(packed))',
+      '    assert result["publishRequired"] is False',
+      '    assert result["payloadDigest"]==m.preflight(local,"1.2.3",lambda _:package(rendered))["payloadDigest"]',
+      '    for remote in [package(packed,installer="changed"),package(packed,extra=True),package(packed.replace("Exact description","Changed metadata")),package(packed.replace("[1.0.0]","[9.0.0]")),package(packed.replace("<id>guardscan</id>","<id>guardscan</id><id>other</id>")),package(packed.replace("2013/05/nuspec.xsd","2099/01/nuspec.xsd")),package(packed.replace("</package>","<ignored>unsafe</ignored></package>"))]:',
+      '        try: m.preflight(local,"1.2.3",lambda _:remote)',
+      '        except ValueError: pass',
+      '        else: raise AssertionError("changed or ambiguous metadata/payload accepted")',
+      'print("NuGet metadata canonicalization preserves exact payload boundaries")',
+    ].join('\n');
+    const result = spawnSync(process.platform === 'win32' ? 'python' : 'python3', ['-c', script,
+      path.resolve(__dirname, '../../scripts/release/chocolatey-preflight.py')], {encoding: 'utf8', timeout: 10000});
+    if (result.status !== 0) throw new Error(result.stderr || result.stdout || String(result.error));
+    expect(result.stdout).toContain('preserves exact payload boundaries');
+  });
+
   it('compares complete package payloads and exact identity without timestamp/GUID churn', () => {
     const result = spawnSync(process.platform === 'win32' ? 'python' : 'python3', ['-c', [
       'import contextlib, importlib.util, io, pathlib, runpy, sys, tempfile, urllib.error, zipfile',

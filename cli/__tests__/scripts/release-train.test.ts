@@ -110,7 +110,9 @@ const {releaseTrainChannels} = require('../../scripts/release/lib') as {
 };
 const {
   prepareForwardFixSource,
+  selectForwardFixBase,
 } = require('../../scripts/release/recovery-source') as {
+  selectForwardFixBase: (root: string, input: Record<string, any>) => string;
   prepareForwardFixSource: (
     repositoryRoot: string,
     input: Record<string, string>
@@ -514,6 +516,79 @@ describe('append-only release train', () => {
     }
   });
 
+  it('merges a known-good product projection while retaining the current release controls', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'guardscan-forward-merge-'));
+    const git = (...args: string[]) => execFileSync('git', args, {cwd: root, encoding: 'utf8'}).trim();
+    const write = (file: string, value: string) => {
+      fs.mkdirSync(path.dirname(path.join(root, file)), {recursive: true});
+      fs.writeFileSync(path.join(root, file), value);
+    };
+    try {
+      git('init', '-q', '-b', 'main');
+      git('config', 'user.name', 'Recovery test');
+      git('config', 'user.email', 'recovery@example.test');
+      git('config', 'core.filemode', 'false');
+      git('config', 'core.autocrlf', 'false');
+      write('cli/src/product.ts', 'known good\n');
+      write('cli/schemas/runtime.json', 'known good schema\n');
+      write('cli/schemas/guardscan.release-event.v1.schema.json', 'old control schema\n');
+      write('cli/package.json', JSON.stringify({version: '1.1.9', scripts: {build: 'old'}}));
+      write('cli/package-lock.json', JSON.stringify({version: '1.1.9', packages: {'': {version: '1.1.9'}}}));
+      write('cli/CHANGELOG.md', '# Changelog\n\n## [Unreleased]\n\n## [1.1.9]\n');
+      git('add', '.');
+      git('update-index', '--chmod=+x', 'cli/src/product.ts');
+      git('commit', '-qm', 'known good');
+      const knownGoodCommit = git('rev-parse', 'HEAD');
+      write('cli/src/product.ts', 'defective\n');
+      write('cli/src/defective-added.ts', 'defective addition\n');
+      write('cli/schemas/runtime.json', 'defective schema\n');
+      write('cli/schemas/guardscan.release-event.v1.schema.json', 'trusted control schema\n');
+      write('cli/scripts/release/control.js', 'trusted control\n');
+      write('.github/workflows/release.yml', 'trusted workflow\n');
+      write('cli/README.md', 'defective-only readme\n');
+      write('cli/package.json', JSON.stringify({version: '1.2.0', scripts: {build: 'trusted'}}));
+      git('add', '.');
+      git('update-index', '--chmod=-x', 'cli/src/product.ts');
+      git('commit', '-qm', 'current main');
+      const baseCommit = git('rev-parse', 'HEAD');
+      const input = {knownGoodCommit, baseCommit, knownGoodVersion: '1.1.9', defectiveVersion: '1.2.0', forwardFixVersion: '1.2.1'};
+      git('switch', '-qc', 'forward');
+      const projection = prepareForwardFixSource(root, input);
+      git('add', '-A');
+      const firstTree = git('write-tree');
+      git('commit', '-qm', 'forward fix');
+      const remoteHead = git('rev-parse', 'HEAD');
+      git('switch', '-q', 'main'); git('merge', '--no-edit', 'forward');
+      const newerPackage = JSON.parse(fs.readFileSync(path.join(root, 'cli/package.json'), 'utf8'));
+      newerPackage.version = '1.3.0';
+      write('cli/package.json', JSON.stringify(newerPackage));
+      git('add', '.'); git('commit', '-qm', 'newer main release');
+      const mergedMain = git('rev-parse', 'HEAD');
+      const authority = {mainCommit: mergedMain, remoteHead, repository: 'owner/repo', pullRequests: [{
+        state: 'MERGED', mergedAt: '2026-10-26T00:00:00Z', baseRefName: 'main',
+        headRefOid: remoteHead, headRepository: {nameWithOwner: 'owner/repo'},
+      }]};
+      expect(selectForwardFixBase(root, authority)).toBe(baseCommit);
+      expect(() => selectForwardFixBase(root, {...authority, pullRequests: []})).toThrow(/drifted/);
+      expect(() => selectForwardFixBase(root, {...authority, repository: 'unrelated/repo'})).toThrow(/drifted/);
+      expect(git('ls-tree', 'HEAD', 'cli/src/product.ts')).toMatch(/^100755 blob /);
+      expect(fs.readFileSync(path.join(root, 'cli/src/product.ts'), 'utf8')).toBe('known good\n');
+      expect(fs.existsSync(path.join(root, 'cli/src/defective-added.ts'))).toBe(false);
+      expect(fs.existsSync(path.join(root, 'cli/README.md'))).toBe(false);
+      expect(fs.readFileSync(path.join(root, 'cli/schemas/runtime.json'), 'utf8')).toBe('known good schema\n');
+      expect(fs.readFileSync(path.join(root, 'cli/schemas/guardscan.release-event.v1.schema.json'), 'utf8')).toBe('trusted control schema\n');
+      expect(JSON.parse(fs.readFileSync(path.join(root, 'cli/package.json'), 'utf8')).scripts).toEqual({build: 'trusted'});
+      expect(git('diff', baseCommit, 'HEAD', '--', '.github', 'cli/scripts')).toBe('');
+      expect(() => prepareForwardFixSource(root, input)).toThrow(/clean pinned main base/);
+      expect(() => prepareForwardFixSource(root, {...input, baseCommit: mergedMain}))
+        .toThrow(/base package version does not match/);
+      expect(git('status', '--porcelain')).toBe('');
+      git('switch', '--detach', baseCommit);
+      expect(prepareForwardFixSource(root, input).files).toEqual(projection.files);
+      git('add', '-A'); expect(git('write-tree')).toBe(firstTree);
+    } finally { fs.rmSync(root, {recursive: true, force: true}); }
+  });
+
   it('appends, replays, retries idempotently, and models rollback without backward mutation', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'guardscan-ledger-'));
     const ledger = path.join(root, 'v1.2.0-rc.1.jsonl');
@@ -849,6 +924,12 @@ describe('append-only release train', () => {
       expect(() => prepareFirstReleaseCatalogWithdrawal(root, '1.2.0', commit))
         .toThrow(/does not exactly identify/);
       fs.writeFileSync(path.join(root, 'channel-lock.json'), `${JSON.stringify(lock)}\n`);
+      const git = (...args: string[]) => execFileSync('git', args, {cwd: root, encoding: 'utf8'});
+      git('init', '-q');
+      git('config', 'user.name', 'Withdrawal test');
+      git('config', 'user.email', 'withdrawal@example.test');
+      git('add', '.');
+      git('commit', '-qm', 'Publish catalog');
       expect(prepareFirstReleaseCatalogWithdrawal(root, '1.2.0', commit)).toEqual({
         changed: true,
         state: 'removed',
@@ -860,6 +941,29 @@ describe('append-only release train', () => {
       });
       expect(prepareFirstReleaseCatalogWithdrawal(root, '1.2.0', commit))
         .toEqual({changed: false, state: 'already-absent', removed: []});
+      git('add', '-A', '--', 'Formula/guardscan.rb', 'bucket/guardscan.json', 'channel-lock.json');
+      expect(git('diff', '--cached', '--name-status').trim().split('\n').sort()).toEqual([
+        'D\tFormula/guardscan.rb', 'D\tbucket/guardscan.json', 'D\tchannel-lock.json',
+      ]);
+      git('commit', '-qm', 'Withdraw catalog');
+      const oldStaging = spawnSync('git', [
+        'add', '-A', '--', 'Formula/guardscan.rb', 'bucket/guardscan.json', 'channel-lock.json',
+      ], {cwd: root});
+      expect(oldStaging.status).toBe(128);
+      // Force CRLF even on Unix to exercise the Windows checkout normalization.
+      const workflow = fs.readFileSync(path.resolve(__dirname, '../../../.github/workflows/release-first-withdrawal.yml'), 'utf8')
+        .replace(/\r?\n/g, '\r\n').replace(/\r\n/g, '\n');
+      const staging = workflow.slice(
+        workflow.indexOf('          CATALOG_PREPARED_STATE='),
+        workflow.indexOf('          CATALOG_CHANGED_FILES='),
+      ).replace(/git -C catalog-withdrawal/g, 'git');
+      fs.writeFileSync(path.join(root, 'catalog-withdrawal.json'), JSON.stringify(
+        prepareFirstReleaseCatalogWithdrawal(root, '1.2.0', commit)
+      ));
+      expect(spawnSync('bash', ['-e', '-c', staging], {cwd: root}).status).toBe(0);
+      expect(git('diff', '--cached', '--name-status')).toBe('');
+      fs.writeFileSync(path.join(root, 'catalog-withdrawal.json'), '{"state":"unknown"}');
+      expect(spawnSync('bash', ['-e', '-c', staging], {cwd: root}).status).toBe(1);
       fs.writeFileSync(path.join(root, 'channel-lock.json'), '{}\n');
       expect(() => prepareFirstReleaseCatalogWithdrawal(root, '1.2.0', commit))
         .toThrow(/catalog is partial/);

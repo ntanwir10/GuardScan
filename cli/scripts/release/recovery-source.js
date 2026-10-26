@@ -4,6 +4,63 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const semver = require('semver');
+const {execFileSync} = require('child_process');
+
+// Keep the release document schemas consumed by the current protected control plane.
+const CONTROL_SCHEMAS = ['release-approval.v1', 'channel-catalog.v1', 'promotion-decision.v1',
+  'release-event.v1', 'release-manifest.v1', 'release-state.v1', 'release-state.v2']
+  .map(name => `cli/schemas/guardscan.${name}.schema.json`);
+function productPath(file) {
+  return file.startsWith('cli/src/')
+    || (file.startsWith('cli/schemas/') && !CONTROL_SCHEMAS.includes(file))
+    || [...FILES, 'cli/README.md', 'cli/LICENSE'].includes(file);
+}
+
+function selectForwardFixBase(root, {mainCommit, remoteHead, pullRequests, repository}) {
+  const git = (...args) => execFileSync('git', ['-C', root, ...args], {encoding: 'utf8'}).trim();
+  if (!/^[a-f0-9]{40}$/.test(mainCommit || '')) throw new Error('invalid forward-fix main commit');
+  if (!remoteHead) return mainCommit;
+  if (!/^[a-f0-9]{40}$/.test(remoteHead)) throw new Error('invalid forward-fix remote head');
+  const parent = git('rev-parse', `${remoteHead}^`);
+  const merged = pullRequests.some(pr => pr.state === 'MERGED' && pr.mergedAt
+    && pr.baseRefName === 'main' && pr.headRefOid === remoteHead
+    && pr.headRepository?.nameWithOwner?.toLowerCase() === repository.toLowerCase());
+  if (merged) {
+    git('merge-base', '--is-ancestor', parent, mainCommit);
+    return parent;
+  }
+  if (parent !== mainCommit) throw new Error('open forward-fix branch base has drifted from main');
+  return mainCommit;
+}
+
+function restoreProductSource(root, input) {
+  const git = (...args) => execFileSync('git', ['-C', root, ...args], {encoding: 'utf8'});
+  for (const key of ['knownGoodCommit', 'baseCommit']) {
+    if (!/^[a-f0-9]{40}$/.test(input[key] || '')) throw new Error(`invalid forward-fix ${key}`);
+  }
+  if (git('rev-parse', 'HEAD').trim() !== input.baseCommit
+      || git('status', '--porcelain').trim()) throw new Error('forward-fix requires its clean pinned main base');
+  const files = ref => git('ls-tree', '-rz', '--full-tree', ref).split('\0').filter(Boolean)
+    .map(row => {
+      const [entry, file] = row.split('\t');
+      if (productPath(file) && !/^100(644|755) blob /.test(entry)) {
+        throw new Error(`forward-fix product source is not a regular file: ${file}`);
+      }
+      return file;
+    }).filter(productPath);
+  const known = files(input.knownGoodCommit);
+  const current = files(input.baseCommit);
+  const basePackage = JSON.parse(git('show', `${input.baseCommit}:cli/package.json`));
+  if (basePackage.version !== input.defectiveVersion) {
+    throw new Error('forward-fix base package version does not match the defective release');
+  }
+  const scripts = basePackage.scripts;
+  for (const file of current.filter(file => !known.includes(file))) {
+    fs.unlinkSync(path.join(root, file));
+  }
+  for (const file of known) git('restore', '--source', input.knownGoodCommit, '--staged', '--worktree', '--', file);
+  return {scripts, files: [...new Set([...known, ...current])].sort()};
+}
 
 const FILES = Object.freeze([
   'cli/CHANGELOG.md',
@@ -68,6 +125,7 @@ function prepareForwardFixSource(repositoryRoot, input) {
   if (forwardFixVersion !== semver.inc(defectiveVersion, 'patch')) {
     throw new Error('forward-fix version must be the next patch after the defective release');
   }
+  const projection = input.knownGoodCommit || input.baseCommit ? restoreProductSource(root, input) : null;
   const packageSource = readRegularFile(root, 'cli/package.json');
   const lockSource = readRegularFile(root, 'cli/package-lock.json');
   const changelogSource = readRegularFile(root, 'cli/CHANGELOG.md');
@@ -83,6 +141,7 @@ function prepareForwardFixSource(repositoryRoot, input) {
     }
   }
   packageJson.version = forwardFixVersion;
+  if (projection) packageJson.scripts = projection.scripts;
   packageLock.version = forwardFixVersion;
   packageLock.packages[''].version = forwardFixVersion;
   const outputs = {
@@ -101,9 +160,12 @@ function prepareForwardFixSource(repositoryRoot, input) {
     schemaVersion: 'guardscan.forward-fix-source.v1',
     changed,
     version: forwardFixVersion,
-    files: [...FILES],
-    digests: Object.fromEntries(FILES.map(relative => [relative, sha256(outputs[relative])])),
+    files: projection ? projection.files : [...FILES],
+    digests: Object.fromEntries((projection ? projection.files : FILES).map(relative => {
+      const file = path.join(root, relative);
+      return [relative, fs.existsSync(file) ? sha256(fs.readFileSync(file)) : null];
+    })),
   };
 }
 
-module.exports = {prepareForwardFixSource};
+module.exports = {prepareForwardFixSource, selectForwardFixBase};
