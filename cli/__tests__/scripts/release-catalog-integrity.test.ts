@@ -24,6 +24,64 @@ describe('catalog reconciliation and rollback integrity', () => {
     ]) expect(() => validateCatalogPullRequest(invalid, head, true)).toThrow();
   });
 
+  it('restores the complete known-good catalog and authenticates its workflow against the pinned source', () => {
+    const run = step('Restore the shared catalog to the exact known-good projection');
+    const preparation = run.slice(run.indexOf('git -C catalog-rollback switch'),
+      run.indexOf('git -C catalog-rollback config'));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'catalog-known-good-'));
+    const repo = path.join(root, 'catalog-rollback');
+    const workflowPath = '.github/workflows/verify.yml';
+    const targets = ['Formula/guardscan.rb', 'bucket/guardscan.json', 'channel-lock.json', workflowPath];
+    const git = (cwd: string, ...args: string[]) => {
+      const result = spawnSync('git', args, {cwd, encoding: 'utf8', env: {...process.env,
+        GIT_AUTHOR_NAME: 'Fixture', GIT_AUTHOR_EMAIL: 'fixture@example.invalid',
+        GIT_COMMITTER_NAME: 'Fixture', GIT_COMMITTER_EMAIL: 'fixture@example.invalid'}});
+      if (result.status !== 0) throw new Error(result.stderr);
+      return result.stdout.trim();
+    };
+    const commit = (cwd: string) => {git(cwd, 'add', '.'); git(cwd, '-c', 'commit.gpgsign=false',
+      'commit', '-m', 'fixture'); return git(cwd, 'rev-parse', 'HEAD');};
+    try {
+      fs.mkdirSync(repo);
+      git(root, 'init');
+      fs.mkdirSync(path.join(root, 'catalog/homebrew-tap/.github/workflows'), {recursive: true});
+      fs.writeFileSync(path.join(root, 'catalog/homebrew-tap', workflowPath), 'known-good workflow\n');
+      const sourceCommit = commit(root);
+      fs.writeFileSync(path.join(root, 'known-good-workflow.yml'), 'known-good workflow\n');
+      fs.writeFileSync(path.join(root, 'catalog/homebrew-tap', workflowPath), 'defective workflow\n');
+      git(repo, 'init');
+      for (const target of targets) {
+        fs.mkdirSync(path.dirname(path.join(repo, target)), {recursive: true});
+        fs.writeFileSync(path.join(repo, target), target === workflowPath ? 'known-good workflow\n'
+          : target === 'channel-lock.json' ? JSON.stringify({sourceCommit}) : `${target} known-good\n`);
+      }
+      const knownGood = commit(repo);
+      for (const target of targets) fs.writeFileSync(path.join(repo, target), `${target} defective\n`);
+      const base = commit(repo);
+      const execute = () => spawnSync('bash', ['-euo', 'pipefail', '-c', preparation.replace(/\r\n/g, '\n')],
+        {cwd: root, encoding: 'utf8', env: {...process.env,
+          PATH: `${path.dirname(process.execPath)}${path.delimiter}${process.env.PATH}`,
+          CATALOG_BRANCH: `recovery-${git(repo, 'rev-parse', '--short', 'HEAD')}`,
+          CATALOG_BASE: base, KNOWN_GOOD_CATALOG_COMMIT: knownGood, KNOWN_GOOD_COMMIT: sourceCommit}});
+      expect(execute().status).toBe(0);
+      const restored = commit(repo);
+      const {verifyCatalogProjection} = require('../../scripts/release/adapter-projection');
+      expect(() => verifyCatalogProjection(repo, path.join(root, 'catalog-rollback-trusted'),
+        path.join(root, 'known-good-workflow.yml'), restored, base)).not.toThrow();
+      expect(git(repo, 'show', `${restored}:${workflowPath}`)).toBe('known-good workflow');
+      // A ledger catalog whose workflow disagrees with its authenticated source must stop before publication.
+      fs.writeFileSync(path.join(repo, workflowPath), 'mismatched catalog workflow\n');
+      const mismatched = commit(repo);
+      const rejected = spawnSync('bash', ['-euo', 'pipefail', '-c', preparation.replace(/\r\n/g, '\n')
+        + '\ntouch push-reached'], {cwd: root, encoding: 'utf8', env: {...process.env,
+        PATH: `${path.dirname(process.execPath)}${path.delimiter}${process.env.PATH}`,
+        CATALOG_BRANCH: 'mismatched-recovery', CATALOG_BASE: base,
+        KNOWN_GOOD_CATALOG_COMMIT: mismatched, KNOWN_GOOD_COMMIT: sourceCommit}});
+      expect(rejected.status).not.toBe(0);
+      expect(fs.existsSync(path.join(root, 'push-reached'))).toBe(false);
+    } finally {fs.rmSync(root, {recursive: true, force: true});}
+  });
+
   it.each([
     'Authoritatively refetch and reconcile the shared catalog',
     'Restore the shared catalog to the exact known-good projection',
@@ -39,7 +97,7 @@ describe('catalog reconciliation and rollback integrity', () => {
     expect(run).not.toContain('--auto');
     expect(run).toContain('merge-base --is-ancestor');
     expect(run).toContain('^1');
-    expect(spawnSync('bash', ['-n'], {input: run, encoding: 'utf8'}).status).toBe(0);
+    expect(spawnSync('bash', ['-n'], {input: run.replace(/\r\n/g, '\n'), encoding: 'utf8'}).status).toBe(0);
   });
 
   it.each([
@@ -77,7 +135,7 @@ describe('catalog reconciliation and rollback integrity', () => {
       }
       const good = commit();
       const execute = (head: string) => spawnSync('bash', ['-euo', 'pipefail', '-c', [
-        'gh() { echo merged > merge-invoked; }', check, merge,
+        'gh() { echo merged > merge-invoked; }', check!.replace(/\r\n/g, '\n'), merge!.replace(/\r\n/g, '\n'),
       ].join('\n')], {cwd: root, encoding: 'utf8', env: {...process.env,
         PATH: `${path.dirname(process.execPath)}${path.delimiter}${process.env.PATH}`,
         [headVariable]: head, PROJECTION_BASE: base, PR_NUMBER: '1', CATALOG_PR: '1'}});

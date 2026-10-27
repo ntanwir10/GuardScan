@@ -1756,6 +1756,7 @@ jobs:
         id: catalog-rollback
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
+          KNOWN_GOOD_COMMIT: ${{ steps.known-good.outputs.commit }}
           KNOWN_GOOD_CATALOG_COMMIT: ${{ steps.known-good.outputs.catalog_commit }}
         run: |
           CATALOG_BRANCH="rollback/v$DEFECTIVE_VERSION-to-v$KNOWN_GOOD_VERSION"
@@ -1769,16 +1770,16 @@ jobs:
             CATALOG_REMOTE_HEAD="$(git -C catalog-rollback rev-parse "refs/remotes/origin/$CATALOG_BRANCH")"
           fi
           git -C catalog-rollback switch -c "$CATALOG_BRANCH" "$CATALOG_BASE"
-          git -C catalog-rollback restore --source "$KNOWN_GOOD_CATALOG_COMMIT" -- \
-            Formula/guardscan.rb bucket/guardscan.json channel-lock.json
           test ! -L catalog-rollback/.github
           test ! -L catalog-rollback/.github/workflows
-          mkdir -p catalog-rollback/.github/workflows catalog-rollback-trusted/Formula catalog-rollback-trusted/bucket
-          rm -f catalog-rollback/.github/workflows/verify.yml
-          cp catalog/homebrew-tap/.github/workflows/verify.yml catalog-rollback/.github/workflows/verify.yml
-          for CATALOG_PATH in Formula/guardscan.rb bucket/guardscan.json channel-lock.json; do
+          git -C catalog-rollback restore --source "$KNOWN_GOOD_CATALOG_COMMIT" -- \
+            Formula/guardscan.rb bucket/guardscan.json channel-lock.json .github/workflows/verify.yml
+          mkdir -p catalog-rollback-trusted/Formula catalog-rollback-trusted/bucket catalog-rollback-trusted/.github/workflows
+          for CATALOG_PATH in Formula/guardscan.rb bucket/guardscan.json channel-lock.json .github/workflows/verify.yml; do
             git -C catalog-rollback show "$KNOWN_GOOD_CATALOG_COMMIT:$CATALOG_PATH" > "catalog-rollback-trusted/$CATALOG_PATH"
           done
+          git show "$KNOWN_GOOD_COMMIT:catalog/homebrew-tap/.github/workflows/verify.yml" > catalog-rollback-trusted/source-verify.yml
+          cmp catalog-rollback-trusted/source-verify.yml catalog-rollback-trusted/.github/workflows/verify.yml
           git -C catalog-rollback config user.name guardscan-release-bot
           git -C catalog-rollback config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git -C catalog-rollback add Formula/guardscan.rb bucket/guardscan.json channel-lock.json
@@ -1927,7 +1928,7 @@ jobs:
             PROJECTION_BASE="$(git -C catalog-rollback rev-parse "$CATALOG_MERGE_SHA^1")"
           fi
           node -e 'require("./cli/scripts/release/adapter-projection").verifyCatalogProjection(...process.argv.slice(1))' \
-            catalog-rollback catalog-rollback-trusted catalog/homebrew-tap/.github/workflows/verify.yml \
+            catalog-rollback catalog-rollback-trusted catalog-rollback-trusted/.github/workflows/verify.yml \
             "$CATALOG_HEAD" "$PROJECTION_BASE"
           if [ "$CATALOG_PR_STATE" = OPEN ]; then
             gh pr merge --repo ntanwir10/homebrew-tap "$CATALOG_PR" --squash --match-head-commit "$CATALOG_HEAD"
@@ -1959,12 +1960,12 @@ jobs:
           PROJECTION_BASE="$(git -C catalog-rollback rev-parse "$CATALOG_MERGE_SHA^1")"
           git -C catalog-rollback fetch origin "$CATALOG_HEAD"
           node -e 'require("./cli/scripts/release/adapter-projection").verifyCatalogProjection(...process.argv.slice(1))' \
-            catalog-rollback catalog-rollback-trusted catalog/homebrew-tap/.github/workflows/verify.yml \
+            catalog-rollback catalog-rollback-trusted catalog-rollback-trusted/.github/workflows/verify.yml \
             "$CATALOG_HEAD" "$PROJECTION_BASE"
           node -e 'require("./cli/scripts/release/adapter-projection").verifyCatalogProjection(...process.argv.slice(1))' \
-            catalog-rollback catalog-rollback-trusted catalog/homebrew-tap/.github/workflows/verify.yml \
+            catalog-rollback catalog-rollback-trusted catalog-rollback-trusted/.github/workflows/verify.yml \
             "$CATALOG_MERGE_SHA" "$PROJECTION_BASE"
-          for CATALOG_PATH in Formula/guardscan.rb bucket/guardscan.json channel-lock.json; do
+          for CATALOG_PATH in Formula/guardscan.rb bucket/guardscan.json channel-lock.json .github/workflows/verify.yml; do
             test "$(git -C catalog-rollback rev-parse "$CATALOG_MERGE_SHA:$CATALOG_PATH")" = \
               "$(git -C catalog-rollback rev-parse "$KNOWN_GOOD_CATALOG_COMMIT:$CATALOG_PATH")"
           done
