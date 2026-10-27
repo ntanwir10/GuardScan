@@ -90,6 +90,20 @@ describe('distribution state guards', () => {
     expect(shouldPublishCatalogChannel(state, 'scoop')).toBe(true);
   });
 
+  it.each(['winget', 'chocolatey'])('includes resubmitted %s packages in known good rollback', channel => {
+    const plan = planRollback({version: '1.2.3', channels: {[channel]: {status: 'resubmitted'}}},
+      '1.0.5', 'b'.repeat(40));
+    expect(plan.actions).toEqual([expect.objectContaining({
+      channel, currentStatus: 'resubmitted', automation: 'external-action-required',
+      authority: `${channel}-maintainer`,
+      action: channel === 'winget' ? 'submit-corrective-manifest' : 'unlist-or-supersede',
+    })]);
+    for (const status of ['withdrawn', 'superseded']) {
+      expect(planRollback({version: '1.2.3', channels: {[channel]: {status}}},
+        '1.0.5', 'b'.repeat(40)).actions).toEqual([]);
+    }
+  });
+
   it('supersedes failed repository owned channels during known good rollback', () => {
     const plan = planRollback({
       version: '1.2.0', tag: 'v1.2.0', commit: 'a'.repeat(40),

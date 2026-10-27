@@ -101,6 +101,45 @@ function accept(h: ReturnType<typeof fixture>, channel: string, extra = {}) {
   return require('../../scripts/release/moderated-acceptance').acceptModeratedChannel(h.ledger, channel, {passed: true, complete: true, checkedAt, ...extra}, h.execute);
 }
 describe('scheduled moderated acceptance', () => {
+  it('rolls back resubmitted moderated packages through the CLI idempotently', async () => {
+    const h = fixture();
+    const stdout = jest.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    try {
+      for (const channel of ['winget', 'chocolatey']) {
+        h.transition(channel, 'channel_rejected', 'rejected');
+        h.transition(channel, 'channel_corrected', 'corrected');
+        h.transition(channel, 'channel_resubmitted', 'resubmitted');
+      }
+      fs.writeFileSync(path.join(h.root, 'package.json'), JSON.stringify({
+        name: 'guardscan', version: source.version, engines: {node: '>=22.0.0'},
+      }));
+      fs.writeFileSync(path.join(h.root, 'package-lock.json'), JSON.stringify({
+        version: source.version, packages: {'': {version: source.version, engines: {node: '>=22.0.0'}}},
+      }));
+      fs.writeFileSync(path.join(h.root, 'CHANGELOG.md'), `## [${source.version}]\n`);
+      const args = ['rollback', '--package-root', h.root,
+        '--repository-root', path.resolve(__dirname, '../../..'), '--commit', source.commit,
+        '--tag', source.tag, '--ledger', h.ledger, '--timestamp', future,
+        '--idempotency-key', 'rollback:resubmitted', '--known-good', '1.0.5',
+        '--known-good-commit', 'b'.repeat(40)];
+      const {main} = require('../../scripts/release/index');
+      await main(args);
+      const first = events.readEvents(h.ledger);
+      expect(first.filter((e: any) => e.type === 'action_required')).toEqual(
+        ['chocolatey', 'winget'].map(channel => expect.objectContaining({
+          channel, payload: expect.objectContaining({authority: `${channel}-maintainer`,
+            action: channel === 'winget' ? 'submit-corrective-manifest' : 'unlist-or-supersede'}),
+        })));
+      expect(events.materializeReleaseState(first)).toMatchObject({
+        recovery: {status: 'started', mode: 'known-good'},
+        channels: {winget: {status: 'resubmitted'}, chocolatey: {status: 'resubmitted'}},
+      });
+      const bytes = fs.readFileSync(h.ledger, 'utf8');
+      await main(args);
+      expect(events.readEvents(h.ledger)).toEqual(first);
+      expect(fs.readFileSync(h.ledger, 'utf8')).toBe(bytes);
+    } finally { stdout.mockRestore(); h.cleanup(); }
+  });
   it.each(['winget', 'chocolatey'])('binds fresh %s bytes to the protected manifest and suppresses repeat acceptance', channel => {
     const h = fixture(); try {
       expect(accept(h, channel)).toBe(true);
