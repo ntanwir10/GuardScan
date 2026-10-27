@@ -15,6 +15,8 @@ permissions:
 
 env:
   RELEASE_NODE_VERSION: 22.23.1
+  SCOOP_INSTALL_COMMIT: b0ee913725139b816f9178163af0aecdba07a7ed
+  SCOOP_COMMIT: b588a06e41d920d2123ec70aee682bae14935939
 
 jobs:
   discover:
@@ -24,8 +26,19 @@ jobs:
     outputs:
       trains: ${{ steps.matrix.outputs.trains }}
     steps:
+      - name: Validate optional manual version before minting credentials
+        env:
+          REQUEST_VERSION: ${{ inputs.version }}
+        run: |
+          node - <<'NODE'
+          const version = process.env.REQUEST_VERSION;
+          if (version && !/^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-rc\.(0|[1-9][0-9]*))?$/.test(version)) {
+            throw new Error('manual canary version is invalid');
+          }
+          NODE
       - name: Create short-lived release app token
         id: app
+        if: inputs.version == '' || vars.RELEASE_AUTOMATION_ENABLED == 'true'
         uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
         with:
           app-id: ${{ vars.RELEASE_APP_ID }}
@@ -113,37 +126,41 @@ jobs:
         env:
           VERSION: ${{ matrix.train.version }}
         run: |
+          assert_version() {
+            ACTUAL_VERSION="$("$@" | tr -d '\r')"
+            test "$ACTUAL_VERSION" = "$VERSION"
+          }
           case "${{ matrix.manager }}" in
             npm)
               npm install --global "guardscan@$VERSION"
-              guardscan --version
-              npx --yes "guardscan@$VERSION" --version
+              assert_version guardscan --version
+              assert_version npx --yes "guardscan@$VERSION" --version
               npm uninstall --global guardscan
               ;;
             pnpm)
               pnpm config set global-bin-dir "$RUNNER_TEMP/pnpm-bin"
               export PATH="$RUNNER_TEMP/pnpm-bin:$PATH"
               pnpm add --global "guardscan@$VERSION"
-              guardscan --version
-              pnpm dlx "guardscan@$VERSION" --version
+              assert_version guardscan --version
+              assert_version pnpm dlx "guardscan@$VERSION" --version
               pnpm remove --global guardscan
               ;;
             yarn-classic)
               corepack enable
               corepack prepare yarn@1.22.22 --activate
               yarn global add "guardscan@$VERSION"
-              "$(yarn global bin)/guardscan" --version
+              assert_version "$(yarn global bin)/guardscan" --version
               yarn global remove guardscan
               ;;
             yarn-modern)
               corepack enable
               corepack prepare yarn@4.9.2 --activate
-              yarn dlx "guardscan@$VERSION" --version
+              assert_version yarn dlx "guardscan@$VERSION" --version
               ;;
             bun)
               bun add --global "guardscan@$VERSION"
-              guardscan --version
-              bunx "guardscan@$VERSION" --version
+              assert_version guardscan --version
+              assert_version bunx "guardscan@$VERSION" --version
               bun remove --global guardscan
               ;;
           esac
@@ -385,14 +402,15 @@ jobs:
           EXE="$PWD/executable/$EXECUTABLE"
           (
             cd project
-            test "$(env -i \
+            ACTUAL_VERSION="$(env -i \
               HOME="$PWD/../isolated-home" \
               USERPROFILE="$PWD/../isolated-home" \
               GUARDSCAN_HOME="$PWD/../isolated-home/.guardscan" \
               GUARDSCAN_NO_TELEMETRY=true \
               GUARDSCAN_OFFLINE=true \
               PATH="" \
-              "$EXE" --version)" = "$VERSION"
+              "$EXE" --version | tr -d '\r')"
+            test "$ACTUAL_VERSION" = "$VERSION"
             env -i HOME="$PWD/../isolated-home" PATH="" "$EXE" --help
             env -i HOME="$PWD/../isolated-home" PATH="" "$EXE" \
               --no-telemetry scan --offline --no-cve --skip-tests --skip-ai \
@@ -418,8 +436,9 @@ jobs:
         run: |
           PYPI_VERSION="${VERSION/-rc./rc}"
           python -m pip install --no-deps "guardscan-cli==$PYPI_VERSION"
-          PIP_REPORTED_VERSION="$(guardscan --version)"
+          PIP_REPORTED_VERSION="$(guardscan --version | tr -d '\r')"
           test "$PIP_REPORTED_VERSION" = "$VERSION"
+          guardscan --help | grep -q scan
           python -m pip uninstall -y guardscan-cli
           python -m pip install pipx
           export PIPX_BIN_DIR="$RUNNER_TEMP/pipx-bin"
@@ -430,8 +449,10 @@ jobs:
             PIPX_APP="$PIPX_APP.exe"
           fi
           test -x "$PIPX_APP"
-          PIPX_REPORTED_VERSION="$("$PIPX_APP" --version)"
+          PIPX_REPORTED_VERSION="$("$PIPX_APP" --version | tr -d '\r')"
           test "$PIPX_REPORTED_VERSION" = "$VERSION"
+          "$PIPX_APP" --help | grep -q scan
+          python -m pipx runpip guardscan-cli show guardscan-cli
           python -m pipx uninstall guardscan-cli
           python - <<'PY'
           import json
@@ -461,6 +482,26 @@ jobs:
         train: ${{ fromJSON(needs.discover.outputs.trains) }}
         adapter: [homebrew-macos, homebrew-linux, scoop]
     steps:
+      - name: Check out the pinned Scoop installer
+        if: matrix.adapter == 'scoop'
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: ScoopInstaller/Install
+          ref: ${{ env.SCOOP_INSTALL_COMMIT }}
+          path: .scoop-installer
+          persist-credentials: false
+      - name: Install the pinned Scoop CLI
+        if: matrix.adapter == 'scoop'
+        shell: pwsh
+        run: |
+          $scoopRoot = Join-Path $env:RUNNER_TEMP 'scoop'
+          & .\.scoop-installer\install.ps1 -RunAsAdmin -ScoopDir $scoopRoot
+          if (-not $?) { throw 'Pinned Scoop installer failed' }
+          git -C "$scoopRoot\apps\scoop\current" fetch origin $env:SCOOP_COMMIT --depth 1
+          if ($LASTEXITCODE -ne 0) { throw 'Unable to fetch the pinned Scoop CLI' }
+          git -C "$scoopRoot\apps\scoop\current" checkout --detach $env:SCOOP_COMMIT
+          if ($LASTEXITCODE -ne 0) { throw 'Unable to select the pinned Scoop CLI' }
+          "$scoopRoot\shims" | Out-File $env:GITHUB_PATH -Append
       - name: Initialize fail-closed report
         shell: bash
         run: |
@@ -498,7 +539,7 @@ jobs:
             test "$(guardscan --version | tr -d '\r')" = "$VERSION"
             brew uninstall guardscan
           else
-            git clone --branch "guardscan/v$VERSION" \
+            git clone --branch "channel-preview/v$VERSION" \
               https://github.com/ntanwir10/homebrew-tap preview-tap
             brew tap --custom-remote ntanwir10/tap "$PWD/preview-tap"
             brew style ntanwir10/tap/guardscan
@@ -514,18 +555,6 @@ jobs:
             report.checkedAt = new Date().toISOString();
             fs.writeFileSync("report.json", `${JSON.stringify(report)}\n`);
           '
-      - name: Install Scoop for adapter canary
-        if: matrix.adapter == 'scoop'
-        shell: pwsh
-        run: |
-          $installer = Join-Path $env:RUNNER_TEMP 'guardscan-scoop-install.ps1'
-          Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/ScoopInstaller/Install/1e2f334083d609986d8c8bc9e31ae8e87c39fab4/install.ps1' -OutFile $installer
-          & $installer -RunAsAdmin
-          if ($LASTEXITCODE -ne 0) { throw 'Scoop installation failed' }
-          $scoopRoot = if ($env:SCOOP) { $env:SCOOP } else { Join-Path $env:USERPROFILE 'scoop' }
-          $shimPath = Join-Path $scoopRoot 'shims'
-          if (-not (Test-Path $shimPath)) { throw 'Scoop shim directory is missing after installation' }
-          $shimPath | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
       - name: Scoop install, update check, invocation, and uninstall
         if: matrix.adapter == 'scoop'
         shell: pwsh
@@ -533,26 +562,33 @@ jobs:
           VERSION: ${{ matrix.train.version }}
           CHANNEL: ${{ matrix.train.channel }}
         run: |
-          scoop config installRunAsAdmin true
-          if ($LASTEXITCODE -ne 0) { throw 'Scoop admin-install configuration failed' }
-          $scoopRoot = if ($env:SCOOP) { $env:SCOOP } else { Join-Path $env:USERPROFILE 'scoop' }
+          $scoopRoot = Join-Path $env:RUNNER_TEMP 'scoop'
+          $env:SCOOP = $scoopRoot
           $shimPath = Join-Path $scoopRoot 'shims'
           if (-not (Test-Path $shimPath)) { throw 'Scoop shim directory is missing' }
           $env:PATH = "$shimPath;$env:PATH"
+          scoop config installRunAsAdmin true
+          if ($LASTEXITCODE -ne 0) { throw 'Scoop admin-install configuration failed' }
           if ($env:CHANNEL -eq 'stable') {
-            scoop bucket add guardscan https://github.com/ntanwir10/scoop-bucket
+            scoop bucket add guardscan https://github.com/ntanwir10/homebrew-tap
+            if ($LASTEXITCODE -ne 0) { throw 'Unable to add the stable GuardScan bucket' }
+            $package = 'guardscan/guardscan'
           } else {
-            git clone --branch "guardscan/v$env:VERSION" https://github.com/ntanwir10/scoop-bucket preview-bucket
+            git clone --branch "channel-preview/v$env:VERSION" https://github.com/ntanwir10/homebrew-tap preview-bucket
+            if ($LASTEXITCODE -ne 0) { throw 'Unable to clone the GuardScan preview bucket' }
             scoop bucket add guardscan-preview (Resolve-Path preview-bucket)
+            if ($LASTEXITCODE -ne 0) { throw 'Unable to add the GuardScan preview bucket' }
+            $package = 'guardscan-preview/guardscan'
           }
-          scoop install guardscan
+          scoop install $package
           if ($LASTEXITCODE -ne 0) { throw 'Scoop installation failed' }
           $installedVersion = (& guardscan --version | Out-String).Trim()
-          if ($LASTEXITCODE -ne 0 -or $installedVersion -ne $env:VERSION) {
+          if ($LASTEXITCODE -ne 0) { throw 'Scoop invocation failed' }
+          if ($installedVersion -ne $env:VERSION) {
             throw 'Scoop installed version does not match the release train'
           }
           scoop update guardscan
-          if ($LASTEXITCODE -ne 0) { throw 'Scoop update failed' }
+          if ($LASTEXITCODE -ne 0) { throw 'Scoop update check failed' }
           scoop uninstall guardscan
           if ($LASTEXITCODE -ne 0) { throw 'Scoop uninstall failed' }
           node -e '
@@ -619,8 +655,8 @@ jobs:
                   } else {
                     throw "Unexpected moderated registry error: WinGet availability query exited ${availabilityStatus}: $availabilityText"
                   }
-                } elseif ($availabilityText -notmatch '(?im)^\s*Id\s*:\s*NaumanTanwir\.GuardScan\s*$'
-                    -or $availabilityText -notmatch '(?im)^\s*Version\s*:\s*${{ matrix.train.version }}\s*$') {
+                } elseif ($availabilityText -notmatch '(?im)^\s*Id\s*:\s*NaumanTanwir\.GuardScan\s*$' -or
+                    $availabilityText -notmatch '(?im)^\s*Version\s*:\s*${{ matrix.train.version }}\s*$') {
                   throw 'Unexpected moderated registry error: WinGet did not confirm the exact package and version'
                 }
                 if ($notPublic) {
@@ -739,7 +775,14 @@ jobs:
           const fs = require('fs');
           const path = require('path');
           const cp = require('child_process');
-          const {appendEvent, monotonicLedgerTimestamp, readEvents} = require('./cli/scripts/release/events');
+          const {
+            appendEvent,
+            materializeReleaseState,
+            monotonicLedgerTimestamp,
+            readEvents,
+          } = require('./cli/scripts/release/events');
+          const {canaryChannelEventType} = require('./cli/scripts/release/distribution-guards');
+          const {acceptModeratedChannel} = require('./cli/scripts/release/moderated-acceptance');
           const {validateCanaryReports} = require('./cli/scripts/release/canary-reports');
           const files = [];
           const walk = dir => fs.readdirSync(dir, {withFileTypes: true}).forEach(entry => {
@@ -770,6 +813,18 @@ jobs:
           const commit = existing[0].commit;
           const checkoutCommit = cp.execFileSync('git', ['rev-parse', 'HEAD'], {encoding: 'utf8'}).trim();
           if (commit !== checkoutCommit) throw new Error(`release ledger commit does not match checked-out tag ${tag}`);
+          const expectedTargetCounts = {
+            npm: 1,
+            pnpm: 1,
+            yarn: 2,
+            bun: 1,
+            github: 5,
+            pypi: 5,
+            homebrew: 2,
+            scoop: 1,
+            winget: 1,
+            chocolatey: 1,
+          };
           for (const {file, report} of reports) {
             if (report.status === 'pending') continue;
             const suffix = `${process.env.GITHUB_RUN_ID}:${process.env.GITHUB_RUN_ATTEMPT}:${report.channel}:${report.target}:${path.basename(path.dirname(file))}`;
@@ -786,32 +841,60 @@ jobs:
                 evidenceUrl: report.evidenceUrl,
               },
             });
-            if (report.status === 'passed') {
-              const types = ['winget', 'chocolatey'].includes(report.channel)
-                ? ['channel_accepted', 'channel_verified']
-                : ['channel_verified'];
-              for (const type of types) {
-                appendEvent(ledger, {
-                  version, tag, commit,
-                  timestamp: monotonicLedgerTimestamp(readEvents(ledger), report.checkedAt, `${type}:${suffix}`),
-                  type,
-                  channel: report.channel,
-                  idempotencyKey: `${type}:${suffix}`,
-                  payload: {
-                    remoteIdentity: `${report.channel}:${version}`,
-                  },
-                });
-              }
-            }
+          }
+          const versionAggregateTimestamp = reports
+            .filter(({report}) => report.status !== 'pending')
+            .map(({report}) => report.checkedAt)
+            .sort()
+            .at(-1);
+          for (const [channel, expectedCount] of Object.entries(expectedTargetCounts)) {
+            const channelReports = reports.filter(({report}) => report.channel === channel);
+            const resolved = channelReports.filter(({report}) => report.status !== 'pending');
+            if (resolved.length === 0) continue;
+            const suffix = `${process.env.GITHUB_RUN_ID}:${process.env.GITHUB_RUN_ATTEMPT}:${channel}`;
+            const passed = resolved.every(({report}) => report.status === 'passed');
+            const complete = resolved.length === expectedCount;
+            acceptModeratedChannel(ledger, channel, {passed, complete});
+            const state = materializeReleaseState(readEvents(ledger));
+            const type = canaryChannelEventType(state, channel, passed, complete);
+            if (!type) continue;
+            const idempotencyKey = `${type}:${suffix}`;
+            appendEvent(ledger, {
+              version, tag, commit,
+              timestamp: monotonicLedgerTimestamp(
+                readEvents(ledger), versionAggregateTimestamp, idempotencyKey
+              ),
+              type,
+              channel,
+              idempotencyKey,
+              payload: type === 'channel_failed'
+                ? {error: 'one or more current public canary targets failed'}
+                : {},
+            });
           }
           NODE
           git worktree add ledger-branch origin/release-ledger
           cp ledgers/*.jsonl ledger-branch/events/
+          node - <<'NODE'
+          const fs = require('fs');
+          const path = require('path');
+          const {materializeReleaseState, readEvents} = require('./cli/scripts/release/events');
+          const {reconcileRelease} = require('./cli/scripts/release/reconcile');
+          const activeFile = 'ledger-branch/active-versions.json';
+          const active = JSON.parse(fs.readFileSync(activeFile));
+          active.trains = (active.trains || []).filter(train => {
+            if (train.channel !== 'stable') return true;
+            const ledger = path.join('ledger-branch/events', `v${train.version}.jsonl`);
+            return !fs.existsSync(ledger)
+              || !reconcileRelease(materializeReleaseState(readEvents(ledger))).complete;
+          });
+          fs.writeFileSync(activeFile, `${JSON.stringify(active, null, 2)}\n`);
+          NODE
           (
             cd ledger-branch
             git config user.name guardscan-release-bot
             git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-            git add events
+            git add events active-versions.json
             if git diff --cached --quiet; then
               echo 'Canary evidence already persisted.'
             else

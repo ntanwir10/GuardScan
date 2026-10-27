@@ -12,6 +12,7 @@ import { CodebaseIndexer, CodebaseIndex } from './codebase-indexer';
 import { ParsedFunction, ParsedClass } from './ast-parser';
 import { CodeChunk, EmbeddingMetadata, hashContent } from './embeddings';
 import { readTextFileBounded } from '../utils/private-state';
+import { repositoryRelativePath } from '../utils/path-helper';
 
 const MAX_DOCUMENTATION_BYTES = 2 * 1024 * 1024;
 const MAX_DOCUMENTATION_CHUNK_CHARS = 2_000;
@@ -114,7 +115,8 @@ export class EmbeddingChunker {
         continue;
       }
 
-      const content = this.formatFunctionForEmbedding(func);
+      const source = repositoryRelativePath(this.repoRoot, func.file);
+      const content = this.formatFunctionForEmbedding(func, source);
 
       // Skip if too large
       if (content.length > options.maxFunctionSize!) {
@@ -135,7 +137,7 @@ export class EmbeddingChunker {
           tags: this.generateTags(func),
           lastModified: await this.getFileModificationTime(func.file),
         },
-        source: func.file,
+        source,
         startLine: func.line,
         endLine: func.endLine,
       });
@@ -154,7 +156,8 @@ export class EmbeddingChunker {
     const chunks: CodeChunk[] = [];
 
     for (const [classId, cls] of index.classes) {
-      const content = this.formatClassForEmbedding(cls);
+      const source = repositoryRelativePath(this.repoRoot, cls.file);
+      const content = this.formatClassForEmbedding(cls, source);
 
       // Skip if too large
       if (content.length > options.maxClassSize!) {
@@ -175,7 +178,7 @@ export class EmbeddingChunker {
           tags: this.generateClassTags(cls),
           lastModified: await this.getFileModificationTime(cls.file),
         },
-        source: cls.file,
+        source,
         startLine: cls.line,
         endLine: cls.endLine,
       });
@@ -311,11 +314,11 @@ export class EmbeddingChunker {
   /**
    * Format function with context for better embeddings
    */
-  private formatFunctionForEmbedding(func: ParsedFunction): string {
+  private formatFunctionForEmbedding(func: ParsedFunction, source: string): string {
     const parts: string[] = [];
 
     // File context
-    parts.push(`// File: ${func.file}`);
+    parts.push(`// File: ${source}`);
     parts.push(`// Function: ${func.name}`);
 
     // Documentation
@@ -348,11 +351,11 @@ export class EmbeddingChunker {
   /**
    * Format class with context
    */
-  private formatClassForEmbedding(cls: ParsedClass): string {
+  private formatClassForEmbedding(cls: ParsedClass, source: string): string {
     const parts: string[] = [];
 
     // File context
-    parts.push(`// File: ${cls.file}`);
+    parts.push(`// File: ${source}`);
     parts.push(`// Class: ${cls.name}`);
 
     // Documentation

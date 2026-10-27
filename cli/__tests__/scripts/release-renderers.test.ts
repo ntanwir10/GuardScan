@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -6,8 +7,11 @@ import {spawnSync} from 'child_process';
 
 const {
   MARKER_FILE,
+  classifyChannelCatalog,
   renderAdapters,
+  renderChannelCatalog,
   toPep440,
+  writeChannelCatalogOutput,
   writeRenderedOutput,
 } = require('../../scripts/release/renderers') as {
   MARKER_FILE: string;
@@ -15,7 +19,20 @@ const {
     manifest: Record<string, any>,
     channels?: string
   ) => {channels: string[]; files: Record<string, string>};
+  renderChannelCatalog: (
+    manifest: Record<string, any>,
+    options: Record<string, string>
+  ) => {files: Record<string, string>; lock: Record<string, any>};
+  classifyChannelCatalog: (
+    rendered: {files: Record<string, string>; lock: Record<string, any>},
+    catalogRoot: string
+  ) => Record<string, unknown>;
   toPep440: (version: string) => string;
+  writeChannelCatalogOutput: (
+    rendered: {files: Record<string, string>; lock: Record<string, any>},
+    outputDir: string,
+    checkOnly?: boolean
+  ) => {changed: boolean; checked: boolean; files: string[]; lockSha256: string};
   writeRenderedOutput: (
     manifest: Record<string, any>,
     rendered: {channels: string[]; files: Record<string, string>},
@@ -158,6 +175,13 @@ describe('release adapter rendering', () => {
     if (run.status !== 0) throw new Error(run.stderr || String(run.error));
     expect(run.status).toBe(0);
   });
+  const catalogOptions = {
+    manifestUrl: 'https://github.com/ntanwir10/GuardScan/releases/download/v1.2.3/release-manifest.json',
+    manifestSha256: '9'.repeat(64),
+    generatorRepository: 'ntanwir10/GuardScan',
+    generatorCommit: commit,
+  };
+
   it('renders deterministic native adapters and a fail-closed PyPI publication descriptor', () => {
     const manifest = makeManifest();
     const rendered = renderAdapters(manifest, 'pypi,chocolatey,winget,scoop,homebrew');
@@ -196,6 +220,48 @@ describe('release adapter rendering', () => {
     });
   });
 
+  it('selects the exact Homebrew URL and checksum for all four native targets', () => {
+    const manifest = makeManifest();
+    const formula = renderAdapters(manifest, 'homebrew').files['homebrew/Formula/guardscan.rb'];
+    expect(formula).not.toMatch(/on_(?:arm|intel|macos|linux) do/);
+    const harness = [
+      'require "json"',
+      'module OS; def self.mac?; ENV.fetch("FIXTURE_OS") == "darwin"; end; end',
+      'module Hardware; module CPU; def self.arm?; ENV.fetch("FIXTURE_ARCH") == "arm64"; end; end; end',
+      'class Formula',
+      '  def self.method_missing(*); end',
+      '  def self.url(value); @selected_url = value; end',
+      '  def self.sha256(value); @selected_sha = value; end',
+      '  def self.test; end',
+      '  def self.selection; [@selected_url, @selected_sha]; end',
+      'end', formula, 'puts JSON.generate(Guardscan.selection)',
+    ].join('\n');
+    for (const osName of ['darwin', 'linux']) {
+      for (const arch of ['arm64', 'x64']) {
+        const expected = manifest.artifacts.find((artifact: any) => artifact.kind === 'standalone'
+          && artifact.platform.os === osName && artifact.platform.arch === arch);
+        const result = spawnSync('ruby', ['-e', harness], {encoding: 'utf8', timeout: 10000,
+          env: {...process.env, FIXTURE_OS: osName, FIXTURE_ARCH: arch}});
+        expect(result.status).toBe(0);
+        expect(JSON.parse(result.stdout)).toEqual([expected.url, expected.sha256]);
+      }
+    }
+  });
+
+  it('audits and exercises the generated formula through a temporary qualified catalog tap', () => {
+    const workflow = yaml.load(fs.readFileSync(path.resolve(__dirname,
+      '../../../catalog/homebrew-tap/.github/workflows/verify.yml'), 'utf8')) as any;
+    const run = workflow.jobs.homebrew.steps.find((step: any) =>
+      step.name === 'Style, audit, install, invoke, test, and uninstall').run;
+    expect(run).toContain('brew tap --custom-remote guardscan-ci/catalog "$GITHUB_WORKSPACE"');
+    for (const command of ['audit --strict', 'install', 'test']) {
+      expect(run).toContain(`brew ${command} guardscan-ci/catalog/guardscan`);
+    }
+    expect(run).toContain('brew untap guardscan-ci/catalog');
+    expect(run.indexOf('trap cleanup EXIT')).toBeLessThan(run.indexOf('brew audit'));
+    expect(run).not.toMatch(/brew (?:audit|install|test)[^\n]*Formula\//);
+  });
+
   it('rejects mutable URLs, missing signatures, and PyPI plans without built wheels', () => {
     const mutable = makeManifest();
     mutable.artifacts[0].url = 'https://github.com/ntanwir10/GuardScan/releases/latest/download/guardscan.tar.gz';
@@ -210,6 +276,154 @@ describe('release adapter rendering', () => {
       artifact.kind !== 'python-wheel'
     ));
     expect(() => renderAdapters(noWheels, 'pypi')).toThrow(/requires at least one prebuilt/);
+  });
+
+  it('renders one cryptographically bound shared Homebrew and Scoop catalog', () => {
+    const rendered = renderChannelCatalog(makeManifest(), catalogOptions);
+    expect(Object.keys(rendered.files).sort()).toEqual([
+      'Formula/guardscan.rb',
+      'bucket/guardscan.json',
+      'channel-lock.json',
+    ]);
+    expect(rendered.lock).toMatchObject({
+      schemaVersion: 'guardscan.channel-catalog.v1',
+      source: {
+        repository: 'ntanwir10/GuardScan',
+        version: '1.2.3',
+        tag: 'v1.2.3',
+        commit,
+        manifestSha256: '9'.repeat(64),
+      },
+      generator: {repository: 'ntanwir10/GuardScan', commit},
+    });
+    expect(rendered.lock).not.toHaveProperty('catalogCommit');
+    for (const catalogPath of ['Formula/guardscan.rb', 'bucket/guardscan.json']) {
+      expect(rendered.lock.files[catalogPath].sha256).toBe(
+        crypto.createHash('sha256').update(rendered.files[catalogPath]).digest('hex')
+      );
+    }
+  });
+
+  it('detects missing, older, newer, and manually edited catalog projections', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'guardscan-catalog-'));
+    try {
+      const rendered = renderChannelCatalog(makeManifest(), catalogOptions);
+      expect(classifyChannelCatalog(rendered, root)).toMatchObject({
+        classification: 'missing',
+        integrityIncident: false,
+        action: 'open-or-reuse-update-pr',
+      });
+      expect(writeChannelCatalogOutput(rendered, root)).toMatchObject({changed: true});
+      expect(writeChannelCatalogOutput(rendered, root, true)).toMatchObject({
+        changed: false,
+        checked: true,
+      });
+      expect(classifyChannelCatalog(rendered, root)).toMatchObject({
+        classification: 'exact',
+        integrityIncident: false,
+        action: 'record-verified',
+      });
+
+      fs.writeFileSync(path.join(root, 'Formula/evil.rb'), 'system "curl", "https://evil.invalid"\n');
+      expect(classifyChannelCatalog(rendered, root)).toMatchObject({
+        classification: 'digest-conflict',
+        integrityIncident: true,
+        action: 'stop',
+      });
+      expect(() => writeChannelCatalogOutput(rendered, root, true)).toThrow(/unmanaged generated paths/);
+      fs.rmSync(path.join(root, 'Formula/evil.rb'));
+
+      fs.appendFileSync(path.join(root, 'Formula/guardscan.rb'), '# human drift\n');
+      expect(classifyChannelCatalog(rendered, root)).toMatchObject({
+        classification: 'digest-conflict',
+        integrityIncident: true,
+        action: 'stop',
+      });
+      expect(() => writeChannelCatalogOutput(rendered, root, true)).toThrow(/manually edited/);
+
+      writeChannelCatalogOutput(rendered, root);
+      const lockPath = path.join(root, 'channel-lock.json');
+      const newer = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
+      newer.source.version = '9.0.0';
+      newer.source.tag = 'v9.0.0';
+      newer.source.manifestUrl =
+        'https://github.com/ntanwir10/GuardScan/releases/download/v9.0.0/release-manifest.json';
+      fs.writeFileSync(lockPath, `${JSON.stringify(newer, null, 2)}\n`);
+      expect(classifyChannelCatalog(rendered, root)).toMatchObject({
+        classification: 'unexpected-newer',
+        integrityIncident: true,
+        action: 'stop',
+      });
+
+      const older = {
+        ...newer,
+        source: {
+          ...newer.source,
+          version: '1.2.2',
+          tag: 'v1.2.2',
+          manifestUrl:
+            'https://github.com/ntanwir10/GuardScan/releases/download/v1.2.2/release-manifest.json',
+        },
+      };
+      fs.writeFileSync(lockPath, `${JSON.stringify(older, null, 2)}\n`);
+      expect(classifyChannelCatalog(rendered, root)).toMatchObject({
+        classification: 'older',
+        integrityIncident: false,
+        action: 'open-or-reuse-update-pr',
+      });
+    } finally {
+      fs.rmSync(root, {recursive: true, force: true});
+    }
+  });
+
+  it('rejects catalog identity drift and renders a stable source formula for Homebrew Core', () => {
+    expect(() => renderChannelCatalog(makeManifest(), {
+      ...catalogOptions,
+      generatorCommit: 'b'.repeat(40),
+    })).toThrow(/exact release source commit/);
+    expect(() => renderChannelCatalog(makeManifest(), {
+      ...catalogOptions,
+      manifestUrl: 'https://github.com/ntanwir10/GuardScan/releases/latest/download/release-manifest.json',
+    })).toThrow(/canonical immutable/);
+
+    const manifest = makeManifest();
+    manifest.artifacts.push({
+      id: 'npm:guardscan@1.2.3',
+      kind: 'npm-tarball',
+      filename: 'guardscan-1.2.3.tgz',
+      size: 1024,
+      sha256: '8'.repeat(64),
+      source,
+      integrity: `sha512-${'A'.repeat(86)}==`,
+      url: 'https://registry.npmjs.org/guardscan/-/guardscan-1.2.3.tgz',
+      provenance: {
+        type: 'slsa',
+        url: 'https://github.com/ntanwir10/GuardScan/attestations/npm',
+        verified: true,
+      },
+    });
+    const core = renderAdapters(manifest, 'homebrew-core');
+    expect(core.files['homebrew-core/Formula/guardscan.rb']).toContain('depends_on "node"');
+    expect(core.files['homebrew-core/Formula/guardscan.rb']).toContain('*std_npm_args');
+
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'guardscan-homebrew-core-'));
+    try {
+      const output = path.join(root, 'adapters');
+      writeRenderedOutput(manifest, core, output);
+      expect(validateAdapters(manifest, output, 'homebrew-core')).toMatchObject({
+        valid: true,
+        structural: {'homebrew-core': {valid: true, files: 1}},
+      });
+      expect(nativeValidationPlan(output, ['homebrew-core'], 'darwin')).toEqual([
+        expect.objectContaining({
+          channel: 'homebrew-core',
+          command: 'brew',
+          args: ['style', path.join(output, 'homebrew-core', 'Formula', 'guardscan.rb')],
+        }),
+      ]);
+    } finally {
+      fs.rmSync(root, {recursive: true, force: true});
+    }
   });
 
   it('writes owned output atomically, detects drift, and refuses unmanaged replacement', () => {

@@ -67,12 +67,15 @@ describe('publication convergence', () => {
     expect(select).toBeLessThan(authenticate);
     const uploads = job.steps.filter((s: any) => s.uses?.startsWith('actions/upload-artifact@'));
     expect(uploads.map((s: any) => s.with.name).sort()).toEqual([
-      'release-npm-${{ inputs.tag }}', 'release-payload-${{ inputs.tag }}',
+      'release-github-evidence-${{ inputs.tag }}', 'release-npm-${{ inputs.tag }}', 'release-payload-${{ inputs.tag }}',
     ]);
     for (const upload of uploads) {
-      expect(upload.with.overwrite).toBe(true);
+      expect(upload.with.overwrite).toBe(upload.with.name.startsWith('release-github-evidence-') ? undefined : true);
+      expect(upload.with['if-no-files-found']).toBe('error');
       expect(job.steps.indexOf(upload)).toBeGreaterThan(publish);
     }
+    expect(uploads.find((s: any) => s.with.name.startsWith('release-github-evidence-')).with.path)
+      .toBe('github-publication-evidence.json');
     for (const build of Object.values(workflow('release-build.yml').jobs) as any[]) {
       for (const upload of (build.steps || []).filter((s: any) => s.uses?.startsWith('actions/upload-artifact@'))) {
         expect(upload.with.overwrite).toBe(upload.with.name.startsWith('release-canonical-') ? false : true);
@@ -109,12 +112,20 @@ describe('publication convergence', () => {
 
   it('requires WinGet exact-state preflight and postflight instead of trusting the submit exit code', () => {
     const job = workflow('release-publish.yml').jobs.winget;
-    const submit = job.steps.find((s: any) => s.name === 'Submit WinGet manifests');
+    const submit = job.steps.find((s: any) => s.name === 'Preflight and submit WinGet manifests with exact evidence');
     expect(submit.run).toContain('winget-submission.js');
-    expect(submit.run.indexOf('Get-SubmissionState')).toBeLessThan(submit.run.indexOf('& $creator submit'));
+    const invocation = submit.run.indexOf('& .\\wingetcreate.exe submit');
+    expect(invocation).toBeGreaterThan(-1);
+    for (const preflight of ["$publicState = Get-WinGetState '--public'", '$pullRequest = Find-WinGetPullRequest']) {
+      expect(submit.run.indexOf(preflight)).toBeGreaterThan(-1);
+      expect(submit.run.indexOf(preflight)).toBeLessThan(invocation);
+    }
     expect(submit.run).toContain('submitRequired');
-    expect(submit.run).toContain('WinGet submission did not converge');
-    expect(job.steps.some((s: any) => s.with?.name === 'release-winget-${{ inputs.tag }}')).toBe(true);
+    expect(submit.run).toContain('Submitted WinGet pull request identity did not become queryable');
+    expect(submit.run.indexOf('$pullRequest = Find-WinGetPullRequest $true')).toBeGreaterThan(invocation);
+    expect(submit.run).toContain("$script:verifiedWinGet.remoteDigest");
+    expect(submit.run).toContain("$script:verifiedWinGet.files");
+    expect(job.steps.some((s: any) => s.with?.name === 'release-winget-evidence-${{ inputs.tag }}')).toBe(true);
   });
 
   it('retries only classified transient WinGet verification failures after, never before, submission', () => {
@@ -127,10 +138,12 @@ describe('publication convergence', () => {
       expect(() => githubApi('fixture', () => { throw Object.assign(new Error('request failed'), {stderr: detail}); }))
         .not.toThrow(VerificationUnavailable);
     }
-    const submit = workflow('release-publish.yml').jobs.winget.steps.find((s: any) => s.name === 'Submit WinGet manifests');
+    const submit = workflow('release-publish.yml').jobs.winget.steps.find((s: any) => s.name === 'Preflight and submit WinGet manifests with exact evidence');
     expect(submit.run).toContain('catch [System.IO.IOException]');
-    expect(submit.run).toContain('$verifyStatus -eq 75');
-    expect(submit.run.indexOf('catch [System.IO.IOException]')).toBeGreaterThan(submit.run.indexOf('& $creator submit'));
+    expect(submit.run).toContain('$LASTEXITCODE -eq 75 -and $retryUnavailable');
+    expect(submit.run).toContain('Find-WinGetPullRequest $true');
+    expect(submit.run).toContain('$publicState = Get-WinGetState \'--public\'');
+    expect(submit.run.indexOf('catch [System.IO.IOException]')).toBeGreaterThan(submit.run.indexOf('& .\\wingetcreate.exe submit'));
     expect(submit.run).not.toMatch(/catch\s*\{/);
   });
 

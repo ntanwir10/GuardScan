@@ -9,10 +9,10 @@ import {
   sanitizeChildEnvironment,
 } from "../../src/utils/process-runner";
 import {
-  APIClient,
+  TelemetryClient,
   TelemetryDeliveryError,
   TelemetryRequest,
-} from "../../src/utils/api-client";
+} from "../../src/utils/telemetry-client";
 
 import { describe, it, beforeEach, afterEach, expect } from "@jest/globals";
 
@@ -546,12 +546,12 @@ describe("isolated tool discovery", () => {
   });
 });
 
-describe("APIClient endpoint validation", () => {
+describe("TelemetryClient endpoint validation", () => {
   it("defers invalid endpoint errors until telemetry delivery", async () => {
-    let client: APIClient | undefined;
+    let client: TelemetryClient | undefined;
 
     expect(() => {
-      client = new APIClient("not a URL");
+      client = new TelemetryClient("not a URL");
     }).not.toThrow();
 
     const request: TelemetryRequest = {
@@ -568,8 +568,8 @@ describe("APIClient endpoint validation", () => {
   });
 
   it("does not retry unexpected local telemetry failures", async () => {
-    const client = new APIClient("https://example.test") as unknown as {
-      sendTelemetry: APIClient["sendTelemetry"];
+    const client = new TelemetryClient("https://example.test") as unknown as {
+      sendTelemetry: TelemetryClient["sendTelemetry"];
       client: { post: () => Promise<never> };
     };
     client.client = {

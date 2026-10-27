@@ -13,8 +13,9 @@ describe('final release evidence boundaries', () => {
     const publish = workflow('release-publish.yml');
     const steps = [
       publish.jobs['pypi-test'].steps.find((s: any) => s.name === 'Reject conflicting TestPyPI files'),
+      publish.jobs['pypi-test'].steps.find((s: any) => s.name === 'Verify complete TestPyPI file set'),
       publish.jobs.pypi.steps.find((s: any) => s.name === 'Reject conflicting PyPI files'),
-      publish.jobs.pypi.steps.find((s: any) => s.name === 'Verify exact PyPI file set after publication'),
+      publish.jobs.pypi.steps.find((s: any) => s.name === 'Verify complete PyPI file set'),
     ];
     for (const step of steps) {
       const script = step.run.match(/python - <<'PY'\n([\s\S]*?)\nPY/)[1];
@@ -96,9 +97,61 @@ describe('final release evidence boundaries', () => {
       git('-c', 'commit.gpgsign=false', 'commit', '-m', 'symlink fixture');
       const symlink = git('rev-parse', 'HEAD');
       expect(() => verifyAdapterProjection(repo, rendered, target, symlink, wrong)).toThrow(/regular/);
-      const run = workflow('release-publish.yml').jobs.adapters.steps.find((s: any) => s.name === 'Push deterministic adapter branches and open PRs').run;
-      expect(run.indexOf('adapter-projection.js')).toBeLessThan(run.indexOf('gh pr merge'));
-      expect(run).toContain('$MERGE_SHA^1');
+    } finally { fs.rmSync(root, {recursive: true, force: true}); }
+  });
+
+  it('validates the complete shared catalog projection before merge and verifies the actual merge again', () => {
+    const run = workflow('release-publish.yml').jobs.catalog.steps.find((s: any) => s.name === 'Push one deterministic catalog update').run;
+    const merge = run.indexOf('gh pr merge');
+    const checks = [...run.matchAll(/verifyCatalogProjection\(/g)].map(match => match.index!);
+    expect(merge).toBeGreaterThan(-1);
+    expect(checks.length).toBeGreaterThanOrEqual(2);
+    expect(checks[0]).toBeLessThan(merge);
+    expect(checks.at(-1)).toBeGreaterThan(merge);
+    expect(run).toContain('$MERGE_SHA^1');
+  });
+
+  it('rejects extra paths, altered bytes, and symlinks in the shared catalog projection', () => {
+    const {verifyCatalogProjection} = require('../../scripts/release/adapter-projection');
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'catalog-projection-'));
+    const repo = path.join(root, 'catalog');
+    const rendered = path.join(root, 'rendered');
+    fs.mkdirSync(repo);
+    const targets = ['Formula/guardscan.rb', 'bucket/guardscan.json', 'channel-lock.json', '.github/workflows/verify.yml'];
+    const git = (...args: string[]) => {
+      const result = spawnSync('git', args, {cwd: repo, encoding: 'utf8', env: {...process.env,
+        GIT_AUTHOR_NAME: 'Release Fixture', GIT_AUTHOR_EMAIL: 'fixture@example.invalid',
+        GIT_COMMITTER_NAME: 'Release Fixture', GIT_COMMITTER_EMAIL: 'fixture@example.invalid'}});
+      if (result.status !== 0) throw new Error(result.stderr || String(result.error));
+      return result.stdout.trim();
+    };
+    const commit = () => { git('add', '.'); git('-c', 'commit.gpgsign=false', 'commit', '-m', 'fixture'); return git('rev-parse', 'HEAD'); };
+    try {
+      git('init');
+      fs.writeFileSync(path.join(repo, 'README.md'), 'catalog\n');
+      const base = commit();
+      for (const target of targets) {
+        for (const directory of [repo, rendered]) {
+          fs.mkdirSync(path.dirname(path.join(directory, target)), {recursive: true});
+          fs.writeFileSync(path.join(directory, target), `immutable ${target}\n`);
+        }
+      }
+      const good = commit();
+      const verify = (head: string) => verifyCatalogProjection(repo, rendered,
+        path.join(rendered, '.github/workflows/verify.yml'), head, base);
+      expect(() => verify(good)).not.toThrow();
+      fs.writeFileSync(path.join(repo, 'extra.txt'), 'smuggled\n');
+      const extra = commit();
+      expect(() => verify(extra)).toThrow(/complete|projection/i);
+      git('-c', 'commit.gpgsign=false', 'revert', '--no-edit', extra);
+      fs.writeFileSync(path.join(repo, targets[1]), 'wrong bytes\n');
+      const wrong = commit();
+      expect(() => verify(wrong)).toThrow(/bytes|projection/);
+      git('-c', 'commit.gpgsign=false', 'revert', '--no-edit', wrong);
+      const blob = git('rev-parse', `${good}:${targets[0]}`);
+      git('update-index', '--cacheinfo', `120000,${blob},${targets[0]}`);
+      git('-c', 'commit.gpgsign=false', 'commit', '-m', 'symlink fixture');
+      expect(() => verify(git('rev-parse', 'HEAD'))).toThrow(/regular/);
     } finally { fs.rmSync(root, {recursive: true, force: true}); }
   });
 });

@@ -224,9 +224,10 @@ describe('release workflow review regressions', () => {
     const npm = publish.jobs.npm;
     const setupNode = npm.steps.find((candidate: any) => candidate.uses?.startsWith('actions/setup-node@'));
     expect(setupNode).toBeTruthy();
-    expect(npm.steps.some((candidate: any) => (
-      candidate.name === 'Install OIDC-compatible npm' && candidate.run?.includes('npm@11.21.0')
-    ))).toBe(true);
+    expect(publish.env.RELEASE_NPM_VERSION).toBe('11.21.0');
+    const npmInstall = step(npm, 'Install OIDC-compatible npm');
+    expect(npmInstall.run).toContain('npm install --global "npm@${RELEASE_NPM_VERSION}"');
+    expect(npmInstall.run).toContain('test "$(npm --version)" = "$RELEASE_NPM_VERSION"');
     expect(JSON.stringify(npm.steps)).not.toMatch(/_authToken|NODE_AUTH_TOKEN|--token/);
 
     const github = publish.jobs.github;
@@ -277,14 +278,16 @@ describe('release workflow review regressions', () => {
     const prepare = train.jobs.prepare;
     const validate = step(prepare, 'Validate request and resolve unchanged release PR head');
     expect(validate.env.RELEASE_PR).toBe('${{ inputs.release_pr }}');
-    expect(validate.run).toContain('--json state,baseRefName,headRefName,headRefOid,headRepository');
-    expect(validate.run).toContain('.state == "OPEN"');
-    expect(validate.run).toContain('.baseRefName == "main"');
-    expect(validate.run).toContain('.headRepository.nameWithOwner');
-    expect(validate.run).toContain('release/$BASE_VERSION');
-    expect(validate.run).toContain('test("^[a-f0-9]{40}$")');
-    expect(step(prepare, 'Checkout source PR head').with.ref)
-      .toBe('${{ steps.source.outputs.head_sha }}');
+    expect(validate.run).toContain('gh api "repos/${GITHUB_REPOSITORY}/pulls/$REQUEST_RELEASE_PR" > release-pr.json');
+    expect(validate.run).toContain("pr.state !== 'open' && !resumableMergedPromotion");
+    expect(validate.run).toContain("pr.base?.ref !== 'main'");
+    expect(validate.run).toContain('pr.head?.repo?.full_name?.toLowerCase()');
+    expect(validate.run).toContain('`release/${baseVersion}`');
+    expect(validate.run).toContain("/^[a-f0-9]{40}$/.test(pr.head?.sha || '')");
+    const checkout = prepare.steps.find((candidate: any) => candidate.uses?.startsWith('actions/checkout@')
+      && candidate.with?.ref === '${{ steps.source.outputs.head_sha }}');
+    expect(checkout).toBeTruthy();
+    expect(prepare.steps.indexOf(validate)).toBeLessThan(prepare.steps.indexOf(checkout));
   });
 
   it('reuses a stable tag only when its peeled commit is the exact merged PR commit', () => {
@@ -395,8 +398,14 @@ describe('release workflow review regressions', () => {
     expect(local.run.indexOf('winget settings --enable LocalManifestFiles'))
       .toBeLessThan(local.run.indexOf('winget install --manifest'));
     expect(local.run).toContain("if ($LASTEXITCODE -ne 0) { throw 'WinGet local manifest setting failed' }");
-    const submit = step(winget, 'Submit WinGet manifests');
-    expect(submit.run).toContain('& $creator submit $installer.Directory.FullName');
+    const submit = step(winget, 'Preflight and submit WinGet manifests with exact evidence');
+    expect(submit.run).toContain('$manifestDirectory = $installer.Directory.FullName');
+    expect(submit.run).toContain('Get-ChildItem $manifestDirectory -File');
+    expect(submit.run).toContain('cli/scripts/release/winget-submission.js');
+    expect(submit.run).toContain('& .\\wingetcreate.exe submit --prtitle');
+    expect(submit.run).toContain('--token $env:WINGET_GITHUB_TOKEN $manifestDirectory');
+    expect(submit.run.indexOf("throw 'Pinned wingetcreate executable failed SHA-256 verification'"))
+      .toBeLessThan(submit.run.indexOf('& .\\wingetcreate.exe submit'));
     expect(submit.run).not.toContain('wingetcreate submit adapters\\winget ');
   });
 

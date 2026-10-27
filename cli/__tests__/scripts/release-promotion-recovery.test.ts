@@ -7,16 +7,19 @@ import yaml from 'js-yaml';
 
 const {createEvent} = require('../../scripts/release/events');
 const {createPromotionDecision} = require('../../scripts/release/promotion');
+const {createPublicationEvidence} = require('../../scripts/release/publication-evidence');
 const head = 'a'.repeat(40);
 const merge = 'b'.repeat(40);
+const base = '1'.repeat(40);
+const sourceTree = '2'.repeat(40);
 const publishedAt = '2026-01-01T00:00:00.000Z';
 const evaluatedAt = '2026-01-02T02:00:00.000Z';
 
 function fixture() {
-  const candidate = {sourcePr: 42, sourcePrHead: head};
+  const candidate = {sourcePr: 42, sourcePrHead: head, sourcePrBase: base, sourcePrTree: sourceTree};
   const rc = {version: '1.2.3-rc.1', tag: 'v1.2.3-rc.1', commit: 'c'.repeat(40),
     manifestSha256: 'd'.repeat(64), publishedAt, ...candidate};
-  const decision = createPromotionDecision({rc, currentSourcePrHead: head, evaluatedAt,
+  const decision = createPromotionDecision({rc, currentSourcePrHead: head, currentSourcePrBase: base, evaluatedAt,
     requiredChannels: ['github'], canaries: Array.from({length: 24}, (_, index) => ({
       channel: 'github', status: 'passed', checkedAt: index ? evaluatedAt : publishedAt,
     })), incidents: []});
@@ -27,9 +30,13 @@ function fixture() {
       timestamp: events.length < 3 ? publishedAt : evaluatedAt, type, payload,
       idempotencyKey: `fixture:${events.length}`, ...(channel ? {channel} : {})}, events.at(-1)));
   };
-  append('train_started', {releasePr: 42, sourcePrHead: head, channels: ['github']});
+  append('train_started', {profile: 'full', releasePr: 42, sourcePrHead: head, sourcePrBase: base,
+    sourcePrTree: sourceTree, channels: ['github']});
   append('manifest_created', {manifestSha256: rc.manifestSha256});
-  append('channel_published', {}, 'github');
+  const publication = createPublicationEvidence({channel: 'github', version: rc.version, tag: rc.tag,
+    remoteIdentity: `github:${rc.tag}`, files: {'artifact.zip': '3'.repeat(64)}});
+  append('channel_published', {publication, remoteIdentity: publication.remoteIdentity,
+    remoteDigest: publication.aggregateSha256}, 'github');
   append('promotion_decided', {result: 'permitted', eligible: true, reasons: [],
     decisionSha256: crypto.createHash('sha256').update(text).digest('hex')});
   const blob = 'e'.repeat(40);
@@ -100,6 +107,30 @@ describe('immutable stable promotion approval recovery', () => {
     expect(() => recover(f.input, f.git)).toThrow(/approval/i);
   });
 
+  it.each(['sourcePrBase', 'sourcePrTree'])(
+    'rejects candidate %s drift from the immutable train', field => {
+      const f = fixture();
+      expect(() => recover({...f.input, candidate: {...f.input.candidate, [field]: 'f'.repeat(40)}}, f.git))
+        .toThrow(/identity|source/i);
+      expect(f.calls).toHaveLength(0);
+    }
+  );
+
+  it.each([
+    ['rc', 'sourcePrBase'], ['rc', 'sourcePrTree'],
+    ['stable', 'sourcePrBase'], ['stable', 'sourcePrTree'],
+  ])('rejects authenticated approval with mismatched %s.%s', (section, field) => {
+    const f = fixture();
+    const decision = JSON.parse(f.text);
+    decision[section][field] = 'f'.repeat(40);
+    const text = JSON.stringify(decision);
+    f.blobs.set(f.blob, text);
+    f.events.pop();
+    f.append('promotion_decided', {result: 'permitted', eligible: true, reasons: [],
+      decisionSha256: crypto.createHash('sha256').update(text).digest('hex')});
+    expect(() => recover(f.input, f.git)).toThrow(/approval|identity/i);
+  });
+
   it.each(['120000', '100755'])('rejects non-regular approval mode %s', mode => {
     const f = fixture();
     f.setTree(`${mode} blob ${f.blob}\tdecisions/v1.2.3-rc.1-123-1.json\0`);
@@ -166,12 +197,15 @@ describe('immutable stable promotion approval recovery', () => {
 
   it('does not revive a rolled-back RC or stable release', () => {
     const f = fixture();
-    f.append('rollback_started', {});
+    const rollback = {knownGoodVersion: '1.2.2', knownGoodCommit: '4'.repeat(40),
+      forwardFixVersion: '1.2.4', forwardFixBranch: 'release/forward-fix-v1.2.4-from-v1.2.2'};
+    f.append('rollback_started', rollback);
     expect(() => recover(f.input, f.git)).toThrow(/rollback|terminal/i);
     f.events.pop();
     const stable = [createEvent({version: '1.2.3', tag: 'v1.2.3', commit: merge,
       timestamp: evaluatedAt, type: 'train_started', idempotencyKey: 'stable', payload: {channels: ['github']}})];
-    stable.push(createEvent({...stable[0], type: 'rollback_started', idempotencyKey: 'rollback'}, stable[0]));
+    stable.push(createEvent({...stable[0], type: 'rollback_started', idempotencyKey: 'rollback',
+      payload: rollback}, stable[0]));
     const blob = 'f'.repeat(40);
     f.blobs.set(blob, stable.map(event => JSON.stringify(event)).join('\n') + '\n');
     f.setTree(`100644 blob ${f.blob}\tdecisions/v1.2.3-rc.1-123-1.json\0` +
