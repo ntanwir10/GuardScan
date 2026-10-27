@@ -16,13 +16,19 @@ const {createEvent, materializeReleaseState} = require('../../scripts/release/ev
 };
 
 describe('distribution state guards', () => {
-  it.each(['verified', 'failed', 'withdrawn', 'superseded'])(
+  it.each(['failed', 'withdrawn', 'superseded'])(
     'suppresses repeated canary channel transitions after %s', status => {
       const state = {channels: {npm: {status}}};
       expect(canaryChannelEventType(state, 'npm', false, false)).toBeNull();
       expect(canaryChannelEventType(state, 'npm', true, true)).toBeNull();
     }
   );
+
+  it('fails a previously verified channel while suppressing repeat verification', () => {
+    const state = {channels: {npm: {status: 'verified'}}};
+    expect(canaryChannelEventType(state, 'npm', false, false)).toBe('channel_failed');
+    expect(canaryChannelEventType(state, 'npm', true, true)).toBeNull();
+  });
 
   it('verifies moderated channels only after provider evidenced acceptance', () => {
     expect(canaryChannelEventType({channels: {winget: {status: 'submitted'}}}, 'winget', true, true))

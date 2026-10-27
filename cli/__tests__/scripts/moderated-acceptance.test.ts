@@ -85,7 +85,7 @@ function fixture() {
     const payload = status ? {...initial.find(e => e.channel === channel).payload, submission} : {};
     if (status === 'rejected') { payload.reason = 'provider correction'; submission.reason = payload.reason; }
     events.appendEvent(ledger, {...source, type, channel, timestamp: future,
-      idempotencyKey: `${type}:extra`, payload});
+      idempotencyKey: `${type}:${channel}:extra`, payload});
     expect(events.readEvents(ledger)).toHaveLength(previous.length + 1);
   };
   const rebind = () => {
@@ -150,14 +150,64 @@ describe('scheduled moderated acceptance', () => {
   it.each(['winget', 'chocolatey'])('does not query %s without a complete passing report', channel => {
     const h = fixture(); try { expect(accept(h, channel, {complete: false})).toBe(false); expect(accept(h, channel, {passed: false})).toBe(false); expect(h.calls).toHaveLength(0); } finally { h.cleanup(); }
   });
-  it('executes the scheduled record body submitted→public accepted→verified for both channels and suppresses retries', () => {
+  it.each(['submitted', 'resubmitted', 'accepted', 'verified', 'failed', 'withdrawn', 'superseded'])(
+    'retries the real stable moderated publication loop from %s without reviving or duplicating acceptance', status => {
+      const h = fixture(); try {
+        const evidence: Record<string, any> = {};
+        for (const channel of ['winget', 'chocolatey']) {
+          accept(h, channel);
+          evidence[channel] = events.readEvents(h.ledger).at(-1).payload.submission;
+        }
+        if (!['accepted', 'verified'].includes(status)) fs.writeFileSync(h.ledger, h.initial.map(e => JSON.stringify(e) + '\n').join(''));
+        for (const channel of ['winget', 'chocolatey']) {
+          if (status === 'resubmitted') {
+            h.transition(channel, 'channel_rejected', 'rejected');
+            h.transition(channel, 'channel_corrected', 'corrected');
+            h.transition(channel, 'channel_resubmitted', 'resubmitted');
+          } else if (['verified', 'failed', 'withdrawn', 'superseded'].includes(status)) {
+            h.transition(channel, status === 'verified' ? 'channel_verified' : status === 'failed' ? 'channel_failed' : status);
+          }
+        }
+        const workflow: any = yaml.load(fs.readFileSync(path.resolve(__dirname, '../../../.github/workflows/release-train.yml'), 'utf8'));
+        const body = Object.values(workflow.jobs).flatMap((j: any) => j.steps || []).find((s: any) => s.name === 'Fetch ledger, append chained events, and push') as any;
+        const code = body.run.replace(/\r\n/g, '\n').match(/node - <<'NODE'\n([\s\S]*?)\nNODE/)[1];
+        const validator = code.slice(code.indexOf('const readModeratedEvidence ='), code.indexOf("for (const channel of ['github', 'npm', 'pypi'])"));
+        const loop = code.slice(code.lastIndexOf("if (process.env.RELEASE_CHANNEL === 'stable')"));
+        const run = () => vm.runInNewContext(validator + loop, {
+          process: {env: {RELEASE_CHANNEL: 'stable'}}, crypto, version: source.version, tag: source.tag,
+          fs: {readFileSync: (f: string) => JSON.stringify(evidence[f.split('/')[1]])},
+          ledger: h.ledger, base: source, artifactIds: {scoop: ['windows']},
+          appendEvent: events.appendEvent, readEvents: events.readEvents, materializeReleaseState: events.materializeReleaseState,
+          timestampFor: (key: string) => events.monotonicLedgerTimestamp(events.readEvents(h.ledger), checkedAt, key),
+        });
+        const before = fs.readFileSync(h.ledger, 'utf8');
+        run();
+        const after = events.readEvents(h.ledger);
+        const expected = ['submitted', 'resubmitted'].includes(status) ? 'accepted' : status;
+        for (const channel of ['winget', 'chocolatey']) expect(events.materializeReleaseState(after).channels[channel].status).toBe(expected);
+        if (expected === status) expect(fs.readFileSync(h.ledger, 'utf8')).toBe(before);
+        else for (const event of after.slice(-2)) {
+          expect(event.type).toBe('channel_accepted'); expect(event.timestamp).toBe(future);
+          expect(event.payload).toMatchObject({artifactIds: ['windows'], submission: evidence[event.channel], remoteIdentity: evidence[event.channel].remoteIdentity, remoteDigest: evidence[event.channel].remoteDigest});
+          expect(event.idempotencyKey.split(':').at(-1)).toHaveLength(16);
+        }
+        const hashChain = fs.readFileSync(h.ledger, 'utf8'); run(); expect(fs.readFileSync(h.ledger, 'utf8')).toBe(hashChain);
+        if (status === 'accepted') {
+          for (const channel of ['winget', 'chocolatey']) evidence[channel] = h.initial.find(e => e.channel === channel).payload.submission;
+          run(); expect(fs.readFileSync(h.ledger, 'utf8')).toBe(hashChain);
+          for (const channel of ['winget', 'chocolatey']) expect(events.materializeReleaseState(events.readEvents(h.ledger)).channels[channel].status).toBe('accepted');
+        }
+      } finally { h.cleanup(); }
+    }
+  );
+  it.each([false, true])('executes scheduled acceptance and cleanup with previously verified npm failure=%s', failed => {
     const h = fixture(); try {
       const workflow: any = yaml.load(fs.readFileSync(path.resolve(__dirname, '../../../.github/workflows/release-canary.yml'), 'utf8'));
-      const body = workflow.jobs.record.steps.find((s: any) => s.name === 'Append hash-chained canary and verification events').run.match(/node - <<'NODE'\n([\s\S]*?)\nNODE/)[1];
+      const body = workflow.jobs.record.steps.find((s: any) => s.name === 'Append hash-chained canary and verification events').run.replace(/\r\n/g, '\n').match(/node - <<'NODE'\n([\s\S]*?)\nNODE/)[1];
       fs.mkdirSync(path.join(h.root, 'reports', 'current'), {recursive: true});
       for (const [channel, target] of EXPECTED_CANARY_TARGETS) fs.writeFileSync(path.join(h.root, 'reports', 'current', `${channel}-${target}.json`), JSON.stringify({...source, channel, target, checkedAt, status: 'passed', evidenceUrl: 'https://github.com/ntanwir10/GuardScan/actions/runs/123'}));
-      let original = fs.readFileSync(h.ledger, 'utf8');
-      const run = () => vm.runInNewContext(body, {process: {env: {TRAIN_VERSION: source.version, GITHUB_RUN_ID: '123', GITHUB_RUN_ATTEMPT: '1', GITHUB_REPOSITORY: 'ntanwir10/GuardScan', GITHUB_SERVER_URL: 'https://github.com'}}, require: (name: string) => {
+      let original = fs.readFileSync(h.ledger, 'utf8'), runId = '123';
+      const run = () => vm.runInNewContext(body, {process: {env: {TRAIN_VERSION: source.version, GITHUB_RUN_ID: runId, GITHUB_RUN_ATTEMPT: '1', GITHUB_REPOSITORY: 'ntanwir10/GuardScan', GITHUB_SERVER_URL: 'https://github.com'}}, require: (name: string) => {
         if (name === 'fs') return Object.fromEntries(['readdirSync', 'readFileSync', 'writeFileSync', 'mkdirSync'].map(method => [method, (file: string, ...args: any[]) => (fs as any)[method](path.resolve(h.root, file), ...args)]));
         if (name === 'child_process') return {execFileSync: (_c: string, args: string[]) => args[0] === 'show' ? original : source.commit};
         if (name.endsWith('/moderated-acceptance')) return {acceptModeratedChannel: (file: string, c: string, report: any) => require('../../scripts/release/moderated-acceptance').acceptModeratedChannel(path.resolve(h.root, file), c, report, h.execute)};
@@ -181,11 +231,38 @@ describe('scheduled moderated acceptance', () => {
         const report = JSON.parse(fs.readFileSync(file, 'utf8'));
         fs.writeFileSync(file, JSON.stringify({...report, status: 'passed'}));
       }
+      if (failed) {
+        runId = '124';
+        for (const name of fs.readdirSync(path.join(h.root, 'reports', 'current'))) {
+          const file = path.join(h.root, 'reports', 'current', name);
+          const report = JSON.parse(fs.readFileSync(file, 'utf8'));
+          fs.writeFileSync(file, JSON.stringify({...report, evidenceUrl: 'https://github.com/ntanwir10/GuardScan/actions/runs/124'}));
+        }
+        const file = path.join(h.root, 'reports', 'current', 'npm-npm.json');
+        const report = JSON.parse(fs.readFileSync(file, 'utf8'));
+        fs.writeFileSync(file, JSON.stringify({...report, status: 'failed'}));
+      }
       run();
       const completed = events.readEvents(output);
       for (const c of ['winget', 'chocolatey']) { expect(completed.filter((e: any) => e.channel === c).map((e: any) => e.type)).toEqual(['channel_submitted', 'canary_recorded', 'channel_accepted', 'channel_verified']); expect(events.materializeReleaseState(completed).channels[c].status).toBe('verified'); }
       expect(completed.filter((e: any) => e.type === 'canary_recorded').every((e: any) => e.payload.checkedAt === checkedAt)).toBe(true);
       original = fs.readFileSync(output, 'utf8'); const calls = h.calls.length; run(); expect(events.readEvents(output)).toHaveLength(completed.length); expect(h.calls).toHaveLength(calls);
+      expect(events.materializeReleaseState(completed).channels.npm.status).toBe(failed ? 'failed' : 'verified');
+      expect(completed.filter((e: any) => e.type === 'channel_failed')).toHaveLength(failed ? 1 : 0);
+      const branch = path.join(h.root, 'ledger-branch');
+      fs.mkdirSync(path.join(branch, 'events'), {recursive: true});
+      fs.copyFileSync(output, path.join(branch, 'events', source.tag + '.jsonl'));
+      const stable = {version: source.version, channel: 'stable'}, rc = {version: '1.2.4-rc.1', channel: 'rc'};
+      fs.writeFileSync(path.join(branch, 'active-versions.json'), JSON.stringify({trains: [stable, rc]}));
+      const cleanup = workflow.jobs.record.steps.find((s: any) => s.name === 'Append hash-chained canary and verification events').run.replace(/\r\n/g, '\n').matchAll(/node - <<'NODE'\n([\s\S]*?)\nNODE/g);
+      const cleanupBody = [...cleanup][1][1];
+      vm.runInNewContext(cleanupBody, {require: (name: string) => {
+        if (name === 'fs') return {existsSync: (f: string) => fs.existsSync(path.resolve(h.root, f)), readFileSync: (f: string) => fs.readFileSync(path.resolve(h.root, f)), writeFileSync: (f: string, v: string) => fs.writeFileSync(path.resolve(h.root, f), v)};
+        if (name.endsWith('/events')) return {...events, readEvents: (f: string) => events.readEvents(path.resolve(h.root, f))};
+        if (name.startsWith('./cli/')) return require(path.resolve(__dirname, '../../../', name));
+        return require(name);
+      }});
+      expect(JSON.parse(fs.readFileSync(path.join(branch, 'active-versions.json'), 'utf8')).trains).toEqual(failed ? [stable, rc] : [rc]);
     } finally { h.cleanup(); }
   });
 });

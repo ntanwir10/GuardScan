@@ -6,9 +6,9 @@ const MODERATED_CHANNELS = new Set(['winget', 'chocolatey']);
 
 function canaryChannelEventType(state, channel, passed, complete) {
   const status = state.channels?.[channel]?.status;
-  if (!status || TERMINAL_CHANNEL_STATUSES.has(status)) return null;
+  if (!status || ['failed', 'withdrawn', 'superseded'].includes(status)) return null;
   if (!passed) {
-    return ['planned', 'published', 'submitted', 'accepted', 'resubmitted'].includes(status)
+    return ['planned', 'published', 'submitted', 'accepted', 'resubmitted', 'verified'].includes(status)
       ? 'channel_failed'
       : null;
   }

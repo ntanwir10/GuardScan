@@ -687,7 +687,7 @@ jobs:
           const fs = require('fs');
           const cp = require('child_process');
           const path = require('path');
-          const {appendEvent, monotonicLedgerTimestamp, readEvents} = require('./cli/scripts/release/events');
+          const {appendEvent, materializeReleaseState, monotonicLedgerTimestamp, readEvents} = require('./cli/scripts/release/events');
           const {
             assertDocumentMatchesSource,
             releaseTrainChannels,
@@ -938,6 +938,8 @@ jobs:
                 corrected: 'channel_corrected',
                 resubmitted: 'channel_resubmitted',
               }[evidence.state] || 'channel_submitted';
+              const status = materializeReleaseState(readEvents(ledger)).channels[channel]?.status;
+              if (['accepted', 'verified', 'failed', 'withdrawn', 'superseded'].includes(status)) continue;
               const identityKey = crypto.createHash('sha256')
                 .update(evidence.remoteIdentity)
                 .digest('hex')
