@@ -17,7 +17,7 @@ import {EmbeddingChunker} from '../../src/core/embedding-chunker';
 import {EmbeddingIndexer} from '../../src/core/embedding-indexer';
 import {EmbeddingSearchEngine} from '../../src/core/embedding-search';
 import {FileBasedEmbeddingStore} from '../../src/core/embedding-store';
-import {EmbeddingProvider} from '../../src/core/embeddings';
+import {generateEmbeddingId, EmbeddingProvider} from '../../src/core/embeddings';
 import {RAGContextBuilder} from '../../src/core/rag-context';
 import {AIMessage, AIProvider, AIResponse, ProviderCapabilities} from '../../src/providers/base';
 
@@ -190,6 +190,40 @@ and user management backed by a database.
     expect(response.message.content).toContain('AuthService');
     expect(response.message.metadata?.relevantFiles).toContain('src/auth.ts');
     expect(response.stats.relevantSnippets).toBeGreaterThan(0);
+  });
+
+  it('rebuilds legacy absolute paths and reloads current embeddings incrementally', async () => {
+    await embeddingIndexer.indexCodebase({incremental: false, showProgress: false});
+    const legacy = JSON.parse(fs.readFileSync(store.getIndexPath(), 'utf8'));
+    legacy.version = '1.0.0';
+    legacy.embeddings = legacy.embeddings.map((embedding: any) => {
+      embedding.source = path.join(repository, embedding.source);
+      embedding.id = generateEmbeddingId(embedding.type, embedding.source, embedding.metadata.symbolName);
+      return embedding;
+    });
+    fs.writeFileSync(store.getIndexPath(), JSON.stringify(legacy));
+    const provider = new DeterministicEmbeddingProvider();
+    const reload = () => {
+      store = new FileBasedEmbeddingStore(legacy.repoId, stateRoot);
+      embeddingIndexer = new EmbeddingIndexer(indexer, new EmbeddingChunker(indexer, repository), provider, store, repository);
+    };
+    reload();
+    expect(await store.exists()).toBe(false);
+    expect(await store.loadEmbeddings()).toEqual([]);
+    const rebuilt = await embeddingIndexer.indexCodebase({incremental: false, showProgress: false});
+    expect(rebuilt.success).toBe(true);
+    const fresh = await store.loadEmbeddings();
+    expect(fresh).toHaveLength(rebuilt.stats.embeddingsGenerated);
+    expect(fresh.every(embedding => !path.isAbsolute(embedding.source))).toBe(true);
+    const results = await new EmbeddingSearchEngine(provider, store).search('authentication', {k: 100, minSimilarity: 0});
+    expect(results.results.length).toBeGreaterThan(0);
+    expect(results.results.every(result => !path.isAbsolute(result.embedding.source))).toBe(true);
+    reload();
+    expect(await store.exists()).toBe(true);
+    const incremental = await embeddingIndexer.indexCodebase({incremental: true, showProgress: false});
+    expect(incremental.success).toBe(true);
+    expect(incremental.stats.embeddingsGenerated).toBe(0);
+    expect(incremental.stats.chunksCached).toBe(fresh.length);
   });
 
   it('preserves unchanged embeddings and refreshes changed source incrementally', async () => {

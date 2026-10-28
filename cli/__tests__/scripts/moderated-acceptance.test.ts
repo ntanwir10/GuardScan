@@ -81,8 +81,9 @@ function fixture() {
   fs.writeFileSync(ledger, initial.map(e => JSON.stringify(e) + '\n').join(''));
   const transition = (channel: string, type: string, status?: string) => {
     const previous = events.readEvents(ledger);
-    const submission = {...initial.find(e => e.channel === channel).payload.submission, state: status};
-    const payload = status ? {...initial.find(e => e.channel === channel).payload, submission} : {};
+    const original = initial.find(e => e.channel === channel);
+    const submission = {...original?.payload.submission, state: status};
+    const payload = status ? {...original?.payload, submission} : {};
     if (status === 'rejected') { payload.reason = 'provider correction'; submission.reason = payload.reason; }
     events.appendEvent(ledger, {...source, type, channel, timestamp: future,
       idempotencyKey: `${type}:${channel}:extra`, payload});
@@ -100,8 +101,84 @@ function fixture() {
 function accept(h: ReturnType<typeof fixture>, channel: string, extra = {}) {
   return require('../../scripts/release/moderated-acceptance').acceptModeratedChannel(h.ledger, channel, {passed: true, complete: true, checkedAt, ...extra}, h.execute);
 }
+function runModeratedWriter(h: ReturnType<typeof fixture>, evidence: Record<string, any>) {
+  const workflow: any = yaml.load(fs.readFileSync(path.resolve(__dirname, '../../../.github/workflows/release-train.yml'), 'utf8'));
+  const body = Object.values(workflow.jobs).flatMap((j: any) => j.steps || []).find((s: any) => s.name === 'Fetch ledger, append chained events, and push') as any;
+  const code = body.run.replace(/\r\n/g, '\n').match(/node - <<'NODE'\n([\s\S]*?)\nNODE/)[1];
+  const validator = code.slice(code.indexOf('const readModeratedEvidence ='), code.indexOf("for (const channel of ['github', 'npm', 'pypi'])"));
+  const loop = code.slice(code.lastIndexOf("if (process.env.RELEASE_CHANNEL === 'stable')"));
+  return vm.runInNewContext(validator + loop, {
+    process: {env: {RELEASE_CHANNEL: 'stable'}}, crypto, version: source.version, tag: source.tag,
+    fs: {readFileSync: (f: string) => JSON.stringify(evidence[f.split('/')[1]])},
+    ledger: h.ledger, base: source, artifactIds: {scoop: ['windows']},
+    appendEvent: events.appendEvent, readEvents: events.readEvents, materializeReleaseState: events.materializeReleaseState,
+    timestampFor: (key: string) => events.monotonicLedgerTimestamp(events.readEvents(h.ledger), checkedAt, key),
+  });
+}
 describe('scheduled moderated acceptance', () => {
-  it('rolls back resubmitted moderated packages through the CLI idempotently', async () => {
+  it.each(['submitted', 'resubmitted'])('keeps fresh pending receipts byte identical from %s and rejects changed identity or bytes', status => {
+    const h = fixture(); try {
+      if (status === 'resubmitted') for (const channel of ['winget', 'chocolatey']) {
+        h.transition(channel, 'channel_rejected', 'rejected');
+        h.transition(channel, 'channel_corrected', 'corrected');
+        h.transition(channel, 'channel_resubmitted', 'resubmitted');
+      }
+      const originalEvents = events.readEvents(h.ledger), rebound: any[] = [];
+      for (const event of originalEvents) {
+        if (event.type === 'channel_submitted') event.idempotencyKey = `channel_submitted:${event.channel}:${source.tag}:${event.payload.remoteDigest}:${sha256(event.payload.remoteIdentity).slice(0, 16)}`;
+        rebound.push(events.createEvent(event, rebound.at(-1)));
+      }
+      fs.writeFileSync(h.ledger, rebound.map(e => JSON.stringify(e) + '\n').join(''));
+      const evidence: Record<string, any> = Object.fromEntries(['winget', 'chocolatey'].map(channel => [channel, {
+        ...h.initial.find(e => e.channel === channel).payload.submission, state: 'pending-ledger', checkedAt,
+        provider: {...h.initial.find(e => e.channel === channel).payload.submission.provider, pendingStateQuery: 'fresh authenticated provider query'},
+      }]));
+      const before = fs.readFileSync(h.ledger, 'utf8');
+      runModeratedWriter(h, evidence);
+      expect(fs.readFileSync(h.ledger, 'utf8')).toBe(before);
+      expect(events.materializeReleaseState(events.readEvents(h.ledger)).channels.winget.status).toBe(status);
+      const original = evidence.winget;
+      for (const field of ['identity', 'digest', 'artifacts']) {
+        evidence.winget = JSON.parse(JSON.stringify(original));
+        if (field === 'identity') {
+          evidence.winget.provider.commit = 'f'.repeat(40);
+          evidence.winget.remoteIdentity = evidence.winget.remoteIdentity.replace('d'.repeat(40), 'f'.repeat(40));
+        } else if (field === 'digest') {
+          for (const name of Object.keys(evidence.winget.files)) evidence.winget.files[name] = 'f'.repeat(64);
+          evidence.winget.remoteDigest = sha256(Object.keys(evidence.winget.files).sort().map(name => `${name}\0${evidence.winget.files[name]}\n`).join(''));
+        } else {
+          const changed = events.readEvents(h.ledger);
+          changed.filter((e: any) => e.channel === 'winget').at(-1).payload.artifactIds = ['other'];
+          const chained: any[] = [];
+          for (const event of changed) chained.push(events.createEvent(event, chained.at(-1)));
+          fs.writeFileSync(h.ledger, chained.map(e => JSON.stringify(e) + '\n').join(''));
+        }
+        const unchanged = fs.readFileSync(h.ledger, 'utf8');
+        expect(() => runModeratedWriter(h, evidence)).toThrow();
+        expect(fs.readFileSync(h.ledger, 'utf8')).toBe(unchanged);
+      }
+    } finally { h.cleanup(); }
+  });
+  it('records corrected resubmissions and keeps subsequent pending receipts unchanged', () => {
+    const h = fixture(); try {
+      const evidence: Record<string, any> = {};
+      for (const channel of ['winget', 'chocolatey']) {
+        h.transition(channel, 'channel_rejected', 'rejected');
+        h.transition(channel, 'channel_corrected', 'corrected');
+        evidence[channel] = {...h.initial.find(e => e.channel === channel).payload.submission, state: 'resubmitted', checkedAt};
+      }
+      runModeratedWriter(h, evidence);
+      const recorded = events.readEvents(h.ledger);
+      expect(recorded.slice(-2).map((e: any) => e.type)).toEqual(['channel_resubmitted', 'channel_resubmitted']);
+      expect(recorded.slice(-2).every((e: any) => e.timestamp === future)).toBe(true);
+      for (const channel of ['winget', 'chocolatey']) evidence[channel].state = 'pending-ledger';
+      const bytes = fs.readFileSync(h.ledger, 'utf8');
+      runModeratedWriter(h, evidence);
+      expect(fs.readFileSync(h.ledger, 'utf8')).toBe(bytes);
+      expect(events.materializeReleaseState(events.readEvents(h.ledger)).channels.winget.status).toBe('resubmitted');
+    } finally { h.cleanup(); }
+  });
+  it.each(['resubmitted', 'failed'])('rolls back %s moderated packages through the CLI idempotently', async status => {
     const h = fixture();
     const stdout = jest.spyOn(process.stdout, 'write').mockImplementation(() => true);
     try {
@@ -109,6 +186,21 @@ describe('scheduled moderated acceptance', () => {
         h.transition(channel, 'channel_rejected', 'rejected');
         h.transition(channel, 'channel_corrected', 'corrected');
         h.transition(channel, 'channel_resubmitted', 'resubmitted');
+        if (status === 'failed') {
+          accept(h, channel);
+          h.transition(channel, 'channel_verified');
+          h.transition(channel, 'channel_failed');
+        }
+      }
+      if (status === 'failed') for (const channel of ['npm', 'pypi']) {
+        const publication = require('../../scripts/release/publication-evidence').createPublicationEvidence({
+          ...source, channel, remoteIdentity: `${channel}:guardscan@${source.version}`, files: {'package.tgz': 'b'.repeat(64)},
+        });
+        events.appendEvent(h.ledger, {...source, channel, type: 'channel_published', timestamp: future,
+          idempotencyKey: `published:${channel}`, payload: {artifactIds: ['windows'], publication,
+            remoteIdentity: publication.remoteIdentity, remoteDigest: publication.aggregateSha256}});
+        h.transition(channel, 'channel_verified');
+        h.transition(channel, 'channel_failed');
       }
       fs.writeFileSync(path.join(h.root, 'package.json'), JSON.stringify({
         name: 'guardscan', version: source.version, engines: {node: '>=22.0.0'},
@@ -126,13 +218,13 @@ describe('scheduled moderated acceptance', () => {
       await main(args);
       const first = events.readEvents(h.ledger);
       expect(first.filter((e: any) => e.type === 'action_required')).toEqual(
-        ['chocolatey', 'winget'].map(channel => expect.objectContaining({
+        (status === 'failed' ? ['chocolatey', 'npm', 'pypi', 'winget'] : ['chocolatey', 'winget']).map(channel => expect.objectContaining({
           channel, payload: expect.objectContaining({authority: `${channel}-maintainer`,
-            action: channel === 'winget' ? 'submit-corrective-manifest' : 'unlist-or-supersede'}),
+            action: {winget: 'submit-corrective-manifest', chocolatey: 'unlist-or-supersede', npm: 'deprecate-and-forward-fix', pypi: 'yank-and-forward-fix'}[channel]}),
         })));
       expect(events.materializeReleaseState(first)).toMatchObject({
         recovery: {status: 'started', mode: 'known-good'},
-        channels: {winget: {status: 'resubmitted'}, chocolatey: {status: 'resubmitted'}},
+        channels: {winget: {status}, chocolatey: {status}},
       });
       const bytes = fs.readFileSync(h.ledger, 'utf8');
       await main(args);
@@ -207,18 +299,7 @@ describe('scheduled moderated acceptance', () => {
             h.transition(channel, status === 'verified' ? 'channel_verified' : status === 'failed' ? 'channel_failed' : status);
           }
         }
-        const workflow: any = yaml.load(fs.readFileSync(path.resolve(__dirname, '../../../.github/workflows/release-train.yml'), 'utf8'));
-        const body = Object.values(workflow.jobs).flatMap((j: any) => j.steps || []).find((s: any) => s.name === 'Fetch ledger, append chained events, and push') as any;
-        const code = body.run.replace(/\r\n/g, '\n').match(/node - <<'NODE'\n([\s\S]*?)\nNODE/)[1];
-        const validator = code.slice(code.indexOf('const readModeratedEvidence ='), code.indexOf("for (const channel of ['github', 'npm', 'pypi'])"));
-        const loop = code.slice(code.lastIndexOf("if (process.env.RELEASE_CHANNEL === 'stable')"));
-        const run = () => vm.runInNewContext(validator + loop, {
-          process: {env: {RELEASE_CHANNEL: 'stable'}}, crypto, version: source.version, tag: source.tag,
-          fs: {readFileSync: (f: string) => JSON.stringify(evidence[f.split('/')[1]])},
-          ledger: h.ledger, base: source, artifactIds: {scoop: ['windows']},
-          appendEvent: events.appendEvent, readEvents: events.readEvents, materializeReleaseState: events.materializeReleaseState,
-          timestampFor: (key: string) => events.monotonicLedgerTimestamp(events.readEvents(h.ledger), checkedAt, key),
-        });
+        const run = () => runModeratedWriter(h, evidence);
         const before = fs.readFileSync(h.ledger, 'utf8');
         run();
         const after = events.readEvents(h.ledger);

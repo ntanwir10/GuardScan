@@ -18,6 +18,9 @@ import {
   EmbeddingProvider,
 } from './embeddings';
 
+// Relative source paths participate in embedding IDs; absolute-path indexes must rebuild.
+const EMBEDDING_INDEX_VERSION = '2.0.0';
+
 export interface StoreStats {
   totalSize: number;
   embeddingCount: number;
@@ -76,7 +79,7 @@ export class FileBasedEmbeddingStore implements EmbeddingStore {
       const providerName = embeddingProvider?.getName();
       const dimensions = embeddings[0]?.embedding.length || 0;
       existingIndex = {
-        version: '1.0.0',
+        version: EMBEDDING_INDEX_VERSION,
         repoId: this.repoId,
         generatedAt: new Date(),
         totalEmbeddings: 0,
@@ -223,7 +226,7 @@ export class FileBasedEmbeddingStore implements EmbeddingStore {
    * Check if embeddings exist
    */
   async exists(): Promise<boolean> {
-    return this.persistent ? fs.existsSync(this.indexPath) : this.memoryIndex !== null;
+    return (await this.loadIndex()) !== null;
   }
 
   /**
@@ -320,7 +323,9 @@ export class FileBasedEmbeddingStore implements EmbeddingStore {
    * Load index from disk (public method for compatibility checking)
    */
   async loadIndex(): Promise<EmbeddingIndex | null> {
-    if (!this.persistent) {return this.memoryIndex;}
+    if (!this.persistent) {
+      return this.memoryIndex?.version === EMBEDDING_INDEX_VERSION ? this.memoryIndex : null;
+    }
     try {
       if (!fs.existsSync(this.indexPath)) {
         return null;
@@ -328,6 +333,7 @@ export class FileBasedEmbeddingStore implements EmbeddingStore {
 
       const content = await fs.promises.readFile(this.indexPath, 'utf-8');
       const index: EmbeddingIndex = JSON.parse(content);
+      if (index.version !== EMBEDDING_INDEX_VERSION) {return null;}
 
       // Convert date strings back to Date objects
       index.generatedAt = new Date(index.generatedAt);

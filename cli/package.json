@@ -118,7 +118,7 @@
   },
   "overrides": {
     "brace-expansion@<1.1.21": "1.1.21",
-    "qs": "6.16.0",
+    "qs": "6.16.1",
     "@istanbuljs/load-nyc-config@1.1.0": {
       "js-yaml": "4.3.2"
     }

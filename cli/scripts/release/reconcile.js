@@ -87,7 +87,8 @@ function planRollback(state, knownGoodVersion, knownGoodCommit) {
   const actions = [];
   for (const [channel, channelState] of Object.entries(state.channels || {})) {
     if (!['published', 'submitted', 'resubmitted', 'accepted', 'verified'].includes(channelState.status)
-        && !(channelState.status === 'failed' && repositoryOwned.has(channel))) continue;
+        && !(channelState.status === 'failed' && (repositoryOwned.has(channel)
+          || (externalAuthority[channel] && (channelState.publication || channelState.submission))))) continue;
     const action = {
       channel,
       currentStatus: channelState.status,

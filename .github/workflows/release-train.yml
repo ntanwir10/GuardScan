@@ -938,8 +938,18 @@ jobs:
                 corrected: 'channel_corrected',
                 resubmitted: 'channel_resubmitted',
               }[evidence.state] || 'channel_submitted';
-              const status = materializeReleaseState(readEvents(ledger)).channels[channel]?.status;
+              const current = materializeReleaseState(readEvents(ledger)).channels[channel];
+              const status = current?.status;
               if (['accepted', 'verified', 'failed', 'withdrawn', 'superseded'].includes(status)) continue;
+              if (eventType === 'channel_submitted' && ['submitted', 'resubmitted'].includes(status)) {
+                if (current.remoteIdentity !== evidence.remoteIdentity
+                    || current.remoteDigest !== evidence.remoteDigest
+                    || current.submission?.packageIdentity !== evidence.packageIdentity
+                    || JSON.stringify(current.artifactIds) !== JSON.stringify([...artifactIds.scoop].sort())) {
+                  throw new Error(`${channel} pending provider evidence conflicts with the recorded submission`);
+                }
+                continue;
+              }
               const identityKey = crypto.createHash('sha256')
                 .update(evidence.remoteIdentity)
                 .digest('hex')
