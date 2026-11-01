@@ -537,7 +537,17 @@ export class FileBasedEmbeddingStore implements EmbeddingStore {
     if (!index.embeddings || !Array.isArray(index.embeddings)) {
       throw new Error('Invalid embedding index format');
     }
+    if (index.version !== EMBEDDING_INDEX_VERSION) {
+      throw new Error('Unsupported embedding index version; rebuild embeddings instead');
+    }
+
+    index.generatedAt = new Date(index.generatedAt);
+    index.embeddings.forEach(emb => {
+      emb.metadata.lastModified = new Date(emb.metadata.lastModified);
+    });
 
     await this.saveIndex(index);
+    this.cache.clear();
+    this.cacheLoaded = false;
   }
 }
