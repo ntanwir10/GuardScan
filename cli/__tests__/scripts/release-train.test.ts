@@ -167,7 +167,7 @@ describe('release-train workflow readiness boundary', () => {
     const candidateApp = workflow.indexOf('id: candidate-app');
     const candidatePush = workflow.indexOf('name: Commit and push validated candidate source');
     const promoteApp = workflow.indexOf('id: promote-app');
-    const promoteMerge = workflow.indexOf('gh pr merge "$REQUEST_RELEASE_PR"');
+    const promoteMerge = workflow.indexOf('gh pr merge "$RELEASE_PR"');
     expect(checkout).toBeGreaterThan(-1);
     expect(candidate).toBeGreaterThan(checkout);
     expect(preflight).toBeGreaterThan(candidate);

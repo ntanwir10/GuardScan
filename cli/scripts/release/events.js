@@ -369,7 +369,7 @@ function validateIncidentEvent(event) {
 function validateCanaryEvent(event) {
   if (event.type !== 'canary_recorded') return;
   if (event.payload.checkedAt !== undefined) {
-    assertCanonicalTimestamp(event.payload.checkedAt, 'canary check time');
+    assertCanonicalTimestamp(event.payload.checkedAt, 'canary checkedAt');
   }
   const keys = Object.keys(event.payload).sort(compareUtf8);
   const expected = ['evidenceUrl', 'status'];

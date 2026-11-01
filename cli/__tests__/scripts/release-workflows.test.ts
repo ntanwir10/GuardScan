@@ -168,6 +168,7 @@ describe('zero-touch release workflow contracts', () => {
             ...process.env,
             PATH: `${bin}${path.delimiter}${process.env.PATH}`,
             GITHUB_REPOSITORY: 'owner/repo',
+            RELEASE_INPUT_TAG: 'v1.2.3',
             GH_CALL_LOG: log,
             RUNNER_TEMP: runnerTemp,
             GH_ASSET_JSON: JSON.stringify({assets}),
@@ -589,7 +590,8 @@ describe('zero-touch release workflow contracts', () => {
     expect(train).toContain('EXPECTED_BASE="$(node -p \'require("./promotion-decision.json").stable.sourcePrBase\')"');
     expect(train).toContain('CURRENT_BASE="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$RELEASE_PR" --jq .base.sha)"');
     expect(train).toContain('test "$CURRENT_BASE" = "$EXPECTED_BASE"');
-    expect(train).toContain('--squash --match-head-commit "${{ steps.source.outputs.head_sha }}"');
+    expect(train).toContain('EXPECTED_HEAD: ${{ steps.source.outputs.head_sha }}');
+    expect(train).toContain('--squash --match-head-commit "$EXPECTED_HEAD"');
     expect(train).not.toContain('--auto --squash --match-head-commit');
     expect(train).toContain('const canonicalEntries = entries => entries.sort(([left], [right])');
     expect(train).toContain('npm: Object.fromEntries(canonicalEntries(');
@@ -877,7 +879,7 @@ describe('zero-touch release workflow contracts', () => {
     const canary = workflowSource('release-canary.yml');
     expect(canary).toContain('invalidCanaryReport: true');
     expect(canary).toContain('artifact.startsWith(`canary-${candidate}-`)');
-    expect(canary).toContain('...invalidReports.filter(report => report.version === version)');
+    expect(canary).toContain('recordCanary({ledgerFile: ledger');
     expect(canary).not.toContain('localeCompare');
   });
 
@@ -924,7 +926,7 @@ describe('zero-touch release workflow contracts', () => {
     const canary = workflowSource('release-canary.yml');
     const publish = workflowSource('release-publish.yml');
     expect(canary).toContain('$installedVersion = (& guardscan --version | Out-String).Trim()');
-    expect(canary).toContain('$installedVersion -ne \'${{ matrix.train.version }}\'');
+    expect(canary.match(/\$reportedVersion -cne '\$\{\{ matrix.train.version \}\}'/g)).toHaveLength(2);
     expect(publish.match(/\$installedVersion -ne \(\$env:RELEASE_INPUT_TAG\)\.TrimStart\('v'\)/g))
       .toHaveLength(2);
     expect(publish).toContain('WinGet is unavailable on the selected Windows runner');
@@ -975,12 +977,12 @@ describe('zero-touch release workflow contracts', () => {
     const canary = workflowSource('release-canary.yml');
     const train = workflowSource('release-train.yml');
 
-    expect(build).toContain('--prototype-metadata "../standalone/standalone-prototype.json"');
-    expect(publish).toContain('remote == local');
-    expect(publish).toContain('PyPI has unexpected files for this version');
-    expect(publish).toContain('PyPI returned unexpected files for this version');
-    expect(publish).toContain('PyPI returned a conflicting wheel digest');
-    expect(publish).toContain('complete tested wheel set');
+    expect(build).toContain('--prototype-metadata standalone/standalone-prototype.json');
+    expect(train).toContain('remote == local');
+    expect(train).toContain('PyPI has unexpected files for this version');
+    expect(train).toContain('PyPI returned unexpected files for this version');
+    expect(train).toContain('PyPI returned a conflicting wheel digest');
+    expect(train).toContain('complete tested wheel set');
     expect(publish).toContain('--expected-dist-tag "$DIST_TAG"');
     expect(publish).toContain("steps.preflight.outputs.dist-tag-repair-required == 'true'");
     expect(publish).toContain('for ATTEMPT in $(seq 1 60)');
@@ -1023,6 +1025,9 @@ describe('zero-touch release workflow contracts', () => {
     expect(canary).toContain('monotonicLedgerTimestamp(readEvents(ledger), report.checkedAt, `canary:${suffix}`)');
     expect(canary).toContain('checkedAt: report.checkedAt');
     expect(train).toContain('Refuse a denied promotion after persistence');
+    expect(train.indexOf('Persist the machine promotion decision before applying its result'))
+      .toBeLessThan(train.indexOf('Refuse a denied promotion after persistence'));
+    expect(train).toContain("inputs.action == 'promote' && steps.promotion.outputs.status == '2'");
     expect(train).toContain('DIFF_STATUS=$?');
     expect(train).not.toContain('git commit -m "release ledger: ${RELEASE_TAG}" || exit 0');
     expect(canary).toContain('test "$(guardscan --version | tr -d \'\\r\')" = "$VERSION"');
