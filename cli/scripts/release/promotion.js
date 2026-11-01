@@ -26,29 +26,35 @@ function stableVersion(rcVersion) {
   return `${parsed.major}.${parsed.minor}.${parsed.patch}`;
 }
 
-function summarizeCanaries(samples, publishedAt, eligibleAt, evaluatedAt, minimumSamples) {
-  const normalized = [...samples].sort((a, b) => a.checkedAt.localeCompare(b.checkedAt));
-  for (const sample of normalized) canonicalTimestamp(sample.checkedAt, 'canary checkedAt');
+function summarizeCanaries(samples, publicationTimestamp, eligibleAt, evaluatedAt, minimumSamples) {
+  const publishedAt = canonicalTimestamp(publicationTimestamp, 'RC publishedAt');
+  const normalized = [...samples].sort((a, b) => compareUtf8(a.checkedAt, b.checkedAt));
+  const checked = normalized.map(sample => ({
+    sample,
+    date: canonicalTimestamp(sample.checkedAt, 'canary checkedAt'),
+  }));
   const failures = normalized.filter(sample => sample.status !== 'passed');
-  const latest = normalized.at(-1);
-  const first = normalized[0];
+  const first = checked[0];
+  const latest = checked.at(-1);
+  const soakBuckets = new Set(checked.flatMap(({date}) => {
+    const offset = date.getTime() - publishedAt.getTime();
+    if (offset < 0 || offset > SOAK_MILLISECONDS) return [];
+    return [Math.max(0, Math.ceil(offset / CANARY_INTERVAL_MILLISECONDS) - 1)];
+  }));
+  const latestAge = latest ? evaluatedAt.getTime() - latest.date.getTime() : undefined;
   return {
     sampleCount: normalized.length,
     passed: failures.length === 0 && normalized.length >= minimumSamples,
-    firstCheckedAt: first?.checkedAt,
-    lastCheckedAt: latest?.checkedAt,
+    firstCheckedAt: first?.sample.checkedAt,
+    lastCheckedAt: latest?.sample.checkedAt,
     failures: failures.length,
-    coversPublication: first ? first.checkedAt >= publishedAt : false,
-    startsNearPublication: first
-      ? new Date(first.checkedAt).getTime() - new Date(publishedAt).getTime()
-        <= MAX_CANARY_AGE_MILLISECONDS
-      : false,
-    coversSoakWindow: latest
-      ? new Date(latest.checkedAt).getTime() >= eligibleAt.getTime()
-      : false,
-    fresh: latest
-      ? evaluatedAt.getTime() - new Date(latest.checkedAt).getTime() <= MAX_CANARY_AGE_MILLISECONDS
-      : false,
+    coversPublication: first ? first.date >= publishedAt : false,
+    startsNearPublication: first ? first.date.getTime() - publishedAt.getTime() <= MAX_CANARY_AGE_MILLISECONDS : false,
+    coversSoakWindow: latest ? latest.date.getTime() >= eligibleAt.getTime() : false,
+    coversSoak: soakBuckets.size === SOAK_MILLISECONDS / CANARY_INTERVAL_MILLISECONDS,
+    fresh: latestAge !== undefined
+      && latestAge >= 0
+      && latestAge <= MAX_CANARY_AGE_MILLISECONDS,
   };
 }
 
@@ -100,6 +106,7 @@ function createPromotionDecision(input) {
       if (summary.sampleCount < minimumSamples) reasons.push(`canary_samples_insufficient:${channel}`);
       if (!summary.coversPublication) reasons.push(`canary_predates_publication:${channel}`);
       if (!summary.startsNearPublication) reasons.push(`canary_start_late:${channel}`);
+      if (!summary.coversSoak) reasons.push(`canary_soak_coverage_incomplete:${channel}`);
       if (!summary.coversSoakWindow) reasons.push(`canary_soak_incomplete:${channel}`);
       if (!summary.fresh) reasons.push(`canary_stale:${channel}`);
     }

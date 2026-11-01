@@ -610,13 +610,12 @@ jobs:
           git show "origin/release-ledger:events/v$RELEASE_VERSION.jsonl" > release-events.jsonl
           RC_TAG="v$RELEASE_VERSION"
           git fetch origin "refs/tags/$RC_TAG:refs/tags/$RC_TAG"
-          git switch --detach "$RC_TAG"
-          npm --prefix cli ci
+          git worktree add --detach rc-source "$RC_TAG"
       - name: Recover original approval for an already tagged stable release
         if: inputs.action == 'promote'
         id: recovery
         env:
-          GH_TOKEN: ${{ steps.app.outputs.token }}
+          GH_TOKEN: ${{ github.token }}
           SOURCE_MERGE_SHA: ${{ steps.source.outputs.merge_sha }}
         run: |
           CURRENT_HEAD="$(gh pr view "$RELEASE_PR" \
@@ -626,9 +625,9 @@ jobs:
           const {readEvents} = require('./cli/scripts/release/events');
           const {recoverPromotionApproval} = require('./cli/scripts/release/promotion-recovery');
           const recovered = recoverPromotionApproval({
-            repository: process.cwd(),
+            repository: require('path').resolve('rc-source'),
             events: readEvents('release-events.jsonl'),
-            candidate: JSON.parse(fs.readFileSync('.release-candidate.json', 'utf8')),
+            candidate: JSON.parse(fs.readFileSync('rc-source/.release-candidate.json', 'utf8')),
             sourcePr: Number(process.env.RELEASE_PR),
             currentHead: process.env.CURRENT_HEAD,
             mergeCommit: process.env.SOURCE_MERGE_SHA,
@@ -652,7 +651,6 @@ jobs:
           git show "origin/release-ledger:events/v$REQUEST_VERSION.jsonl" > release-events.jsonl
           RC_TAG="v$REQUEST_VERSION"
           git -c "http.extraheader=AUTHORIZATION: bearer $GH_TOKEN" fetch origin "refs/tags/$RC_TAG:refs/tags/$RC_TAG"
-          git worktree add --detach rc-source "$RC_TAG"
           if [ "$PR_STATE" = MERGED ]; then
             node - <<'NODE'
           const crypto = require('crypto');
@@ -777,6 +775,8 @@ jobs:
           PR_STATE: ${{ steps.source.outputs.pr_state }}
           RECORDED_MERGE_SHA: ${{ steps.source.outputs.merge_sha }}
           EXPECTED_HEAD: ${{ steps.source.outputs.head_sha }}
+          SOURCE_HEAD: ${{ steps.source.outputs.head_sha }}
+          SOURCE_MERGE_SHA: ${{ steps.source.outputs.merge_sha }}
         run: |
           STABLE_VERSION="$(node -p 'require("./promotion-decision.json").stable.version')"
           STATE="$(gh pr view "$RELEASE_PR" --repo "${GITHUB_REPOSITORY}" --json state --jq .state)"
@@ -791,7 +791,7 @@ jobs:
             fi
             gh pr merge "$RELEASE_PR" \
               --repo "${GITHUB_REPOSITORY}" \
-              --squash --match-head-commit "${{ steps.source.outputs.head_sha }}"
+              --squash --match-head-commit "$EXPECTED_HEAD"
           elif [ "$STATE" != MERGED ]; then
             echo 'Release PR was closed without merging.' >&2
             exit 1
@@ -980,7 +980,7 @@ jobs:
             --sidecar-file "checkpoint-assets/$SIDECAR" \
             --extract-dir rehydrated
       - uses: sigstore/cosign-installer@d58896d6a1865668819e1d91763c7751a165e159 # v3.9.2
-        if: steps.remote.outputs.mode == 'public' || steps.remote.outputs.mode == 'expanded'
+        if: steps.remote.outputs.mode != 'build'
       - name: Download and verify complete expanded or published asset inventory
         if: steps.remote.outputs.mode == 'public' || steps.remote.outputs.mode == 'expanded'
         env:
@@ -1008,17 +1008,6 @@ jobs:
               shasum -a 256 --check SHA256SUMS
             fi
           )
-          RELEASE_BUILD_WORKFLOW_SHA="$(node -p 'require("./rehydrated/payload/release-build-provenance.json").sha')"
-          test "$(node -p 'require("./rehydrated/payload/release-build-provenance.json").workflow')" = .github/workflows/release-build.yml
-          test "$(node -p 'require("./rehydrated/payload/release-build-provenance.json").ref')" = refs/heads/main
-          export RELEASE_BUILD_WORKFLOW_SHA
-          cosign verify-blob \
-            --bundle rehydrated/payload/SHA256SUMS.sigstore.json \
-            --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release-build.yml@refs/heads/main" \
-            --certificate-github-workflow-ref "refs/heads/main" \
-            --certificate-github-workflow-sha "$RELEASE_BUILD_WORKFLOW_SHA" \
-            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
-            rehydrated/payload/SHA256SUMS
           node - <<'NODE'
           const fs = require('fs');
           const path = require('path');
@@ -1042,6 +1031,12 @@ jobs:
             --schema-root "$GITHUB_WORKSPACE/cli" \
             --tag "$RELEASE_TAG" --commit "$RELEASE_REF" \
             --manifest rehydrated/payload/release-manifest.json
+      - name: Authenticate original producer before recovered payload reuse
+        if: steps.remote.outputs.mode != 'build'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+        run: node cli/scripts/release/authenticate-payload.js rehydrated/payload "$RELEASE_TAG" release-state.json
       - name: Restore and verify the exact npm handoff
         if: steps.remote.outputs.mode != 'build'
         env:
@@ -1164,6 +1159,12 @@ jobs:
         with:
           name: release-npm-${{ needs.prepare.outputs.tag }}
           path: checkpoint-npm
+      - uses: sigstore/cosign-installer@d58896d6a1865668819e1d91763c7751a165e159 # v3.9.2
+      - name: Authenticate original producer before checkpoint persistence
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+        run: node cli/scripts/release/authenticate-payload.js checkpoint-root/payload "$RELEASE_TAG"
       - name: Create and locally verify deterministic checkpoint
         env:
           RELEASE_REF: ${{ needs.prepare.outputs.ref }}
@@ -1203,6 +1204,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
         run: |
+          node cli/scripts/release/canonical-payload.js notes checkpoint-root/payload "$RELEASE_TAG" > canonical-release-notes.txt
           if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
             --json isDraft,assets > release-state.json 2>/dev/null; then
             node - <<'NODE'
@@ -1216,8 +1218,9 @@ jobs:
             if [ "${{ needs.prepare.outputs.channel }}" = rc ]; then PRERELEASE+=(--prerelease); fi
             gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
               --verify-tag --draft "${PRERELEASE[@]}" \
-              --title "GuardScan $RELEASE_TAG" --generate-notes
+              --title "GuardScan $RELEASE_TAG" --notes-file canonical-release-notes.txt --generate-notes
           fi
+          gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --notes-file canonical-release-notes.txt
           gh release upload "$RELEASE_TAG" checkpoint-assets/* --repo "$GITHUB_REPOSITORY"
       - name: Redownload and verify persisted checkpoint bytes
         env:

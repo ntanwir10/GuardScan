@@ -29,7 +29,7 @@ describe('complete release canary coverage', () => {
     const workflow: any = yaml.load(fs.readFileSync(path.resolve(__dirname, '../../../.github/workflows/release-canary.yml'), 'utf8'));
     const expected = [
       ...workflow.jobs['package-managers'].strategy.matrix.manager.map((manager: string) => [manager.split('-')[0], manager]),
-      ...workflow.jobs['native-and-pypi'].strategy.matrix.target.flatMap((target: any) => ['github', 'pypi'].map(channel => [channel, target.id])),
+      ...workflow.jobs['native-and-pypi'].strategy.matrix.target.flatMap((target: any) => ['github', 'pypi'].map(channel => [channel, channel === 'pypi' ? target.id.replace(/-glibc$/, '') : target.id])),
       ...workflow.jobs.adapters.strategy.matrix.adapter.map((adapter: string) => [adapter.startsWith('homebrew-') ? 'homebrew' : 'scoop', adapter]),
       ...['winget', 'chocolatey'].map(channel => [channel, 'windows-x64']),
     ];
@@ -53,7 +53,7 @@ describe('complete release canary coverage', () => {
         payload: index === 0
           ? {channels: ['github']}
           : {status: 'passed', checkedAt: timestamp, target: 'linux-x64-glibc',
-            evidenceUrl, note: 'a'.repeat(4096)},
+            evidenceUrl: `${evidenceUrl}/${'a'.repeat(4096)}`},
       }, events.at(-1)));
       fs.writeFileSync(file, events.map(event => JSON.stringify(event) + '\n').join(''));
       expect(fs.statSync(file).size).toBeGreaterThan(1024 * 1024);

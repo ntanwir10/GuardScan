@@ -105,6 +105,45 @@ describe('release canary public seams', () => {
     );
   });
 
+  test('malformed workflow report persists an incident before the job reports failure', () => {
+    const yaml = require('js-yaml');
+    const vm = require('vm');
+    const workflow = yaml.load(fs.readFileSync(path.resolve(__dirname, '../../../.github/workflows/release-canary.yml'), 'utf8'));
+    const step = workflow.jobs.record.steps.find((item: any) => item.name === 'Append hash-chained canary and verification events');
+    const script = step.run.match(/node - <<'NODE'\n([\s\S]*?)\nNODE/)[1];
+    withLedger(seed => {
+      const root = path.dirname(seed);
+      const reportDirectory = path.join(root, 'reports', `canary-${VERSION}-native-linux-x64-glibc`);
+      fs.mkdirSync(reportDirectory, {recursive: true});
+      fs.writeFileSync(path.join(reportDirectory, 'report.json'), '{bad');
+      const initial = fs.readFileSync(seed, 'utf8');
+      const localFs = {...fs,
+        readdirSync: (file: string, options: any) => fs.readdirSync(path.resolve(root, file), options),
+        readFileSync: (file: string, options: any) => fs.readFileSync(path.resolve(root, file), options),
+        mkdirSync: (file: string, options: any) => fs.mkdirSync(path.resolve(root, file), options),
+        writeFileSync: (file: string, bytes: any) => fs.writeFileSync(path.resolve(root, file), bytes),
+      };
+      // The real recorder writes relative to cwd; bind just its ledger to this fixture.
+      const recorder = require('../../scripts/release/canary');
+      const exit = new Error('persisted');
+      const mockRequire = (name: string): any => {
+        if (name === 'fs') return localFs;
+        if (name === 'child_process') return {execFileSync: (_command: string, args: string[]) => args[0] === 'show' ? initial : COMMIT};
+        if (name === './cli/scripts/release/events') return {...require('../../scripts/release/events'), readEvents: (file: string) => readEvents(path.resolve(root, file))};
+        if (name === './cli/scripts/release/canary') return {...recorder, recordCanary: (input: any) => recorder.recordCanary({...input, ledgerFile: path.resolve(root, input.ledgerFile)})};
+        if (name.startsWith('./cli/')) return require(path.resolve(__dirname, '../../..', name));
+        return require(name);
+      };
+      expect(() => vm.runInNewContext(script, {require: mockRequire, process: {
+        env: {TRAIN_VERSION: VERSION, GITHUB_SERVER_URL: 'https://github.com', GITHUB_REPOSITORY: 'ntanwir10/GuardScan', GITHUB_RUN_ID: '42'},
+        exit: () => {throw exit;},
+      }})).toThrow(exit);
+      const result = path.join(root, 'ledgers', `${TAG}.jsonl`);
+      expect(readEvents(result).some((event: any) => event.type === 'incident_opened')).toBe(true);
+      expect(fs.readFileSync(path.join(root, '.canary-record-status'), 'utf8')).toBe('1\n');
+    });
+  });
+
   test('schemas require report identity and the immutable promotion floor', () => {
     const ajv = new Ajv({allErrors: true, strict: true});
     addFormats(ajv);

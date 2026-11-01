@@ -8,7 +8,6 @@ const {spawnSync} = require('child_process');
 const {builtinModules} = require('module');
 const esbuild = require('esbuild');
 const {inject} = require('postject');
-const compareUtf8 = (left, right) => (left < right ? -1 : left > right ? 1 : 0);
 const {assertRuntimeArtifactClean} = require('./runtime-artifact-policy');
 const {compareUtf8} = require('./deterministic');
 

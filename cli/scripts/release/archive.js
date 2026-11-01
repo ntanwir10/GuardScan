@@ -10,10 +10,6 @@ const MAX_ARCHIVE_BYTES = 768 * 1024 * 1024;
 const MAX_EXPANDED_BYTES = 512 * 1024 * 1024;
 const MAX_ARCHIVE_ENTRIES = 32;
 
-function compareUtf8(left, right) {
-  return Buffer.compare(Buffer.from(left, 'utf8'), Buffer.from(right, 'utf8'));
-}
-
 const CRC_TABLE = (() => {
   const table = new Uint32Array(256);
   for (let value = 0; value < 256; value += 1) {

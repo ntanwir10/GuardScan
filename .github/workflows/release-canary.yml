@@ -112,7 +112,7 @@ jobs:
               channel: process.env.CHANNEL,
               status: "failed",
               checkedAt: new Date().toISOString(),
-              target: channel === "pypi" ? process.env.TARGET.replace(/-glibc$/, "") : process.env.TARGET,
+              target: process.env.TARGET,
               evidenceUrl: `${process.env.SERVER_URL}/${process.env.REPOSITORY}/actions/runs/${process.env.RUN_ID}`,
             }) + "\n")
           '
@@ -234,7 +234,7 @@ jobs:
               channel,
               status: 'failed',
               checkedAt: new Date().toISOString(),
-              target: process.env.TARGET,
+              target: channel === "pypi" ? process.env.TARGET.replace(/-glibc$/, "") : process.env.TARGET,
               evidenceUrl: `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`,
             })}\n`);
           }
@@ -786,6 +786,8 @@ jobs:
           const {canaryChannelEventType} = require('./cli/scripts/release/distribution-guards');
           const {acceptModeratedChannel} = require('./cli/scripts/release/moderated-acceptance');
           const {validateCanaryReports} = require('./cli/scripts/release/canary-reports');
+          const {recordCanary, DEFAULT_RC_CANARY_TARGETS} = require('./cli/scripts/release/canary');
+          const {compareUtf8} = require('./cli/scripts/release/deterministic');
           const files = [];
           const walk = dir => fs.readdirSync(dir, {withFileTypes: true}).forEach(entry => {
             const file = path.join(dir, entry.name);
@@ -795,13 +797,19 @@ jobs:
           walk('reports');
           const reports = files.filter(file => path.relative('reports', file).split(path.sep)[0]
             .startsWith(`canary-${process.env.TRAIN_VERSION}-`))
-            .map(file => ({file, report: JSON.parse(fs.readFileSync(file))}))
+            .map(file => {
+              try { return {file, report: JSON.parse(fs.readFileSync(file))}; }
+              catch {
+                const artifact = path.relative('reports', file).split(path.sep)[0];
+                const candidate = process.env.TRAIN_VERSION;
+                if (!artifact.startsWith(`canary-${candidate}-`)) throw new Error('Unattributed malformed canary report');
+                return {file, report: {version: candidate, invalidCanaryReport: true}};
+              }
+            })
             .filter(({report}) => report.version === process.env.TRAIN_VERSION)
-            .sort((a, b) => a.report.checkedAt.localeCompare(b.report.checkedAt)
-              || a.file.localeCompare(b.file));
+            .sort((a, b) => compareUtf8(String(a.report.checkedAt || ''), String(b.report.checkedAt || ''))
+              || compareUtf8(a.file, b.file));
           if (reports.length === 0) throw new Error(`no reports found for train ${process.env.TRAIN_VERSION}`);
-          validateCanaryReports(reports.map(({report}) => report), process.env.TRAIN_VERSION,
-            `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`);
           const version = process.env.TRAIN_VERSION;
           const tag = `v${version}`;
           const ledger = `ledgers/${tag}.jsonl`;
@@ -817,6 +825,16 @@ jobs:
           const commit = existing[0].commit;
           const checkoutCommit = cp.execFileSync('git', ['rev-parse', 'HEAD'], {encoding: 'utf8'}).trim();
           if (commit !== checkoutCommit) throw new Error(`release ledger commit does not match checked-out tag ${tag}`);
+          try {
+            validateCanaryReports(reports.map(({report}) => report), version,
+              `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`);
+          } catch {
+            const expectedTargets = {...DEFAULT_RC_CANARY_TARGETS, winget: ['windows-x64'], chocolatey: ['windows-x64']};
+            recordCanary({ledgerFile: ledger, reports: reports.map(({report}) => report),
+              expectedTargets, evaluatedAt: new Date().toISOString()});
+            fs.writeFileSync('.canary-record-status', '1\n');
+            process.exit(0); // Persist incident evidence before failing the job below.
+          }
           const expectedTargetCounts = {
             npm: 1,
             pnpm: 1,
