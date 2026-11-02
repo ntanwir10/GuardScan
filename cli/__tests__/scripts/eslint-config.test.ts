@@ -1,22 +1,30 @@
-const {ESLint} = require('eslint');
+import {execFileSync} from 'child_process';
+import * as path from 'path';
 
 describe('ESLint source guards', () => {
-  it('checks typed source and ignores generated JavaScript', async () => {
-    const eslint = new ESLint({
-      overrideConfigFile: true,
-      overrideConfig: require('../../eslint.config'),
-    });
-    const [result] = await eslint.lintText(
-      'export const unsafe: any = 1;\nPromise.resolve(unsafe);\n',
-      {filePath: 'src/index.ts'}
-    );
+  it('checks typed source and ignores generated JavaScript', () => {
+    const packageRoot = path.resolve(__dirname, '../..');
+    const {rules, ignored} = JSON.parse(execFileSync(process.execPath, ['-e', `
+      const {ESLint} = require('eslint');
+      (async () => {
+        const eslint = new ESLint({overrideConfigFile: true, overrideConfig: require('./eslint.config')});
+        const [result] = await eslint.lintText(
+          'export const unsafe: any = 1;\\nPromise.resolve(unsafe);\\n',
+          {filePath: 'src/index.ts'}
+        );
+        process.stdout.write(JSON.stringify({
+          rules: result.messages.map(message => message.ruleId),
+          ignored: await eslint.isPathIgnored('dist/index.js'),
+        }));
+      })().catch(error => {console.error(error); process.exitCode = 1;});
+    `], {cwd: packageRoot, encoding: 'utf8'})) as {rules: string[]; ignored: boolean};
 
-    expect(result.messages.map((message: {ruleId: string}) => message.ruleId)).toEqual(
+    expect(rules).toEqual(
       expect.arrayContaining([
         '@typescript-eslint/no-explicit-any',
         '@typescript-eslint/no-floating-promises',
       ])
     );
-    expect(await eslint.isPathIgnored('dist/index.js')).toBe(true);
+    expect(ignored).toBe(true);
   });
 });
