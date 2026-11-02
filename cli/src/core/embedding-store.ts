@@ -74,7 +74,7 @@ export class FileBasedEmbeddingStore implements EmbeddingStore {
     // Load existing index if it exists
     let existingIndex = await this.loadIndex();
 
-    if (!existingIndex || existingIndex.version !== EMBEDDING_INDEX_VERSION) {
+    if (!existingIndex) {
       // Create new index
       const providerName = embeddingProvider?.getName();
       const dimensions = embeddings[0]?.embedding.length || 0;
@@ -272,11 +272,11 @@ export class FileBasedEmbeddingStore implements EmbeddingStore {
     const index = await this.loadIndex();
     if (!index) {return;}
 
-    const changedSet = new Set(changedFiles.map(file => file.replace(/\\/g, '/')));
+    const changedSet = new Set(changedFiles);
     const original = index.embeddings.length;
 
     index.embeddings = index.embeddings.filter(
-      emb => !changedSet.has(emb.source.replace(/\\/g, '/'))
+      emb => !changedSet.has(emb.source)
     );
 
     const removed = original - index.embeddings.length;

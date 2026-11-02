@@ -9,15 +9,8 @@ import chalk from 'chalk';
 import * as cliProgress from 'cli-progress';
 import { CodebaseIndexer, CodebaseIndex } from './codebase-indexer';
 import { EmbeddingChunker, ChunkingStats } from './embedding-chunker';
-import {
-  EmbeddingProvider,
-  CodeEmbedding,
-  EMBEDDING_INDEX_VERSION,
-  generateEmbeddingId,
-  hashContent,
-} from './embeddings';
+import { EmbeddingProvider, CodeEmbedding, generateEmbeddingId, hashContent } from './embeddings';
 import { FileBasedEmbeddingStore } from './embedding-store';
-import { repositoryRelativePath } from '../utils/path-helper';
 
 // ============================================================================
 // Types and Interfaces
@@ -100,9 +93,6 @@ export class EmbeddingIndexer {
     try {
       // Phase 0: Check compatibility with existing embeddings
       const existingIndex = await this.store.loadIndex();
-      const requiresPathRebuild = Boolean(
-        existingIndex && existingIndex.version !== EMBEDDING_INDEX_VERSION
-      );
       if (existingIndex) {
         const compatibility = this.store.checkCompatibility(this.embeddingProvider, existingIndex);
         if (!compatibility.compatible && compatibility.requiresRebuild) {
@@ -144,9 +134,6 @@ export class EmbeddingIndexer {
       stats.totalTokens = chunkStats.estimatedTokens;
 
       if (chunks.length === 0) {
-        if (requiresPathRebuild) {
-          await this.store.clear();
-        }
         console.log(chalk.yellow('\n⚠️  No code chunks found to index'));
         return {
           success: true,
@@ -159,7 +146,7 @@ export class EmbeddingIndexer {
       // Phase 3: Check for existing embeddings (incremental mode)
       let chunksToProcess = chunks;
 
-      if (opts.incremental && !requiresPathRebuild) {
+      if (opts.incremental) {
         if (opts.showProgress) {
           console.log(chalk.blue('🔍 Checking for existing embeddings...'));
         }
@@ -235,9 +222,6 @@ export class EmbeddingIndexer {
           console.log(chalk.blue('\n💾 Storing embeddings...'));
         }
 
-        if (requiresPathRebuild && errors.length > 0) {
-          throw new Error('Embedding path migration failed; the existing index was preserved');
-        }
         await this.store.saveEmbeddings(embeddings, this.embeddingProvider);
 
         if (this.progressBar) {
@@ -286,14 +270,8 @@ export class EmbeddingIndexer {
     changedFiles: string[],
     options: IndexingOptions = {}
   ): Promise<IndexingResult> {
-    const existingIndex = await this.store.loadIndex();
-    if (!existingIndex || existingIndex.version === EMBEDDING_INDEX_VERSION) {
-      // Keep a legacy index intact until its complete replacement succeeds.
-      const repositoryPaths = changedFiles.map(file =>
-        repositoryRelativePath(this.repoRoot, file)
-      );
-      await this.store.invalidateChangedFiles(repositoryPaths);
-    }
+    // Invalidate old embeddings for changed files
+    await this.store.invalidateChangedFiles(changedFiles);
 
     // Re-index (will only process changed files due to incremental mode)
     return this.indexCodebase({ ...options, incremental: true });
