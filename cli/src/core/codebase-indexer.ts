@@ -11,6 +11,8 @@ import { configManager } from "./config";
 import { environmentDisablesCache } from '../utils/execution-policy';
 import { repositoryRelativePath } from "../utils/path-helper";
 
+const CODEBASE_INDEX_VERSION = "2.0.0";
+
 /**
  * Symbol information in the codebase
  */
@@ -174,7 +176,7 @@ export class CodebaseIndexer {
     const files = await this.findCodeFiles(this.repoRoot);
 
     const index: CodebaseIndex = {
-      version: "1.0.0",
+      version: CODEBASE_INDEX_VERSION,
       repoId: this.repoId,
       rootPath: this.repoRoot,
       lastUpdated: new Date(),
@@ -798,6 +800,8 @@ export class CodebaseIndexer {
     try {
       const content = fs.readFileSync(indexPath, "utf-8");
       const data = JSON.parse(content);
+      // Legacy indexes contain platform-native paths and must be rebuilt.
+      if ((data as {version?: unknown}).version !== CODEBASE_INDEX_VERSION) {return null;}
 
       // Convert arrays back to Maps
       const index: CodebaseIndex = {
