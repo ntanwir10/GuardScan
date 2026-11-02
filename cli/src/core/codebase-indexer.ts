@@ -634,7 +634,7 @@ export class CodebaseIndexer {
       for (const ext of extensions) {
         const fullPath = resolved + ext;
         if (fs.existsSync(path.join(this.repoRoot, fullPath))) {
-          return fullPath;
+          return repositoryRelativePath(this.repoRoot, fullPath);
         }
       }
     }
