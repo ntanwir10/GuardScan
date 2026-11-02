@@ -21,7 +21,7 @@ describe('release workflow review regressions', () => {
     const build = workflow('release-build.yml');
     const aggregateSteps = Object.values(build.jobs).flatMap((job: any) => job.steps || []);
     const collect = aggregateSteps.find((candidate: any) => (
-      candidate.name === 'Reject unexpected links and collect release assets'
+      candidate.name === 'Reject links and collect release assets'
     ));
     expect(collect).toBeTruthy();
     expect(collect.run).toContain("-name '*.apple-notarization.json'");
@@ -277,7 +277,7 @@ describe('release workflow review regressions', () => {
     const train = workflow('release-train.yml');
     const prepare = train.jobs.prepare;
     const validate = step(prepare, 'Validate request and resolve unchanged release PR head');
-    expect(validate.env.RELEASE_PR).toBe('${{ inputs.release_pr }}');
+    expect(prepare.env.REQUEST_RELEASE_PR).toBe('${{ inputs.release_pr }}');
     expect(validate.run).toContain('gh api "repos/${GITHUB_REPOSITORY}/pulls/$REQUEST_RELEASE_PR" > release-pr.json');
     expect(validate.run).toContain("pr.state !== 'open' && !resumableMergedPromotion");
     expect(validate.run).toContain("pr.base?.ref !== 'main'");
@@ -293,12 +293,13 @@ describe('release workflow review regressions', () => {
   it('reuses a stable tag only when its peeled commit is the exact merged PR commit', () => {
     const train = workflow('release-train.yml');
     const stable = step(train.jobs.prepare, 'Auto-merge unchanged stable release PR and create stable tag');
-    expect(stable.run).toContain('--match-head-commit "${{ steps.source.outputs.head_sha }}"');
+    expect(stable.env.EXPECTED_HEAD).toBe('${{ steps.source.outputs.head_sha }}');
+    expect(stable.run).toContain('--match-head-commit "$EXPECTED_HEAD"');
     expect(stable.run).toContain('git ls-remote --exit-code');
     expect(stable.run).toContain('git rev-list -n 1');
     expect(stable.run).toContain('EXISTING_TAG_SHA" != "$MERGE_SHA"');
     expect(stable.run.indexOf('EXISTING_TAG_SHA" != "$MERGE_SHA"'))
-      .toBeLessThan(stable.run.indexOf('git push origin "refs/tags/'));
+      .toBeLessThan(stable.run.indexOf('push origin "refs/tags/'));
     expect(stable.run).toContain('TAG_PUSH_REQUIRED=false');
     expect(stable.run).toContain('TAG_PUSH_REQUIRED=true');
   });
@@ -318,6 +319,7 @@ describe('release workflow review regressions', () => {
     fs.mkdirSync(bin);
     fs.writeFileSync(path.join(bin, 'git'), [
       '#!/bin/sh',
+      'if [ "$1" = -c ]; then shift 2; fi',
       'printf "%s\\n" "$*" >> "$GIT_CALLS"',
       'case "$1" in',
       '  ls-remote) case "$TAG_MODE" in',
@@ -346,6 +348,7 @@ describe('release workflow review regressions', () => {
           TAG_OBJECT: 'b'.repeat(40),
           MERGE_SHA: 'a'.repeat(40),
           STABLE_VERSION: '1.2.3',
+          RELEASE_APP_TOKEN: 'test-token',
           WRONG_SHA: 'c'.repeat(40),
           LOCAL_TAG: 'false',
           ...extra,

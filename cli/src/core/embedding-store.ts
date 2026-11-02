@@ -16,7 +16,6 @@ import {
   SearchFilters,
   formatBytes,
   EmbeddingProvider,
-  EMBEDDING_INDEX_VERSION,
 } from './embeddings';
 
 // Relative source paths participate in embedding IDs; absolute-path indexes must rebuild.
