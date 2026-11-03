@@ -8,13 +8,13 @@ const workflow = yaml.load(fs.readFileSync(workflowPath, 'utf8')) as any;
 const step = workflow.jobs.reconcile.steps.find((candidate: any) => (
   candidate.name === 'Trigger promotion when the machine policy is eligible'
 ));
-const scriptMatch = (step?.run as string | undefined)?.match(/ELIGIBLE="\$\(CURRENT_HEAD="\$CURRENT_HEAD" node - <<'NODE'\n([\s\S]*?)\nNODE\n\s*\)"/);
+const scriptMatch = (step?.run as string | undefined)?.match(/ELIGIBLE="\$\(CURRENT_HEAD="\$CURRENT_HEAD" CURRENT_BASE="\$CURRENT_BASE" node - <<'NODE'\n([\s\S]*?)\nNODE\n\s*\)"/);
 
 if (!scriptMatch) throw new Error('scheduler promotion policy Node block was not found');
 
 const policyScript = scriptMatch[1];
 const publishedAt = '2026-01-01T00:00:00.000Z';
-const evaluatedAt = '2026-01-02T02:00:00.000Z';
+const evaluatedAt = '2026-01-02T00:00:00.000Z';
 const sourcePrHead = 'a'.repeat(40);
 const channels = ['npm', 'pnpm', 'yarn', 'bun', 'github', 'homebrew', 'scoop', 'pypi'];
 
@@ -29,7 +29,7 @@ function fixture(overrides: {
   startedPr?: number;
 } = {}) {
   const checkedAts = [overrides.firstAt || publishedAt,
-    ...Array.from({length: 23}, () => overrides.latestAt || evaluatedAt)];
+    ...Array.from({length: 22}, (_, index) => new Date(Date.parse(publishedAt) + (index + 2) * 3600000).toISOString()), overrides.latestAt || evaluatedAt];
   const candidateHead = overrides.candidateHead || sourcePrHead;
   const candidatePr = overrides.candidatePr || 42;
   const events = [
@@ -38,6 +38,7 @@ function fixture(overrides: {
       payload: {
         releasePr: overrides.startedPr || candidatePr,
         sourcePrHead: overrides.startedHead || candidateHead,
+        sourcePrBase: 'c'.repeat(40), sourcePrTree: 'd'.repeat(40),
       },
     },
     {
@@ -57,7 +58,7 @@ function fixture(overrides: {
   return {
     events,
     state,
-    candidate: {sourcePr: candidatePr, sourcePrHead: candidateHead},
+    candidate: {sourcePr: candidatePr, sourcePrHead: candidateHead, sourcePrBase: 'c'.repeat(40), sourcePrTree: 'd'.repeat(40)},
     currentHead: overrides.currentHead || candidateHead,
     releasePr: overrides.releasePr || candidatePr,
   };
@@ -75,7 +76,7 @@ function evaluate(input: ReturnType<typeof fixture>): string {
     Date: FixedDate,
     process: {
       env: {
-        CURRENT_HEAD: input.currentHead,
+        CURRENT_HEAD: input.currentHead, CURRENT_BASE: 'c'.repeat(40),
         RELEASE_PR: String(input.releasePr),
       },
       stdout: {write: (value: string) => { output += value; }},
@@ -105,7 +106,7 @@ describe('release scheduler promotion policy', () => {
   });
 
   it('denies promotion when the latest canary evidence is stale', () => {
-    expect(evaluate(fixture({latestAt: '2026-01-02T00:00:00.000Z'}))).toBe('false');
+    expect(evaluate(fixture({latestAt: '2026-01-01T22:00:00.000Z'}))).toBe('false');
   });
 
   it('denies promotion when the current source PR head has changed', () => {
@@ -121,6 +122,6 @@ describe('release scheduler promotion policy', () => {
     expect(step.run).toContain('CURRENT_HEAD="$(gh pr view "$RELEASE_PR"');
     expect(step.run).toContain('--json headRefOid --jq .headRefOid)"');
     expect(step.run.indexOf('CURRENT_HEAD="$(gh pr view'))
-      .toBeLessThan(step.run.indexOf('ELIGIBLE="$(CURRENT_HEAD="$CURRENT_HEAD" node'));
+      .toBeLessThan(step.run.indexOf('ELIGIBLE="$(CURRENT_HEAD="$CURRENT_HEAD" CURRENT_BASE="$CURRENT_BASE" node'));
   });
 });

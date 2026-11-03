@@ -233,7 +233,7 @@ function standalone(
   digest: string,
   libc?: string
 ): Record<string, any> {
-  const filename = `guardscan-${source.version}-${suffix}.${osName === 'windows' ? 'zip' : 'tar.gz'}`;
+  const filename = `guardscan-${source.version}-${suffix}.${osName === 'linux' ? 'tar.gz' : 'zip'}`;
   const entrypoint = osName === 'windows' ? 'guardscan.exe' : 'guardscan';
   const signatures = osName === 'darwin'
     ? [evidence('apple-code-signing'), evidence('apple-notarization')]
@@ -269,7 +269,7 @@ function standalone(
       },
     },
     platform: {os: osName, arch, ...(libc ? {libc} : {})},
-    archiveFormat: osName === 'windows' ? 'zip' : 'tar.gz',
+    archiveFormat: osName === 'linux' ? 'tar.gz' : 'zip',
     entrypoint,
     url: `https://github.com/ntanwir10/GuardScan/releases/download/${source.tag}/${filename}`,
     archiveEntries: [{
@@ -1585,3 +1585,23 @@ describe('deterministic artifacts and manifest aggregation', () => {
 function cryptoDigest(value: string): string {
   return require('crypto').createHash('sha256').update(value).digest('hex');
 }
+
+
+test('Darwin builder emits the exact ZIP format required by notarization and consumers', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'guardscan-darwin-archive-'));
+  try {
+    const artifact = standalone('darwin', 'arm64', 'darwin-arm64', 'a');
+    const executable = path.join(root, 'guardscan');
+    fs.writeFileSync(executable, 'signed executable fixture');
+    const evidenceFile = path.join(root, 'evidence.json');
+    fs.writeFileSync(evidenceFile, JSON.stringify({schemaVersion: 'guardscan.standalone-evidence.v1',
+      ...source, platform: artifact.platform, optionalCapabilities: artifact.optionalCapabilities,
+      signatures: artifact.signatures, sboms: artifact.sboms, provenance: artifact.provenance}));
+    const output = require('../../scripts/release/standalone-artifact').buildStandaloneArtifact(
+      source, executable, artifact.platform, path.join(root, 'output'), timestamp, evidenceFile);
+    expect(output.metadata.artifact.archiveFormat).toBe('zip');
+    expect(output.metadata.artifact.filename).toMatch(/-darwin-arm64\.zip$/);
+    const archive = require('../../scripts/release/archive').inspectArchive(output.artifactFile, 'zip');
+    expect(archive.entries).toEqual([expect.objectContaining({path: 'guardscan', mode: '0755'})]);
+  } finally { fs.rmSync(root, {recursive: true, force: true}); }
+});

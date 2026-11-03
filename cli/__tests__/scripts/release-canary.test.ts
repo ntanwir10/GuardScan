@@ -253,6 +253,28 @@ describe('release canary public seams', () => {
     });
   });
 
+  test('rejects conflicting prior canary evidence at the exact same checkedAt and preserves identical retries', () => {
+    withLedger(ledger => {
+      const input = {ledgerFile: ledger, reports: reports(), evaluatedAt: EVALUATED_AT};
+      expect(recordCanary(input).failures).toEqual([]);
+      const recorded = fs.readFileSync(ledger, 'utf8');
+      expect(recordCanary(input).changed).toBe(false);
+      expect(fs.readFileSync(ledger, 'utf8')).toBe(recorded);
+      const conflict = reports().map(report => report.channel === 'npm' ? {...report, status: 'failed'} : report);
+      const result = recordCanary({...input, reports: conflict});
+      expect(result.failures).toEqual(expect.arrayContaining([expect.objectContaining({
+        channel: 'npm', reason: expect.stringContaining('conflicts with recorded evidence'),
+      })]));
+      const added = readEvents(ledger).slice(recorded.trim().split('\n').length);
+      expect(added.map((event: any) => event.type)).toEqual(['incident_opened']);
+      expect(result.recorded).toEqual([]);
+      expect(result.incidents).toHaveLength(1);
+      const afterConflict = fs.readFileSync(ledger, 'utf8');
+      expect(recordCanary({...input, reports: conflict}).changed).toBe(false);
+      expect(fs.readFileSync(ledger, 'utf8')).toBe(afterConflict);
+    });
+  });
+
   test('record-canary CLI uses the ledger identity and emits a machine-readable result', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'guardscan-canary-cli-'));
     const ledger = path.join(root, 'events.ndjson');

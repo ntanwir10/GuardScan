@@ -15,7 +15,7 @@ const sha256 = (bytes: any) => crypto.createHash('sha256').update(bytes).digest(
 function manifest() {
   const url = 'https://github.com/ntanwir10/GuardScan/releases/download/v1.2.3/guardscan-windows.zip';
   return {...source, schemaVersion: 'guardscan.release-manifest.v1', createdAt: checkedAt,
-    producer: {provider: 'github-actions', repository: 'ntanwir10/GuardScan', workflow: '.github/workflows/release-build.yml', runId: '1', runAttempt: 1, sourceRef: 'refs/tags/v1.2.3'},
+    producer: {provider: 'github-actions', repository: 'ntanwir10/GuardScan', workflow: '.github/workflows/release-build.yml', workflowSha: 'f'.repeat(40), runId: '1', runAttempt: 1, sourceRef: 'refs/tags/v1.2.3'},
     toolchain: {node: '22.12.0', packageManager: {name: 'npm', version: '10.9.0'}, tools: [{name: 'esbuild', version: '1'}]},
     artifacts: [{id: 'windows', kind: 'standalone', productionReady: true, filename: 'guardscan-windows.zip', size: 123, sha256: 'b'.repeat(64), source,
       platform: {os: 'windows', arch: 'x64'}, archiveFormat: 'zip', entrypoint: 'guardscan.exe', url,
@@ -26,7 +26,10 @@ function manifest() {
       archiveEntries: [{path: 'guardscan.exe', size: 12, mode: '0755', sha256: 'c'.repeat(64)}],
       signatures: [{type: 'authenticode', url: url + '.sig', verified: true}],
       sboms: ['spdx', 'cyclonedx'].map(type => ({type, url: url + '.' + type, verified: true})),
-      provenance: {type: 'slsa', url: url + '.attestation', verified: true}}]};
+      provenance: {type: 'slsa', url: url + '.attestation', verified: true, sha256: 'd'.repeat(64),
+        subjectSha256: 'b'.repeat(64), sourceVersion: source.version, sourceTag: source.tag, sourceCommit: source.commit,
+        signerIdentity: 'https://github.com/ntanwir10/GuardScan/.github/workflows/release-build.yml',
+        signerDigest: 'f'.repeat(40), predicateType: 'https://slsa.dev/provenance/v1'}}]};
 }
 function fixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'moderated-acceptance-')), ledger = path.join(root, 'ledger.jsonl');
@@ -324,22 +327,23 @@ describe('scheduled moderated acceptance', () => {
     const h = fixture(); try {
       const workflow: any = yaml.load(fs.readFileSync(path.resolve(__dirname, '../../../.github/workflows/release-canary.yml'), 'utf8'));
       const body = workflow.jobs.record.steps.find((s: any) => s.name === 'Append hash-chained canary and verification events').run.replace(/\r\n/g, '\n').match(/node - <<'NODE'\n([\s\S]*?)\nNODE/)[1];
-      fs.mkdirSync(path.join(h.root, 'reports', 'current'), {recursive: true});
-      for (const [channel, target] of EXPECTED_CANARY_TARGETS) fs.writeFileSync(path.join(h.root, 'reports', 'current', `${channel}-${target}.json`), JSON.stringify({...source, channel, target, checkedAt, status: 'passed', evidenceUrl: 'https://github.com/ntanwir10/GuardScan/actions/runs/123'}));
+      fs.mkdirSync(path.join(h.root, 'reports', 'canary-1.2.3-current'), {recursive: true});
+      for (const [channel, target] of EXPECTED_CANARY_TARGETS) fs.writeFileSync(path.join(h.root, 'reports', 'canary-1.2.3-current', `${channel}-${target}.json`), JSON.stringify({version: source.version, channel, target, checkedAt, status: 'passed', evidenceUrl: 'https://github.com/ntanwir10/GuardScan/actions/runs/123'}));
       let original = fs.readFileSync(h.ledger, 'utf8'), runId = '123';
       const run = () => vm.runInNewContext(body, {process: {env: {TRAIN_VERSION: source.version, GITHUB_RUN_ID: runId, GITHUB_RUN_ATTEMPT: '1', GITHUB_REPOSITORY: 'ntanwir10/GuardScan', GITHUB_SERVER_URL: 'https://github.com'}}, require: (name: string) => {
         if (name === 'fs') return Object.fromEntries(['readdirSync', 'readFileSync', 'writeFileSync', 'mkdirSync'].map(method => [method, (file: string, ...args: any[]) => (fs as any)[method](path.resolve(h.root, file), ...args)]));
         if (name === 'child_process') return {execFileSync: (_c: string, args: string[]) => args[0] === 'show' ? original : source.commit};
         if (name.endsWith('/moderated-acceptance')) return {acceptModeratedChannel: (file: string, c: string, report: any) => require('../../scripts/release/moderated-acceptance').acceptModeratedChannel(path.resolve(h.root, file), c, report, h.execute)};
+        if (name.endsWith('/canary')) return {...require('../../scripts/release/canary'), recordCanary: (input: any) => require('../../scripts/release/canary').recordCanary({...input, ledgerFile: path.resolve(h.root, input.ledgerFile), evaluatedAt: '2026-10-01T00:02:00.000Z'})};
         if (name.endsWith('/events')) return {...events, readEvents: (f: string) => events.readEvents(path.resolve(h.root, f)), appendEvent: (f: string, input: any) => events.appendEvent(path.resolve(h.root, f), input)};
         if (name.startsWith('./cli/')) return require(path.resolve(__dirname, '../../../', name)); return require(name);
       }});
       const output = path.join(h.root, 'ledgers', source.tag + '.jsonl');
       const moderatedReports = ['winget', 'chocolatey'].map(channel =>
-        path.join(h.root, 'reports', 'current', `${channel}-windows-x64.json`));
+        path.join(h.root, 'reports', 'canary-1.2.3-current', `${channel}-windows-x64.json`));
       for (const file of moderatedReports) {
         const report = JSON.parse(fs.readFileSync(file, 'utf8'));
-        fs.writeFileSync(file, JSON.stringify({...report, status: 'pending'}));
+        fs.writeFileSync(file, JSON.stringify({...report, status: 'pending', checkedAt: '2026-09-30T23:59:00.000Z'}));
       }
       run();
       expect(h.calls).toHaveLength(0);
@@ -349,23 +353,23 @@ describe('scheduled moderated acceptance', () => {
       original = fs.readFileSync(output, 'utf8');
       for (const file of moderatedReports) {
         const report = JSON.parse(fs.readFileSync(file, 'utf8'));
-        fs.writeFileSync(file, JSON.stringify({...report, status: 'passed'}));
+        fs.writeFileSync(file, JSON.stringify({...report, status: 'passed', checkedAt}));
       }
       if (failed) {
         runId = '124';
-        for (const name of fs.readdirSync(path.join(h.root, 'reports', 'current'))) {
-          const file = path.join(h.root, 'reports', 'current', name);
+        for (const name of fs.readdirSync(path.join(h.root, 'reports', 'canary-1.2.3-current'))) {
+          const file = path.join(h.root, 'reports', 'canary-1.2.3-current', name);
           const report = JSON.parse(fs.readFileSync(file, 'utf8'));
-          fs.writeFileSync(file, JSON.stringify({...report, evidenceUrl: 'https://github.com/ntanwir10/GuardScan/actions/runs/124'}));
+          fs.writeFileSync(file, JSON.stringify({...report, checkedAt: '2026-10-01T00:01:00.000Z', evidenceUrl: 'https://github.com/ntanwir10/GuardScan/actions/runs/124'}));
         }
-        const file = path.join(h.root, 'reports', 'current', 'npm-npm.json');
+        const file = path.join(h.root, 'reports', 'canary-1.2.3-current', 'npm-npm.json');
         const report = JSON.parse(fs.readFileSync(file, 'utf8'));
-        fs.writeFileSync(file, JSON.stringify({...report, status: 'failed'}));
+        fs.writeFileSync(file, JSON.stringify({...report, status: 'failed', checkedAt: '2026-10-01T00:01:00.000Z'}));
       }
       run();
       const completed = events.readEvents(output);
-      for (const c of ['winget', 'chocolatey']) { expect(completed.filter((e: any) => e.channel === c).map((e: any) => e.type)).toEqual(['channel_submitted', 'canary_recorded', 'channel_accepted', 'channel_verified']); expect(events.materializeReleaseState(completed).channels[c].status).toBe('verified'); }
-      expect(completed.filter((e: any) => e.type === 'canary_recorded').every((e: any) => e.payload.checkedAt === checkedAt)).toBe(true);
+      for (const c of ['winget', 'chocolatey']) { expect(completed.filter((e: any) => e.channel === c).map((e: any) => e.type)).toEqual(['channel_submitted', 'canary_recorded', 'canary_recorded', 'channel_accepted', 'channel_verified']); expect(events.materializeReleaseState(completed).channels[c].status).toBe('verified'); }
+      expect(completed.filter((e: any) => e.type === 'canary_recorded').every((e: any) => [checkedAt, '2026-09-30T23:59:00.000Z', '2026-10-01T00:01:00.000Z'].includes(e.payload.checkedAt))).toBe(true);
       original = fs.readFileSync(output, 'utf8'); const calls = h.calls.length; run(); expect(events.readEvents(output)).toHaveLength(completed.length); expect(h.calls).toHaveLength(calls);
       expect(events.materializeReleaseState(completed).channels.npm.status).toBe(failed ? 'failed' : 'verified');
       expect(completed.filter((e: any) => e.type === 'channel_failed')).toHaveLength(failed ? 1 : 0);
@@ -378,6 +382,7 @@ describe('scheduled moderated acceptance', () => {
       const cleanupBody = [...cleanup][1][1];
       vm.runInNewContext(cleanupBody, {require: (name: string) => {
         if (name === 'fs') return {existsSync: (f: string) => fs.existsSync(path.resolve(h.root, f)), readFileSync: (f: string) => fs.readFileSync(path.resolve(h.root, f)), writeFileSync: (f: string, v: string) => fs.writeFileSync(path.resolve(h.root, f), v)};
+        if (name.endsWith('/canary')) return {...require('../../scripts/release/canary'), recordCanary: (input: any) => require('../../scripts/release/canary').recordCanary({...input, ledgerFile: path.resolve(h.root, input.ledgerFile), evaluatedAt: '2026-10-01T00:02:00.000Z'})};
         if (name.endsWith('/events')) return {...events, readEvents: (f: string) => events.readEvents(path.resolve(h.root, f))};
         if (name.startsWith('./cli/')) return require(path.resolve(__dirname, '../../../', name));
         return require(name);

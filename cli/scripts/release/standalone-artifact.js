@@ -40,7 +40,7 @@ function buildStandaloneArtifact(source, executableFile, platform, outputDir, ti
   if (path.basename(executableFile) !== executableName) {
     throw new Error(`standalone executable must be named ${executableName}`);
   }
-  const format = platform.os === 'windows' ? 'zip' : 'tar.gz';
+  const format = platform.os === 'linux' ? 'tar.gz' : 'zip';
   const extension = format === 'zip' ? 'zip' : 'tar.gz';
   const filename = `guardscan-${source.version}-${target}.${extension}`;
   const resolvedOutput = path.resolve(outputDir);

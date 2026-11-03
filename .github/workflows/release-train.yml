@@ -579,6 +579,7 @@ jobs:
         env:
           RELEASE_APP_TOKEN: ${{ steps.candidate-app.outputs.token }}
         run: |
+          export GH_TOKEN="$RELEASE_APP_TOKEN"
           SOURCE_COMMIT_TIME="$(git -C source show -s --format=%cI HEAD)"
           CREATED_AT="$(SOURCE_COMMIT_TIME="$SOURCE_COMMIT_TIME" node -e 'process.stdout.write(new Date(process.env.SOURCE_COMMIT_TIME).toISOString())')"
           git -C source config core.hooksPath /dev/null
@@ -592,9 +593,9 @@ jobs:
           else
             git -C source tag "v$REQUEST_VERSION"
           fi
-          git -C source -c "http.extraheader=AUTHORIZATION: bearer $RELEASE_APP_TOKEN" \
+          git -C source -c credential.helper= -c 'credential.https://github.com.helper=!gh auth git-credential' \
             push origin "HEAD:refs/heads/release-candidate/v$REQUEST_VERSION"
-          git -C source -c "http.extraheader=AUTHORIZATION: bearer $RELEASE_APP_TOKEN" \
+          git -C source -c credential.helper= -c 'credential.https://github.com.helper=!gh auth git-credential' \
             push origin "refs/tags/v$REQUEST_VERSION"
       - name: Emit candidate build identity
         if: inputs.action == 'candidate'
@@ -646,11 +647,11 @@ jobs:
           CURRENT_BASE: ${{ steps.source.outputs.base_sha }}
           PR_STATE: ${{ steps.source.outputs.pr_state }}
         run: |
-          git -c "http.extraheader=AUTHORIZATION: bearer $GH_TOKEN" fetch origin release-ledger
+          git -c credential.helper= -c 'credential.https://github.com.helper=!gh auth git-credential' fetch origin release-ledger
           git worktree add decision-ledger origin/release-ledger
           git show "origin/release-ledger:events/v$REQUEST_VERSION.jsonl" > release-events.jsonl
           RC_TAG="v$REQUEST_VERSION"
-          git -c "http.extraheader=AUTHORIZATION: bearer $GH_TOKEN" fetch origin "refs/tags/$RC_TAG:refs/tags/$RC_TAG"
+          git -c credential.helper= -c 'credential.https://github.com.helper=!gh auth git-credential' fetch origin "refs/tags/$RC_TAG:refs/tags/$RC_TAG"
           if [ "$PR_STATE" = MERGED ]; then
             node - <<'NODE'
           const crypto = require('crypto');
@@ -743,6 +744,7 @@ jobs:
         env:
           RELEASE_APP_TOKEN: ${{ steps.promote-app.outputs.token }}
         run: |
+          export GH_TOKEN="$RELEASE_APP_TOKEN"
           mkdir -p decision-ledger/events decision-ledger/decisions
           cp release-events.jsonl "decision-ledger/events/v$REQUEST_VERSION.jsonl"
           cp promotion-decision.json \
@@ -759,7 +761,7 @@ jobs:
               if [ "$DIFF_STATUS" -ne 1 ]; then exit "$DIFF_STATUS"; fi
               git commit -m "promotion decision: v$REQUEST_VERSION"
             fi
-            git -c "http.extraheader=AUTHORIZATION: bearer $RELEASE_APP_TOKEN" push origin HEAD:release-ledger
+            git -c credential.helper= -c 'credential.https://github.com.helper=!gh auth git-credential' push origin HEAD:release-ledger
           )
       - name: Refuse a denied promotion after persistence
         if: inputs.action == 'promote' && steps.promotion.outputs.status == '2'
@@ -778,6 +780,7 @@ jobs:
           SOURCE_HEAD: ${{ steps.source.outputs.head_sha }}
           SOURCE_MERGE_SHA: ${{ steps.source.outputs.merge_sha }}
         run: |
+          export GH_TOKEN="$RELEASE_APP_TOKEN"
           STABLE_VERSION="$(node -p 'require("./promotion-decision.json").stable.version')"
           STATE="$(gh pr view "$RELEASE_PR" --repo "${GITHUB_REPOSITORY}" --json state --jq .state)"
           if [ "$STATE" = OPEN ]; then
@@ -816,8 +819,8 @@ jobs:
             echo 'Previously merged release PR changed merge identity.' >&2
             exit 1
           fi
-          git -c "http.extraheader=AUTHORIZATION: bearer $RELEASE_APP_TOKEN" fetch origin "$MERGE_SHA"
-          git -c "http.extraheader=AUTHORIZATION: bearer $RELEASE_APP_TOKEN" fetch origin main
+          git -c credential.helper= -c 'credential.https://github.com.helper=!gh auth git-credential' fetch origin "$MERGE_SHA"
+          git -c credential.helper= -c 'credential.https://github.com.helper=!gh auth git-credential' fetch origin main
           git merge-base --is-ancestor "$MERGE_SHA" origin/main
           git switch --detach "$MERGE_SHA"
           MERGE_TREE="$(git rev-parse "$MERGE_SHA^{tree}")"
@@ -856,7 +859,7 @@ jobs:
             else
               git tag "v$STABLE_VERSION" "$MERGE_SHA"
             fi
-            git -c "http.extraheader=AUTHORIZATION: bearer $RELEASE_APP_TOKEN" push origin "refs/tags/v$STABLE_VERSION"
+            git -c credential.helper= -c 'credential.https://github.com.helper=!gh auth git-credential' push origin "refs/tags/v$STABLE_VERSION"
           fi
           echo "ref=$MERGE_SHA" >> "$GITHUB_OUTPUT"
           echo "tag=v$STABLE_VERSION" >> "$GITHUB_OUTPUT"
@@ -1316,6 +1319,8 @@ jobs:
               if error.code != 404:
                   raise
               remote = {"urls": []}
+          if any(item.get("yanked") is not False for item in remote["urls"]):
+              raise SystemExit("Registry returned a yanked wheel or unknown yank state")
           remote_files = {item["filename"]: item["digests"]["sha256"] for item in remote["urls"]}
           local_files = {
               wheel.name: hashlib.sha256(wheel.read_bytes()).hexdigest()
@@ -1351,10 +1356,10 @@ jobs:
           for attempt in range(30):
               try:
                   with urllib.request.urlopen(url, timeout=30) as response:
-                      remote = {
-                          item["filename"]: item["digests"]["sha256"]
-                          for item in json.load(response)["urls"]
-                      }
+                      files = json.load(response)["urls"]
+                      if any(item.get("yanked") is not False for item in files):
+                          raise SystemExit("Registry returned a yanked wheel or unknown yank state")
+                      remote = {item["filename"]: item["digests"]["sha256"] for item in files}
               except urllib.error.HTTPError as error:
                   if error.code != 404:
                       raise
@@ -1486,6 +1491,8 @@ jobs:
               if error.code != 404:
                   raise
               remote = {"urls": []}
+          if any(item.get("yanked") is not False for item in remote["urls"]):
+              raise SystemExit("Registry returned a yanked wheel or unknown yank state")
           remote_files = {item["filename"]: item["digests"]["sha256"] for item in remote["urls"]}
           local_files = {
               wheel.name: hashlib.sha256(wheel.read_bytes()).hexdigest()
@@ -1520,10 +1527,10 @@ jobs:
           for attempt in range(30):
               try:
                   with urllib.request.urlopen(url, timeout=30) as response:
-                      remote = {
-                          item["filename"]: item["digests"]["sha256"]
-                          for item in json.load(response)["urls"]
-                      }
+                      files = json.load(response)["urls"]
+                      if any(item.get("yanked") is not False for item in files):
+                          raise SystemExit("Registry returned a yanked wheel or unknown yank state")
+                      remote = {item["filename"]: item["digests"]["sha256"] for item in files}
               except urllib.error.HTTPError as error:
                   if error.code != 404:
                       raise
@@ -1672,7 +1679,8 @@ jobs:
           SOURCE_PR_TREE: ${{ needs.prepare.outputs.source_pr_tree }}
           RELEASE_CHANNEL: ${{ needs.prepare.outputs.channel }}
         run: |
-          git -c "http.extraheader=AUTHORIZATION: bearer $RELEASE_APP_TOKEN" \
+          export GH_TOKEN="$RELEASE_APP_TOKEN"
+          git -c credential.helper= -c 'credential.https://github.com.helper=!gh auth git-credential' \
             fetch origin release-ledger
           mkdir ledger
           git show "origin/release-ledger:events/${RELEASE_TAG}.jsonl" > "ledger/${RELEASE_TAG}.jsonl" 2>/dev/null || true
@@ -2003,7 +2011,7 @@ jobs:
               if [ "$DIFF_STATUS" -ne 1 ]; then exit "$DIFF_STATUS"; fi
               git commit -m "release ledger: ${RELEASE_TAG}"
             fi
-            git -c "http.extraheader=AUTHORIZATION: bearer $RELEASE_APP_TOKEN" push origin HEAD:release-ledger
+            git -c credential.helper= -c 'credential.https://github.com.helper=!gh auth git-credential' push origin HEAD:release-ledger
           )
 
   reconcile:
@@ -2070,7 +2078,8 @@ jobs:
           GH_TOKEN: ${{ steps.app.outputs.token }}
           RELEASE_APP_TOKEN: ${{ steps.app.outputs.token }}
         run: |
-          git -c "http.extraheader=AUTHORIZATION: bearer $RELEASE_APP_TOKEN" \
+          export GH_TOKEN="$RELEASE_APP_TOKEN"
+          git -c credential.helper= -c 'credential.https://github.com.helper=!gh auth git-credential' \
             fetch origin release-ledger
           git show "origin/release-ledger:events/v$RELEASE_VERSION.jsonl" > release-events.jsonl
           node cli/scripts/release/index.js reconcile \
@@ -2174,11 +2183,11 @@ jobs:
             }
             CHANGED_PATHS="$(git -C catalog-checkout diff --name-only origin/main...HEAD | sort)"
             EXPECTED_PATHS="$(printf '%s\n' \
-              .github/workflows/verify.yml \
               Formula/guardscan.rb \
               bucket/guardscan.json \
               channel-lock.json)"
-            test "$CHANGED_PATHS" = "$EXPECTED_PATHS" || {
+            ACTUAL_GENERATED_PATHS="$(printf '%s\n' "$CHANGED_PATHS" | grep -Fvx '.github/workflows/verify.yml' || true)"
+            test "$ACTUAL_GENERATED_PATHS" = "$EXPECTED_PATHS" || {
               echo "::error::Release-integrity incident: catalog branch contains an unexpected diff"
               printf '%s\n' "$CHANGED_PATHS" >&2
               exit 1
@@ -2228,7 +2237,7 @@ jobs:
               git -C catalog-checkout commit -m "guardscan v$RELEASE_VERSION"
               assert_exact_catalog_branch
               git -C catalog-checkout \
-                -c "http.extraheader=AUTHORIZATION: bearer $GH_TOKEN" push \
+                -c credential.helper= -c 'credential.https://github.com.helper=!gh auth git-credential' push \
                 --force-with-lease="refs/heads/$UPDATE_BRANCH" \
                 origin HEAD:"$UPDATE_BRANCH"
             fi
@@ -2352,6 +2361,7 @@ jobs:
         env:
           RELEASE_APP_TOKEN: ${{ steps.app.outputs.token }}
         run: |
+          export GH_TOKEN="$RELEASE_APP_TOKEN"
           node - <<'NODE'
           const fs = require('fs');
           const {appendEvent, materializeReleaseState, monotonicLedgerTimestamp, readEvents} = require('./cli/scripts/release/events');
@@ -2412,7 +2422,7 @@ jobs:
               if [ "$DIFF_STATUS" -ne 1 ]; then exit "$DIFF_STATUS"; fi
               git commit -m "catalog reconciled: v$RELEASE_VERSION"
             fi
-            git -c "http.extraheader=AUTHORIZATION: bearer $RELEASE_APP_TOKEN" push origin HEAD:release-ledger
+            git -c credential.helper= -c 'credential.https://github.com.helper=!gh auth git-credential' push origin HEAD:release-ledger
           )
       - name: Trigger promotion when the machine policy is eligible
         if: vars.RELEASE_AUTOMATION_ENABLED == 'true' && contains(inputs.version, '-rc.')
@@ -2421,17 +2431,21 @@ jobs:
         run: |
           CURRENT_HEAD="$(gh pr view "$RELEASE_PR" \
             --repo "${GITHUB_REPOSITORY}" --json headRefOid --jq .headRefOid)"
-          ELIGIBLE="$(CURRENT_HEAD="$CURRENT_HEAD" node - <<'NODE'
+          CURRENT_BASE="$(gh pr view "$RELEASE_PR" \
+            --repo "${GITHUB_REPOSITORY}" --json baseRefOid --jq .baseRefOid)"
+          ELIGIBLE="$(CURRENT_HEAD="$CURRENT_HEAD" CURRENT_BASE="$CURRENT_BASE" node - <<'NODE'
           const fs = require('fs');
           const {readEvents, materializeReleaseState} = require('./cli/scripts/release/events');
           const {createPromotionDecision} = require('./cli/scripts/release/promotion');
           const events = readEvents('release-events.jsonl');
           const state = materializeReleaseState(events);
-          const candidate = JSON.parse(fs.readFileSync('.release-candidate.json', 'utf8'));
+          const candidate = JSON.parse(fs.readFileSync('source/.release-candidate.json', 'utf8'));
           const started = events.find(event => event.type === 'train_started');
           if (candidate.sourcePr !== Number(process.env.RELEASE_PR)
               || started?.payload.releasePr !== candidate.sourcePr
-              || started?.payload.sourcePrHead !== candidate.sourcePrHead) {
+              || started?.payload.sourcePrHead !== candidate.sourcePrHead
+              || started?.payload.sourcePrBase !== candidate.sourcePrBase
+              || started?.payload.sourcePrTree !== candidate.sourcePrTree) {
             throw new Error('Promotion source PR does not match the immutable candidate and recorded train head');
           }
           const published = events.find(event => event.type === 'channel_published' && event.channel === 'github');
@@ -2449,8 +2463,11 @@ jobs:
               publishedAt: published.timestamp,
               sourcePr: candidate.sourcePr,
               sourcePrHead: candidate.sourcePrHead,
+              sourcePrBase: candidate.sourcePrBase,
+              sourcePrTree: candidate.sourcePrTree,
             },
             currentSourcePrHead: process.env.CURRENT_HEAD,
+            currentSourcePrBase: process.env.CURRENT_BASE,
             evaluatedAt: new Date().toISOString(),
             requiredChannels: ['npm', 'pnpm', 'yarn', 'bun', 'github', 'homebrew', 'scoop', 'pypi'],
             canaries,
@@ -2480,10 +2497,9 @@ jobs:
     if: >-
       github.event_name == 'workflow_dispatch'
       && vars.RELEASE_AUTOMATION_ENABLED == 'true'
-      && needs.credential-health.outputs.release_eligible == 'true'
       && inputs.action == 'rollback'
       && inputs.known_good == ''
-    needs: [credential-health]
+    needs: [validate-request]
     permissions:
       contents: read
       pull-requests: read
@@ -2498,10 +2514,9 @@ jobs:
     if: >-
       github.event_name == 'workflow_dispatch'
       && vars.RELEASE_AUTOMATION_ENABLED == 'true'
-      && needs.credential-health.outputs.release_eligible == 'true'
       && inputs.action == 'rollback'
       && inputs.known_good != ''
-    needs: [credential-health]
+    needs: [validate-request]
     runs-on: ubuntu-24.04
     env:
       DEFECTIVE_VERSION: ${{ inputs.version }}
@@ -2551,14 +2566,14 @@ jobs:
           DEFECTIVE_VERSION: ${{ inputs.version }}
           RELEASE_APP_TOKEN: ${{ steps.app.outputs.token }}
         run: >-
-          git -c "http.extraheader=AUTHORIZATION: bearer $RELEASE_APP_TOKEN" fetch origin
+          GH_TOKEN="$RELEASE_APP_TOKEN" git -c credential.helper= -c 'credential.https://github.com.helper=!gh auth git-credential' fetch origin
           "refs/tags/v$DEFECTIVE_VERSION:refs/tags/v$DEFECTIVE_VERSION"
       - name: Verify the exact known-good release and protected ledger
         id: known-good
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
         run: |
-          git -c "http.extraheader=AUTHORIZATION: bearer $GH_TOKEN" fetch origin release-ledger \
+          git -c credential.helper= -c 'credential.https://github.com.helper=!gh auth git-credential' fetch origin release-ledger \
             "refs/tags/v$KNOWN_GOOD_VERSION:refs/tags/v$KNOWN_GOOD_VERSION"
           KNOWN_GOOD_TAG="v$KNOWN_GOOD_VERSION"
           KNOWN_GOOD_COMMIT="$(git rev-list -n 1 "$KNOWN_GOOD_TAG")"
@@ -2620,7 +2635,8 @@ jobs:
           RELEASE_VERSION: ${{ inputs.version }}
           KNOWN_GOOD_COMMIT: ${{ steps.known-good.outputs.commit }}
         run: |
-          git -c "http.extraheader=AUTHORIZATION: bearer $RELEASE_APP_TOKEN" \
+          export GH_TOKEN="$RELEASE_APP_TOKEN"
+          git -c credential.helper= -c 'credential.https://github.com.helper=!gh auth git-credential' \
             fetch origin release-ledger
           DEFECTIVE_TAG="v$DEFECTIVE_VERSION"
           git show "origin/release-ledger:events/$DEFECTIVE_TAG.jsonl" > release-events.jsonl
@@ -2683,7 +2699,7 @@ jobs:
               if [ "$DIFF_STATUS" -ne 1 ]; then exit "$DIFF_STATUS"; fi
               git commit -m "rollback started and train deactivated: $DEFECTIVE_TAG"
             fi
-            git -c "http.extraheader=AUTHORIZATION: bearer $RELEASE_APP_TOKEN" push origin HEAD:release-ledger
+            git -c credential.helper= -c 'credential.https://github.com.helper=!gh auth git-credential' push origin HEAD:release-ledger
           )
       - name: Prepare or verify the deterministic forward-fix pull request
         id: forward-fix
@@ -2784,12 +2800,12 @@ jobs:
           NODE
           if [ -n "$FORWARD_FIX_REMOTE_HEAD" ]; then
             git -C forward-fix-source \
-              -c "http.extraheader=AUTHORIZATION: bearer $GH_TOKEN" push \
+              -c credential.helper= -c 'credential.https://github.com.helper=!gh auth git-credential' push \
               --force-with-lease="refs/heads/$FORWARD_FIX_BRANCH:$FORWARD_FIX_REMOTE_HEAD" \
               origin "HEAD:refs/heads/$FORWARD_FIX_BRANCH"
           else
             git -C forward-fix-source \
-              -c "http.extraheader=AUTHORIZATION: bearer $GH_TOKEN" \
+              -c credential.helper= -c 'credential.https://github.com.helper=!gh auth git-credential' \
               push origin "HEAD:refs/heads/$FORWARD_FIX_BRANCH"
           fi
           FORWARD_FIX_HEAD="$(git -C forward-fix-source rev-parse HEAD)"
@@ -2929,12 +2945,12 @@ jobs:
           NODE
           if [ -n "$CATALOG_REMOTE_HEAD" ]; then
             git -C catalog-rollback \
-              -c "http.extraheader=AUTHORIZATION: bearer $GH_TOKEN" push \
+              -c credential.helper= -c 'credential.https://github.com.helper=!gh auth git-credential' push \
               --force-with-lease="refs/heads/$CATALOG_BRANCH:$CATALOG_REMOTE_HEAD" \
               origin "HEAD:refs/heads/$CATALOG_BRANCH"
           else
             git -C catalog-rollback \
-              -c "http.extraheader=AUTHORIZATION: bearer $GH_TOKEN" \
+              -c credential.helper= -c 'credential.https://github.com.helper=!gh auth git-credential' \
               push origin "HEAD:refs/heads/$CATALOG_BRANCH"
           fi
           CATALOG_HEAD="$(git -C catalog-rollback rev-parse HEAD)"
@@ -3084,6 +3100,7 @@ jobs:
           CATALOG_PR: ${{ steps.catalog-rollback.outputs.pull_request }}
           CATALOG_COMMIT: ${{ steps.catalog-rollback.outputs.commit }}
         run: |
+          export GH_TOKEN="$RELEASE_APP_TOKEN"
           node - <<'NODE'
           const fs = require('fs');
           const {appendEvent, readEvents, materializeReleaseState, monotonicLedgerTimestamp} = require('./cli/scripts/release/events');
@@ -3172,7 +3189,7 @@ jobs:
               if [ "$DIFF_STATUS" -ne 1 ]; then exit "$DIFF_STATUS"; fi
               git commit -m "rollback repository recovery complete: v$DEFECTIVE_VERSION"
             fi
-            git -c "http.extraheader=AUTHORIZATION: bearer $RELEASE_APP_TOKEN" push origin HEAD:release-ledger
+            git -c credential.helper= -c 'credential.https://github.com.helper=!gh auth git-credential' push origin HEAD:release-ledger
           )
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:

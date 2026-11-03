@@ -112,7 +112,7 @@ function assertStandaloneArtifact(source, producer, artifact) {
   if (!REQUIRED_NATIVE_TARGETS.includes(target)) {
     throw new Error(`standalone artifact has unsupported target ${target}: ${artifact.id}`);
   }
-  const expectedFormat = artifact.platform.os === 'windows' ? 'zip' : 'tar.gz';
+  const expectedFormat = artifact.platform.os === 'linux' ? 'tar.gz' : 'zip';
   const expectedEntrypoint = artifact.platform.os === 'windows' ? 'guardscan.exe' : 'guardscan';
   if (artifact.archiveFormat !== expectedFormat || artifact.entrypoint !== expectedEntrypoint) {
     throw new Error(`standalone artifact archive contract is invalid: ${artifact.id}`);

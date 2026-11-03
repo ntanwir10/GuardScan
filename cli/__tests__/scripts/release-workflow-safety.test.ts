@@ -19,10 +19,13 @@ describe('release workflow safety', () => {
   it('keeps release side effects behind the existing disabled-by-default repository switch', () => {
     const guard = "vars.RELEASE_AUTOMATION_ENABLED == 'true'";
     const train = load('release-train.yml');
-    for (const job of Object.values(train.jobs) as any[]) expect(job.if).toContain(guard);
-    expect(load('release-build.yml').jobs.quality.if).toBe(guard);
+    for (const [name, job] of Object.entries(train.jobs) as any[]) {
+      if (name === 'manual-guard') { expect(job.if).toBe("github.event_name == 'workflow_dispatch'"); continue; }
+      expect(job.if).toContain(guard);
+    }
+    expect(load('release-build.yml').jobs.quality.if).toContain(guard);
     expect(load('release-publish.yml').jobs.github.if).toBe(guard);
-    expect(load('release-please.yml').jobs['release-pr'].if).toContain(guard);
+    expect(load('release-please.yml').jobs['release-pr'].if).toContain("vars.RELEASE_PLEASE_ENABLED == 'true'");
     const canary = load('release-canary.yml');
     expect(canary.jobs.discover.if).toContain(guard);
     expect(canary.jobs.record.if).toContain(guard);
@@ -30,12 +33,12 @@ describe('release workflow safety', () => {
   });
 
   it('checks out the pinned PyPI evidence helper before downloading publication payloads', () => {
-    const steps = load('release-publish.yml').jobs.pypi.steps;
+    const steps = load('release-train.yml').jobs.pypi.steps;
     const checkout = steps.findIndex((step: any) => step.uses?.startsWith('actions/checkout@'));
     const download = steps.findIndex((step: any) => step.uses?.startsWith('actions/download-artifact@'));
     expect(checkout).toBeGreaterThanOrEqual(0);
     expect(checkout).toBeLessThan(download);
-    expect(steps[checkout].with).toMatchObject({ref: '${{ inputs.ref }}', 'persist-credentials': false});
+    expect(steps[checkout].with).toMatchObject({ref: '${{ github.workflow_sha }}', 'persist-credentials': false});
   });
 
   it('requires a recorded WinGet correction before a rejected submission can be resubmitted', () => {
@@ -79,12 +82,13 @@ describe('release workflow safety', () => {
   });
 
   it('normalizes the source timestamp once for every native builder', () => {
-    const native = load('release-build.yml').jobs.native;
+    const native = load('release-build.yml').jobs['native-finalize'];
     const timestamp = namedStep(native, 'Resolve canonical native build timestamp');
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'guardscan-source-time-'));
     try {
       const envFile = path.join(root, 'environment');
-      const result = spawnSync('bash', ['-euo', 'pipefail', '-c', timestamp.run], {
+      const fixtureScript = timestamp.run.replace('resolveGitTimestamp("source",', 'resolveGitTimestamp(process.cwd(),');
+      const result = spawnSync('bash', ['-euo', 'pipefail', '-c', fixtureScript], {
         cwd: repository, encoding: 'utf8',
         env: {...process.env, SOURCE_REF: 'HEAD', GITHUB_ENV: envFile},
       });
@@ -98,9 +102,9 @@ describe('release workflow safety', () => {
         'SOURCE_TIMESTAMP=' + new Date(raw.stdout.trim()).toISOString() + '\n'
       );
       for (const name of [
-        'Generate executable SPDX and CycloneDX SBOMs',
-        'Archive signed executable deterministically',
-        'Build wheel containing the exact signed executable',
+        'Generate SBOM with trusted default-branch tooling',
+        'Archive signed executable with trusted tooling',
+        'Build exact signed Python wheel with trusted tooling',
       ]) {
         const builder = namedStep(native, name);
         expect(native.steps.indexOf(timestamp)).toBeLessThan(native.steps.indexOf(builder));
@@ -114,9 +118,12 @@ describe('release workflow safety', () => {
 
   it('signs the SEA with minimal JIT entitlements and exercises it after signing', () => {
     const signing = namedStep(
-      load('release-build.yml').jobs.native,
+      load('release-build.yml').jobs['native-finalize'],
       'Sign, notarize, staple, and verify macOS executable'
     ).run as string;
+    expect(signing).toContain("awk -v team=\"($APPLE_TEAM_ID)\" 'index($0, \"Developer ID Application:\") && index($0, team) {print $2}'");
+    expect(signing).toContain("test \"$(printf '%s\\n' \"$IDENTITY\" | wc -l | tr -d ' ')\" = 1");
+    expect(signing).not.toContain('Developer ID Application: Nauman Tanwir');
     expect(signing).toContain('--entitlements .github/release/macos-entitlements.plist');
     expect(signing).toContain('standalone/guardscan --version');
     expect(signing.indexOf('--entitlements')).toBeLessThan(signing.indexOf('standalone/guardscan --version'));
@@ -132,13 +139,13 @@ describe('release workflow safety', () => {
   it('assesses the signed stapled DMG and binds the canary to its exact executable', () => {
     const build = load('release-build.yml');
     const signing = namedStep(
-      build.jobs.native, 'Sign, notarize, staple, and verify macOS executable'
+      build.jobs['native-finalize'], 'Sign, notarize, staple, and verify macOS executable'
     ).run as string;
     expect(signing).not.toContain('spctl --assess --type execute');
     expect(signing).toContain('spctl --assess --type open');
     expect(signing).toMatch(/codesign[^\n]+guardscan-notarization\.dmg/);
-    expect(namedStep(build.jobs.native, 'Archive signed executable deterministically').run)
-      .toContain("'stapled-notarization.dmg'");
+    expect(namedStep(build.jobs['native-finalize'], 'Archive signed executable with trusted tooling').run)
+      .toContain('standalone/stapled-notarization.dmg');
     expect(JSON.stringify(build.jobs.aggregate.steps)).toContain("*.dmg");
     const canary = namedStep(load('release-canary.yml').jobs['native-and-pypi'],
       'Verify macOS signing and Gatekeeper').run as string;
@@ -158,7 +165,7 @@ describe('release workflow safety', () => {
     const predicate = run.match(/HEAD_SHA="\$\(node - <<'NODE'\n([\s\S]*?)\nNODE/)?.[1];
     expect(predicate).toBeTruthy();
     const check = (head: string, extra: Record<string, unknown> = {}, action = 'candidate') => {
-      const pr = {state: 'open', base: {ref: 'main'},
+      const pr = {state: 'open', base: {ref: 'main', sha: 'b'.repeat(40), repo: {full_name: 'ntanwir10/GuardScan'}},
         head: {ref: head, sha: 'a'.repeat(40), repo: {full_name: 'ntanwir10/GuardScan'}}, ...extra};
       let output = '';
       try {
@@ -168,7 +175,7 @@ describe('release workflow safety', () => {
             return pr;
           },
           process: {env: {GITHUB_REPOSITORY: 'ntanwir10/guardscan', REQUEST_VERSION: '1.2.3-rc.1',
-            REQUEST_ACTION: action}, stdout: {write: (value: string) => { output += value; }}},
+            REQUEST_ACTION: action, REQUEST_RELEASE_PR: '42', REQUEST_EXPECTED_HEAD: 'a'.repeat(40)}, stdout: {write: (value: string) => { output += value; }}},
         });
         expect(output).toBe('a'.repeat(40));
         return {status: 0};
@@ -195,7 +202,7 @@ describe('release workflow safety', () => {
 
   it('requires visible matching npm bytes and tag, allowing bounded propagation retries', () => {
     const verification = namedStep(load('release-publish.yml').jobs.npm, 'Verify public registry integrity');
-    const script = verification.run.split('${{ inputs.channel }}').join('stable');
+    const script = verification.run;
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'guardscan-npm-post-publish-'));
     const bin = path.join(root, 'bin');
     fs.mkdirSync(bin);
@@ -215,7 +222,7 @@ describe('release workflow safety', () => {
         'RUNNER_TEMP="$PWD"; npm() { sh ./bin/npm "$@"; }; sleep() { :; };\n' + script], {
         cwd: root, encoding: 'utf8', timeout: 10000,
         env: {...process.env, PATH: bin + path.delimiter + process.env.PATH,
-          RUNNER_TEMP: root, NPM_MODE: mode},
+          RUNNER_TEMP: root, NPM_MODE: mode, RELEASE_INPUT_CHANNEL: 'stable'},
       });
     };
     try {
@@ -246,11 +253,12 @@ describe('release workflow safety', () => {
     const evaluate = (now: number, published = true) => {
       let output = '';
       const head = 'a'.repeat(40);
-      const events = [{type: 'train_started', payload: {releasePr: 42, sourcePrHead: head}},
+      const base = 'c'.repeat(40), tree = 'd'.repeat(40);
+      const events = [{type: 'train_started', payload: {releasePr: 42, sourcePrHead: head, sourcePrBase: base, sourcePrTree: tree}},
         ...(published ? [{type: 'channel_published', channel: 'github', timestamp: new Date(publishedAt).toISOString()}] : [])];
       const canaries = Object.fromEntries(['npm', 'pnpm', 'yarn', 'bun', 'github', 'homebrew', 'scoop', 'pypi']
         .map(channel => [channel, Array.from({length: 24}, (_, index) => ({
-          status: 'passed', checkedAt: new Date(index === 0 ? publishedAt : now).toISOString(),
+          status: 'passed', checkedAt: new Date(publishedAt + Math.min(index + 1, Math.floor((now - publishedAt) / 3600000)) * 3600000).toISOString(),
         }))]));
       class FixedDate extends Date {
         constructor(value?: string | number) { super(value === undefined ? now : value); }
@@ -258,7 +266,7 @@ describe('release workflow safety', () => {
       }
       vm.runInNewContext(script!, {
         require: (name: string) => {
-          if (name === 'fs') return {readFileSync: () => JSON.stringify({sourcePr: 42, sourcePrHead: head})};
+          if (name === 'fs') return {readFileSync: () => JSON.stringify({sourcePr: 42, sourcePrHead: head, sourcePrBase: base, sourcePrTree: tree})};
           if (name.endsWith('/promotion')) return require('../../scripts/release/promotion');
           return {readEvents: () => events, materializeReleaseState: () => ({
             version: '1.2.3-rc.1', tag: 'v1.2.3-rc.1', commit: head,
@@ -266,7 +274,7 @@ describe('release workflow safety', () => {
           })};
         },
         Date: FixedDate,
-        process: {env: {CURRENT_HEAD: head, RELEASE_PR: '42'},
+        process: {env: {CURRENT_HEAD: head, CURRENT_BASE: base, RELEASE_PR: '42'},
           stdout: {write: (value: string) => { output += value; }}},
       });
       return output;

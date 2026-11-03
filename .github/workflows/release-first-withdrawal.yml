@@ -99,6 +99,7 @@ jobs:
         env:
           RELEASE_APP_TOKEN: ${{ steps.app.outputs.token }}
         run: |
+          export GH_TOKEN="$RELEASE_APP_TOKEN"
           DEFECTIVE_TAG="v$DEFECTIVE_VERSION"
           ROLLBACK_KEY="rollback:$DEFECTIVE_VERSION"
           export ROLLBACK_KEY
@@ -154,7 +155,7 @@ jobs:
             else
               git commit -m "first release withdrawal started: $DEFECTIVE_TAG"
             fi
-            git -c "http.extraheader=AUTHORIZATION: bearer $RELEASE_APP_TOKEN" \
+            git -c credential.helper= -c 'credential.https://github.com.helper=!gh auth git-credential' \
               push origin HEAD:release-ledger
           )
       - name: Remove or verify the exact first-release catalog projection
@@ -267,12 +268,12 @@ jobs:
             CATALOG_HEAD="$(git -C catalog-withdrawal rev-parse HEAD)"
             if [ -n "$CATALOG_REMOTE_HEAD" ]; then
               git -C catalog-withdrawal \
-                -c "http.extraheader=AUTHORIZATION: bearer $GH_TOKEN" push \
+                -c credential.helper= -c 'credential.https://github.com.helper=!gh auth git-credential' push \
                 --force-with-lease="refs/heads/$CATALOG_BRANCH:$CATALOG_REMOTE_HEAD" \
                 origin "HEAD:refs/heads/$CATALOG_BRANCH"
             else
               git -C catalog-withdrawal \
-                -c "http.extraheader=AUTHORIZATION: bearer $GH_TOKEN" \
+                -c credential.helper= -c 'credential.https://github.com.helper=!gh auth git-credential' \
                 push origin "HEAD:refs/heads/$CATALOG_BRANCH"
             fi
             CATALOG_PRS="$(gh pr list --repo ntanwir10/homebrew-tap \
@@ -339,6 +340,7 @@ jobs:
           CATALOG_PR: ${{ steps.catalog.outputs.pull_request }}
           CATALOG_COMMIT: ${{ steps.catalog.outputs.commit }}
         run: |
+          export GH_TOKEN="$RELEASE_APP_TOKEN"
           node - <<'NODE'
           const fs = require('fs');
           const {appendEvent, readEvents, materializeReleaseState} = require('./cli/scripts/release/events');
@@ -445,7 +447,7 @@ jobs:
             else
               git commit -m "first release repository withdrawal complete: v$DEFECTIVE_VERSION"
             fi
-            git -c "http.extraheader=AUTHORIZATION: bearer $RELEASE_APP_TOKEN" \
+            git -c credential.helper= -c 'credential.https://github.com.helper=!gh auth git-credential' \
               push origin HEAD:release-ledger
           )
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

@@ -78,7 +78,9 @@ describe('publication convergence', () => {
       .toBe('github-publication-evidence.json');
     for (const build of Object.values(workflow('release-build.yml').jobs) as any[]) {
       for (const upload of (build.steps || []).filter((s: any) => s.uses?.startsWith('actions/upload-artifact@'))) {
-        expect(upload.with.overwrite).toBe(upload.with.name.startsWith('release-canonical-') ? false : true);
+        expect(upload.with.overwrite).toBe(upload.with.name.startsWith('release-canonical-') ? false
+          : /^(release-npm-|release-native-|release-payload-)/.test(upload.with.name)
+            && !upload.with.name.includes('-input-') ? true : undefined);
       }
     }
     const canonical = Object.values(workflow('release-build.yml').jobs).flatMap((build: any) => build.steps || [])

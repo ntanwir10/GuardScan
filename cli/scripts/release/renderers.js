@@ -101,7 +101,7 @@ function selectStandalone(manifest, os, arch, libc) {
   const label = [os, arch, libc].filter(Boolean).join('-');
   if (matches.length !== 1) throw new Error(`release manifest must contain exactly one ${label} standalone artifact`);
   const artifact = matches[0];
-  const expectedFormat = os === 'windows' ? 'zip' : 'tar.gz';
+  const expectedFormat = os === 'linux' ? 'tar.gz' : 'zip';
   if (artifact.archiveFormat !== expectedFormat) {
     throw new Error(`${label} standalone artifact must use ${expectedFormat}`);
   }

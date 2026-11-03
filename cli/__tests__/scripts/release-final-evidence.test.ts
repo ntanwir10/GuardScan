@@ -10,7 +10,7 @@ const workflow = (name: string): any => yaml.load(fs.readFileSync(path.join(repo
 
 describe('final release evidence boundaries', () => {
   it('rejects yanked or unknown-yank-state files in every PyPI acceptance path', () => {
-    const publish = workflow('release-publish.yml');
+    const publish = workflow('release-train.yml');
     const steps = [
       publish.jobs['pypi-test'].steps.find((s: any) => s.name === 'Reject conflicting TestPyPI files'),
       publish.jobs['pypi-test'].steps.find((s: any) => s.name === 'Verify complete TestPyPI file set'),

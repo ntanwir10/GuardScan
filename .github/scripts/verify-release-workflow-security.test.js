@@ -5,6 +5,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
+const {spawnSync} = require('node:child_process');
 const yaml = require('../../cli/node_modules/js-yaml');
 const {
   ATTESTED_PATHS,
@@ -60,12 +61,29 @@ test('provider onboarding attestation is deterministic and content-bound', () =>
         fs.writeFileSync(path.join(absolute, 'fixture.json'), `${file}\n`);
       } else {
         fs.mkdirSync(path.dirname(absolute), {recursive: true});
-        fs.writeFileSync(absolute, `${file}\n`);
+        fs.writeFileSync(absolute, file.endsWith('package.json') || file.endsWith('package-lock.json')
+          ? JSON.stringify({version: '1.2.3', packages: {'': {version: '1.2.3'}}, dependencies: {fixture: '1.0.0'}})
+          : `${file}\n`);
       }
     }
     const first = computeProviderOnboardingAttestation(fixture);
     assert.match(first, /^sha256:[a-f0-9]{64}$/);
     assert.equal(computeProviderOnboardingAttestation(fixture), first);
+    for (const file of ['cli/package.json', 'cli/package-lock.json']) {
+      const absolute = path.join(fixture, file);
+      const document = JSON.parse(fs.readFileSync(absolute, 'utf8'));
+      document.version = '1.2.4';
+      document.packages[''].version = '1.2.4';
+      fs.writeFileSync(absolute, JSON.stringify(document));
+      assert.equal(computeProviderOnboardingAttestation(fixture), first);
+    }
+    const packageFile = path.join(fixture, 'cli/package.json');
+    const originalPackage = fs.readFileSync(packageFile);
+    const changedPackage = JSON.parse(originalPackage);
+    changedPackage.dependencies.fixture = '2.0.0';
+    fs.writeFileSync(packageFile, JSON.stringify(changedPackage));
+    assert.notEqual(computeProviderOnboardingAttestation(fixture), first);
+    fs.writeFileSync(packageFile, originalPackage);
     const issuedAt = new Date('2026-08-24T12:00:00.000Z');
     const attestation = createProviderOnboardingAttestation(first, issuedAt, 30);
     assert.match(
@@ -159,10 +177,23 @@ test('manual release entry points fail closed while disabled', () => {
 
 test('release signer verification binds the reusable workflow and SHA', () => {
   for (const name of ['release-build.yml', 'release-publish.yml', 'release-train.yml', 'release-canary.yml']) {
-    const source = readWorkflow(name);
+    const source = name === 'release-train.yml'
+      ? readWorkflow(name) + fs.readFileSync(path.join(root, 'cli/scripts/release/authenticate-payload.js'), 'utf8')
+      : readWorkflow(name);
+    if (name === 'release-train.yml') {
+      assert.match(source, /authenticatePayload/);
+      assert.match(source, /'--certificate-identity', `https:\/\/github\.com\/\$\{repository\}\/\.github\/workflows\/release-build\.yml@refs\/heads\/main`/);
+      assert.match(source, /'--certificate-github-workflow-ref', 'refs\/heads\/main'/);
+      assert.match(source, /'--certificate-github-workflow-sha', run\.head_sha/);
+      continue;
+    }
     assert.match(source, /--certificate-identity\s+"https:\/\/github\.com\/\$\{GITHUB_REPOSITORY\}\/\.github\/workflows\/release-build\.yml@refs\/heads\/main"/);
     assert.match(source, /--certificate-github-workflow-ref\s+"refs\/heads\/main"/);
-    assert.match(source, /--certificate-github-workflow-sha\s+"\$RELEASE_BUILD_WORKFLOW_SHA"/);
+    assert.match(source, /--certificate-github-workflow-sha\s+"\$(?:RELEASE_BUILD_WORKFLOW_SHA|BUILD_WORKFLOW_SHA)"/);
+    if (name === 'release-publish.yml') {
+      assert.match(source, /BUILD_WORKFLOW_SHA="\$\(jq -er '\.head_sha' <<< "\$BUILD_RUN"\)"/);
+      assert.match(source, /\.event == "workflow_dispatch" and \.head_branch == "main"/);
+    }
     assert.doesNotMatch(source, /certificate-identity-regexp/);
   }
 });
@@ -170,7 +201,8 @@ test('release signer verification binds the reusable workflow and SHA', () => {
 test('Chocolatey publication selects the exact expected package', () => {
   const source = readWorkflow('release-publish.yml');
   assert.doesNotMatch(source, /local-feed\\\\\*\.nupkg\s*\|\s*Select-Object\s+-First/);
-  assert.match(source, /expectedPackageName\s*=\s*"guardscan\.\$candidateVersion\.nupkg"/);
+  assert.match(source, /Get-Item -LiteralPath "local-feed\/guardscan\.\$version\.nupkg"/);
+  assert.match(source, /\$version = \$env:RELEASE_TAG.TrimStart\('v'\)/);
 });
 
 test('rollback pins trusted control-plane code and fetches the defective tag as data', () => {
@@ -191,6 +223,10 @@ test('release train requires explicit preflight eligibility while monitoring pre
   assert.equal(workflow.jobs['credential-health'].permissions?.contents, 'read');
   assert.equal(workflow.jobs['credential-health'].with?.release_preflight, true);
   assert.match(train, /needs\.credential-health\.outputs\.release_eligible == 'true'/);
+  for (const name of ['rollback', 'first-release-withdrawal']) {
+    assert.deepEqual(workflow.jobs[name].needs, ['validate-request']);
+    assert.doesNotMatch(workflow.jobs[name].if, /credential-health/);
+  }
   assert.doesNotMatch(train, /needs\.credential-health\.outputs\.status == 'healthy'/);
   assert.match(health, /RELEASE_PROVIDER_ONBOARDING_ATTESTATION/);
   assert.match(health, /provider-onboarding-attestation\.js/);
@@ -202,10 +238,10 @@ test('release train requires explicit preflight eligibility while monitoring pre
 
 test('canary aggregation delegates fail-closed incident handling to record-canary', () => {
   const source = readWorkflow('release-canary.yml');
-  assert.match(source, /record-canary/);
-  assert.match(source, /--expected-targets/);
+  assert.match(source, /recordCanary\(\{ledgerFile: ledger/);
+  assert.match(source, /const expectedTargets = \{\.\.\.DEFAULT_RC_CANARY_TARGETS\}/);
   assert.match(source, /invalidCanaryReport: true/);
-  assert.match(source, /invalidReports\.filter\(report => report\.version === version\)/);
+  assert.match(source, /\.filter\(\(\{report\}\) => report\.version === process\.env\.TRAIN_VERSION\)/);
   assert.doesNotMatch(source, /appendEvent/);
 });
 
@@ -275,4 +311,72 @@ test('credentialed release jobs never execute release-source code', () => {
       }
     }
   }
+});
+
+
+test('App-token Git authentication uses the GitHub credential helper without secret arguments', () => {
+  for (const name of ['release-train.yml', 'release-canary.yml', 'release-publish.yml', 'release-first-withdrawal.yml']) {
+    const source = readWorkflow(name);
+    assert.doesNotMatch(source, /http\.extraheader=AUTHORIZATION: bearer/);
+    assert.match(source, /-c credential\.helper= -c 'credential\.https:\/\/github\.com\.helper=!gh auth git-credential'/);
+  }
+  const args = ['-c', 'credential.helper=', '-c',
+    'credential.https://github.com.helper=!gh auth git-credential', 'credential', 'fill'];
+  const token = 'guardscan-fixture-installation-token';
+  const result = spawnSync('git', args, {encoding: 'utf8', timeout: 5000,
+    input: 'protocol=https\nhost=github.com\n\n',
+    env: {...process.env, GH_HOST: 'github.com', GH_TOKEN: token, GITHUB_TOKEN: '',
+      GIT_TERMINAL_PROMPT: '0', GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null'}});
+  assert.equal(result.status, 0);
+  assert.equal(result.stdout.includes(`password=${token}`), true);
+  assert.equal(args.some(argument => argument.includes(token)), false);
+});
+
+test('catalog branch validation allows unchanged verifier bytes and rejects unrelated or missing files', () => {
+  const required = ['Formula/guardscan.rb', 'bucket/guardscan.json', 'channel-lock.json'];
+  for (const name of ['release-publish.yml', 'release-train.yml']) {
+    const workflow = parseWorkflow(name);
+    const job = name === 'release-publish.yml' ? workflow.jobs.catalog : workflow.jobs.reconcile;
+    const run = job.steps.find(step => step.run?.includes('assert_exact_')).run;
+    const start = run.indexOf('assert_exact_');
+    const end = run.indexOf(name === 'release-publish.yml' ? 'MAIN_ALREADY_CURRENT=false'
+      : 'if [ "$CATALOG_CLASSIFICATION" != exact ]; then', start);
+    assert.ok(end > start);
+    const fn = run.slice(start, end);
+    const functionName = fn.slice(0, fn.indexOf('()'));
+    for (const [paths, valid] of [[required, true], [['.github/workflows/verify.yml', ...required], true],
+      [[...required, 'unexpected.txt'], false], [required.slice(1), false]]) {
+      const result = spawnSync('bash', ['-eu', '-c', `
+        git() { case "$*" in *merge-base*) return 0;; *diff*) printf '%s\\n' "$CHANGED_FIXTURE";; *) return 1;; esac; }
+        projection_matches() { return 0; }
+        ${fn}
+        ${functionName}
+      `], {encoding: 'utf8', env: {...process.env, BRANCH: 'fixture', CHANGED_FIXTURE: paths.join('\n')}});
+      assert.equal(result.status === 0, valid, `${name}: exact catalog change set`);
+    }
+  }
+});
+
+
+test('native archive optional evidence absence succeeds while copy failures propagate', () => {
+  const step = parseWorkflow('release-build.yml').jobs['native-finalize'].steps
+    .find(step => step.name === 'Archive signed executable with trusted tooling');
+  const loop = step.run.split('\n').find(line => line.startsWith('for file in guardscan.sigstore.json'));
+  assert.ok(loop);
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'guardscan-optional-evidence-'));
+  try {
+    fs.mkdirSync(path.join(root, 'standalone'));
+    fs.mkdirSync(path.join(root, 'native-output'));
+    for (const [id, file] of [['linux-x64-glibc', 'guardscan.sigstore.json'],
+      ['darwin-arm64', 'apple-code-signing.txt'], ['windows-x64', 'authenticode.txt']]) {
+      fs.writeFileSync(path.join(root, 'standalone', file), id);
+      const script = loop.replaceAll('${{ matrix.id }}', id);
+      const result = spawnSync('bash', ['-e', '-c', script], {cwd: root, encoding: 'utf8'});
+      assert.equal(result.status, 0);
+      assert.equal(fs.readFileSync(path.join(root, 'native-output', `${id}.${file}`), 'utf8'), id);
+      const failure = spawnSync('bash', ['-e', '-c', `cp() { return 23; }; ${script}`], {cwd: root, encoding: 'utf8'});
+      assert.equal(failure.status, 23);
+      fs.unlinkSync(path.join(root, 'standalone', file));
+    }
+  } finally { fs.rmSync(root, {recursive: true, force: true}); }
 });

@@ -61,7 +61,15 @@ function computeProviderOnboardingAttestation(repositoryRoot, repository = EXPEC
   const files = ATTESTED_PATHS.flatMap(entry => relativeFiles(repositoryRoot, entry));
   assert.equal(new Set(files).size, files.length, 'provider onboarding paths overlap');
   for (const file of files) {
-    records.push(`${file}\0${sha256(fs.readFileSync(path.join(repositoryRoot, file)))}\n`);
+    let contents = fs.readFileSync(path.join(repositoryRoot, file));
+    if (file === 'cli/package.json' || file === 'cli/package-lock.json') {
+      const document = JSON.parse(contents.toString('utf8'));
+      // Release version bumps do not change the attested provider control plane.
+      delete document.version;
+      if (document.packages?.['']) delete document.packages[''].version;
+      contents = Buffer.from(JSON.stringify(document));
+    }
+    records.push(`${file}\0${sha256(contents)}\n`);
   }
   return `sha256:${sha256(records.join(''))}`;
 }
