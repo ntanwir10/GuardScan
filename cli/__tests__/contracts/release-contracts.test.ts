@@ -366,13 +366,14 @@ describe('release contract schemas', () => {
       timestamp,
       type: 'canary_recorded',
       idempotencyKey: 'canary:release:run:1',
-      payload: {status: 'passed'},
+      channel: 'npm',
+      payload: {status: 'passed', evidenceUrl: 'https://example.test/canary'},
       eventHash: digest,
     };
     expect(validateEvent(event)).toBe(true);
-    expect(validateEvent({...event, payload: {status: 'passed', checkedAt: timestamp}})).toBe(true);
-    expect(validateEvent({...event, payload: {status: 'passed', checkedAt: 'not-a-date'}})).toBe(false);
-    expect(validateEvent({...event, payload: {status: 'passed', checkedAt: 123}})).toBe(false);
+    expect(validateEvent({...event, payload: {status: 'passed', evidenceUrl: 'https://example.test/canary', checkedAt: timestamp}})).toBe(true);
+    expect(validateEvent({...event, payload: {status: 'passed', evidenceUrl: 'https://example.test/canary', checkedAt: 'not-a-date'}})).toBe(false);
+    expect(validateEvent({...event, payload: {status: 'passed', evidenceUrl: 'https://example.test/canary', checkedAt: 123}})).toBe(false);
   });
 
   it('binds the shared channel catalog to GuardScan source, generator, and file digests', () => {

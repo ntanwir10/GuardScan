@@ -106,7 +106,7 @@ describe('release artifact determinism', () => {
     expect(workflowSource).toContain('spctl --assess --type execute --verbose=4 "$RUNNER_TEMP/guardscan-unpacked/guardscan"');
     expect(workflowSource.match(/spctl --assess --type execute/g)).toHaveLength(1);
     expect(workflowSource).toContain("trap 'rm -f \"$RUNNER_TEMP/AuthKey.p8\"' EXIT");
-    expect(workflowSource).not.toContain('stapled-notarization.dmg');
+    expect(workflowSource).toContain('cp standalone/stapled-notarization.dmg \"native-output/${{ matrix.id }}.stapled-notarization.dmg\"');
     expect(workflowSource).not.toContain('xcrun stapler staple "$RUNNER_TEMP/guardscan.dmg"');
     expect(workflowSource.indexOf('name: Archive signed executable with trusted tooling'))
       .toBeLessThan(workflowSource.indexOf('name: Notarize exact macOS archive'));
@@ -165,7 +165,8 @@ describe('release artifact determinism', () => {
       expect(first.created).toBe(true);
       expect(fs.existsSync(output)).toBe(true);
       fs.writeFileSync(output, '{}');
-      expect(() => writeReleaseManifest(source, descriptor, output)).toThrow(/manifest is invalid/);
+      expect(() => writeReleaseManifest(source, descriptor, output)).toThrow(/conflicts with existing output/);
+      expect(fs.readFileSync(output, 'utf8')).toBe('{}');
     } finally {
       fs.rmSync(root, {recursive: true, force: true});
     }

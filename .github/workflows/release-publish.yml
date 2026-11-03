@@ -50,7 +50,7 @@ jobs:
         with:
           node-version: ${{ env.RELEASE_NODE_VERSION }}
       - working-directory: cli
-        run: npm ci
+        run: npm ci --ignore-scripts
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: release-payload-${{ inputs.tag }}
@@ -161,6 +161,7 @@ jobs:
           cosign verify-blob \
             --bundle payload/SHA256SUMS.sigstore.json \
             --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release-build.yml@refs/heads/main" \
+            --certificate-github-workflow-ref "refs/heads/main" \
             --certificate-github-workflow-sha "$BUILD_WORKFLOW_SHA" \
             --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
             payload/SHA256SUMS
@@ -168,12 +169,14 @@ jobs:
           (cd payload && sha256sum --check SHA256SUMS)
           TAG_SHA="$(gh api "repos/${GITHUB_REPOSITORY}/commits/v$VERSION" --jq .sha)"
           jq -e --arg repository "$GITHUB_REPOSITORY" --arg version "$VERSION" \
-            --arg run_id "$PRODUCER_RUN_ID" --arg attempt "$PRODUCER_ATTEMPT" --arg tag_sha "$TAG_SHA" '
+            --arg run_id "$PRODUCER_RUN_ID" --arg attempt "$PRODUCER_ATTEMPT" \
+            --arg workflow_sha "$BUILD_WORKFLOW_SHA" --arg tag_sha "$TAG_SHA" '
               .schemaVersion == "guardscan.release-manifest.v1" and
               .version == $version and .tag == ("v" + $version) and .commit == $tag_sha and
               .producer.provider == "github-actions" and
               (.producer.repository | ascii_downcase) == ($repository | ascii_downcase) and
               .producer.workflow == ".github/workflows/release-build.yml" and
+              .producer.workflowSha == $workflow_sha and
               .producer.runId == $run_id and (.producer.runAttempt | tostring) == $attempt and
               .producer.sourceRef == ("refs/tags/v" + $version)
             ' payload/release-manifest.json >/dev/null || {
@@ -207,21 +210,21 @@ jobs:
             echo "::error::Release-integrity incident: publication has no persisted checkpoint release"
             exit 1
           fi
-          RELEASE_JSON="$(gh release view "${{ inputs.tag }}" \
+          RELEASE_JSON="$(gh release view "$RELEASE_INPUT_TAG" \
             --repo "${{ github.repository }}" --json isDraft,isPrerelease)"
           jq -e '.isDraft | type == "boolean"' <<< "$RELEASE_JSON" >/dev/null
           jq -e '.isPrerelease | type == "boolean"' <<< "$RELEASE_JSON" >/dev/null
           IS_DRAFT="$(jq -r '.isDraft' <<< "$RELEASE_JSON")"
           IS_PRERELEASE="$(jq -r '.isPrerelease' <<< "$RELEASE_JSON")"
           EXPECTED_PRERELEASE=false
-          if [ "${{ inputs.channel }}" = rc ]; then EXPECTED_PRERELEASE=true; fi
+          if [ "$RELEASE_INPUT_CHANNEL" = rc ]; then EXPECTED_PRERELEASE=true; fi
           if [ "$IS_PRERELEASE" != "$EXPECTED_PRERELEASE" ]; then
             echo 'Release channel mismatch: existing release prerelease state differs from requested channel.' >&2
             exit 1
           fi
           while IFS= read -r -d '' FILE; do
             NAME="$(basename "$FILE")"
-            ASSET_JSON="$(gh release view "${{ inputs.tag }}" --repo "${{ github.repository }}" --json assets)"
+            ASSET_JSON="$(gh release view "$RELEASE_INPUT_TAG" --repo "${{ github.repository }}" --json assets)"
             ASSET_API_URL="$(jq -er --arg name "$NAME" --arg repository "$GITHUB_REPOSITORY" '
               [.assets[]? | select(.name == $name)] as $matches |
               if ($matches | length) > 1 then error("duplicate release asset name")
@@ -260,6 +263,7 @@ jobs:
           done < <(find payload -maxdepth 1 -type f -print0 | sort -z)
       - name: Redownload and verify every draft asset before publication
         env:
+          BUILD_WORKFLOW_SHA: ${{ steps.release-build-identity.outputs.workflow_sha }}
           GH_TOKEN: ${{ github.token }}
         run: |
           mkdir redownload
@@ -275,7 +279,8 @@ jobs:
           cosign verify-blob \
             --bundle redownload/SHA256SUMS.sigstore.json \
             --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release-build.yml@refs/heads/main" \
-            --certificate-github-workflow-sha "${{ steps.release-build-identity.outputs.workflow_sha }}" \
+            --certificate-github-workflow-ref "refs/heads/main" \
+            --certificate-github-workflow-sha "$BUILD_WORKFLOW_SHA" \
             --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
             redownload/SHA256SUMS
           (cd redownload && sha256sum --check SHA256SUMS)
@@ -416,7 +421,7 @@ jobs:
         working-directory: cli
         run: |
           DIST_TAG=latest
-          if [ "${{ inputs.channel }}" = rc ]; then DIST_TAG=next; fi
+          if [ "$RELEASE_INPUT_CHANNEL" = rc ]; then DIST_TAG=next; fi
           npm run release:npm-preflight -- \
             --artifact-dir ../npm-artifact \
             --expected-dist-tag "$DIST_TAG" \
@@ -438,7 +443,7 @@ jobs:
         working-directory: cli
         run: |
           DIST_TAG=latest
-          if [ "${{ inputs.channel }}" = rc ]; then DIST_TAG=next; fi
+          if [ "$RELEASE_INPUT_CHANNEL" = rc ]; then DIST_TAG=next; fi
           for ATTEMPT in $(seq 1 30); do
             : > "$RUNNER_TEMP/npm-preflight-output"
             npm run release:npm-preflight -- \
@@ -599,11 +604,11 @@ jobs:
               }
               CHANGED_PATHS="$(git diff --name-only origin/main...HEAD | sort)"
               EXPECTED_PATHS="$(printf '%s\n' \
-                .github/workflows/verify.yml \
                 Formula/guardscan.rb \
                 bucket/guardscan.json \
                 channel-lock.json)"
-              test "$CHANGED_PATHS" = "$EXPECTED_PATHS" || {
+              ACTUAL_GENERATED_PATHS="$(printf '%s\n' "$CHANGED_PATHS" | grep -Fvx '.github/workflows/verify.yml' || true)"
+              test "$ACTUAL_GENERATED_PATHS" = "$EXPECTED_PATHS" || {
                 echo "::error::Release-integrity incident: $BRANCH contains an unexpected diff"
                 printf '%s\n' "$CHANGED_PATHS" >&2
                 exit 1
@@ -640,7 +645,7 @@ jobs:
               git add Formula/guardscan.rb bucket/guardscan.json channel-lock.json .github/workflows/verify.yml
               git commit -m "guardscan $RELEASE_TAG"
               assert_exact_projection_branch
-              git -c "http.extraheader=AUTHORIZATION: bearer $GH_TOKEN" push \
+              git -c credential.helper= -c 'credential.https://github.com.helper=!gh auth git-credential' push \
                 --force-with-lease="refs/heads/$BRANCH" origin HEAD:"$BRANCH"
             fi
             CATALOG_COMMIT="$(git rev-parse HEAD)"

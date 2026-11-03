@@ -97,6 +97,7 @@ jobs:
     permissions:
       contents: read
       id-token: write
+      attestations: write
     uses: ./.github/workflows/release-build.yml
     with:
       ref: ${{ needs.validate.outputs.head }}

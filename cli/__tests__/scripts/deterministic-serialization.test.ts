@@ -39,8 +39,8 @@ describe('locale-independent release serialization', () => {
         nodeVersion: '22.23.1',
         executable: {filename: 'guardscan', sha256: 'b'.repeat(64)},
         components: [
-          {name: 'a', version: '1', type: 'library', purl: 'pkg:generic/a@1'},
-          {name: 'B', version: '1', type: 'library', purl: 'pkg:generic/b@1'},
+          {name: 'a', version: '1', type: 'library', purl: 'pkg:npm/a@1'},
+          {name: 'B', version: '1', type: 'library', purl: 'pkg:npm/B@1'},
         ],
       });
       expect(sboms.spdx.packages.map((component: Record<string, string>) => component.name))

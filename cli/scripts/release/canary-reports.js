@@ -4,7 +4,7 @@ const EXPECTED_CANARY_TARGETS = Object.freeze([
   ['npm', 'npm'], ['pnpm', 'pnpm'], ['yarn', 'yarn-classic'], ['yarn', 'yarn-modern'], ['bun', 'bun'],
   ...['linux-x64-glibc', 'linux-arm64-glibc', 'darwin-arm64', 'darwin-x64', 'windows-x64']
     .flatMap(target => [['github', target], ['pypi', target.replace(/-glibc$/, '')]]),
-  ['homebrew', 'homebrew-macos'], ['homebrew', 'homebrew-linux'], ['scoop', 'scoop'],
+  ['homebrew', 'macOS'], ['homebrew', 'Linux'], ['scoop', 'Windows'],
   ['winget', 'windows-x64'], ['chocolatey', 'windows-x64'],
 ].map(target => Object.freeze(target)));
 

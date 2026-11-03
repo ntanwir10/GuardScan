@@ -3,6 +3,7 @@
 const crypto = require('crypto');
 const {CHANNELS} = require('./lib');
 const {compareUtf8} = require('./deterministic');
+const {canaryChannelEventType} = require('./distribution-guards');
 const {
   appendEvent,
   canonicalJson,
@@ -176,7 +177,7 @@ function recordCanary(input, reports, expectedTargets, evaluatedAt) {
   const seen = new Map();
   const validReports = [];
   const observedFailures = [];
-  const existingKeys = new Set(events.map(event => event.idempotencyKey));
+  const existingEvents = new Map(events.map(event => [event.idempotencyKey, event]));
   for (let index = 0; index < reportList.length; index += 1) {
     const report = reportList[index];
     const reportErrors = validateReport(report, initialState.version, expected, evaluated, maxAge);
@@ -189,7 +190,16 @@ function recordCanary(input, reports, expectedTargets, evaluatedAt) {
       failures.push({index, channel: report?.channel, target: report?.target, reason: reportErrors.join('; ')});
     } else {
       const key = `canary:${initialState.version}:${report.channel}:${report.target}:${report.checkedAt}`;
-      if (!existingKeys.has(key)) validReports.push({report, key});
+      const previous = existingEvents.get(key);
+      const payload = {status: report.status, target: report.target,
+        checkedAt: report.checkedAt, evidenceUrl: report.evidenceUrl};
+      if (previous && (previous.type !== 'canary_recorded' || previous.channel !== report.channel
+          || canonicalJson(previous.payload) !== canonicalJson(payload))) {
+        failures.push({index, channel: report.channel, target: report.target,
+          reason: 'canary report conflicts with recorded evidence'});
+        continue;
+      }
+      if (!previous) validReports.push({report, key});
       if (report.status === 'failed') {
         observedFailures.push({index, channel: report.channel, target: report.target, reason: 'canary report status is failed'});
       }
@@ -257,8 +267,7 @@ function recordCanary(input, reports, expectedTargets, evaluatedAt) {
     const channelReports = reportList.filter(report => report.channel === channel);
     if (channelReports.some(report => report.status !== 'passed')) continue;
     const state = materializeReleaseState(currentEvents);
-    const current = state.channels[channel];
-    if (!current || ['verified', 'withdrawn', 'superseded'].includes(current.status)) continue;
+    if (canaryChannelEventType(state, channel, true, true) !== 'channel_verified') continue;
     const latestCheckedAt = channelReports.map(report => report.checkedAt).sort(compareUtf8).at(-1);
     const result = appendEvent(options.ledgerFile, {
       version: state.version,

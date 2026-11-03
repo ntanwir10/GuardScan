@@ -113,7 +113,7 @@ describe('release reviewer regressions', () => {
     ['first sample arrives after the publication window', 91, 24 * 60, 'canary_start_late'],
     ['latest sample does not reach soak eligibility', 1, 23 * 60 + 59, 'canary_soak_incomplete'],
   ])('denies promotion when %s', (_label, firstMinute, finalMinute, reason) => {
-    const channels = ['npm'];
+    const channels = ['npm', 'pnpm', 'yarn', 'bun', 'github', 'homebrew', 'scoop', 'pypi'];
     const published = Date.parse(timestamp);
     const canaries = Array.from({length: 24}, (_, index) => {
       const minute = Number(firstMinute) + (Number(finalMinute) - Number(firstMinute)) * index / 23;
@@ -168,15 +168,15 @@ describe('release reviewer regressions', () => {
         currentSourcePrHead: commit,
         currentSourcePrBase: 'c'.repeat(40),
         evaluatedAt: '2026-10-02T01:00:00.000Z',
-        requiredChannels: ['npm'],
-        canaries: Array.from({length: 24}, (_, index) => {
-          const minute = Number(firstMinute) + (Number(finalMinute) - Number(firstMinute)) * index / 23;
+        requiredChannels: ['npm', 'pnpm', 'yarn', 'bun', 'github', 'homebrew', 'scoop', 'pypi'],
+        canaries: ['npm', 'pnpm', 'yarn', 'bun', 'github', 'homebrew', 'scoop', 'pypi'].flatMap(channel => Array.from({length: 25}, (_, index) => {
+          const minute = Number(firstMinute) + (Number(finalMinute) - Number(firstMinute)) * index / 24;
           return {
-            channel: 'npm',
+            channel,
             status: 'passed',
             checkedAt: new Date(published + minute * 60_000).toISOString(),
           };
-        }),
+        })),
         incidents: [],
       });
       const file = path.join(root, 'decision.json');
@@ -219,6 +219,7 @@ describe('release reviewer regressions', () => {
         provider: 'github-actions',
         repository: 'ntanwir10/GuardScan',
         workflow: '.github/workflows/release.yml',
+        workflowSha: 'f'.repeat(40),
         runId: '123',
         runAttempt: 1,
         sourceRef: 'refs/tags/v1.2.3',

@@ -261,6 +261,9 @@ jobs:
     name: Sign and attest native ${{ matrix.id }}
     if: inputs.mode == 'production'
     runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        shell: bash
     needs: [quality, native-build]
     environment: ${{ matrix.os == 'darwin' && 'apple-notarization' || matrix.os == 'windows' && 'windows-signing' || inputs.channel == 'rc' && 'release-rc' || 'release-stable' }}
     permissions:
@@ -337,6 +340,16 @@ jobs:
           const digest = crypto.createHash('sha256').update(executable).digest('hex');
           if (executable.length <= 0 || executable.length !== prototype.executable.size || digest !== prototype.executable.sha256) throw new Error('native executable size or SHA-256 does not match prototype');
           NODE
+      - name: Resolve canonical native build timestamp
+        env:
+          SOURCE_REF: ${{ inputs.ref }}
+        run: |
+          node -e '
+            const fs = require("fs");
+            const {resolveGitTimestamp} = require("./cli/scripts/release/lib");
+            fs.appendFileSync(process.env.GITHUB_ENV,
+              "SOURCE_TIMESTAMP=" + resolveGitTimestamp("source", process.env.SOURCE_REF) + "\n");
+          '
       - name: Install Sigstore cosign
         if: matrix.os == 'linux'
         uses: sigstore/cosign-installer@d58896d6a1865668819e1d91763c7751a165e159 # v3.9.2
@@ -365,11 +378,14 @@ jobs:
           security import "$RUNNER_TEMP/certificate.p12" -P "$APPLE_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN"
           security list-keychain -d user -s "$KEYCHAIN"
           security set-key-partition-list -S apple-tool:,apple: -s -k "$RUNNER_TEMP" "$KEYCHAIN"
-      - name: Sign and verify macOS executable
+      - name: Sign, notarize, staple, and verify macOS executable
         if: matrix.os == 'darwin'
         shell: bash
         env:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+          APPLE_NOTARY_PRIVATE_KEY: ${{ secrets.APPLE_NOTARY_PRIVATE_KEY }}
         run: |
           KEYCHAIN="$RUNNER_TEMP/guardscan-signing.keychain-db"
           IDENTITY="$(security find-identity -v -p codesigning "$KEYCHAIN" | awk -v team="($APPLE_TEAM_ID)" 'index($0, "Developer ID Application:") && index($0, team) {print $2}')"
@@ -378,11 +394,44 @@ jobs:
           codesign --force --options runtime --timestamp \
             --entitlements .github/release/macos-entitlements.plist --sign "$IDENTITY" standalone/guardscan
           codesign --verify --deep --strict --verbose=2 standalone/guardscan
-          EXPECTED_VERSION="${{ inputs.tag }}"
+          EXPECTED_VERSION="$RELEASE_INPUT_TAG"
           SIGNED_VERSION="$(GUARDSCAN_HOME="$RUNNER_TEMP/post-sign-home" GUARDSCAN_NO_TELEMETRY=true \
             GUARDSCAN_OFFLINE=true standalone/guardscan --version | tail -n 1 | tr -d '\r')"
           test "$SIGNED_VERSION" = "${EXPECTED_VERSION#v}"
+          printf '%s' "$APPLE_NOTARY_PRIVATE_KEY" > "$RUNNER_TEMP/AuthKey.p8"
+          mkdir "$RUNNER_TEMP/notarization-volume"
+          cp standalone/guardscan "$RUNNER_TEMP/notarization-volume/guardscan"
+          hdiutil create \
+            -volname "GuardScan" \
+            -srcfolder "$RUNNER_TEMP/notarization-volume" \
+            -format UDZO \
+            "$RUNNER_TEMP/guardscan-notarization.dmg"
+          codesign --force --timestamp --sign "$IDENTITY" "$RUNNER_TEMP/guardscan-notarization.dmg"
+          xcrun notarytool submit "$RUNNER_TEMP/guardscan-notarization.dmg" \
+            --key "$RUNNER_TEMP/AuthKey.p8" \
+            --key-id "$APPLE_NOTARY_KEY_ID" \
+            --issuer "$APPLE_NOTARY_ISSUER_ID" \
+            --wait --output-format json > "$RUNNER_TEMP/notary-submission.json"
+          SUBMISSION_ID="$(node -p 'require(process.argv[1]).id' "$RUNNER_TEMP/notary-submission.json")"
+          xcrun notarytool log "$SUBMISSION_ID" \
+            --key "$RUNNER_TEMP/AuthKey.p8" \
+            --key-id "$APPLE_NOTARY_KEY_ID" \
+            --issuer "$APPLE_NOTARY_ISSUER_ID" \
+            "$RUNNER_TEMP/apple-notarization.json"
+          node -e '
+            const submission = require(process.argv[1]);
+            const log = require(process.argv[2]);
+            if (submission.status !== "Accepted" || log.status !== "Accepted") {
+              throw new Error(`notarization was not accepted: ${submission.status || log.status}`);
+            }
+          ' "$RUNNER_TEMP/notary-submission.json" "$RUNNER_TEMP/apple-notarization.json"
+          xcrun stapler staple "$RUNNER_TEMP/guardscan-notarization.dmg"
+          xcrun stapler validate "$RUNNER_TEMP/guardscan-notarization.dmg"
+          spctl --assess --type open --context context:primary-signature --verbose=4 "$RUNNER_TEMP/guardscan-notarization.dmg"
+          cp "$RUNNER_TEMP/apple-notarization.json" standalone/apple-notarization.json
+          cp "$RUNNER_TEMP/guardscan-notarization.dmg" standalone/stapled-notarization.dmg
           codesign -dvvv standalone/guardscan 2> standalone/apple-code-signing.txt
+
       - name: Remove ephemeral Apple signing material
         if: always() && matrix.os == 'darwin'
         shell: bash
@@ -419,7 +468,7 @@ jobs:
       - name: Generate SBOM with trusted default-branch tooling
         shell: bash
         run: |
-          ARGS=(--kind artifact-sbom --output-dir standalone-sbom --prototype-metadata standalone/standalone-prototype.json --executable "standalone/${{ matrix.executable }}" --platform-os "${{ matrix.os }}" --platform-arch "${{ matrix.arch }}" --timestamp "$(git -C source show -s --format=%cI "$RELEASE_INPUT_REF")" --package-root "$GITHUB_WORKSPACE/source/cli" --repository-root "$GITHUB_WORKSPACE/source" --schema-root "$GITHUB_WORKSPACE/cli")
+          ARGS=(--kind artifact-sbom --output-dir standalone-sbom --prototype-metadata standalone/standalone-prototype.json --executable "standalone/${{ matrix.executable }}" --platform-os "${{ matrix.os }}" --platform-arch "${{ matrix.arch }}" --timestamp "$SOURCE_TIMESTAMP" --package-root "$GITHUB_WORKSPACE/source/cli" --repository-root "$GITHUB_WORKSPACE/source" --schema-root "$GITHUB_WORKSPACE/cli")
           if [ -n "${{ matrix.libc }}" ]; then ARGS+=(--platform-libc "${{ matrix.libc }}"); fi
           node cli/scripts/release/index.js build "${ARGS[@]}"
       - name: Attest signed executable
@@ -471,12 +520,16 @@ jobs:
       - name: Archive signed executable with trusted tooling
         shell: bash
         run: |
-          ARGS=(--kind archive --output-dir native-output --executable "standalone/${{ matrix.executable }}" --evidence standalone/evidence.json --platform-os "${{ matrix.os }}" --platform-arch "${{ matrix.arch }}" --timestamp "$(git -C source show -s --format=%cI "$RELEASE_INPUT_REF")" --package-root "$GITHUB_WORKSPACE/source/cli" --repository-root "$GITHUB_WORKSPACE/source" --schema-root "$GITHUB_WORKSPACE/cli")
+          ARGS=(--kind archive --output-dir native-output --executable "standalone/${{ matrix.executable }}" --evidence standalone/evidence.json --platform-os "${{ matrix.os }}" --platform-arch "${{ matrix.arch }}" --timestamp "$SOURCE_TIMESTAMP" --package-root "$GITHUB_WORKSPACE/source/cli" --repository-root "$GITHUB_WORKSPACE/source" --schema-root "$GITHUB_WORKSPACE/cli")
           if [ -n "${{ matrix.libc }}" ]; then ARGS+=(--platform-libc "${{ matrix.libc }}"); fi
           node cli/scripts/release/index.js build "${ARGS[@]}"
           cp standalone-sbom/guardscan-*.json native-output/
           cp "standalone/${{ matrix.id }}.executable.provenance.sigstore.json" native-output/
-          for file in guardscan.sigstore.json apple-code-signing.txt authenticode.txt; do [ -f "standalone/$file" ] && cp "standalone/$file" "native-output/${{ matrix.id }}.$file"; done
+          if [ "${{ matrix.os }}" = darwin ]; then
+            cp standalone/stapled-notarization.dmg "native-output/${{ matrix.id }}.stapled-notarization.dmg"
+            cp standalone/apple-notarization.json "native-output/${{ matrix.id }}.dmg.apple-notarization.json"
+          fi
+          for file in guardscan.sigstore.json apple-code-signing.txt authenticode.txt; do if [ -f "standalone/$file" ]; then cp "standalone/$file" "native-output/${{ matrix.id }}.$file"; fi; done
       - name: Notarize exact macOS archive
         if: matrix.os == 'darwin'
         shell: bash
@@ -551,7 +604,7 @@ jobs:
       - name: Build exact signed Python wheel with trusted tooling
         shell: bash
         run: |
-          ARGS=(--kind python-wheel --output-dir wheel-output --executable "standalone/${{ matrix.executable }}" --platform-os "${{ matrix.os }}" --platform-arch "${{ matrix.arch }}" --timestamp "$(git -C source show -s --format=%cI "$RELEASE_INPUT_REF")" --package-root "$GITHUB_WORKSPACE/source/cli" --repository-root "$GITHUB_WORKSPACE/source" --schema-root "$GITHUB_WORKSPACE/cli")
+          ARGS=(--kind python-wheel --output-dir wheel-output --executable "standalone/${{ matrix.executable }}" --platform-os "${{ matrix.os }}" --platform-arch "${{ matrix.arch }}" --timestamp "$SOURCE_TIMESTAMP" --package-root "$GITHUB_WORKSPACE/source/cli" --repository-root "$GITHUB_WORKSPACE/source" --schema-root "$GITHUB_WORKSPACE/cli")
           if [ -n "${{ matrix.libc }}" ]; then ARGS+=(--platform-libc "${{ matrix.libc }}"); fi
           node cli/scripts/release/index.js build "${ARGS[@]}"
       - name: Attest and cryptographically verify Python wheel
@@ -780,6 +833,9 @@ jobs:
     name: Provider rehearsal signing ${{ matrix.id }}
     if: inputs.mode == 'rehearsal'
     runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        shell: bash
     needs: [provider-build]
     environment: ${{ matrix.os == 'darwin' && 'apple-notarization' || 'windows-signing' }}
     permissions:

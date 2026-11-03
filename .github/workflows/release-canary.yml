@@ -203,11 +203,11 @@ jobs:
             executable: guardscan
           - id: darwin-arm64
             runner: macos-15
-            archive: tar.gz
+            archive: zip
             executable: guardscan
           - id: darwin-x64
             runner: macos-15-intel
-            archive: tar.gz
+            archive: zip
             executable: guardscan
           - id: windows-x64
             runner: windows-2025
@@ -286,6 +286,7 @@ jobs:
           cosign verify-blob \
             --bundle release/SHA256SUMS.sigstore.json \
             --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release-build.yml@refs/heads/main" \
+            --certificate-github-workflow-ref "refs/heads/main" \
             --certificate-github-workflow-sha "$BUILD_WORKFLOW_SHA" \
             --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
             release/SHA256SUMS
@@ -297,6 +298,7 @@ jobs:
           VERSION: ${{ matrix.train.version }}
           TARGET: ${{ matrix.target.id }}
           ARCHIVE: ${{ matrix.target.archive }}
+          BUILD_WORKFLOW_SHA: ${{ steps.release-build-identity.outputs.workflow_sha }}
         run: |
           ARCHIVE_NAME="guardscan-$VERSION-$TARGET.$ARCHIVE"
           for REQUIRED_FILE in "$ARCHIVE_NAME" release-manifest.json; do
@@ -315,12 +317,13 @@ jobs:
             --arg archive "$ARCHIVE_NAME" --arg archive_sha "$ARCHIVE_SHA" \
             --arg run_id "$(jq -r '.producer.runId' release/release-manifest.json)" \
             --arg attempt "$(jq -r '.producer.runAttempt' release/release-manifest.json)" \
-            --arg tag_sha "$TAG_SHA" '
+            --arg workflow_sha "$BUILD_WORKFLOW_SHA" --arg tag_sha "$TAG_SHA" '
               .schemaVersion == "guardscan.release-manifest.v1" and
               .version == $version and .tag == ("v" + $version) and .commit == $tag_sha and
               .producer.provider == "github-actions" and
               (.producer.repository | ascii_downcase) == ($repository | ascii_downcase) and
               .producer.workflow == ".github/workflows/release-build.yml" and
+              .producer.workflowSha == $workflow_sha and
               .producer.runId == $run_id and (.producer.runAttempt | tostring) == $attempt and
               .producer.sourceRef == ("refs/tags/v" + $version) and
               ([.artifacts[] | select(.filename == $archive and .kind == "standalone" and
@@ -357,6 +360,7 @@ jobs:
           cosign verify-blob \
             --bundle "release/$TARGET.guardscan.sigstore.json" \
             --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release-build.yml@refs/heads/main" \
+            --certificate-github-workflow-ref "refs/heads/main" \
             --certificate-github-workflow-sha "$BUILD_WORKFLOW_SHA" \
             --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
             executable/guardscan
@@ -520,7 +524,7 @@ jobs:
         env:
           CHANNEL: ${{ startsWith(matrix.adapter, 'homebrew-') && 'homebrew' || 'scoop' }}
           VERSION: ${{ matrix.train.version }}
-          TARGET: ${{ matrix.adapter }}
+          TARGET: ${{ matrix.adapter == 'homebrew-macos' && 'macOS' || matrix.adapter == 'homebrew-linux' && 'Linux' || 'Windows' }}
       - name: Homebrew install, test, upgrade check, and uninstall
         if: startsWith(matrix.adapter, 'homebrew-')
         shell: bash
@@ -626,7 +630,7 @@ jobs:
               channel = $channel
               status = 'pending'
               checkedAt = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.fffZ')
-              target = 'Windows'
+              target = 'windows-x64'
               evidenceUrl = "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
             } | ConvertTo-Json -Compress | Out-File "$channel.json"
           }
@@ -642,7 +646,7 @@ jobs:
               channel = $channel
               status = 'pending'
               checkedAt = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.fffZ')
-              target = 'Windows'
+              target = 'windows-x64'
               evidenceUrl = "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
             }
             $notPublic = $false
@@ -750,10 +754,13 @@ jobs:
         with:
           app-id: ${{ vars.RELEASE_APP_ID }}
           private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-metadata: read
       - name: Checkout exact train implementation
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: v${{ matrix.train.version }}
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
           fetch-depth: 0
           token: ${{ steps.app.outputs.token }}
       - name: Download this train reports
@@ -766,24 +773,19 @@ jobs:
         with:
           node-version: ${{ env.RELEASE_NODE_VERSION }}
       - working-directory: cli
-        run: npm ci
+        run: npm ci --ignore-scripts
       - name: Append hash-chained canary and verification events
         env:
           RELEASE_APP_TOKEN: ${{ steps.app.outputs.token }}
           TRAIN_VERSION: ${{ matrix.train.version }}
         run: |
-          git -c "http.extraheader=AUTHORIZATION: bearer $RELEASE_APP_TOKEN" fetch origin release-ledger
+          export GH_TOKEN="$RELEASE_APP_TOKEN"
+          git -c credential.helper= -c 'credential.https://github.com.helper=!gh auth git-credential' fetch origin release-ledger "refs/tags/v$TRAIN_VERSION:refs/tags/v$TRAIN_VERSION"
           node - <<'NODE'
           const fs = require('fs');
           const path = require('path');
           const cp = require('child_process');
-          const {
-            appendEvent,
-            materializeReleaseState,
-            monotonicLedgerTimestamp,
-            readEvents,
-          } = require('./cli/scripts/release/events');
-          const {canaryChannelEventType} = require('./cli/scripts/release/distribution-guards');
+          const {materializeReleaseState, readEvents} = require('./cli/scripts/release/events');
           const {acceptModeratedChannel} = require('./cli/scripts/release/moderated-acceptance');
           const {validateCanaryReports} = require('./cli/scripts/release/canary-reports');
           const {recordCanary, DEFAULT_RC_CANARY_TARGETS} = require('./cli/scripts/release/canary');
@@ -823,78 +825,39 @@ jobs:
           const existing = readEvents(ledger);
           if (existing.length === 0) throw new Error(`release ledger is empty for ${tag}`);
           const commit = existing[0].commit;
-          const checkoutCommit = cp.execFileSync('git', ['rev-parse', 'HEAD'], {encoding: 'utf8'}).trim();
+          const checkoutCommit = cp.execFileSync('git', ['rev-list', '-n', '1', tag], {encoding: 'utf8'}).trim();
           if (commit !== checkoutCommit) throw new Error(`release ledger commit does not match checked-out tag ${tag}`);
+          const state = materializeReleaseState(existing);
+          const expectedTargets = {...DEFAULT_RC_CANARY_TARGETS};
+          for (const channel of ['winget', 'chocolatey']) {
+            if (state.channels[channel]) expectedTargets[channel] = ['windows-x64'];
+          }
+          const selectedReports = reports.map(({report}) => report)
+            .filter(report => state.channels[report.channel] || report.invalidCanaryReport);
+          const evaluatedAt = new Date().toISOString();
           try {
             validateCanaryReports(reports.map(({report}) => report), version,
               `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`);
           } catch {
-            const expectedTargets = {...DEFAULT_RC_CANARY_TARGETS, winget: ['windows-x64'], chocolatey: ['windows-x64']};
-            recordCanary({ledgerFile: ledger, reports: reports.map(({report}) => report),
-              expectedTargets, evaluatedAt: new Date().toISOString()});
+            recordCanary({ledgerFile: ledger, reports: [{version, invalidCanaryReport: true}],
+              expectedTargets, evaluatedAt});
             fs.writeFileSync('.canary-record-status', '1\n');
             process.exit(0); // Persist incident evidence before failing the job below.
           }
-          const expectedTargetCounts = {
-            npm: 1,
-            pnpm: 1,
-            yarn: 2,
-            bun: 1,
-            github: 5,
-            pypi: 5,
-            homebrew: 2,
-            scoop: 1,
-            winget: 1,
-            chocolatey: 1,
-          };
-          for (const {file, report} of reports) {
-            if (report.status === 'pending') continue;
-            const suffix = `${process.env.GITHUB_RUN_ID}:${process.env.GITHUB_RUN_ATTEMPT}:${report.channel}:${report.target}:${path.basename(path.dirname(file))}`;
-            appendEvent(ledger, {
-              version, tag, commit,
-              timestamp: monotonicLedgerTimestamp(readEvents(ledger), report.checkedAt, `canary:${suffix}`),
-              type: 'canary_recorded',
-              channel: report.channel,
-              idempotencyKey: `canary:${suffix}`,
-              payload: {
-                status: report.status,
-                checkedAt: report.checkedAt,
-                target: report.target,
-                evidenceUrl: report.evidenceUrl,
-              },
-            });
+          const result = recordCanary({ledgerFile: ledger, reports: selectedReports,
+            expectedTargets, evaluatedAt});
+          if (result.failures.every(failure => failure.reason === 'canary report status is failed')) {
+            for (const channel of ['winget', 'chocolatey']) {
+              const channelReports = selectedReports.filter(report => report.channel === channel);
+              acceptModeratedChannel(ledger, channel, {
+                passed: channelReports.every(report => report.status === 'passed'),
+                complete: channelReports.length === 1,
+              });
+            }
+            // Public acceptance must precede verification of moderated channels.
+            recordCanary({ledgerFile: ledger, reports: selectedReports, expectedTargets, evaluatedAt});
           }
-          const versionAggregateTimestamp = reports
-            .filter(({report}) => report.status !== 'pending')
-            .map(({report}) => report.checkedAt)
-            .sort()
-            .at(-1);
-          for (const [channel, expectedCount] of Object.entries(expectedTargetCounts)) {
-            const channelReports = reports.filter(({report}) => report.channel === channel);
-            const resolved = channelReports.filter(({report}) => report.status !== 'pending');
-            if (resolved.length === 0) continue;
-            const suffix = `${process.env.GITHUB_RUN_ID}:${process.env.GITHUB_RUN_ATTEMPT}:${channel}`;
-            const passed = resolved.every(({report}) => report.status === 'passed');
-            const complete = resolved.length === expectedCount;
-            acceptModeratedChannel(ledger, channel, {passed, complete});
-            const state = materializeReleaseState(readEvents(ledger));
-            const type = canaryChannelEventType(state, channel, passed, complete);
-            if (!type) continue;
-            const idempotencyKey = `${type}:${suffix}`;
-            appendEvent(ledger, {
-              version, tag, commit,
-              timestamp: monotonicLedgerTimestamp(
-                readEvents(ledger), versionAggregateTimestamp, idempotencyKey
-              ),
-              type,
-              channel,
-              idempotencyKey,
-              payload: type === 'channel_failed'
-                ? {error: 'one or more current public canary targets failed'}
-                : {},
-            });
-          }
-          fs.writeFileSync('.canary-record-status', '0\n');
+          fs.writeFileSync('.canary-record-status', result.failures.length ? '1\n' : '0\n');
           NODE
           git worktree add ledger-branch origin/release-ledger
           cp ledgers/*.jsonl ledger-branch/events/
