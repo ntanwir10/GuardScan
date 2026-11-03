@@ -118,7 +118,7 @@ describe('release workflow review regressions', () => {
         commit: 'c'.repeat(40),
         producer: {
           provider: 'github-actions', repository: 'ntanwir10/GuardScan',
-          workflow: '.github/workflows/release-build.yml', runId: '123',
+          workflow: '.github/workflows/release-build.yml', workflowSha: 'a'.repeat(40), runId: '123',
           runAttempt: 2, sourceRef: 'refs/tags/v1.2.3',
         },
         artifacts: [{
@@ -130,10 +130,12 @@ describe('release workflow review regressions', () => {
         '-e', '--arg', 'repository', 'ntanwir10/GuardScan', '--arg', 'version', '1.2.3',
         '--arg', 'archive', archiveName, '--arg', 'archive_sha', digest,
         '--arg', 'run_id', '123', '--arg', 'attempt', '2', '--arg', 'tag_sha', 'c'.repeat(40),
+        '--arg', 'workflow_sha', 'a'.repeat(40),
         manifestPolicy,
       ], {input: JSON.stringify(manifest), encoding: 'utf8'});
       expect(checkManifest(trustedManifest).status).toBe(0);
       expect(checkManifest({...trustedManifest, version: '1.2.4'}).status).not.toBe(0);
+      expect(checkManifest({...trustedManifest, producer: {...trustedManifest.producer, workflowSha: 'b'.repeat(40)}}).status).not.toBe(0);
       expect(checkManifest({...trustedManifest, artifacts: [{...trustedManifest.artifacts[0], filename: 'other.tar.gz'}]}).status).not.toBe(0);
       expect(checkManifest({...trustedManifest, artifacts: [
         trustedManifest.artifacts[0], trustedManifest.artifacts[0],
@@ -256,7 +258,7 @@ describe('release workflow review regressions', () => {
     }
   });
 
-  it('records each canary train from its own tag and only its own reports', () => {
+  it('records each canary train using trusted tooling, its immutable tag and only its own reports', () => {
     const canary = workflow('release-canary.yml');
     const discover = canary.jobs.discover;
     expect(discover.outputs).not.toHaveProperty('implementation_ref');
@@ -264,13 +266,15 @@ describe('release workflow review regressions', () => {
     const record = canary.jobs.record;
     expect(record.strategy.matrix.train).toBe('${{ fromJSON(needs.discover.outputs.trains) }}');
     expect(record.if).toContain("needs.discover.outputs.trains != '[]'");
-    expect(step(record, 'Checkout exact train implementation').with.ref).toBe('v${{ matrix.train.version }}');
+    expect(step(record, 'Checkout exact train implementation').with.ref).toBe('${{ github.workflow_sha }}');
     expect(step(record, 'Download this train reports').with.pattern)
       .toBe('canary-${{ matrix.train.version }}-*');
     const append = step(record, 'Append hash-chained canary and verification events');
     expect(append.env.TRAIN_VERSION).toBe('${{ matrix.train.version }}');
     expect(append.run).toContain('report.version === process.env.TRAIN_VERSION');
     expect(append.run).toContain('commit !== checkoutCommit');
+    expect(append.run).toContain("['rev-list', '-n', '1', tag]");
+    expect(append.run).toContain('refs/tags/v$TRAIN_VERSION:refs/tags/v$TRAIN_VERSION');
   });
 
   it('authorizes release source PR metadata before checking out or mutating a ref', () => {
@@ -319,7 +323,7 @@ describe('release workflow review regressions', () => {
     fs.mkdirSync(bin);
     fs.writeFileSync(path.join(bin, 'git'), [
       '#!/bin/sh',
-      'if [ "$1" = -c ]; then shift 2; fi',
+      'while [ "$1" = -c ]; do shift 2; done',
       'printf "%s\\n" "$*" >> "$GIT_CALLS"',
       'case "$1" in',
       '  ls-remote) case "$TAG_MODE" in',

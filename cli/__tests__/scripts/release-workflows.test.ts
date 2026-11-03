@@ -169,6 +169,7 @@ describe('zero-touch release workflow contracts', () => {
             PATH: `${bin}${path.delimiter}${process.env.PATH}`,
             GITHUB_REPOSITORY: 'owner/repo',
             RELEASE_INPUT_TAG: 'v1.2.3',
+            RELEASE_INPUT_CHANNEL: options.channel || 'stable',
             GH_CALL_LOG: log,
             RUNNER_TEMP: runnerTemp,
             GH_ASSET_JSON: JSON.stringify({assets}),
@@ -639,19 +640,23 @@ describe('zero-touch release workflow contracts', () => {
     expect(train).toMatch(
       /Persist refetched catalog publication evidence\n\s+if:[^\n]+\n\s+env:\n\s+RELEASE_APP_TOKEN: \$\{\{ steps\.app\.outputs\.token \}\}/
     );
-    expect(train).toContain('http.extraheader=AUTHORIZATION: bearer $RELEASE_APP_TOKEN');
+    expect(train).toContain("-c credential.helper= -c 'credential.https://github.com.helper=!gh auth git-credential'");
+    expect(train).toContain('export GH_TOKEN="$RELEASE_APP_TOKEN"');
+    expect(train).not.toContain('http.extraheader=AUTHORIZATION: bearer');
   });
 
-  it('pins each canary train implementation to its immutable ledger identity and verifies its own version', () => {
+  it('pins canary tooling to its workflow and binds product tags to immutable ledger identities', () => {
     const canary = workflowSource('release-canary.yml');
     expect(canary).not.toContain('implementation_ref');
     expect(canary).not.toContain('trains[0]');
     const record = (yaml.load(canary) as any).jobs.record;
     expect(record.strategy.matrix.train).toBe('${{ fromJSON(needs.discover.outputs.trains) }}');
     const checkout = record.steps.find((step: any) => step.name === 'Checkout exact train implementation');
-    expect(checkout.with.ref).toBe('v${{ matrix.train.version }}');
+    expect(checkout.with.ref).toBe('${{ github.workflow_sha }}');
+    expect(checkout.with['persist-credentials']).toBe(false);
     expect(stepCommands(record)).toContain('if (commit !== checkoutCommit) throw new Error');
-    expect(stepCommands(record)).toContain("['rev-parse', 'HEAD']");
+    expect(stepCommands(record)).toContain("['rev-list', '-n', '1', tag]");
+    expect(stepCommands(record)).toContain('refs/tags/v$TRAIN_VERSION:refs/tags/v$TRAIN_VERSION');
     expect(stepCommands(record)).toContain('origin/release-ledger:events/${tag}.jsonl');
     expect(canary).toContain('VERSION: ${{ matrix.train.version }}');
     expect(canary).toContain('version = \'${{ matrix.train.version }}\'');
@@ -661,12 +666,14 @@ describe('zero-touch release workflow contracts', () => {
     expect(canary).toContain('PIPX_REPORTED_VERSION="$("$PIPX_APP" --version | tr -d \'\\r\')"');
     expect(canary).toContain('test "$PIPX_REPORTED_VERSION" = "$VERSION"');
     expect(canary).toContain('$installedVersion -ne $env:VERSION');
-    expect(canary).toContain('const expectedTargetCounts = {');
-    expect(canary).toContain('resolved.length === expectedCount');
-    expect(canary).toContain("type === 'channel_failed'");
-    expect(canary).toContain("error: 'one or more current public canary targets failed'");
-    expect(canary).toContain('const versionAggregateTimestamp = reports');
-    expect(canary).toContain('canaryChannelEventType(state, channel, passed, complete)');
+    const recorder = fs.readFileSync(path.resolve(__dirname, '../../scripts/release/canary.js'), 'utf8');
+    expect(canary).toContain('recordCanary({ledgerFile: ledger, reports: selectedReports');
+    expect(canary).toContain('const expectedTargets = {...DEFAULT_RC_CANARY_TARGETS}');
+    expect(recorder).toContain('reportList.length !== expectedCount');
+    expect(recorder).toContain("type: 'channel_failed'");
+    expect(recorder).toContain('canary failed for target ${report.target}');
+    expect(recorder).toContain('timestamp: monotonicTimestamp(options.ledgerFile, evaluated.toISOString())');
+    expect(recorder).toContain("canaryChannelEventType(state, channel, true, true) !== 'channel_verified'");
     expect(canary).not.toContain("? ['channel_accepted', 'channel_verified']");
     const train = workflowSource('release-train.yml');
     expect(train).toContain('catalogReconciliationAllowed(');
@@ -1022,8 +1029,10 @@ describe('zero-touch release workflow contracts', () => {
     expect(train).toContain("catalogResult.state !== 'MERGED'");
     expect(train).toContain('catalogResult.lockSha256 !== lockSha256');
     expect(train).toContain('active.trains = (active.trains || []).filter');
-    expect(canary).toContain('monotonicLedgerTimestamp(readEvents(ledger), report.checkedAt, `canary:${suffix}`)');
-    expect(canary).toContain('checkedAt: report.checkedAt');
+    expect(canary).toContain('recordCanary({ledgerFile: ledger, reports: selectedReports');
+    const recorder = fs.readFileSync(path.resolve(__dirname, '../../scripts/release/canary.js'), 'utf8');
+    expect(recorder).toContain('timestamp: monotonicTimestamp(options.ledgerFile, report.checkedAt)');
+    expect(recorder).toContain('checkedAt: report.checkedAt');
     expect(train).toContain('Refuse a denied promotion after persistence');
     expect(train.indexOf('Persist the machine promotion decision before applying its result'))
       .toBeLessThan(train.indexOf('Refuse a denied promotion after persistence'));
