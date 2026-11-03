@@ -126,6 +126,7 @@ function main(argv = process.argv.slice(2)) {
     assert(scan.schemaVersion === 'guardscan.scan.v1', `${manager} emitted the wrong scan schema`);
     assert(scan.run?.executionMode === 'static-analysis', `${manager} did not preserve safe execution mode`);
     assert(scan.run?.offline === true, `${manager} did not preserve offline mode`);
+    assert(scan.run?.allowPartial === false, `${manager} weakened the partial-inventory policy`);
 
     const telemetry = runCli(manager, ['--no-telemetry', 'telemetry', 'status'], project, env);
     assert(telemetry.stdout.includes('Consent: disabled'), `${manager} did not preserve telemetry opt-out`);

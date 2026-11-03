@@ -8,6 +8,7 @@ const { spawnSync } = require('child_process');
 const Ajv = require('ajv');
 const addFormats = require('ajv-formats');
 const {resolveToolInvocation} = require('./process-invocation');
+const {assertCompiledRuntimeFilesClean} = require('./release/runtime-artifact-policy');
 
 const packageRoot = path.resolve(__dirname, '..');
 const expectedVersion = require(path.join(packageRoot, 'package.json')).version;
@@ -48,6 +49,7 @@ try {
     ? path.join(globalPrefix, 'node_modules', 'guardscan')
     : path.join(globalPrefix, 'lib', 'node_modules', 'guardscan');
   const files = new Set(listPackageFiles(installedPackage));
+  assertCompiledRuntimeFilesClean(installedPackage, files, 'npm packed runtime');
   for (const required of [
     'package.json',
     'dist/index.js',

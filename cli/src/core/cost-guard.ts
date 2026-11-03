@@ -239,15 +239,6 @@ export class CostGuard {
   }
 
   /**
-   * Reset daily budget (for testing/admin)
-   */
-  async resetDailyBudget(): Promise<void> {
-    // This would require filtering records to keep only old ones
-    // For now, this is a placeholder
-    console.log('⚠️  Manual budget reset not yet implemented');
-  }
-
-  /**
    * Clear all usage records
    */
   async clearUsage(): Promise<void> {

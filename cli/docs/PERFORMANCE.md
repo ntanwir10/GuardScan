@@ -190,7 +190,7 @@ guardscan config
 
 **Solution**:
 
-- Use `--no-cloud` flag to skip cloud dependency checks
+- Enable `offlineMode` in config to skip online dependency and license advisory checks
 - Cache dependency results
 - Limit to production dependencies only
 

@@ -15,10 +15,74 @@ import zipfile
 MAX_PACKAGE_BYTES = 16 * 1024 * 1024
 MAX_EXPANDED_BYTES = 8 * 1024 * 1024
 CORE_PROPERTIES = re.compile(r"package/services/metadata/core-properties/[0-9a-fA-F]{32}\.psmdcp")
+NUSPEC_NAMESPACES = {"", *(
+    "http://schemas.microsoft.com/packaging/" + schema + "/nuspec.xsd"
+    for schema in ("2010/07", "2011/08", "2011/10", "2012/06", "2013/01", "2013/05", "2015/06")
+)}
 
 
 class RegistryUnavailable(Exception):
     """A failed remote fetch, never a local package error or payload conflict."""
+
+
+def canonical_nuspec(payload, version):
+    text = payload.decode('utf-8-sig')
+    if '<!DOCTYPE' in text.upper() or '<!ENTITY' in text.upper():
+        raise ValueError("Chocolatey identity contains XML declarations")
+    document = ET.fromstring(text)
+    namespace = document.tag[1:].split('}')[0] if document.tag.startswith('{') else ''
+    if (namespace not in NUSPEC_NAMESPACES or document.attrib or (document.text or '').strip()
+            or any((child.tail or '').strip() for child in document)):
+        raise ValueError("Chocolatey nuspec namespace or package attributes are invalid")
+
+    def name(element):
+        prefix = '{' + namespace + '}' if namespace else ''
+        if ((prefix and not element.tag.startswith(prefix))
+                or (not prefix and element.tag.startswith('{'))):
+            raise ValueError("Chocolatey nuspec contains a foreign namespace")
+        return element.tag[len(prefix):]
+
+    if name(document) != 'package':
+        raise ValueError("Chocolatey nuspec root is invalid")
+    children = [name(child) for child in document]
+    if sorted(children) not in (['metadata'], ['files', 'metadata']):
+        raise ValueError("Chocolatey nuspec packaging structure is invalid")
+    metadata = next(child for child in document if name(child) == 'metadata')
+    fields = [name(child) for child in metadata]
+    if len(set(fields)) != len(fields):
+        raise ValueError("Chocolatey nuspec metadata is ambiguous")
+    identity = next((child for child in metadata if name(child) == 'id'), None)
+    release = next((child for child in metadata if name(child) == 'version'), None)
+    if (identity is None or (identity.text or '').strip().lower() != 'guardscan'
+            or release is None or (release.text or '').strip() != version
+            or list(identity) or list(release) or identity.attrib or release.attrib):
+        raise ValueError("Chocolatey package identity/version mismatch")
+    for child in document:
+        if name(child) == 'files':
+            if child.attrib or (child.text or '').strip():
+                raise ValueError("Chocolatey nuspec files map is invalid")
+            for entry in child:
+                if (name(entry) != 'file' or list(entry) or (entry.text or '').strip()
+                        or (entry.tail or '').strip()
+                        or not entry.get('src') or set(entry.attrib) - {'src', 'target', 'exclude'}):
+                    raise ValueError("Chocolatey nuspec files map is invalid")
+
+    def canonical(element):
+        if any('{' in key or ':' in key for key in element.attrib):
+            raise ValueError("Chocolatey nuspec contains foreign attributes")
+        if any((child.tail or '').strip() for child in element):
+            raise ValueError("Chocolatey nuspec contains ambiguous mixed content")
+        text = element.text or ''
+        if list(element):
+            if text.strip():
+                raise ValueError("Chocolatey nuspec contains ambiguous mixed content")
+            text = ''
+        return [name(element), sorted(element.attrib.items()), text,
+                sorted((canonical(child) for child in element), key=lambda value: json.dumps(value))]
+
+    # NuGet rewrites XML and removes the source files map; every metadata value
+    # remains digest-bound, while every installable file retains its byte hash.
+    return json.dumps(canonical(metadata), ensure_ascii=True).encode()
 
 
 def package_inventory(data, version):
@@ -66,15 +130,9 @@ def package_inventory(data, version):
                                 or not (target == 'guardscan.nuspec' or CORE_PROPERTIES.fullmatch(target))):
                             raise ValueError("Chocolatey package has an unexpected OPC relationship")
                 continue
-            inventory[name] = hashlib.sha256(payload).hexdigest()
             if name == 'guardscan.nuspec':
-                if b'<!DOCTYPE' in payload.upper() or b'<!ENTITY' in payload.upper():
-                    raise ValueError("Chocolatey identity contains XML declarations")
-                document = ET.fromstring(payload)
-                identity = document.find('.//{*}metadata/{*}id')
-                release = document.find('.//{*}metadata/{*}version')
-                if identity is None or (identity.text or '').lower() != 'guardscan' or release is None or release.text != version:
-                    raise ValueError("Chocolatey package identity/version mismatch")
+                payload = canonical_nuspec(payload, version)
+            inventory[name] = hashlib.sha256(payload).hexdigest()
         if 'guardscan.nuspec' not in inventory or 'tools/chocolateyInstall.ps1' not in inventory:
             raise ValueError("Chocolatey package lacks the required identity or installer")
     return inventory
@@ -112,6 +170,7 @@ def preflight(package, version, fetch=fetch_package):
         raise RegistryUnavailable("Incomplete or corrupt registry download") from error
     if remote_inventory != local:
         raise ValueError("Existing Chocolatey version has conflicting package payloads")
+    # This is the canonical metadata/file inventory digest, not the ZIP byte hash.
     return {'publishRequired': False, 'payloadDigest': digest}
 
 

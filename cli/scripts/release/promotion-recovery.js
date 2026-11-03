@@ -30,7 +30,11 @@ function recoverPromotionApproval(input, git = (...args) => execFileSync('git', 
   const state = materializeReleaseState(events);
   const started = events[0];
   if (candidate?.sourcePr !== sourcePr || candidate.sourcePrHead !== currentHead
-      || started.payload.releasePr !== sourcePr || started.payload.sourcePrHead !== currentHead) {
+      || started.payload.releasePr !== sourcePr || started.payload.sourcePrHead !== currentHead
+      || ['sourcePrBase', 'sourcePrTree'].some(field => (
+        !/^[a-f0-9]{40}$/.test(candidate[field] || '')
+        || candidate[field] !== started.payload[field]
+      ))) {
     throw new Error('Promotion recovery source identity does not match the immutable train');
   }
   assertNotTerminal(events);
@@ -102,8 +106,12 @@ function recoverPromotionApproval(input, git = (...args) => execFileSync('git', 
         || decision.rc.commit !== state.commit || decision.rc.manifestSha256 !== state.manifestSha256
         || decision.rc.publishedAt !== published?.timestamp
         || decision.rc.sourcePr !== sourcePr || decision.rc.sourcePrHead !== currentHead
+        || decision.rc.sourcePrBase !== candidate.sourcePrBase
+        || decision.rc.sourcePrTree !== candidate.sourcePrTree
         || decision.stable.version !== version || decision.stable.tag !== tag
-        || decision.stable.sourcePr !== sourcePr || decision.stable.sourcePrHead !== currentHead) {
+        || decision.stable.sourcePr !== sourcePr || decision.stable.sourcePrHead !== currentHead
+        || decision.stable.sourcePrBase !== candidate.sourcePrBase
+        || decision.stable.sourcePrTree !== candidate.sourcePrTree) {
       throw new Error('Protected promotion approval identity or permitted decision is invalid');
     }
     return {text, decision};

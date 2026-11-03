@@ -1,0 +1,70 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://guardscancli.com/schemas/guardscan.channel-catalog.v1.schema.json",
+  "title": "GuardScan generated shared channel catalog lock",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "source", "generator", "files"],
+  "properties": {
+    "schemaVersion": { "const": "guardscan.channel-catalog.v1" },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "repository",
+        "version",
+        "tag",
+        "commit",
+        "manifestUrl",
+        "manifestSha256"
+      ],
+      "properties": {
+        "repository": { "const": "ntanwir10/GuardScan" },
+        "version": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?$"
+        },
+        "tag": {
+          "type": "string",
+          "pattern": "^v(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?$"
+        },
+        "commit": { "$ref": "#/definitions/commit" },
+        "manifestUrl": {
+          "type": "string",
+          "pattern": "^https://github\\.com/ntanwir10/GuardScan/releases/download/v[^/]+/release-manifest\\.json$"
+        },
+        "manifestSha256": { "$ref": "#/definitions/sha256" }
+      }
+    },
+    "generator": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository", "commit"],
+      "properties": {
+        "repository": { "const": "ntanwir10/GuardScan" },
+        "commit": { "$ref": "#/definitions/commit" }
+      }
+    },
+    "files": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["Formula/guardscan.rb", "bucket/guardscan.json"],
+      "properties": {
+        "Formula/guardscan.rb": { "$ref": "#/definitions/file" },
+        "bucket/guardscan.json": { "$ref": "#/definitions/file" }
+      }
+    }
+  },
+  "definitions": {
+    "commit": { "type": "string", "pattern": "^[a-f0-9]{40}$" },
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "file": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sha256"],
+      "properties": {
+        "sha256": { "$ref": "#/definitions/sha256" }
+      }
+    }
+  }
+}

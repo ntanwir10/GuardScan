@@ -132,8 +132,11 @@ describe('release reviewer regressions', () => {
         publishedAt: timestamp,
         sourcePr: 42,
         sourcePrHead: commit,
+        sourcePrBase: 'c'.repeat(40),
+        sourcePrTree: 'd'.repeat(40),
       },
       currentSourcePrHead: commit,
+      currentSourcePrBase: 'c'.repeat(40),
       evaluatedAt: '2026-10-02T01:00:00.000Z',
       requiredChannels: channels,
       canaries,
@@ -159,8 +162,11 @@ describe('release reviewer regressions', () => {
           publishedAt,
           sourcePr: 42,
           sourcePrHead: commit,
+          sourcePrBase: 'c'.repeat(40),
+          sourcePrTree: 'd'.repeat(40),
         },
         currentSourcePrHead: commit,
+        currentSourcePrBase: 'c'.repeat(40),
         evaluatedAt: '2026-10-02T01:00:00.000Z',
         requiredChannels: ['npm'],
         canaries: Array.from({length: 24}, (_, index) => {
@@ -177,6 +183,14 @@ describe('release reviewer regressions', () => {
       fs.writeFileSync(file, `${JSON.stringify(decision, null, 2)}\n`);
       expect(decision.eligible).toBe(eligible);
       expect(() => validateDocument('decision', file, source.packageRoot)).not.toThrow();
+      for (const section of ['rc', 'stable']) {
+        for (const field of ['sourcePrBase', 'sourcePrTree']) {
+          const missing = JSON.parse(JSON.stringify(decision));
+          delete missing[section][field];
+          fs.writeFileSync(file, JSON.stringify(missing));
+          expect(() => validateDocument('decision', file, source.packageRoot)).toThrow(new RegExp(field));
+        }
+      }
     } finally {
       fs.rmSync(root, {recursive: true, force: true});
     }

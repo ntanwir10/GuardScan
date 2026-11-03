@@ -3,6 +3,16 @@ import * as path from 'path';
 import * as fs from 'fs';
 
 /**
+ * Return a stable repository-relative path for persisted data and user output.
+ */
+export function repositoryRelativePath(repoRoot: string, filePath: string): string {
+  const absolutePath = path.isAbsolute(filePath)
+    ? filePath
+    : path.resolve(repoRoot, filePath);
+  return path.relative(repoRoot, absolutePath).replace(/\\/g, '/');
+}
+
+/**
  * Get home directory with fallbacks for containerized environments
  * Handles Alpine Docker and other edge cases where os.homedir() may fail
  */

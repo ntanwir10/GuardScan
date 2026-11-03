@@ -49,7 +49,7 @@ This comprehensive guide covers running GuardScan CLI in Docker across all major
 ### General Requirements
 
 - Docker Engine 20.10+ or Docker Desktop 4.0+
-- Node.js 18+ (in container)
+- Node.js 22+ (in container)
 - 2GB+ RAM available for Docker
 - Internet connection (for npm install and AI features)
 
@@ -916,19 +916,26 @@ guardscan init  # Will show detailed logging
 docker run -e GUARDSCAN_DEBUG=true node:lts-alpine guardscan init
 ```
 
-#### `GUARDSCAN_API_URL`
+#### `GUARDSCAN_TELEMETRY_URL`
 
-Override the default backend API URL (for self-hosting or testing).
+Select a user-operated telemetry collector. GuardScan has no hosted or default
+collector, and telemetry is sent only by an explicit `guardscan telemetry sync`.
 
 ```bash
-export GUARDSCAN_API_URL=https://custom-api.example.com
+export GUARDSCAN_TELEMETRY_URL=https://telemetry.example.com
 ```
+
+`GUARDSCAN_API_URL` and `api.guardscancli.com` are retired.
 
 #### `GUARDSCAN_NO_TELEMETRY`
 
-Disable telemetry for the current command execution (set via `--no-telemetry` flag).
+Disable telemetry for the current command execution with either the environment
+variable or the `--no-telemetry` flag.
 
-**Note:** This is handled via the `--no-telemetry` CLI flag, not an environment variable.
+```bash
+export GUARDSCAN_NO_TELEMETRY=true
+guardscan security
+```
 
 ### OS-Specific Environment Variables
 
@@ -1237,7 +1244,7 @@ jobs:
       - name: Install Node.js
         uses: actions/setup-node@v3
         with:
-          node-version: '18'
+          node-version: '22'
       
       - name: Install GuardScan
         run: npm install -g guardscan
@@ -1266,7 +1273,7 @@ jobs:
       - name: Install Node.js
         uses: actions/setup-node@v3
         with:
-          node-version: '18'
+          node-version: '22'
       
       - name: Install GuardScan
         run: npm install -g guardscan
@@ -1741,8 +1748,13 @@ apk add --no-cache \
 
    ```bash
    mkdir -p /tmp/guardscan
-   chmod 755 /tmp/guardscan
+   chmod 700 /tmp/guardscan
    ```
+
+   `GUARDSCAN_HOME` must be an absolute directory private to the container
+   user. Do not share the same writable state directory between different
+   users or containers. Mount a user-owned volume when state must survive the
+   container lifecycle.
 
 ### General Troubleshooting
 
@@ -2183,7 +2195,7 @@ spec:
 
 - [Main README](../README.md)
 - [Getting Started Guide](GETTING_STARTED.md)
-- [Alpine Linux Quick Reference](../DOCKER_ALPINE_GUIDE.md)
+- [Alpine Linux Quick Reference](./DOCKER_ALPINE_GUIDE.md)
 - [Issue #25 - Alpine Linux Fix](https://github.com/ntanwir10/GuardScan/issues/25)
 - [Docker Documentation](https://docs.docker.com/)
 - [Docker Compose Documentation](https://docs.docker.com/compose/)

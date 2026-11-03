@@ -26,6 +26,69 @@ describe('CodebaseIndexer cache policy', () => {
     fs.rmSync(cache, {recursive: true, force: true});
   });
 
+  it('keeps relative import edges canonical with Windows path resolution', async () => {
+    fs.mkdirSync(path.join(repository, 'nested', 'directory'), {recursive: true});
+    fs.writeFileSync(path.join(repository, 'nested', 'helper.ts'), 'export const helper = 1;\n');
+    fs.writeFileSync(path.join(repository, 'nested', 'directory', 'index.ts'), 'export const directory = 2;\n');
+    fs.writeFileSync(path.join(repository, 'nested', 'main.ts'), "import {helper} from './helper';\nimport {directory} from './directory';\n");
+    const indexer = new CodebaseIndexer(repository, 'fixture-repo');
+    const index = await indexer.buildIndex();
+    expect(index.dependencies.edges.get('nested/main.ts')).toContain('nested/helper.ts');
+    const nativeFs = jest.requireActual<typeof import('fs')>('fs');
+    const nativePath = jest.requireActual<typeof import('path')>('path');
+    const windowsPath = {...path.win32};
+    const existsSync = nativeFs.existsSync;
+    jest.spyOn(nativeFs, 'existsSync').mockImplementation(filePath =>
+      existsSync(typeof filePath === 'string' ? filePath.replace(/\\/g, '/') : filePath)
+    );
+    for (const method of ['dirname', 'join', 'normalize', 'relative', 'resolve', 'isAbsolute'] as const) {
+      jest.spyOn(nativePath, method).mockImplementation(windowsPath[method] as never);
+    }
+
+    (indexer as unknown as {buildDependencyGraph(value: typeof index): void}).buildDependencyGraph(index);
+
+    expect(index.dependencies.edges.get('nested/main.ts')).toEqual(
+      new Set(['nested/helper.ts', 'nested/directory/index.ts'])
+    );
+    expect(index.dependencies.reverseEdges.get('nested/helper.ts')).toContain('nested/main.ts');
+  });
+
+  it('rejects legacy Windows index keys without deleting the cache and rebuilds canonical paths', async () => {
+    fs.mkdirSync(path.join(repository, 'nested'));
+    fs.writeFileSync(path.join(repository, 'nested', 'helper.ts'), 'export function helper() { return 1; }\n');
+    fs.writeFileSync(path.join(repository, 'nested', 'main.ts'), "import { helper } from './helper';\nexport function main() { return helper(); }\n");
+    const original = await new CodebaseIndexer(repository, 'fixture-repo').buildIndex();
+    const indexPath = path.join(cache, 'fixture-repo', 'index.json');
+    const serialized = JSON.parse(fs.readFileSync(indexPath, 'utf8'));
+    const windowsPaths = (value: unknown): unknown => {
+      if (typeof value === 'string') {return value.replace(/\//g, '\\');}
+      if (Array.isArray(value)) {return value.map(windowsPaths);}
+      if (value && typeof value === 'object') {
+        return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, windowsPaths(item)]));
+      }
+      return value;
+    };
+    const legacy = {...windowsPaths(serialized) as object, version: '1.0.0'};
+    fs.writeFileSync(indexPath, JSON.stringify(legacy));
+    const legacyBytes = fs.readFileSync(indexPath);
+    const fresh = new CodebaseIndexer(repository, 'fixture-repo');
+    expect(await fresh.getFileIndex(path.join(repository, 'nested', 'main.ts'))).toBeNull();
+    expect(await fresh.searchFunctions('main')).toEqual([]);
+    expect(await fresh.getDependencies('nested/main.ts')).toEqual([]);
+    expect(fs.readFileSync(indexPath)).toEqual(legacyBytes);
+
+    const rebuilt = await fresh.updateIndex([]);
+    expect(rebuilt.version).toBe('2.0.0');
+    expect([...rebuilt.files.keys()]).toEqual([...original.files.keys()]);
+    expect([...rebuilt.symbols.keys()]).toEqual([...original.symbols.keys()]);
+    expect([...rebuilt.symbols.keys()].every(id => !id.includes('\\'))).toBe(true);
+    expect([...rebuilt.symbols.keys()].some(id => id.startsWith('nested/main.ts:'))).toBe(true);
+    const reloaded = new CodebaseIndexer(repository, 'fixture-repo');
+    expect((await reloaded.getFileIndex(path.join(repository, 'nested', 'main.ts')))?.relativePath).toBe('nested/main.ts');
+    expect(await reloaded.getDependencies('nested/main.ts')).toContain('nested/helper.ts');
+    expect(await reloaded.searchFunctions('main')).toHaveLength(1);
+  });
+
   it.each(['true', '1', 'TRUE', 'TrUe'])('keeps the source-derived index memory-only for cache opt-out %s', async value => {
     process.env.GUARDSCAN_NO_CACHE = value;
     const indexer = new CodebaseIndexer(repository, 'fixture-repo');

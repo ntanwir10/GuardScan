@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const {inspectArchive, writeArchive} = require('./archive');
 const {readJson} = require('./lib');
+const {assertReducedCapabilityEvidence} = require('./standalone');
 
 const ARTIFACT_METADATA_SCHEMA = 'guardscan.artifact-metadata.v1';
 const EVIDENCE_SCHEMA = 'guardscan.standalone-evidence.v1';
@@ -26,6 +27,7 @@ function assertEvidence(source, platform, evidence) {
       || !evidence.provenance) {
     throw new Error('standalone evidence is incomplete');
   }
+  assertReducedCapabilityEvidence(evidence.optionalCapabilities);
   return evidence;
 }
 
@@ -73,9 +75,10 @@ function buildStandaloneArtifact(source, executableFile, platform, outputDir, ti
     capabilities: {
       coreScan: true,
       sbom: true,
-      chartRendering: false,
-      accurateTokenCounting: false,
+      chartRendering: evidence.optionalCapabilities.chartRendering.dependencyAvailable,
+      accurateTokenCounting: evidence.optionalCapabilities.tokenCounting.mode === 'accurate',
     },
+    optionalCapabilities: evidence.optionalCapabilities,
     platform,
     archiveFormat: format,
     entrypoint: executableName,

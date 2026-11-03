@@ -111,6 +111,57 @@ describe('FileBasedEmbeddingStore', () => {
     });
   });
 
+  describe.each([false, true])('importFromFile (ephemeral=%s)', ephemeral => {
+    beforeEach(() => {
+      if (ephemeral) {process.env.GUARDSCAN_NO_CACHE = 'true';}
+      store = new FileBasedEmbeddingStore(testRepoId, testDir);
+    });
+
+    it('rejects incompatible imports without replacing the current index or cache', async () => {
+      const current = createTestEmbedding('current', 'function', 'src/current.ts');
+      await store.saveEmbeddings([current]);
+      const originalIndex = await store.loadIndex();
+      const originalBytes = ephemeral ? null : fs.readFileSync(store.getIndexPath(), 'utf8');
+      const inputPath = path.join(testDir, 'import.json');
+
+      for (const version of ['1.0.0', '3.0.0', undefined]) {
+        fs.writeFileSync(inputPath, JSON.stringify({
+          ...originalIndex,
+          version,
+          embeddings: [createTestEmbedding('legacy', 'function', '/old/source.ts')],
+        }));
+        await expect(store.importFromFile(inputPath)).rejects.toThrow('Unsupported embedding index version');
+        expect(await store.loadIndex()).toEqual(originalIndex);
+        expect(await store.loadEmbeddings()).toEqual([current]);
+        if (!ephemeral) {
+          expect(fs.readFileSync(store.getIndexPath(), 'utf8')).toBe(originalBytes);
+          const reopened = new FileBasedEmbeddingStore(testRepoId, testDir);
+          expect(await reopened.loadEmbeddings()).toEqual([current]);
+        }
+      }
+    });
+
+    it('imports a current index and replaces the previously loaded cache', async () => {
+      await store.saveEmbeddings([createTestEmbedding('old', 'function', 'src/old.ts')]);
+      const replacement = createTestEmbedding('replacement', 'function', 'src/replacement.ts');
+      const inputPath = path.join(testDir, 'import.json');
+      fs.writeFileSync(inputPath, JSON.stringify({
+        ...await store.loadIndex(),
+        embeddings: [replacement],
+        totalEmbeddings: 1,
+      }));
+
+      await store.importFromFile(inputPath);
+
+      expect(await store.loadEmbeddings()).toEqual([replacement]);
+      expect(await store.count()).toBe(1);
+      if (!ephemeral) {
+        const reopened = new FileBasedEmbeddingStore(testRepoId, testDir);
+        expect(await reopened.loadEmbeddings()).toEqual([replacement]);
+      }
+    });
+  });
+
   describe('loadEmbeddings', () => {
     it('should load saved embeddings', async () => {
       const embeddings = [

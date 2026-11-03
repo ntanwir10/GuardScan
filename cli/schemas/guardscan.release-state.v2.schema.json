@@ -28,7 +28,20 @@
     "channels": {
       "type": "object",
       "minProperties": 1,
-      "additionalProperties": { "$ref": "#/definitions/channel" }
+      "additionalProperties": false,
+      "properties": {
+        "npm": { "$ref": "#/definitions/primaryPublicationChannel" },
+        "pnpm": { "$ref": "#/definitions/channel" },
+        "yarn": { "$ref": "#/definitions/channel" },
+        "bun": { "$ref": "#/definitions/channel" },
+        "github": { "$ref": "#/definitions/primaryPublicationChannel" },
+        "homebrew": { "$ref": "#/definitions/channel" },
+        "homebrew-core": { "$ref": "#/definitions/channel" },
+        "scoop": { "$ref": "#/definitions/channel" },
+        "winget": { "$ref": "#/definitions/channel" },
+        "chocolatey": { "$ref": "#/definitions/channel" },
+        "pypi": { "$ref": "#/definitions/primaryPublicationChannel" }
+      }
     },
     "canaries": {
       "type": "object",
@@ -41,9 +54,35 @@
       "type": "object",
       "additionalProperties": { "$ref": "#/definitions/incident" }
     },
-    "promotion": { "type": "object" }
+    "actionRequired": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/actionRequired" }
+    },
+    "promotion": { "type": "object" },
+    "recovery": { "$ref": "#/definitions/recovery" }
   },
   "definitions": {
+    "primaryPublicationChannel": {
+      "allOf": [
+        { "$ref": "#/definitions/channel" },
+        {
+          "if": {
+            "type": "object",
+            "properties": {
+              "status": { "enum": ["published", "verified", "superseded"] }
+            },
+            "required": ["status"]
+          },
+          "then": {
+            "type": "object",
+            "properties": {
+              "publication": { "$ref": "#/definitions/publicationEvidence" }
+            },
+            "required": ["publication"]
+          }
+        }
+      ]
+    },
     "channel": {
       "type": "object",
       "additionalProperties": false,
@@ -57,6 +96,9 @@
             "accepted",
             "verified",
             "failed",
+            "rejected",
+            "corrected",
+            "resubmitted",
             "withdrawn",
             "superseded"
           ]
@@ -69,7 +111,64 @@
         "updatedAt": { "type": "string", "format": "date-time" },
         "remoteIdentity": { "type": "string", "minLength": 1, "maxLength": 500 },
         "remoteDigest": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "catalog": { "$ref": "#/definitions/catalogEvidence" },
+        "publication": { "$ref": "#/definitions/publicationEvidence" },
+        "submission": { "type": "object" },
         "error": { "type": "string", "minLength": 1, "maxLength": 2000 }
+      }
+    },
+    "publicationEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "channel",
+        "version",
+        "tag",
+        "remoteIdentity",
+        "aggregateSha256",
+        "files"
+      ],
+      "properties": {
+        "schemaVersion": { "const": "guardscan.provider-publication.v1" },
+        "channel": { "enum": ["github", "npm", "pypi"] },
+        "version": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "tag": { "type": "string", "minLength": 2, "maxLength": 101 },
+        "remoteIdentity": { "type": "string", "minLength": 1, "maxLength": 500 },
+        "aggregateSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "files": {
+          "type": "object",
+          "minProperties": 1,
+          "maxProperties": 100,
+          "propertyNames": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._+~-]{0,199}$"
+          },
+          "additionalProperties": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+        }
+      }
+    },
+    "catalogEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "repository",
+        "commit",
+        "pullRequest",
+        "lockDigest",
+        "manifestDigest",
+        "path",
+        "fileDigest"
+      ],
+      "properties": {
+        "repository": { "const": "ntanwir10/homebrew-tap" },
+        "commit": { "type": "string", "pattern": "^[a-f0-9]{40}$" },
+        "pullRequest": { "type": "integer", "minimum": 1 },
+        "lockDigest": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "manifestDigest": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "path": {
+          "enum": ["Formula/guardscan.rb", "bucket/guardscan.json"]
+        },
+        "fileDigest": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
       }
     },
     "canary": {
@@ -87,12 +186,72 @@
       "additionalProperties": false,
       "required": ["kind", "status", "openedAt", "summary"],
       "properties": {
-        "kind": { "enum": ["integrity", "security", "availability"] },
+        "kind": { "enum": ["integrity", "security", "availability", "recovery"] },
         "status": { "enum": ["open", "resolved"] },
         "openedAt": { "type": "string", "format": "date-time" },
         "resolvedAt": { "type": "string", "format": "date-time" },
         "summary": { "type": "string", "minLength": 1, "maxLength": 2000 }
       }
+    },
+    "actionRequired": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["channel", "action", "authority", "reason", "requestedAt"],
+      "properties": {
+        "channel": { "type": "string", "minLength": 1, "maxLength": 50 },
+        "action": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "authority": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "reason": { "type": "string", "minLength": 1, "maxLength": 2000 },
+        "requestedAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "recovery": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "status",
+            "startedAt",
+            "mode",
+            "knownGoodVersion",
+            "knownGoodCommit",
+            "forwardFixVersion",
+            "forwardFixBranch"
+          ],
+          "properties": {
+            "status": { "enum": ["started", "repository-completed"] },
+            "startedAt": { "type": "string", "format": "date-time" },
+            "repositoryCompletedAt": { "type": "string", "format": "date-time" },
+            "mode": { "const": "known-good" },
+            "knownGoodVersion": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" },
+            "knownGoodCommit": { "type": "string", "pattern": "^[a-f0-9]{40}$" },
+            "forwardFixVersion": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" },
+            "forwardFixBranch": { "type": "string", "minLength": 1, "maxLength": 200 },
+            "evidence": { "type": "object" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "startedAt", "mode", "requiredNextVersion"],
+          "properties": {
+            "status": { "enum": ["started", "repository-completed", "provider-actions-pending"] },
+            "startedAt": { "type": "string", "format": "date-time" },
+            "repositoryCompletedAt": { "type": "string", "format": "date-time" },
+            "mode": { "const": "first-release-withdrawal" },
+            "requiredNextVersion": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" },
+            "externalActionsPending": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": {
+                "enum": ["npm", "pypi", "homebrew-core", "winget", "chocolatey"]
+              }
+            },
+            "evidence": { "type": "object" }
+          }
+        }
+      ]
     }
   }
 }

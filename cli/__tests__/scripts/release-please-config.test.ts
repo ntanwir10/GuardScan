@@ -46,6 +46,7 @@ describe('release pull request automation', () => {
     expect(source).toContain('googleapis/release-please-action@5c625bfb5d1ff62eadeeb3772007f7f66fdcf071');
     expect(source).toContain('secrets.RELEASE_APP_PRIVATE_KEY');
     expect(source).toContain('skip-github-release: true');
+    expect(source).toContain("vars.RELEASE_AUTOMATION_ENABLED == 'true'");
     expect(source).not.toContain('secrets.GITHUB_TOKEN');
     expect(source).not.toContain('github.token');
   });

@@ -146,29 +146,56 @@ describe('hosted release review regressions', () => {
     expect(install).toContain("[Environment]::GetEnvironmentVariable('Path', 'Machine')");
     expect(install).toContain("[Environment]::GetEnvironmentVariable('Path', 'User')");
     expect(install.indexOf('GetEnvironmentVariable')).toBeLessThan(install.indexOf('guardscan --version'));
-    const submit = step(winget, 'Submit WinGet manifests').run as string;
+    const publish = workflow('release-publish.yml');
+    const submit = step(winget, 'Preflight and submit WinGet manifests with exact evidence').run as string;
     expect(submit).not.toContain('dotnet tool install');
-    expect(submit).toMatch(/microsoft\/winget-create\/releases\/download\/v[0-9.]+\/wingetcreate.exe/);
+    expect(submit).toContain('microsoft/winget-create/releases/download/v$env:RELEASE_WINGETCREATE_VERSION/wingetcreate.exe');
+    expect(publish.env.RELEASE_WINGETCREATE_VERSION).toMatch(/^\d+\.\d+\.\d+\.\d+$/);
     expect(submit).toContain('Get-FileHash');
-    expect(submit).toMatch(/[a-f0-9]{64}/);
-    expect(submit).toContain('WinGet submission failed');
+    expect(publish.env.RELEASE_WINGETCREATE_SHA256).toMatch(/^[a-f0-9]{64}$/);
+    expect(submit.indexOf('$wingetCreateDigest -ne $env:RELEASE_WINGETCREATE_SHA256'))
+      .toBeLessThan(submit.indexOf('& .\\wingetcreate.exe submit'));
+    expect(submit).toContain('Submitted WinGet pull request identity did not become queryable');
   });
 
   it('checks Scoop lifecycle exit codes before recording success', () => {
     const run = step(workflow('release-canary.yml').jobs.adapters,
       'Scoop install, update check, invocation, and uninstall').run as string;
-    for (const command of ['scoop install guardscan', 'scoop update guardscan', 'scoop uninstall guardscan']) {
+    expect(run).toContain("$package = 'guardscan/guardscan'");
+    expect(run).toContain("$package = 'guardscan-preview/guardscan'");
+    for (const command of ['scoop install \\$package', 'scoop update guardscan', 'scoop uninstall guardscan']) {
       expect(run).toMatch(new RegExp(command + '\\r?\\n\\s*if \\(\\$LASTEXITCODE -ne 0\\)'));
     }
   });
 
   it('pins adapter merges and recovers already merged PR heads when branches were deleted', () => {
-    const run = step(workflow('release-publish.yml').jobs.adapters,
-      'Push deterministic adapter branches and open PRs').run as string;
-    expect(run).toContain('--auto --squash --match-head-commit "$EXPECTED_HEAD"');
-    expect(run.indexOf('PR_NUMBER=')).toBeLessThan(run.indexOf('git commit'));
-    expect(run).toContain('git fetch origin "$EXPECTED_HEAD"');
-    expect(run).toContain('git show "$EXPECTED_HEAD:$TARGET"');
+    const publish = workflow('release-publish.yml');
+    const job = Object.values(publish.jobs).find((candidate: any) => candidate.steps?.some(
+      (item: any) => item.name === 'Push one deterministic catalog update'
+    ));
+    const run = step(job, 'Push one deterministic catalog update').run as string;
+    expect(run).toContain('--squash --match-head-commit "$EXPECTED_HEAD"');
+    expect(run).toContain('MAIN_ALREADY_CURRENT=true');
+    expect(run).toContain('commits/$CATALOG_COMMIT/pulls');
+    expect(run).toContain("--state merged --limit 1 --json number");
+    expect(run).toContain('EXPECTED_HEAD="$(node -p \'JSON.parse(process.env.PR_DETAILS).headRefOid\')"');
+    expect(run).toContain('git fetch origin "$MERGE_SHA"');
+    expect(run).toContain('verifyCatalogProjection');
+    expect(run.indexOf('verifyCatalogProjection')).toBeLessThan(run.indexOf('gh pr merge'));
+    const validation = run.match(/node - <<'NODE'\n([\s\S]*?)\nNODE/)?.[1];
+    expect(validation).toBeTruthy();
+    const head = 'a'.repeat(40);
+    const validate = (changes: any = {}) => vm.runInNewContext(validation!, {process: {env: {
+      EXPECTED_HEAD: head, CATALOG_REPOSITORY: 'ntanwir10/homebrew-tap', PR_DETAILS: JSON.stringify({
+        state: 'MERGED', baseRefName: 'main', headRepository: {nameWithOwner: 'ntanwir10/homebrew-tap'},
+        headRefOid: head, mergeCommit: {oid: 'b'.repeat(40)}, ...changes,
+      }),
+    }}});
+    expect(() => validate()).not.toThrow();
+    for (const change of [{state: 'CLOSED'}, {baseRefName: 'other'}, {headRefOid: 'c'.repeat(40)},
+      {headRepository: {nameWithOwner: 'attacker/tap'}}, {mergeCommit: {oid: ''}}]) {
+      expect(() => validate(change)).toThrow();
+    }
   });
 
   it('retires prior stable trains without discarding unrelated RC trains', () => {
@@ -193,9 +220,10 @@ describe('hosted release review regressions', () => {
   it('admits only authenticated merged promotion retries and avoids a second merge', () => {
     const prepare = workflow('release-train.yml').jobs.prepare;
     const validation = step(prepare, 'Validate request and resolve unchanged release PR head').run as string;
-    expect(validation).toContain('.state == "MERGED"');
-    expect(validation).toContain('RELEASE_ACTION');
-    expect(validation).toContain('.mergeCommit.oid');
+    expect(validation).toContain("process.env.REQUEST_ACTION === 'promote'");
+    expect(validation).toContain("pr.state === 'closed'");
+    expect(validation).toContain('pr.merged === true');
+    expect(validation).toContain('pr.merge_commit_sha');
     const decision = step(prepare, 'Materialize machine promotion decision').run as string;
     expect(decision).toContain('candidate.sourcePr !== Number(process.env.RELEASE_PR)');
     expect(decision).toContain('candidate.sourcePrHead !== process.env.CURRENT_HEAD');
@@ -225,20 +253,21 @@ describe('hosted release review regressions', () => {
 
   it('reuses an existing rollback event timestamp and keeps new timestamps monotonic', () => {
     const run = step(workflow('release-train.yml').jobs.rollback,
-      'Generate append-only recovery plan').run as string;
+      'Generate and persist the append-only recovery start').run as string;
     const script = run.match(/ROLLBACK_TIMESTAMP="\$\(node - <<'NODE'\n([\s\S]*?)\nNODE/)?.[1];
     expect(script).toBeTruthy();
     const check = (events: any[]) => {
       let output = '';
       vm.runInNewContext(script!, {
-        require: () => ({readEvents: () => events}), Date,
-        process: {env: {RELEASE_VERSION: '1.2.3', GITHUB_RUN_ID: '123'},
+        require: () => ({readEvents: () => events,
+          monotonicLedgerTimestamp: require('../../scripts/release/events').monotonicLedgerTimestamp}), Date,
+        process: {env: {ROLLBACK_KEY: 'rollback:1.2.3'},
           stdout: {write: (value: string) => { output = value; }}},
       });
       return output;
     };
     const timestamp = '2099-01-01T00:00:00.000Z';
-    expect(check([{idempotencyKey: 'rollback:1.2.3:123', timestamp}])).toBe(timestamp);
+    expect(check([{idempotencyKey: 'rollback:1.2.3', timestamp}])).toBe(timestamp);
     expect(Date.parse(check([{idempotencyKey: 'other', timestamp}]))).toBeGreaterThanOrEqual(Date.parse(timestamp));
   });
 });

@@ -62,7 +62,9 @@
         "publishedAt",
         "eligibleAt",
         "sourcePr",
-        "sourcePrHead"
+        "sourcePrHead",
+        "sourcePrBase",
+        "sourcePrTree"
       ],
       "properties": {
         "version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+-rc\\.[0-9]+$" },
@@ -72,18 +74,29 @@
         "publishedAt": { "type": "string", "format": "date-time" },
         "eligibleAt": { "type": "string", "format": "date-time" },
         "sourcePr": { "type": "integer", "minimum": 1 },
-        "sourcePrHead": { "$ref": "#/definitions/commit" }
+        "sourcePrHead": { "$ref": "#/definitions/commit" },
+        "sourcePrBase": { "$ref": "#/definitions/commit" },
+        "sourcePrTree": { "$ref": "#/definitions/commit" }
       }
     },
     "stable": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["version", "tag", "sourcePr", "sourcePrHead"],
+      "required": [
+        "version",
+        "tag",
+        "sourcePr",
+        "sourcePrHead",
+        "sourcePrBase",
+        "sourcePrTree"
+      ],
       "properties": {
         "version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" },
         "tag": { "type": "string", "pattern": "^v[0-9]+\\.[0-9]+\\.[0-9]+$" },
         "sourcePr": { "type": "integer", "minimum": 1 },
-        "sourcePrHead": { "$ref": "#/definitions/commit" }
+        "sourcePrHead": { "$ref": "#/definitions/commit" },
+        "sourcePrBase": { "$ref": "#/definitions/commit" },
+        "sourcePrTree": { "$ref": "#/definitions/commit" }
       }
     },
     "policy": {

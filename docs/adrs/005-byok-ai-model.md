@@ -18,7 +18,7 @@ GuardScan includes AI-enhanced features like code review, explanation, test gene
 Traditional SaaS approaches:
 - **Vendor-paid**: Company pays for all AI calls (expensive, unsustainable)
 - **Subscription**: Users pay monthly fee (bundled cost, inflexible)
-- **Credit system**: Pre-purchase credits (complexity, vendor lock-in)
+- **Hosted prepaid usage model**: rejected due to complexity and vendor lock-in
 
 ## Decision
 We adopted a **BYOK (Bring Your Own Key)** model where:
@@ -95,8 +95,9 @@ Result: Sustainable at any scale ✅
 # Create key: sk-proj-...
 
 # 2. Configure GuardScan
-guardscan config set providers.openai.apiKey sk-proj-...
-guardscan config set providers.openai.model gpt-4
+guardscan config
+# Follow the provider, API key, and model prompts. Configuration uses
+# top-level provider, apiKey, and model fields in ~/.guardscan/config.yml.
 
 # 3. Use AI features
 guardscan review src/app.ts
@@ -228,21 +229,12 @@ class ProviderFactory {
 ### Configuration Storage
 ```json
 {
-  "providers": {
-    "openai": {
-      "apiKey": "sk-proj-...",  // Stored locally, never sent to GuardScan
-      "model": "gpt-4",
-      "baseUrl": "https://api.openai.com/v1",
-      "maxTokens": 4096,
-      "temperature": 0.7
-    },
-    "ollama": {
-      "enabled": true,
-      "baseUrl": "http://localhost:11434",
-      "model": "codellama"
-    }
-  },
-  "defaultProvider": "openai"
+  "provider": "openai",
+  "apiKey": "sk-proj-...",
+  "model": "gpt-4",
+  "baseUrl": "https://api.openai.com/v1",
+  "maxTokens": 4096,
+  "temperature": 0.7
 }
 ```
 
@@ -251,7 +243,7 @@ class ProviderFactory {
 async function reviewCode(filePath: string): Promise<string> {
   // 1. Load config
   const config = await loadConfig();
-  const providerConfig = config.providers[config.defaultProvider];
+  const providerConfig = config;
   
   // 2. Create provider
   const provider = ProviderFactory.create(providerConfig);
@@ -333,12 +325,12 @@ Options:
 2. Anthropic (Claude): https://console.anthropic.com/
 3. Ollama (Free, Local): https://ollama.ai/
 
-Or run: guardscan config set providers.openai.apiKey YOUR_KEY
+Or run: guardscan config
 ```
 
 ## Related Decisions
 - [ADR 003: Privacy-First Architecture](./003-privacy-first-architecture.md) - Why direct requests
-- [ADR 001: Cloudflare Workers Backend](./001-cloudflare-workers-backend.md) - Why no AI proxy
+- [ADR 007: Retire GuardScan-Hosted Cloudflare Telemetry](./007-retire-hosted-cloudflare-telemetry.md) - Why GuardScan operates no hosted telemetry or AI proxy
 
 ## References
 - [OpenAI API Pricing](https://openai.com/pricing)
@@ -353,4 +345,3 @@ This decision is strategic and should rarely change. Review if:
 - User feedback strongly negative
 
 **Next review date**: 2025-05-19 (6 months)
-

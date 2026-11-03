@@ -1,9 +1,25 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { ensureDirectoryExists, getSafeHomeDir } from '../../src/utils/path-helper';
+import {
+  ensureDirectoryExists,
+  getSafeHomeDir,
+  repositoryRelativePath,
+} from '../../src/utils/path-helper';
 
 describe('path-helper private state handling', () => {
+  it('normalizes repository paths to portable POSIX separators', () => {
+    const repoRoot = path.join(os.tmpdir(), 'workspace', 'project');
+    const authPath = path.join(repoRoot, 'src', 'auth.ts');
+
+    expect(repositoryRelativePath(repoRoot, authPath))
+      .toBe('src/auth.ts');
+    expect(repositoryRelativePath(repoRoot, 'src/auth.ts'))
+      .toBe('src/auth.ts');
+    expect(repositoryRelativePath(repoRoot, 'src\\auth.ts'))
+      .toBe('src/auth.ts');
+  });
+
   const originalEnv = { ...process.env };
 
   afterEach(() => {

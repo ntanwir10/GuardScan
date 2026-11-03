@@ -1,17 +1,18 @@
 # ADR 001: Cloudflare Workers for Backend Infrastructure
 
 ## Status
-Accepted
+
+Superseded by
+[ADR 007](./007-retire-hosted-cloudflare-telemetry.md); retained as historical
+context for the retired backend.
 
 ## Date
 2024-11-19
 
-> **Note (2026-05):** The Worker implementation has moved out of this
-> repository to [ntanwir10/GuardScan-Monitoring](https://github.com/ntanwir10/GuardScan-Monitoring)
-> (private). This ADR still captures the original platform decision; current
-> code, deployment scripts, and the Supabase schema live in that repo under
-> `worker/`. The CLI continues to integrate via HTTP only, configurable through
-> the `GUARDSCAN_API_URL` env var.
+> **Retirement note (2026-08):** This document records the original platform
+> decision; it is not an active deployment or product contract. GuardScan no
+> longer operates hosted telemetry. Self-hosted synchronization requires an
+> explicit `GUARDSCAN_TELEMETRY_URL`.
 
 ## Context
 GuardScan needed a backend infrastructure for optional telemetry and monitoring. The backend requirements were:
@@ -152,8 +153,8 @@ We chose **Cloudflare Workers** as the backend infrastructure for GuardScan's op
 - **Memory**: ~10-20MB per request
 
 ## Related Decisions
-- [ADR 002: Supabase PostgreSQL](./002-supabase-postgresql.md) - Why we chose Supabase for database
 - [ADR 003: Privacy-First Architecture](./003-privacy-first-architecture.md) - Privacy guarantees
+- [ADR 007: Retire GuardScan-Hosted Cloudflare Telemetry](./007-retire-hosted-cloudflare-telemetry.md) - Current decision
 
 ## References
 - [Cloudflare Workers Documentation](https://developers.cloudflare.com/workers/)
@@ -162,11 +163,6 @@ We chose **Cloudflare Workers** as the backend infrastructure for GuardScan's op
 - [Workers KV](https://developers.cloudflare.com/kv/)
 
 ## Review
-This decision should be reviewed if:
-- Cloudflare significantly changes pricing or features
-- We need features not available on Workers
-- We experience significant operational issues
-- A clearly superior alternative emerges
 
-**Next review date**: 2025-05-19 (6 months)
-
+This historical decision is closed. Any future GuardScan-hosted telemetry
+service requires a new ADR and cannot reactivate this one implicitly.

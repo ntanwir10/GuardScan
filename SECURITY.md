@@ -6,6 +6,7 @@ We actively support the following versions of GuardScan with security updates:
 
 | Version | Supported          |
 | ------- | ------------------ |
+| 1.1.x   | :white_check_mark: |
 | 1.0.x   | :white_check_mark: |
 | < 1.0   | :x:                |
 
@@ -76,8 +77,9 @@ We follow responsible disclosure practices:
 
 5. **Network Security**
    - GuardScan works offline for static analysis
-   - Only AI features require network access
-   - Use `--no-telemetry` if you prefer not to send any data
+   - Cloud AI and fresh CVE lookups require network access; local AI is offline-only at literal loopback IP endpoints
+   - Use `--offline` to block GuardScan cloud, advisory, update, and telemetry clients
+   - Telemetry is opt-in and delivered only by an explicit `guardscan telemetry sync` to a user-operated endpoint selected with `GUARDSCAN_TELEMETRY_URL`
 
 ### For Developers
 
@@ -108,6 +110,9 @@ GuardScan executes code analysis **locally** on your machine. This means:
 - ✅ No risk of code exposure through network transmission
 - ⚠️ GuardScan has read access to files you scan
 - ⚠️ Ensure you trust the codebase you're scanning
+- ✅ `guardscan scan` does not execute repository-controlled code by default
+- ⚠️ `--run-project-code` can run tests and linters that read files, change the repository, or use the network
+- ✅ Child environments are scrubbed; `--isolate-project-network` requests an OS-backed network sandbox and fails if it is unavailable
 
 ### AI Provider Integration
 
@@ -117,24 +122,30 @@ When using AI features:
 - API keys are sent directly to your chosen AI provider (OpenAI, Anthropic, etc.)
 - GuardScan does not store or log your API keys
 - Review your AI provider's privacy policy
+- Offline Ollama and LM Studio endpoints must use literal `127/8` or `::1`; remote self-hosted endpoints require online mode plus `allowRemoteSelfHosted: true`
 
 ### Telemetry (Optional)
 
 If telemetry is enabled:
 
-- Only metadata is sent (client_id, repo_id hash, LOC counts)
-- No source code is transmitted
-- You can disable with `--no-telemetry` flag
-- Data is sent to our Cloudflare Workers backend (see PRIVACY.md)
+- Only action, aggregate LOC, duration, coarse execution mode, event ID, and timestamp are queued
+- Source, paths, prompts, responses, findings, dependency names, and errors are excluded
+- GuardScan operates no hosted telemetry collector and provides no default endpoint
+- Events remain local until `guardscan telemetry sync` is run against a user-operated HTTPS endpoint selected with `GUARDSCAN_TELEMETRY_URL`
+- You can suppress an invocation with `--no-telemetry` and inspect or clear the queue with `guardscan telemetry`
 
 ### Dependency Scanning
 
 GuardScan scans your dependencies for known vulnerabilities:
 
-- Uses public vulnerability databases (npm audit, etc.)
+- Uses exact local dependency inventory, the public OSV database, and optional CISA KEV enrichment
+- Offline results require a fresh snapshot matching the current inventory
+- Missing or incomplete coverage fails closed unless `--allow-partial` is explicit
 - Results are based on publicly available CVE data
 - May have false positives or miss zero-day vulnerabilities
 - Always verify critical findings independently
+
+See [Dependency Vulnerability Scanning](./docs/VULNERABILITY_SCANNING.md) for CVSS, CISA KEV, lockfile, and coverage limitations.
 
 ---
 
@@ -184,4 +195,4 @@ We appreciate the security research community's efforts to keep GuardScan secure
 
 ---
 
-**Last Updated**: 2025-11-24
+**Last Updated**: 2026-07-13

@@ -18,6 +18,8 @@ describe('moderated Chocolatey and pipx release canaries', () => {
   it('treats only explicit Chocolatey no-result responses as pending at documented exit codes', () => {
     const run = step(workflow.jobs.moderated,
       'Poll, install, invoke, and uninstall public moderated channels').run as string;
+    // PowerShell requires this binary operator to continue the preceding line.
+    expect(run).not.toMatch(/^\s+-or\s/m);
     const choco = run.slice(run.indexOf('$availability = choco info'), run.indexOf("if ($notPublic) {", run.indexOf('$availability = choco info')));
 
     expect(choco).toContain("$noResult = $availabilityText -match '(?im)^\\s*(Unable to find package .guardscan.|0 packages found\\.)\\s*$'");
@@ -42,8 +44,9 @@ describe('moderated Chocolatey and pipx release canaries', () => {
     expect(run).toContain('"$PIPX_APP" --version');
     expect(run).toContain('test "$PIPX_REPORTED_VERSION" = "$VERSION"');
     expect(run.indexOf('"$PIPX_APP" --version')).toBeLessThan(run.indexOf('report["status"] = "passed"'));
-    expect(run).not.toContain('python -m pipx run');
-    expect(run).not.toContain('python -m pipx runpip guardscan-cli show guardscan-cli');
+    expect(run).not.toMatch(/python -m pipx run\s/);
+    expect(run).toContain('python -m pipx runpip guardscan-cli show guardscan-cli');
+    expect(run.indexOf('"$PIPX_APP" --help')).toBeLessThan(run.indexOf('report["status"] = "passed"'));
     expect(run).toContain('PIP_REPORTED_VERSION');
 
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'guardscan-pipx-canary-'));
@@ -53,6 +56,7 @@ describe('moderated Chocolatey and pipx release canaries', () => {
       fs.mkdirSync(pipxBinDir, {recursive: true});
       fs.writeFileSync(path.join(directory, 'pypi.json'), JSON.stringify({status: 'failed'}));
       fs.writeFileSync(path.join(pipxBinDir, 'guardscan'), `#!/bin/sh
+if [ "$1" = --help ]; then printf '%s\\n' scan; exit 0; fi
 printf '%s\\n' "$CANARY_APP_VERSION"
 `);
       fs.chmodSync(path.join(pipxBinDir, 'guardscan'), 0o755);
@@ -64,7 +68,7 @@ printf '%s\\n' "$CANARY_APP_VERSION"
   fi
   return 0
 }
-guardscan() { printf '%s\\n' "$PIP_VERSION"; }
+guardscan() { if [ "$1" = --help ]; then printf '%s\\n' scan; else printf '%s\\n' "$PIP_VERSION"; fi; }
 `;
       const executed = shellFunctions + run.replace(/\$\{\{\s*matrix\.train\.version\s*\}\}/g, '1.2.3');
       const fixtureNode = process.execPath.replace(/\\/g, '/');

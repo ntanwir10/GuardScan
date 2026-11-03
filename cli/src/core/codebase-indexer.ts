@@ -9,6 +9,9 @@ import {
 } from "./ast-parser";
 import { configManager } from "./config";
 import { environmentDisablesCache } from '../utils/execution-policy';
+import { repositoryRelativePath } from "../utils/path-helper";
+
+const CODEBASE_INDEX_VERSION = "2.0.0";
 
 /**
  * Symbol information in the codebase
@@ -173,7 +176,7 @@ export class CodebaseIndexer {
     const files = await this.findCodeFiles(this.repoRoot);
 
     const index: CodebaseIndex = {
-      version: "1.0.0",
+      version: CODEBASE_INDEX_VERSION,
       repoId: this.repoId,
       rootPath: this.repoRoot,
       lastUpdated: new Date(),
@@ -361,7 +364,7 @@ export class CodebaseIndexer {
     const index = await this.loadIndex();
     if (!index) {return null;}
 
-    const relativePath = path.relative(this.repoRoot, filePath);
+    const relativePath = repositoryRelativePath(this.repoRoot, filePath);
     return index.files.get(relativePath) || null;
   }
 
@@ -391,7 +394,7 @@ export class CodebaseIndexer {
     filePath: string,
     index: CodebaseIndex
   ): Promise<void> {
-    const relativePath = path.relative(this.repoRoot, filePath);
+    const relativePath = repositoryRelativePath(this.repoRoot, filePath);
 
     // Parse file
     const parsed = await this.getParsedFile(filePath);
@@ -489,7 +492,7 @@ export class CodebaseIndexer {
    * Remove file from index
    */
   private removeFileFromIndex(filePath: string, index: CodebaseIndex): void {
-    const relativePath = path.relative(this.repoRoot, filePath);
+    const relativePath = repositoryRelativePath(this.repoRoot, filePath);
     const fileIndex = index.files.get(relativePath);
 
     if (!fileIndex) {return;}
@@ -631,7 +634,7 @@ export class CodebaseIndexer {
       for (const ext of extensions) {
         const fullPath = resolved + ext;
         if (fs.existsSync(path.join(this.repoRoot, fullPath))) {
-          return fullPath;
+          return repositoryRelativePath(this.repoRoot, fullPath);
         }
       }
     }
@@ -797,6 +800,8 @@ export class CodebaseIndexer {
     try {
       const content = fs.readFileSync(indexPath, "utf-8");
       const data = JSON.parse(content);
+      // Legacy indexes contain platform-native paths and must be rebuilt.
+      if ((data as {version?: unknown}).version !== CODEBASE_INDEX_VERSION) {return null;}
 
       // Convert arrays back to Maps
       const index: CodebaseIndex = {
