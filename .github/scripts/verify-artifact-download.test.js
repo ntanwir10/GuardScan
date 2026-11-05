@@ -42,22 +42,42 @@ function fixture(change = () => {}) {
   }
   const digest = 'sha256:' + crypto.createHash('sha256').update(fs.readFileSync(zip)).digest('hex');
   if (!Object.hasOwn(context.artifact, 'digest')) context.artifact.digest = digest;
-  fs.writeFileSync(path.join(root, 'metadata.json'), JSON.stringify([{artifacts:
-    context.duplicates ? [context.artifact, {...context.artifact, id: 20}] : [context.artifact]}]));
+  let artifacts = context.duplicates ? [context.artifact, {...context.artifact, id: 20}] : [context.artifact];
+  let recoveryScript;
+  if (context.recovery) {
+    const yaml = require('../../cli/node_modules/js-yaml');
+    const train = yaml.load(fs.readFileSync(path.join(__dirname, '../workflows/release-train.yml'), 'utf8'));
+    recoveryScript = train.jobs['resolve-checkpoint'].steps.find(step => step.name === 'Reuse only byte-identical current-run recovery handoffs').run;
+    for (const directory of ['rehydrated/payload', 'rehydrated/npm-artifact', '.github/scripts']) fs.mkdirSync(path.join(root, directory), {recursive: true});
+    for (const directory of ['rehydrated/payload', 'rehydrated/npm-artifact']) {
+      fs.copyFileSync(path.join(destination, 'payload file.txt'), path.join(root, directory, 'payload file.txt'));
+    }
+    fs.copyFileSync(helper, path.join(root, '.github/scripts/verify-artifact-download.py'));
+    artifacts = context.recovery === 'absent' ? [] : [
+      {...context.artifact, name: 'release-payload-v1.1.0'},
+      {...context.artifact, id: 20, name: 'release-npm-v1.1.0'},
+    ];
+    if (context.recovery === 'duplicate') artifacts.push({...artifacts[0], id: 21});
+    if (context.recovery === 'drift') fs.writeFileSync(path.join(root, 'rehydrated/npm-artifact/payload file.txt'), 'substituted bytes');
+  }
+  fs.writeFileSync(path.join(root, 'metadata.json'), JSON.stringify([{artifacts}]));
   const gh = path.join(root, 'gh');
   fs.writeFileSync(gh, '#!' + process.execPath + '\n' + [
     "const fs=require('fs');const path=require('path');const args=process.argv.slice(2);",
     "fs.appendFileSync(path.join(__dirname,'calls.jsonl'),JSON.stringify(args)+'\\n');",
     "process.stdout.write(fs.readFileSync(path.join(__dirname,args.includes('--slurp')?'metadata.json':'artifact.zip')));",
   ].join('\n'), {mode: 0o755});
-  const result = spawnSync(python, [helper, context.artifact.name, destination], {encoding: 'utf8', env: {
-    ...process.env, PYTHONDONTWRITEBYTECODE: '1', GITHUB_REPOSITORY: 'ntanwir10/GuardScan', GITHUB_RUN_ID: '42',
-    PATH: root + path.delimiter + process.env.PATH,
-  }});
+  const env = {...process.env, PYTHONDONTWRITEBYTECODE: '1', GITHUB_REPOSITORY: 'ntanwir10/GuardScan', GITHUB_RUN_ID: '42',
+    RELEASE_TAG: 'v1.1.0', RUNNER_TEMP: root, GITHUB_OUTPUT: path.join(root, 'output'),
+    PATH: root + path.delimiter + process.env.PATH};
+  const result = context.recovery
+    ? spawnSync('bash', ['-euo', 'pipefail', '-c', recoveryScript], {cwd: root, encoding: 'utf8', env})
+    : spawnSync(python, [helper, context.artifact.name, destination], {encoding: 'utf8', env});
+  const output = fs.existsSync(env.GITHUB_OUTPUT) ? fs.readFileSync(env.GITHUB_OUTPUT, 'utf8') : '';
   const calls = fs.existsSync(path.join(root, 'calls.jsonl'))
     ? fs.readFileSync(path.join(root, 'calls.jsonl'), 'utf8').trim().split('\n').map(JSON.parse) : [];
   fs.rmSync(root, {recursive: true, force: true});
-  return {result, calls};
+  return {result, calls, output};
 }
 
 test('binds actual action-downloaded files including spaces to one current-run artifact ZIP digest', () => {
@@ -93,7 +113,7 @@ test('every guarded download verifies its exact output bytes and has the complet
   const load = name => yaml.load(fs.readFileSync(path.join(root, name), 'utf8'));
   const build = load('release-build.yml');
   const publish = load('release-publish.yml');
-  for (const job of [build.jobs['npm-finalize'], build.jobs['native-finalize'], build.jobs['provider-finalize'], publish.jobs.npm]) {
+  for (const job of [build.jobs['npm-finalize'], build.jobs['native-finalize'], build.jobs['provider-finalize'], build.jobs.aggregate, publish.jobs.npm]) {
     const index = job.steps.findIndex(step => step.env?.ARTIFACT_NAME);
     assert.ok(index > 0);
     const guard = job.steps[index];
@@ -115,5 +135,33 @@ test('every guarded download verifies its exact output bytes and has the complet
   const ci = fs.readFileSync(path.join(root, 'ci.yml'), 'utf8');
   for (const name of ['verify-release-workflow-security', 'resume-release-checkpoint', 'verify-artifact-download']) {
     assert.ok(ci.includes(`.github/scripts/${name}.test.js`));
+  }
+});
+
+
+for (const mode of ['present', 'absent', 'drift', 'duplicate']) {
+  test(`current-run recovery handoff ${mode} never overwrites existing authority`, () => {
+    const {result, calls, output} = fixture(f => { f.recovery = mode; });
+    assert.equal(result.status === 0, mode === 'present' || mode === 'absent', result.stderr);
+    assert.ok(calls.every(args => args[0] === 'api'));
+    if (mode === 'present' || mode === 'absent') {
+      const expected = mode === 'present' ? 'true' : 'false';
+      assert.equal(output, `payload_exists=${expected}\nnpm_exists=${expected}\n`);
+    }
+    if (mode === 'absent' || mode === 'duplicate') assert.ok(calls.every(args => !args[1]?.endsWith('/zip')));
+  });
+}
+
+test('recovery uploads only absent verified aliases without clobbering canonical originals', () => {
+  const yaml = require('../../cli/node_modules/js-yaml');
+  const train = yaml.load(fs.readFileSync(path.join(__dirname, '../workflows/release-train.yml'), 'utf8'));
+  const job = train.jobs['resolve-checkpoint'];
+  const probe = job.steps.findIndex(step => step.id === 'existing-handoffs');
+  for (const [kind, suffix] of [['payload', 'payload/'], ['npm', 'npm-artifact/']]) {
+    const upload = job.steps.find(step => step.uses?.startsWith('actions/upload-artifact@') && step.with.name.startsWith(`release-${kind}-`));
+    assert.ok(job.steps.indexOf(upload) > probe);
+    assert.ok(upload.if.includes(`steps.existing-handoffs.outputs.${kind}_exists == 'false'`));
+    assert.equal(upload.with.path, `rehydrated/${suffix}`);
+    assert.equal(upload.with.overwrite, undefined);
   }
 });

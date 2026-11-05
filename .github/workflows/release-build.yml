@@ -186,7 +186,8 @@ jobs:
           TARBALL="$(find npm-artifact -maxdepth 1 -type f -name '*.tgz' -print -quit)"
           test -n "$TARBALL" && test -f "$BUNDLE_PATH"
           gh attestation verify "$TARBALL" --bundle "$BUNDLE_PATH" --repo "$GITHUB_REPOSITORY" --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release-build.yml" --signer-digest "$SIGNER_WORKFLOW_SHA" --predicate-type 'https://slsa.dev/provenance/v1' --format json > npm-attestation-verification.json
-          cp "$BUNDLE_PATH" "npm-artifact/$BUNDLE_FILE"
+          mkdir npm-provenance
+          cp "$BUNDLE_PATH" "npm-provenance/$BUNDLE_FILE"
           node - <<'NODE'
           const fs = require('fs');
           const path = require('path');
@@ -194,7 +195,7 @@ jobs:
           const metadata = JSON.parse(fs.readFileSync('npm-artifact/npm-artifact.json'));
           if (metadata.commit !== process.env.SOURCE_COMMIT) throw new Error('npm attestation source binding mismatch');
           const provenance = createVerifiedAttestationEvidence({
-            bundleFile: path.join('npm-artifact', process.env.BUNDLE_FILE),
+            bundleFile: path.join('npm-provenance', process.env.BUNDLE_FILE),
             subjectFile: path.join('npm-artifact', metadata.filename),
             source: {version: metadata.version, tag: metadata.tag, commit: metadata.commit},
             url: process.env.BUNDLE_URL,
@@ -210,7 +211,7 @@ jobs:
             integrity: metadata.integrity,
             provenance,
           };
-          fs.writeFileSync('npm-artifact/npm-artifact.metadata.json', `${JSON.stringify({
+          fs.writeFileSync('npm-provenance/npm-artifact.metadata.json', `${JSON.stringify({
             schemaVersion: 'guardscan.artifact-metadata.v1', version: metadata.version,
             tag: metadata.tag, commit: metadata.commit, createdAt: metadata.createdAt, artifact,
           }, null, 2)}\n`);
@@ -219,6 +220,14 @@ jobs:
         with:
           name: release-npm-${{ inputs.tag }}
           path: npm-artifact/
+          overwrite: true
+          if-no-files-found: error
+          retention-days: 30
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-npm-provenance-${{ inputs.tag }}
+          path: npm-provenance/
           overwrite: true
           if-no-files-found: error
           retention-days: 30
@@ -350,6 +359,12 @@ jobs:
           const digest = crypto.createHash('sha256').update(executable).digest('hex');
           if (executable.length <= 0 || executable.length !== prototype.executable.size || digest !== prototype.executable.sha256) throw new Error('native executable size or SHA-256 does not match prototype');
           NODE
+      - name: Restore executable permissions after native input authentication
+        if: matrix.os != 'windows'
+        shell: bash
+        env:
+          EXPECTED_EXECUTABLE: ${{ matrix.executable }}
+        run: chmod +x "standalone/$EXPECTED_EXECUTABLE"
       - name: Resolve canonical native build timestamp
         env:
           SOURCE_REF: ${{ inputs.ref }}
@@ -679,6 +694,7 @@ jobs:
     runs-on: ubuntu-24.04
     needs: [npm-finalize, native-finalize]
     permissions:
+      actions: read
       contents: read
       id-token: write
       attestations: write
@@ -708,6 +724,17 @@ jobs:
         with:
           name: release-npm-${{ inputs.tag }}
           path: collected/npm
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-npm-provenance-${{ inputs.tag }}
+          path: collected/npm-provenance
+      - name: Authenticate npm provenance transport before manifest assembly
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_NAME: release-npm-provenance-${{ inputs.tag }}
+          ARTIFACT_DIRECTORY: collected/npm-provenance
+        run: python3 .github/scripts/verify-artifact-download.py "$ARTIFACT_NAME" "$ARTIFACT_DIRECTORY"
       - name: Reject links and collect release assets
         shell: bash
         run: |
@@ -894,6 +921,10 @@ jobs:
           PYTHON=python3
           if [ "$RUNNER_OS" = Windows ]; then PYTHON=python; fi
           "$PYTHON" .github/scripts/verify-artifact-download.py "$ARTIFACT_NAME" "$ARTIFACT_DIRECTORY"
+      - name: Restore executable permissions after provider input authentication
+        if: matrix.os == 'darwin'
+        shell: bash
+        run: chmod +x rehearsal-standalone/guardscan
       - name: Import Apple rehearsal certificate
         if: matrix.os == 'darwin'
         shell: bash
@@ -924,7 +955,7 @@ jobs:
           printf '%s' "$APPLE_NOTARY_PRIVATE_KEY" > "$RUNNER_TEMP/rehearsal-AuthKey.p8"
           hdiutil create -volname 'GuardScan rehearsal' -srcfolder rehearsal-standalone -format UDZO "$RUNNER_TEMP/rehearsal.dmg"
           xcrun notarytool submit "$RUNNER_TEMP/rehearsal.dmg" --key "$RUNNER_TEMP/rehearsal-AuthKey.p8" --key-id "$APPLE_NOTARY_KEY_ID" --issuer "$APPLE_NOTARY_ISSUER_ID" --wait --output-format json > rehearsal-standalone/notary-submission.json
-          test "$(node -p 'require(process.argv[1]).status' rehearsal-standalone/notary-submission.json)" = Accepted
+          test "$(node -p 'JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).status' rehearsal-standalone/notary-submission.json)" = Accepted
           codesign -dvvv rehearsal-standalone/guardscan 2> rehearsal-standalone/apple-code-signing.txt
       - name: Azure OIDC login for Windows rehearsal
         if: matrix.os == 'windows'

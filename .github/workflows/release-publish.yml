@@ -197,7 +197,7 @@ jobs:
       - name: Restore npm artifact from authenticated canonical payload
         env:
           RELEASE_TAG: ${{ inputs.tag }}
-        run: node cli/scripts/release/restore-npm-payload.js payload canonical-npm "$RELEASE_TAG"
+        run: node cli/scripts/release/restore-npm-payload.js payload canonical-npm "$RELEASE_TAG" "$GITHUB_WORKSPACE/source/cli" "$GITHUB_WORKSPACE/source" "$GITHUB_WORKSPACE/cli" "$RELEASE_INPUT_REF"
       - name: Check shared mutable tag state before publication
         working-directory: cli
         env:
@@ -877,6 +877,7 @@ jobs:
       - working-directory: cli
         run: npm ci --ignore-scripts
       - name: Render WinGet adapter with trusted tooling
+        shell: bash
         env:
           EXPECTED_TAG: ${{ inputs.tag }}
           EXPECTED_REF: ${{ inputs.ref }}
@@ -1100,6 +1101,7 @@ jobs:
       - working-directory: cli
         run: npm ci --ignore-scripts
       - name: Render Chocolatey adapter with trusted tooling
+        shell: bash
         run: |
           node cli/scripts/release/index.js render --manifest payload/release-manifest.json --output-dir adapters --package-root "$GITHUB_WORKSPACE/source/cli" --repository-root "$GITHUB_WORKSPACE/source" --schema-root "$GITHUB_WORKSPACE/cli"
       - name: Pack and test Chocolatey install, upgrade, invoke, and uninstall from a local feed

@@ -562,23 +562,60 @@ describe('immutable partial checkpoint workflow routing', () => {
     expect(repair.run).toContain('node .github/scripts/resume-release-checkpoint.js');
   });
 
-  it('flattens the complete paginated review history for all three authorization snapshots', () => {
-    const prepare = workflow('release-train.yml').jobs.prepare;
-    const fetches = prepare.steps.flatMap((candidate: any) => (candidate.run || '').split('\n'))
-      .filter((line: string) => line.includes('/reviews?per_page=100'));
-    expect(fetches).toHaveLength(3);
-    for (const fetch of fetches) expect(fetch).toContain('gh api --paginate --slurp');
-    const source = fs.readFileSync(path.join(workflowRoot, 'release-train.yml'), 'utf8');
-    const projection = 'add | map({id,state,commit_id,author_association,submitted_at,user:{login:.user.login}})';
-    expect(source.split("--jq '" + projection + "' > release-")).toHaveLength(4);
-    const metadata = {id: 100, state: 'PENDING', commit_id: null, author_association: 'OWNER',
-      submitted_at: null, user: {login: 'maintainer'}};
+  it('flattens complete review history with CLI-compatible pagination for all four authorization snapshots', () => {
+    const snapshots = [workflow('release-train.yml').jobs.prepare, workflow('release-provider-rehearsal.yml').jobs.validate]
+      .flatMap(job => job.steps).filter(candidate => candidate.run?.includes('cli/scripts/release/index.js validate-pr'));
+    const fetches = snapshots.map(candidate => candidate.run.replace(/\\\n\s*/g, ' ').split('\n')
+      .find((line: string) => line.includes('/reviews?per_page=100')));
+    expect(fetches).toHaveLength(4);
+    const metadata = {id: 1, state: 'APPROVED', commit_id: 'a'.repeat(40), author_association: 'OWNER',
+      submitted_at: '2026-11-05T00:00:00Z', user: {login: 'maintainer'}};
     const expanded = {...metadata, body: 'long review body'.repeat(10000), html_url: 'https://example.test/review',
       user: {...metadata.user, avatar_url: 'https://example.test/avatar', links: {}}};
-    const pages = [Array.from({length: 100}, (_, id) => ({...expanded, id})), [expanded]];
-    const flattened = spawnSync('jq', [projection], {input: JSON.stringify(pages), encoding: 'utf8'});
-    expect(flattened.status).toBe(0);
-    expect(JSON.parse(flattened.stdout)).toEqual(Array.from({length: 101}, (_, id) => ({...metadata, id})));
-    expect(Buffer.byteLength(flattened.stdout)).toBeLessThan(128 * 1024);
+    const later = {...expanded, id: 101, state: 'CHANGES_REQUESTED', submitted_at: '2026-11-05T00:01:00Z'};
+    const pending = {state: 'PENDING', commit_id: null, submitted_at: null};
+    const pages = [Array.from({length: 100}, (_, index) => ({...expanded, id: index + 1, ...(index === 0 ? pending : {})})), [later]];
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'guardscan-review-pages-'));
+    try {
+      fs.writeFileSync(path.join(root, 'pages.json'), JSON.stringify(pages));
+      fs.writeFileSync(path.join(root, 'gh'), `#!/usr/bin/env node
+const fs = require('fs');
+const args = process.argv.slice(2);
+if (args[0] !== 'api' || !args.includes('--paginate') || !args.includes('--slurp')) process.exit(2);
+if (args.includes('--jq') || args.includes('--template')) {
+  process.stderr.write('slurp option is not supported with jq or template'); process.exit(3);
+}
+process.stdout.write(fs.readFileSync(process.env.REVIEW_PAGES, 'utf8'));
+`, {mode: 0o755});
+      for (const fetch of fetches) {
+        const result = spawnSync('bash', ['-e', '-o', 'pipefail', '-c', fetch], {cwd: root, encoding: 'utf8',
+          env: {...process.env, PATH: root + path.delimiter + process.env.PATH, REVIEW_PAGES: path.join(root, 'pages.json'),
+            GITHUB_REPOSITORY: 'ntanwir10/GuardScan', REQUEST_RELEASE_PR: '42'}});
+        expect({status: result.status, stderr: result.stderr}).toEqual({status: 0, stderr: ''});
+        const file = fetch.match(/>\s*(release-[A-Za-z-]+\.json)\s*$/)[1];
+        const output = fs.readFileSync(path.join(root, file), 'utf8');
+        expect(JSON.parse(output)).toEqual([
+          ...Array.from({length: 100}, (_, index) => ({...metadata, id: index + 1, ...(index === 0 ? pending : {})})),
+          {...metadata, id: 101, state: 'CHANGES_REQUESTED', submitted_at: later.submitted_at},
+        ]);
+        expect(Buffer.byteLength(output)).toBeLessThan(128 * 1024);
+      }
+    } finally { fs.rmSync(root, {recursive: true, force: true}); }
+  });
+
+  it('preserves check-run App identity in every authorization evidence projection', () => {
+    const snapshots = [workflow('release-train.yml').jobs.prepare, workflow('release-provider-rehearsal.yml').jobs.validate]
+      .flatMap(job => job.steps).filter(candidate => candidate.run?.includes('cli/scripts/release/index.js validate-pr'));
+    expect(snapshots).toHaveLength(4);
+    const check = {name: 'Release gate', head_sha: 'a'.repeat(40), status: 'completed', conclusion: 'success',
+      app: {id: 15368, slug: 'github-actions'}};
+    for (const candidate of snapshots) {
+      const fetch = candidate.run.replace(/\\\n\s*/g, ' ').split('\n')
+        .find((line: string) => line.includes('/check-runs?per_page=100'));
+      const projection = fetch.match(/--jq '([^']+)'/)[1];
+      const result = spawnSync('jq', [projection], {input: JSON.stringify({check_runs: [check]}), encoding: 'utf8'});
+      expect(result.status).toBe(0);
+      expect(JSON.parse(result.stdout)).toEqual([check]);
+    }
   });
 });

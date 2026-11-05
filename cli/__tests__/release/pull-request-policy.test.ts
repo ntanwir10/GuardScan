@@ -7,6 +7,14 @@ const {main} = require('../../scripts/release/index');
 
 const head = 'a'.repeat(40);
 
+function gate(overrides: Record<string, any> = {}) {
+  return {
+    name: 'Release gate', head_sha: head, status: 'completed', conclusion: 'success',
+    app: {id: 15368, slug: 'github-actions'},
+    ...overrides,
+  };
+}
+
 function review(overrides: Record<string, any> = {}) {
   return {
     id: 1,
@@ -45,12 +53,7 @@ function fixture(overrides: Record<string, any> = {}) {
         repo: {full_name: 'ntanwir10/GuardScan', ...pullRequestOverrides.head?.repo},
       },
     },
-    checkRuns: overrides.checkRuns ?? [{
-      name: 'Release gate',
-      head_sha: head,
-      status: 'completed',
-      conclusion: 'success',
-    }],
+    checkRuns: overrides.checkRuns ?? [gate()],
     reviews: overrides.reviews ?? [{
       ...review(),
     }],
@@ -71,9 +74,42 @@ describe('pull request release authorization policy', () => {
     expect(authorizePullRequest(fixture({
       checkRuns: [
         {name: 'lint', head_sha: head, status: 'in_progress', conclusion: null},
-        {name: 'Release gate', head_sha: head, status: 'completed', conclusion: 'success'},
+        gate(),
       ],
     }))).toMatchObject({head});
+  });
+
+  it.each([
+    undefined, null, {}, {id: 15368}, {slug: 'github-actions'},
+    {id: '15368', slug: 'github-actions'}, {id: 12345, slug: 'github-actions'},
+    {id: 15368, slug: 'other-app'}, {id: 12345, slug: 'other-app'},
+  ])('rejects Release gate evidence without the exact trusted App identity %j', app => {
+    expect(() => authorizePullRequest(fixture({checkRuns: [gate({app})]})))
+      .toThrow(/Release gate/);
+  });
+
+  it.each([
+    {status: 'completed', conclusion: 'failure'},
+    {status: 'in_progress', conclusion: null},
+  ])('rejects a foreign App success while the trusted gate is %j', trusted => {
+    expect(() => authorizePullRequest(fixture({checkRuns: [
+      gate({app: {id: 12345, slug: 'other-app'}}), gate(trusted),
+    ]}))).toThrow(/Release gate/);
+  });
+
+  it('ignores foreign producers and stale trusted runs when the current trusted gate succeeds', () => {
+    expect(authorizePullRequest(fixture({checkRuns: [gate(),
+      gate({app: {id: 12345, slug: 'other-app'}, conclusion: 'failure'}),
+      gate({app: {id: 12345, slug: 'other-app'}, status: 'queued', conclusion: null}),
+      gate({app: undefined}), gate({head_sha: 'b'.repeat(40)}),
+    ]}))).toMatchObject({head});
+  });
+
+  it.each(['success', 'failure'])('rejects ambiguous trusted gate results including a second %s', conclusion => {
+    const duplicate = gate({conclusion});
+    for (const checkRuns of [[gate(), duplicate], [duplicate, gate()]]) {
+      expect(() => authorizePullRequest(fixture({checkRuns}))).toThrow(/Release gate/);
+    }
   });
 
   it('allows only an explicitly permitted, valid merged PR for promotion recovery', () => {
@@ -131,7 +167,7 @@ describe('pull request release authorization policy', () => {
       expectedNumber: 123,
       expectedBase: 'b'.repeat(40),
       pullRequest: {draft: true},
-      checkRuns: [{name: 'Release gate', head_sha: head, status: 'completed', conclusion: 'failure'}],
+      checkRuns: [gate({conclusion: 'failure'})],
     }))).toThrow(/Release gate has not succeeded/i);
     expect(() => authorizePullRequest(fixture({
       readinessPreflight: true,
@@ -175,9 +211,9 @@ describe('pull request release authorization policy', () => {
     ['draft PR', {pullRequest: {draft: true}}],
     ['changed head', {pullRequest: {head: {sha: 'b'.repeat(40)}}}],
     ['wrong expected head', {expectedHead: 'b'.repeat(40)}],
-    ['incomplete check', {checkRuns: [{name: 'Release gate', head_sha: head, status: 'in_progress', conclusion: null}]}],
-    ['neutral check', {checkRuns: [{name: 'Release gate', head_sha: head, status: 'completed', conclusion: 'neutral'}]}],
-    ['stale check', {checkRuns: [{name: 'Release gate', head_sha: 'b'.repeat(40), status: 'completed', conclusion: 'success'}]}],
+    ['incomplete check', {checkRuns: [gate({status: 'in_progress', conclusion: null})]}],
+    ['neutral check', {checkRuns: [gate({conclusion: 'neutral'})]}],
+    ['stale check', {checkRuns: [gate({head_sha: 'b'.repeat(40)})]}],
     ['self approval', {reviews: [review({user: {login: 'RELEASE-AUTHOR'}})]}],
     ['stale approval', {reviews: [review({commit_id: 'b'.repeat(40)})]}],
   ])('rejects %s', (_label, overrides) => {

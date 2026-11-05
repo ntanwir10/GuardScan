@@ -29,9 +29,9 @@ function restoreNpmPayload(source, manifest, payload, output) {
 }
 
 if (require.main === module) {
-  const [payload, output, tag] = process.argv.slice(2);
-  const source = validateSource({tag});
-  const manifest = validateDocument('manifest', path.join(payload, 'release-manifest.json'), source.packageRoot);
+  const [payload, output, tag, packageRoot, repositoryRoot, schemaRoot, commit] = process.argv.slice(2);
+  const source = validateSource({tag, packageRoot, repositoryRoot, schemaRoot, commit});
+  const manifest = validateDocument('manifest', path.join(payload, 'release-manifest.json'), source.schemaRoot);
   restoreNpmPayload(source, manifest, payload, output);
 }
 

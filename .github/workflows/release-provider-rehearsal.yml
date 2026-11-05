@@ -80,8 +80,8 @@ jobs:
           gh api "repos/${GITHUB_REPOSITORY}/commits/$REQUEST_EXPECTED_HEAD/check-runs?per_page=100&filter=latest" \
             --jq '.check_runs' \
             > release-check-runs.json
-          gh api "repos/${GITHUB_REPOSITORY}/pulls/$REQUEST_RELEASE_PR/reviews?per_page=100" \
-            > release-reviews.json
+          gh api --paginate --slurp "repos/${GITHUB_REPOSITORY}/pulls/$REQUEST_RELEASE_PR/reviews?per_page=100" \
+            | jq 'add | map({id,state,commit_id,author_association,submitted_at,user:{login:.user.login}})' > release-reviews.json
           node cli/scripts/release/index.js validate-pr \
             --pull-request pull-request.json \
             --check-runs release-check-runs.json \
