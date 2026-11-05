@@ -172,6 +172,8 @@ npm run release:render -- \
 
 ## Retry-safe release checkpoints
 
+Checkpoints allow at most 64 files, 768 MiB compressed, and 1 GiB of expanded TAR bytes including headers, padding, and end markers. Native archives and Python wheels retain their separate 32-entry and 512 MiB expansion limits. Checkpoint creation and verification buffer the payload in memory; the 1 GiB expansion bound is not a process-memory bound, and verification decompresses it twice. Full signed production payload sizes still require measurement on the five release platforms.
+
 The train resolves remote state before starting a signed build. A new release
 identity may build only when no matching GitHub release exists. Before
 publication, the train creates a draft release and uploads a deterministic
