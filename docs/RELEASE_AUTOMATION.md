@@ -302,7 +302,9 @@ The train:
 7. records `publishedAt` and hourly canary evidence;
 8. reconciles every 30 minutes.
 
-Promotion produces `promotion-decision.json`. A permitted decision requires at least 24 green samples per required channel, a complete 24-hour wall-clock window, a fresh last sample, the same source PR head, and no open incident. The release App then auto-merges that unchanged PR, tags its exact merge commit, rebuilds stable artifacts, and publishes `latest`.
+Promotion produces `promotion-decision.json`. A permitted decision requires at least 24 distinct green check timestamps per required channel across all eight RC channels, a complete 24-hour wall-clock window, the same source PR head and base, and no open incident. The first sample must arrive within 90 minutes of publication, every consecutive sample gap must be at most 90 minutes, and the latest sample must reach the end of the 24-hour soak and be no more than 90 minutes old. Only passed samples at or after publication and at or before evaluation count toward the floor; duplicate timestamps do not add samples. Every recorded failure remains blocking, including evidence outside that counting window. A missed gap cannot recover by waiting for a later rolling window; correction requires a new `rc.N`. The release App then auto-merges that unchanged PR, tags its exact merge commit, rebuilds stable artifacts, and publishes `latest`.
+
+Release PR authorization uses the latest non-comment review per reviewer, ordered by submission timestamp and then review ID. It requires a non-author approval on the exact head from an `OWNER`, `MEMBER`, or `COLLABORATOR` association and rejects outstanding changes requests from those associations. Comments do not clear a changes request or revive a dismissed approval. Missing or malformed review metadata fails closed. These associations are the minimum trust filter; they do not establish current repository write permission or replace protected-branch review requirements.
 
 ## Public installation contracts
 
@@ -392,3 +394,5 @@ gh workflow run release-train.yml \
 A release is complete only when every selected blocking channel materializes
 as `verified`. Optional Homebrew Core submission/acceptance is tracked
 separately and never blocks the release train.
+
+A partial checkpoint upload can resume only from one retained original canonical checkpoint Actions artifact (90-day retention), after authentication and byte comparison of the existing asset. Missing, expired, legacy, or ambiguous artifacts fail closed. After an interrupted upload, rerun the full workflow or dispatch a new run so the resolver can resume the checkpoint; retrying only failed jobs can collide with the immutable artifact name.

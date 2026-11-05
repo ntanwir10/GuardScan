@@ -21,9 +21,9 @@ function fixture() {
     manifestSha256: 'd'.repeat(64), publishedAt, ...candidate};
   const channels = ['github', 'npm', 'pnpm', 'yarn', 'bun', 'pypi', 'homebrew', 'scoop'];
   const decision = createPromotionDecision({rc, currentSourcePrHead: head, currentSourcePrBase: base, evaluatedAt,
-    canaries: channels.flatMap(channel => Array.from({length: 25}, (_, index) => ({
-      channel, status: 'passed', checkedAt: index === 24 ? evaluatedAt
-        : new Date(Date.parse(publishedAt) + (index + 1) * 60 * 60 * 1000).toISOString(),
+    canaries: channels.flatMap(channel => Array.from({length: 26}, (_, index) => ({
+      channel, status: 'passed',
+      checkedAt: new Date(Date.parse(publishedAt) + (index + 1) * 60 * 60 * 1000).toISOString(),
     }))), incidents: []});
   const text = `${JSON.stringify(decision, null, 2)}\n`;
   const events: any[] = [];

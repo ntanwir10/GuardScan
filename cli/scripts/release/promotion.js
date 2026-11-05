@@ -36,22 +36,24 @@ function summarizeCanaries(samples, publicationTimestamp, eligibleAt, evaluatedA
   const failures = normalized.filter(sample => sample.status !== 'passed');
   const first = checked[0];
   const latest = checked.at(-1);
-  const soakBuckets = new Set(checked.flatMap(({date}) => {
-    const offset = date.getTime() - publishedAt.getTime();
-    if (offset < 0 || offset > SOAK_MILLISECONDS) return [];
-    return [Math.max(0, Math.ceil(offset / CANARY_INTERVAL_MILLISECONDS) - 1)];
-  }));
+  const validSamples = [...new Map(checked
+    .filter(({sample, date}) => sample.status === 'passed' && date >= publishedAt && date <= evaluatedAt)
+    .map(value => [value.sample.checkedAt, value])).values()];
+  const coversSoak = validSamples.length > 0 && validSamples.every(({date}, index) => (
+    date.getTime() - (index === 0 ? publishedAt : validSamples[index - 1].date).getTime()
+      <= MAX_CANARY_AGE_MILLISECONDS
+  ));
   const latestAge = latest ? evaluatedAt.getTime() - latest.date.getTime() : undefined;
   return {
-    sampleCount: normalized.length,
-    passed: failures.length === 0 && normalized.length >= minimumSamples,
+    sampleCount: validSamples.length,
+    passed: failures.length === 0 && validSamples.length >= minimumSamples,
     firstCheckedAt: first?.sample.checkedAt,
     lastCheckedAt: latest?.sample.checkedAt,
     failures: failures.length,
     coversPublication: first ? first.date >= publishedAt : false,
     startsNearPublication: first ? first.date.getTime() - publishedAt.getTime() <= MAX_CANARY_AGE_MILLISECONDS : false,
     coversSoakWindow: latest ? latest.date.getTime() >= eligibleAt.getTime() : false,
-    coversSoak: soakBuckets.size === SOAK_MILLISECONDS / CANARY_INTERVAL_MILLISECONDS,
+    coversSoak,
     fresh: latestAge !== undefined
       && latestAge >= 0
       && latestAge <= MAX_CANARY_AGE_MILLISECONDS,
@@ -100,9 +102,9 @@ function createPromotionDecision(input) {
       minimumSamples
     );
     canaryEvidence[channel] = summary;
+    if (summary.failures > 0) reasons.push(`canary_failed:${channel}`);
     if (summary.sampleCount === 0) reasons.push(`canary_missing:${channel}`);
-    else {
-      if (summary.failures > 0) reasons.push(`canary_failed:${channel}`);
+    if (summary.firstCheckedAt !== undefined) {
       if (summary.sampleCount < minimumSamples) reasons.push(`canary_samples_insufficient:${channel}`);
       if (!summary.coversPublication) reasons.push(`canary_predates_publication:${channel}`);
       if (!summary.startsNearPublication) reasons.push(`canary_start_late:${channel}`);
