@@ -1,3 +1,5 @@
+export {};
+
 const {createPromotionDecision} = require('../../scripts/release/promotion');
 
 const publishedAt = '2026-11-01T00:00:00.000Z';

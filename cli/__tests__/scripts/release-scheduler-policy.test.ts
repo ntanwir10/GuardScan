@@ -28,8 +28,11 @@ function fixture(overrides: {
   candidatePr?: number;
   startedPr?: number;
 } = {}) {
-  const checkedAts = [overrides.firstAt || publishedAt,
-    ...Array.from({length: 22}, (_, index) => new Date(Date.parse(publishedAt) + (index + 2) * 3600000).toISOString()), overrides.latestAt || evaluatedAt];
+  const firstAt = overrides.firstAt || publishedAt;
+  const latestAt = overrides.latestAt || evaluatedAt;
+  const checkedAts = [firstAt,
+    ...Array.from({length: 23}, (_, index) => new Date(Date.parse(publishedAt) + (index + 1) * 3600000).toISOString())
+      .filter(checkedAt => checkedAt > firstAt && checkedAt < latestAt), latestAt];
   const candidateHead = overrides.candidateHead || sourcePrHead;
   const candidatePr = overrides.candidatePr || 42;
   const events = [

@@ -1124,6 +1124,7 @@ jobs:
       && needs.resolve-checkpoint.outputs.mode == 'build'
     needs: [prepare, resolve-checkpoint]
     permissions:
+      actions: read
       contents: read
       id-token: write
       attestations: write

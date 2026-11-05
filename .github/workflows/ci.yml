@@ -37,7 +37,7 @@ jobs:
           npm run release:validate
           npm run test:release
       - name: Validate workflow security contracts
-        run: node --test .github/scripts/verify-release-workflow-security.test.js
+        run: node --test .github/scripts/verify-release-workflow-security.test.js .github/scripts/resume-release-checkpoint.test.js .github/scripts/verify-artifact-download.test.js
       - name: Reject whitespace and patch corruption
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
