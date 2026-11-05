@@ -448,3 +448,137 @@ describe('release workflow review regressions', () => {
     expect(moderated.run).toContain('$LASTEXITCODE');
   });
 });
+
+
+describe('release review recovery contracts', () => {
+  it('binds reusable callee signer provenance only in supported step contexts', () => {
+    const build = workflow('release-build.yml');
+    let readers = 0;
+    for (const job of Object.values(build.jobs) as any[]) {
+      expect(JSON.stringify(job.env || {})).not.toContain('job.workflow_sha');
+      for (const candidate of job.steps || []) {
+        if (candidate.run?.includes('RELEASE_BUILD_WORKFLOW_SHA')) {
+          expect(candidate.env?.RELEASE_BUILD_WORKFLOW_SHA).toBe('${{ job.workflow_sha }}');
+          readers++;
+        }
+        if (candidate.env?.SIGNER_WORKFLOW_SHA) {
+          expect(candidate.env.SIGNER_WORKFLOW_SHA).toBe('${{ job.workflow_sha }}');
+          readers++;
+        }
+      }
+    }
+    expect(readers).toBe(7);
+  });
+
+  it('declares and forwards exactly the publication secrets its consumers need', () => {
+    const publish = workflow('release-publish.yml');
+    const caller = workflow('release-train.yml').jobs.publish;
+    const inventory = ['RELEASE_APP_PRIVATE_KEY', 'WINGET_CREATE_GITHUB_TOKEN', 'WINGET_GITHUB_TOKEN', 'CHOCO_API_KEY'];
+    expect(Object.keys(publish.on.workflow_call.secrets).sort()).toEqual(inventory.sort());
+    expect(Object.keys(caller.secrets).sort()).toEqual(inventory.sort());
+    expect(publish.on.workflow_call.secrets.RELEASE_APP_PRIVATE_KEY.required).toBe(true);
+    for (const secret of inventory) expect(caller.secrets[secret]).toBe('${{ secrets.' + secret + ' }}');
+  });
+
+  it('authenticates the final canary ledger push without checkout credentials', () => {
+    const record = workflow('release-canary.yml').jobs.record;
+    const push = record.steps.find((candidate: any) => candidate.run?.includes('push origin HEAD:release-ledger'));
+    expect(push.run).toMatch(/git -c credential.helper= -c 'credential.https:\/\/github.com.helper=!gh auth git-credential'\s+push origin HEAD:release-ledger/);
+    expect(push.run).toContain('export GH_TOKEN="$RELEASE_APP_TOKEN"');
+  });
+
+  it('publishes recovered payloads only after both direct prerequisites succeed and without cancellation', () => {
+    const publish = workflow('release-train.yml').jobs.publish;
+    expect(publish.needs).toEqual(['prepare', 'payload-ready']);
+    const condition = publish.if.replace(/\s+/g, ' ').trim();
+    expect(condition).toContain('always()');
+    expect(condition).toContain('!cancelled()');
+    for (const prepare of ['success', 'failure', 'cancelled', 'skipped']) {
+      for (const payload of ['success', 'failure', 'cancelled', 'skipped']) {
+        for (const cancelled of [false, true]) {
+          const expression = condition.replace(/always\(\)/g, 'true')
+            .replace(/cancelled\(\)/g, String(cancelled))
+            .replace(/vars.RELEASE_AUTOMATION_ENABLED/g, "'true'")
+            .replace(/needs.prepare.outputs.build/g, "'true'")
+            .replace(/needs.prepare.result/g, JSON.stringify(prepare))
+            .replace(/needs.payload-ready.result/g, JSON.stringify(payload));
+          expect(Function('return (' + expression + ')')()).toBe(!cancelled && prepare === 'success' && payload === 'success');
+        }
+      }
+    }
+  });
+
+  it('compares catalog path inventories in byte order in both writers', () => {
+    for (const filename of ['release-train.yml', 'release-publish.yml']) {
+      const source = fs.readFileSync(path.join(workflowRoot, filename), 'utf8');
+      expect(source).toMatch(/CHANGED_PATHS="\$\(git[^\n]*diff --name-only origin\/main\.\.\.HEAD \| LC_ALL=C sort\)"/);
+    }
+  });
+});
+
+describe('immutable partial checkpoint workflow routing', () => {
+  it('routes only one exact canonical asset to partial recovery and rejects unknown checkpoint names', () => {
+    const job = workflow('release-train.yml').jobs['resolve-checkpoint'];
+    const classify = step(job, 'Classify remote checkpoint state').run.match(/node - <<'NODE'\n([\s\S]*?)\nNODE/)[1];
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'guardscan-checkpoint-classify-'));
+    const archive = 'guardscan-release-checkpoint-1.1.0.tar.gz';
+    const sidecar = archive + '.metadata.json';
+    const check = (names: string[], draft = true) => {
+      fs.writeFileSync(path.join(root, 'release-state.json'), JSON.stringify({draft, assets: names.map(name => ({name}))}));
+      const output = path.join(root, 'output');
+      fs.writeFileSync(output, '');
+      const result = spawnSync(process.execPath, ['-e', classify], {cwd: root, encoding: 'utf8',
+        env: {...process.env, ARCHIVE: archive, SIDECAR: sidecar, GITHUB_OUTPUT: output}});
+      return {status: result.status, mode: fs.readFileSync(output, 'utf8').trim()};
+    };
+    try {
+      expect(check([])).toEqual({status: 0, mode: 'mode=build'});
+      expect(check([archive])).toEqual({status: 0, mode: 'mode=partial'});
+      expect(check([sidecar])).toEqual({status: 0, mode: 'mode=partial'});
+      expect(check([archive, sidecar])).toEqual({status: 0, mode: 'mode=checkpoint'});
+      expect(check([archive, 'release-manifest.json']).mode).toBe('mode=expanded');
+      expect(check([archive, archive]).mode).not.toBe('mode=partial');
+      expect(check([archive], false).status).not.toBe(0);
+      expect(check([archive + '.unexpected']).status).not.toBe(0);
+      expect(check([archive, sidecar, archive + '.unexpected']).status).not.toBe(0);
+    } finally { fs.rmSync(root, {recursive: true, force: true}); }
+  });
+
+  it('persists the canonical checkpoint pair before any remote upload and protects partial repairs', () => {
+    const train = workflow('release-train.yml');
+    const checkpoint = train.jobs.checkpoint.steps;
+    const canonical = checkpoint.findIndex((candidate: any) => candidate.name === 'Persist canonical checkpoint pair before remote upload');
+    const upload = checkpoint.findIndex((candidate: any) => candidate.run?.includes('gh release upload'));
+    expect(canonical).toBeGreaterThan(0);
+    expect(canonical).toBeLessThan(upload);
+    expect(checkpoint[canonical].with.name).toBe('release-checkpoint-${{ needs.prepare.outputs.tag }}');
+    expect(checkpoint[canonical].with['retention-days']).toBe(90);
+    expect(checkpoint[canonical].with.overwrite).toBeUndefined();
+    const resolve = train.jobs['resolve-checkpoint'];
+    expect(resolve.permissions).toEqual({actions: 'read', contents: 'write'});
+    expect(resolve.environment).toContain("'release-rc' || 'release-stable'");
+    const repair = step(resolve, 'Resume an authenticated partial checkpoint without replacing existing bytes');
+    expect(repair.if).toBe("steps.remote.outputs.mode == 'partial'");
+    expect(repair.run).toContain('node .github/scripts/resume-release-checkpoint.js');
+  });
+
+  it('flattens the complete paginated review history for all three authorization snapshots', () => {
+    const prepare = workflow('release-train.yml').jobs.prepare;
+    const fetches = prepare.steps.flatMap((candidate: any) => (candidate.run || '').split('\n'))
+      .filter((line: string) => line.includes('/reviews?per_page=100'));
+    expect(fetches).toHaveLength(3);
+    for (const fetch of fetches) expect(fetch).toContain('gh api --paginate --slurp');
+    const source = fs.readFileSync(path.join(workflowRoot, 'release-train.yml'), 'utf8');
+    const projection = 'add | map({id,state,commit_id,author_association,submitted_at,user:{login:.user.login}})';
+    expect(source.split("--jq '" + projection + "' > release-")).toHaveLength(4);
+    const metadata = {id: 100, state: 'PENDING', commit_id: null, author_association: 'OWNER',
+      submitted_at: null, user: {login: 'maintainer'}};
+    const expanded = {...metadata, body: 'long review body'.repeat(10000), html_url: 'https://example.test/review',
+      user: {...metadata.user, avatar_url: 'https://example.test/avatar', links: {}}};
+    const pages = [Array.from({length: 100}, (_, id) => ({...expanded, id})), [expanded]];
+    const flattened = spawnSync('jq', [projection], {input: JSON.stringify(pages), encoding: 'utf8'});
+    expect(flattened.status).toBe(0);
+    expect(JSON.parse(flattened.stdout)).toEqual(Array.from({length: 101}, (_, id) => ({...metadata, id})));
+    expect(Buffer.byteLength(flattened.stdout)).toBeLessThan(128 * 1024);
+  });
+});

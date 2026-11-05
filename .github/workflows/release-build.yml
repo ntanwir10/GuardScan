@@ -109,8 +109,6 @@ jobs:
       contents: read
       id-token: write
       attestations: write
-    env:
-      RELEASE_BUILD_WORKFLOW_SHA: ${{ job.workflow_sha }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -173,7 +171,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           BUNDLE_PATH: ${{ steps.attest-npm.outputs.bundle-path }}
-          SIGNER_WORKFLOW_SHA: ${{ env.RELEASE_BUILD_WORKFLOW_SHA }}
+          SIGNER_WORKFLOW_SHA: ${{ job.workflow_sha }}
           SOURCE_COMMIT: ${{ inputs.ref }}
           BUNDLE_FILE: npm.provenance.sigstore.json
           BUNDLE_URL: https://github.com/${{ github.repository }}/releases/download/${{ inputs.tag }}/npm.provenance.sigstore.json
@@ -270,8 +268,6 @@ jobs:
       contents: read
       id-token: write
       attestations: write
-    env:
-      RELEASE_BUILD_WORKFLOW_SHA: ${{ job.workflow_sha }}
     strategy:
       fail-fast: false
       matrix:
@@ -356,6 +352,8 @@ jobs:
       - name: Keyless-sign Linux executable
         if: matrix.os == 'linux'
         shell: bash
+        env:
+          RELEASE_BUILD_WORKFLOW_SHA: ${{ job.workflow_sha }}
         run: |
           cosign sign-blob --yes --bundle standalone/guardscan.sigstore.json standalone/guardscan
           cosign verify-blob --bundle standalone/guardscan.sigstore.json \
@@ -486,7 +484,7 @@ jobs:
           ARTIFACT_LIBC: ${{ matrix.libc }}
           ARTIFACT_ID: ${{ matrix.id }}
           BUNDLE_PATH: ${{ steps.attest-executable.outputs.bundle-path }}
-          SIGNER_WORKFLOW_SHA: ${{ env.RELEASE_BUILD_WORKFLOW_SHA }}
+          SIGNER_WORKFLOW_SHA: ${{ job.workflow_sha }}
           BUNDLE_FILE: ${{ matrix.id }}.executable.provenance.sigstore.json
           BUNDLE_URL: https://github.com/${{ github.repository }}/releases/download/${{ inputs.tag }}/${{ matrix.id }}.executable.provenance.sigstore.json
         run: |
@@ -574,7 +572,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           BUNDLE_PATH: ${{ steps.attest-archive.outputs.bundle-path }}
-          SIGNER_WORKFLOW_SHA: ${{ env.RELEASE_BUILD_WORKFLOW_SHA }}
+          SIGNER_WORKFLOW_SHA: ${{ job.workflow_sha }}
           SOURCE_COMMIT: ${{ inputs.ref }}
           BUNDLE_FILE: ${{ matrix.id }}.archive.provenance.sigstore.json
           BUNDLE_URL: https://github.com/${{ github.repository }}/releases/download/${{ inputs.tag }}/${{ matrix.id }}.archive.provenance.sigstore.json
@@ -616,7 +614,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           BUNDLE_PATH: ${{ steps.attest-wheel.outputs.bundle-path }}
-          SIGNER_WORKFLOW_SHA: ${{ env.RELEASE_BUILD_WORKFLOW_SHA }}
+          SIGNER_WORKFLOW_SHA: ${{ job.workflow_sha }}
           SOURCE_COMMIT: ${{ inputs.ref }}
           BUNDLE_FILE: ${{ matrix.id }}.wheel.provenance.sigstore.json
           BUNDLE_URL: https://github.com/${{ github.repository }}/releases/download/${{ inputs.tag }}/${{ matrix.id }}.wheel.provenance.sigstore.json
@@ -670,8 +668,6 @@ jobs:
       contents: read
       id-token: write
       attestations: write
-    env:
-      RELEASE_BUILD_WORKFLOW_SHA: ${{ job.workflow_sha }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -712,6 +708,7 @@ jobs:
       - name: Build production manifest from all native and wheel metadata
         shell: bash
         env:
+          RELEASE_BUILD_WORKFLOW_SHA: ${{ job.workflow_sha }}
           RELEASE_TAG: ${{ inputs.tag }}
         run: |
           node - <<'NODE'
@@ -758,6 +755,8 @@ jobs:
           node cli/scripts/release/index.js manifest --descriptor collected/release-manifest-input.json --output release/release-manifest.json --package-root "$GITHUB_WORKSPACE/source/cli" --repository-root "$GITHUB_WORKSPACE/source" --schema-root "$GITHUB_WORKSPACE/cli"
       - name: Produce and sign aggregate checksums
         shell: bash
+        env:
+          RELEASE_BUILD_WORKFLOW_SHA: ${{ job.workflow_sha }}
         run: |
           [[ "$RELEASE_BUILD_WORKFLOW_SHA" =~ ^[a-f0-9]{40}$ ]] || exit 1
           printf '%s\n' "{\"schemaVersion\":\"guardscan.release-build-provenance.v1\",\"workflow\":\".github/workflows/release-build.yml\",\"ref\":\"refs/heads/main\",\"sha\":\"$RELEASE_BUILD_WORKFLOW_SHA\"}" > release/release-build-provenance.json
@@ -841,8 +840,6 @@ jobs:
     permissions:
       contents: read
       id-token: write
-    env:
-      RELEASE_BUILD_WORKFLOW_SHA: ${{ job.workflow_sha }}
     strategy:
       fail-fast: false
       matrix:

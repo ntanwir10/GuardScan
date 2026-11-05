@@ -440,8 +440,8 @@ jobs:
           gh api "repos/$GITHUB_REPOSITORY/pulls/$REQUEST_RELEASE_PR" > release-pr-readiness-preflight.json
           gh api "repos/$GITHUB_REPOSITORY/commits/$EXPECTED_HEAD/check-runs?per_page=100&filter=latest" \
             --jq '.check_runs' > release-readiness-check-runs.json
-          gh api "repos/$GITHUB_REPOSITORY/pulls/$REQUEST_RELEASE_PR/reviews?per_page=100" \
-            > release-readiness-reviews.json
+          gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/pulls/$REQUEST_RELEASE_PR/reviews?per_page=100" \
+            --jq 'add | map({id,state,commit_id,author_association,submitted_at,user:{login:.user.login}})' > release-readiness-reviews.json
           node cli/scripts/release/index.js validate-pr \
             --pull-request release-pr-readiness-preflight.json \
             --check-runs release-readiness-check-runs.json \
@@ -474,8 +474,8 @@ jobs:
           gh api "repos/$GITHUB_REPOSITORY/pulls/$REQUEST_RELEASE_PR" > release-pr-readiness-refresh.json
           gh api "repos/$GITHUB_REPOSITORY/commits/$EXPECTED_HEAD/check-runs?per_page=100&filter=latest" \
             --jq '.check_runs' > release-readiness-check-runs.json
-          gh api "repos/$GITHUB_REPOSITORY/pulls/$REQUEST_RELEASE_PR/reviews?per_page=100" \
-            > release-readiness-reviews.json
+          gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/pulls/$REQUEST_RELEASE_PR/reviews?per_page=100" \
+            --jq 'add | map({id,state,commit_id,author_association,submitted_at,user:{login:.user.login}})' > release-readiness-reviews.json
           node cli/scripts/release/index.js validate-pr \
             --pull-request release-pr-readiness-refresh.json \
             --check-runs release-readiness-check-runs.json \
@@ -549,8 +549,8 @@ jobs:
           gh api "repos/$GITHUB_REPOSITORY/commits/$EXPECTED_HEAD/check-runs?per_page=100&filter=latest" \
             --jq '.check_runs' \
             > release-check-runs.json
-          gh api "repos/$GITHUB_REPOSITORY/pulls/$REQUEST_RELEASE_PR/reviews?per_page=100" \
-            > release-reviews.json
+          gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/pulls/$REQUEST_RELEASE_PR/reviews?per_page=100" \
+            --jq 'add | map({id,state,commit_id,author_association,submitted_at,user:{login:.user.login}})' > release-reviews.json
           PR_POLICY_ARGS=(
             --pull-request release-pr.json
             --check-runs release-check-runs.json
@@ -888,9 +888,10 @@ jobs:
       && needs.prepare.outputs.build == 'true'
     needs: [prepare]
     runs-on: ubuntu-24.04
+    environment: ${{ needs.prepare.outputs.channel == 'rc' && 'release-rc' || 'release-stable' }}
     permissions:
       actions: read
-      contents: read
+      contents: write
     outputs:
       mode: ${{ steps.remote.outputs.mode }}
     steps:
@@ -920,9 +921,18 @@ jobs:
           const names = new Set((state.assets || []).map(asset => asset.name));
           const hasArchive = names.has(process.env.ARCHIVE);
           const hasSidecar = names.has(process.env.SIDECAR);
+          if ([...names].some(name => name.startsWith('guardscan-release-checkpoint-')
+              && name !== process.env.ARCHIVE && name !== process.env.SIDECAR)) {
+            throw new Error('release-integrity incident: unexpected checkpoint asset name');
+          }
           if (hasArchive && hasSidecar) {
             if (!state.draft) throw new Error('release-integrity incident: published release exposes checkpoint assets');
             fs.appendFileSync(process.env.GITHUB_OUTPUT, 'mode=checkpoint\n');
+            process.exit(0);
+          }
+          if (state.draft && (hasArchive || hasSidecar)
+              && (state.assets || []).length === 1 && names.size === 1) {
+            fs.appendFileSync(process.env.GITHUB_OUTPUT, 'mode=partial\n');
             process.exit(0);
           }
           if (state.draft) {
@@ -984,6 +994,13 @@ jobs:
             --extract-dir rehydrated
       - uses: sigstore/cosign-installer@d58896d6a1865668819e1d91763c7751a165e159 # v3.9.2
         if: steps.remote.outputs.mode != 'build'
+      - name: Resume an authenticated partial checkpoint without replacing existing bytes
+        if: steps.remote.outputs.mode == 'partial'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_REF: ${{ needs.prepare.outputs.ref }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+        run: node .github/scripts/resume-release-checkpoint.js "$RELEASE_TAG" "$RELEASE_REF" release-state.json
       - name: Download and verify complete expanded or published asset inventory
         if: steps.remote.outputs.mode == 'public' || steps.remote.outputs.mode == 'expanded'
         env:
@@ -1202,6 +1219,13 @@ jobs:
             --root checkpoint-root --files "$FILES" \
             --producer checkpoint-producer.json --timestamp "$TIMESTAMP" \
             --output-dir checkpoint-assets
+      - name: Persist canonical checkpoint pair before remote upload
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-checkpoint-${{ needs.prepare.outputs.tag }}
+          path: checkpoint-assets/
+          if-no-files-found: error
+          retention-days: 90
       - name: Create or reuse empty draft and upload checkpoint atomically
         env:
           GH_TOKEN: ${{ github.token }}
@@ -1270,7 +1294,7 @@ jobs:
             test "$BUILD_RESULT" = success
             test "$CHECKPOINT_RESULT" = success
           else
-            test "$MODE" = checkpoint -o "$MODE" = expanded -o "$MODE" = public
+            test "$MODE" = checkpoint -o "$MODE" = partial -o "$MODE" = expanded -o "$MODE" = public
             test "$BUILD_RESULT" = skipped
             test "$CHECKPOINT_RESULT" = skipped
           fi
@@ -1579,7 +1603,11 @@ jobs:
   publish:
     name: Publish every automated channel
     if: >-
-      vars.RELEASE_AUTOMATION_ENABLED == 'true'
+      always()
+      && !cancelled()
+      && vars.RELEASE_AUTOMATION_ENABLED == 'true'
+      && needs.prepare.result == 'success'
+      && needs.payload-ready.result == 'success'
       && needs.prepare.outputs.build == 'true'
     needs: [prepare, payload-ready]
     concurrency:
@@ -1596,6 +1624,8 @@ jobs:
       tag: ${{ needs.prepare.outputs.tag }}
       channel: ${{ needs.prepare.outputs.channel }}
     secrets:
+      RELEASE_APP_PRIVATE_KEY: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+      WINGET_GITHUB_TOKEN: ${{ secrets.WINGET_GITHUB_TOKEN }}
       WINGET_CREATE_GITHUB_TOKEN: ${{ secrets.WINGET_CREATE_GITHUB_TOKEN }}
       CHOCO_API_KEY: ${{ secrets.CHOCO_API_KEY }}
 
@@ -2181,7 +2211,7 @@ jobs:
               echo "::error::Release-integrity incident: catalog branch is not based on main"
               exit 1
             }
-            CHANGED_PATHS="$(git -C catalog-checkout diff --name-only origin/main...HEAD | sort)"
+            CHANGED_PATHS="$(git -C catalog-checkout diff --name-only origin/main...HEAD | LC_ALL=C sort)"
             EXPECTED_PATHS="$(printf '%s\n' \
               Formula/guardscan.rb \
               bucket/guardscan.json \

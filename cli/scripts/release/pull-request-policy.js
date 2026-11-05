@@ -6,6 +6,10 @@ const RELEASE_GATE = 'Release gate';
 const SHA_PATTERN = /^[a-f0-9]{40}$/;
 const MAX_INPUT_BYTES = 128 * 1024;
 const MAX_COLLECTION_ITEMS = 1000;
+const TRUSTED_ASSOCIATIONS = new Set(['OWNER', 'MEMBER', 'COLLABORATOR']);
+const REVIEW_ASSOCIATIONS = new Set([...TRUSTED_ASSOCIATIONS,
+  'CONTRIBUTOR', 'FIRST_TIMER', 'FIRST_TIME_CONTRIBUTOR', 'MANNEQUIN', 'NONE']);
+const REVIEW_STATES = new Set(['APPROVED', 'CHANGES_REQUESTED', 'COMMENTED', 'DISMISSED', 'PENDING']);
 
 function isObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -116,18 +120,45 @@ function authorizePullRequest(input) {
   }
 
   const reviews = requireCollection(input.reviews, 'reviews');
+  const reviewIds = new Set();
+  const latestReviews = new Map();
   for (const review of reviews) {
     requireObject(review, 'review');
-    requireString(review.state, 'review state');
+    if (!REVIEW_STATES.has(review.state)) throw new Error('review state is invalid');
+    if (review.state === 'PENDING') continue;
     requireSha(review.commit_id, 'review commit');
-    requireString(review.user?.login, 'review author');
+    const reviewer = requireString(review.user?.login, 'review author').toLowerCase();
+    if (!Number.isSafeInteger(review.id) || review.id < 1 || reviewIds.has(review.id)) {
+      throw new Error('review ID must be a unique positive integer');
+    }
+    reviewIds.add(review.id);
+    if (!REVIEW_ASSOCIATIONS.has(review.author_association)) {
+      throw new Error('review author association is invalid');
+    }
+    const submittedAt = new Date(review.submitted_at);
+    if (typeof review.submitted_at !== 'string' || !Number.isFinite(submittedAt.getTime())
+        || (submittedAt.toISOString() !== review.submitted_at
+          && submittedAt.toISOString().replace('.000Z', 'Z') !== review.submitted_at)) {
+      throw new Error('review submitted_at must be a canonical ISO timestamp');
+    }
+    if (review.state === 'COMMENTED') continue;
+    const previous = latestReviews.get(reviewer);
+    if (!previous || submittedAt > new Date(previous.submitted_at)
+        || (submittedAt.getTime() === Date.parse(previous.submitted_at) && review.id > previous.id)) {
+      latestReviews.set(reviewer, review);
+    }
   }
-  if (!reviews.some(review => (
+  const trustedReviews = [...latestReviews.values()]
+    .filter(review => TRUSTED_ASSOCIATIONS.has(review.author_association));
+  if (trustedReviews.some(review => review.state === 'CHANGES_REQUESTED')) {
+    throw new Error('pull request has outstanding changes requested by a trusted reviewer');
+  }
+  if (!trustedReviews.some(review => (
     review.state === 'APPROVED'
     && review.commit_id === head
     && review.user.login.toLowerCase() !== author
   ))) {
-    throw new Error('expected a non-author approval bound to the exact pull request head');
+    throw new Error('expected a non-author approval from a trusted association bound to the exact pull request head');
   }
 
   return {

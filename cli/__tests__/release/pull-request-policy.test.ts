@@ -7,6 +7,18 @@ const {main} = require('../../scripts/release/index');
 
 const head = 'a'.repeat(40);
 
+function review(overrides: Record<string, any> = {}) {
+  return {
+    id: 1,
+    state: 'APPROVED',
+    commit_id: head,
+    user: {login: 'independent-reviewer'},
+    author_association: 'MEMBER',
+    submitted_at: '2026-11-04T00:00:00Z',
+    ...overrides,
+  };
+}
+
 function fixture(overrides: Record<string, any> = {}) {
   const pullRequestOverrides = overrides.pullRequest || {};
   return {
@@ -40,9 +52,7 @@ function fixture(overrides: Record<string, any> = {}) {
       conclusion: 'success',
     }],
     reviews: overrides.reviews ?? [{
-      state: 'APPROVED',
-      commit_id: head,
-      user: {login: 'independent-reviewer'},
+      ...review(),
     }],
   };
 }
@@ -168,10 +178,99 @@ describe('pull request release authorization policy', () => {
     ['incomplete check', {checkRuns: [{name: 'Release gate', head_sha: head, status: 'in_progress', conclusion: null}]}],
     ['neutral check', {checkRuns: [{name: 'Release gate', head_sha: head, status: 'completed', conclusion: 'neutral'}]}],
     ['stale check', {checkRuns: [{name: 'Release gate', head_sha: 'b'.repeat(40), status: 'completed', conclusion: 'success'}]}],
-    ['self approval', {reviews: [{state: 'APPROVED', commit_id: head, user: {login: 'release-author'}}]}],
-    ['stale approval', {reviews: [{state: 'APPROVED', commit_id: 'b'.repeat(40), user: {login: 'independent-reviewer'}}]}],
+    ['self approval', {reviews: [review({user: {login: 'RELEASE-AUTHOR'}})]}],
+    ['stale approval', {reviews: [review({commit_id: 'b'.repeat(40)})]}],
   ])('rejects %s', (_label, overrides) => {
     expect(() => authorizePullRequest(fixture(overrides))).toThrow();
+  });
+
+  it.each(['NONE', 'CONTRIBUTOR', 'FIRST_TIMER', 'FIRST_TIME_CONTRIBUTOR', 'MANNEQUIN'])(
+    'rejects an exact-head approval from association %s', author_association => {
+      expect(() => authorizePullRequest(fixture({reviews: [review({author_association})]})))
+        .toThrow(/approval/);
+    }
+  );
+
+  it.each(['OWNER', 'MEMBER', 'COLLABORATOR'])(
+    'accepts an exact-head approval from association %s', author_association => {
+      expect(authorizePullRequest(fixture({reviews: [review({author_association})]})))
+        .toMatchObject({head});
+    }
+  );
+
+  it.each(['CHANGES_REQUESTED', 'DISMISSED'])(
+    'does not revive an approval superseded by %s regardless of array order', state => {
+      const earlier = review();
+      const later = review({id: 2, state, submitted_at: '2026-11-04T00:01:00Z'});
+      for (const reviews of [[earlier, later], [later, earlier]]) {
+        expect(() => authorizePullRequest(fixture({reviews}))).toThrow();
+      }
+    }
+  );
+
+  it('uses review IDs to order submissions sharing the same timestamp', () => {
+    expect(() => authorizePullRequest(fixture({reviews: [
+      review({id: 2, state: 'CHANGES_REQUESTED'}), review(),
+    ]}))).toThrow(/changes requested/i);
+    expect(authorizePullRequest(fixture({reviews: [
+      review({id: 2}), review({state: 'CHANGES_REQUESTED'}),
+    ]}))).toMatchObject({head});
+  });
+
+  it('orders review submission timestamps before IDs and input array order', () => {
+    const earlier = review({id: 100});
+    const later = review({id: 2, state: 'CHANGES_REQUESTED', submitted_at: '2026-11-04T00:01:00.000Z'});
+    for (const reviews of [[earlier, later], [later, earlier]]) {
+      expect(() => authorizePullRequest(fixture({reviews}))).toThrow(/changes requested/i);
+    }
+  });
+
+  it('keeps outstanding changes requested by another reviewer blocking across heads and comments', () => {
+    const requested = review({id: 2, state: 'CHANGES_REQUESTED', commit_id: 'b'.repeat(40),
+      user: {login: 'Other-Reviewer'}});
+    const comment = review({id: 3, state: 'COMMENTED', user: {login: 'other-reviewer'},
+      submitted_at: '2026-11-04T00:01:00Z'});
+    expect(() => authorizePullRequest(fixture({reviews: [review(), requested, comment]})))
+      .toThrow(/changes requested/i);
+    expect(authorizePullRequest(fixture({reviews: [review(), requested,
+      review({id: 3, state: 'DISMISSED', user: {login: 'other-reviewer'},
+        submitted_at: '2026-11-04T00:01:00Z'}),
+    ]}))).toMatchObject({head});
+  });
+
+  it('does not let an outsider changes request block a trusted approval', () => {
+    expect(authorizePullRequest(fixture({reviews: [review(), review({id: 2,
+      state: 'CHANGES_REQUESTED', author_association: 'NONE', user: {login: 'outsider'}}),
+    ]}))).toMatchObject({head});
+  });
+
+  it('ignores unsubmitted pending drafts without revoking or supplying approval', () => {
+    const pending = review({id: 2, state: 'PENDING', submitted_at: null, commit_id: null});
+    expect(authorizePullRequest(fixture({reviews: [review(), pending]}))).toMatchObject({head});
+    expect(() => authorizePullRequest(fixture({reviews: [pending]}))).toThrow(/approval/);
+  });
+
+  it('requires the latest approval from a reviewer to bind the current head', () => {
+    expect(() => authorizePullRequest(fixture({reviews: [review(),
+      review({id: 2, commit_id: 'b'.repeat(40), submitted_at: '2026-11-04T00:01:00Z'}),
+    ]}))).toThrow(/approval/);
+    expect(authorizePullRequest(fixture({reviews: [review(),
+      review({id: 2, state: 'COMMENTED', submitted_at: '2026-11-04T00:01:00Z'}),
+    ]}))).toMatchObject({head});
+  });
+
+  it.each([
+    {id: undefined}, {id: 0}, {id: 1.5}, {submitted_at: undefined},
+    {submitted_at: 'invalid'}, {submitted_at: '2026-02-30T00:00:00Z'},
+    {author_association: undefined}, {author_association: 'maintainer'}, {state: 'UNKNOWN'},
+  ])('rejects malformed review metadata %j', overrides => {
+    expect(() => authorizePullRequest(fixture({reviews: [review(overrides)]}))).toThrow();
+  });
+
+  it('rejects missing review evidence and conflicting duplicate review IDs', () => {
+    expect(() => authorizePullRequest({...fixture(), reviews: undefined})).toThrow(/reviews/);
+    expect(() => authorizePullRequest(fixture({reviews: [review(), review({state: 'DISMISSED'})]})))
+      .toThrow(/review.*id/i);
   });
 
   it('rejects malformed and oversized GitHub fixtures before authorization', () => {

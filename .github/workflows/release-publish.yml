@@ -13,6 +13,10 @@ on:
         type: string
         required: true
     secrets:
+      RELEASE_APP_PRIVATE_KEY:
+        required: true
+      WINGET_GITHUB_TOKEN:
+        required: false
       WINGET_CREATE_GITHUB_TOKEN:
         required: false
       CHOCO_API_KEY:
@@ -602,7 +606,7 @@ jobs:
                 echo "::error::Release-integrity incident: $BRANCH is not based on catalog main"
                 exit 1
               }
-              CHANGED_PATHS="$(git diff --name-only origin/main...HEAD | sort)"
+              CHANGED_PATHS="$(git diff --name-only origin/main...HEAD | LC_ALL=C sort)"
               EXPECTED_PATHS="$(printf '%s\n' \
                 Formula/guardscan.rb \
                 bucket/guardscan.json \

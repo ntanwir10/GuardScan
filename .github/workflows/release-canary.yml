@@ -887,7 +887,7 @@ jobs:
               DIFF_STATUS=$?
               if [ "$DIFF_STATUS" -ne 1 ]; then exit "$DIFF_STATUS"; fi
               git commit -m "canary evidence: run $GITHUB_RUN_ID"
-              git push origin HEAD:release-ledger
+              git -c credential.helper= -c 'credential.https://github.com.helper=!gh auth git-credential' push origin HEAD:release-ledger
             fi
           )
           CANARY_RECORD_STATUS="$(cat .canary-record-status)"
