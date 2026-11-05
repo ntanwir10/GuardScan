@@ -337,11 +337,20 @@ jobs:
           const fs = require('fs');
           const path = require('path');
           const release = JSON.parse(fs.readFileSync('release-before-publication.json'));
-          if (!release.draft) throw new Error('release became public before final asset verification');
-          const assets = new Map((release.assets || []).map(asset => [asset.name, asset]));
-          for (const name of fs.readdirSync('redownload')) {
+          const observed = JSON.parse(fs.readFileSync(path.join(process.env.RUNNER_TEMP, 'existing-release.json')));
+          if (typeof observed.isDraft !== 'boolean' || release.draft !== observed.isDraft) {
+            throw new Error('release publication state changed before final asset verification');
+          }
+          const names = fs.readdirSync('redownload');
+          const listed = release.assets || [];
+          const assets = new Map(listed.map(asset => [asset.name, asset]));
+          if (listed.length !== names.length || assets.size !== names.length
+              || names.some(name => !assets.has(name))) {
+            throw new Error('release asset inventory changed before publication');
+          }
+          for (const name of names) {
             const asset = assets.get(name);
-            if (!asset || !Number.isSafeInteger(asset.id)) throw new Error(`release asset identity is missing for ${name}`);
+            if (!asset || !Number.isSafeInteger(asset.id) || asset.id < 1) throw new Error(`release asset identity is missing for ${name}`);
             const bytes = cp.execFileSync('gh', [
               'api', '-H', 'Accept: application/octet-stream',
               `repos/${process.env.GITHUB_REPOSITORY}/releases/assets/${asset.id}`,
@@ -355,7 +364,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if [ "$(gh release view "$RELEASE_INPUT_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)" = true ]; then
+          OBSERVED_DRAFT="$(jq -r .isDraft "$RUNNER_TEMP/existing-release.json")"
+          CURRENT_DRAFT="$(gh release view "$RELEASE_INPUT_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)"
+          test "$CURRENT_DRAFT" = "$OBSERVED_DRAFT" || {
+            echo "Release publication state changed after final asset verification" >&2
+            exit 1
+          }
+          if [ "$CURRENT_DRAFT" = true ]; then
             gh release edit "$RELEASE_INPUT_TAG" --repo "$GITHUB_REPOSITORY" --draft=false
           fi
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -386,6 +401,7 @@ jobs:
     needs: [github]
     environment: npm-publish
     permissions:
+      actions: read
       contents: read
       id-token: write
     steps:
@@ -407,9 +423,15 @@ jobs:
           name: release-npm-${{ inputs.tag }}
           path: npm-artifact
       - name: Require artifact-service digest before npm publication
+        shell: bash
         env:
-          ARTIFACT_DIGEST: ${{ steps.download-npm-artifact.outputs.artifact-digest }}
-        run: test -n "$ARTIFACT_DIGEST"
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_NAME: release-npm-${{ inputs.tag }}
+          ARTIFACT_DIRECTORY: npm-artifact
+        run: |
+          PYTHON=python3
+          if [ "$RUNNER_OS" = Windows ]; then PYTHON=python; fi
+          "$PYTHON" .github/scripts/verify-artifact-download.py "$ARTIFACT_NAME" "$ARTIFACT_DIRECTORY"
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: ${{ env.RELEASE_NODE_VERSION }}

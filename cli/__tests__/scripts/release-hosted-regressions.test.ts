@@ -84,7 +84,7 @@ describe('hosted release review regressions', () => {
 
   it('grants reusable callers the least union of callee permissions', () => {
     const train = workflow('release-train.yml');
-    expect(train.jobs.build.permissions).toEqual({contents: 'read', 'id-token': 'write', attestations: 'write'});
+    expect(train.jobs.build.permissions).toEqual({actions: 'read', contents: 'read', 'id-token': 'write', attestations: 'write'});
     expect(train.jobs.publish.permissions).toEqual({contents: 'write', actions: 'read', 'id-token': 'write'});
     expect(train.permissions).toEqual({contents: 'read', 'pull-requests': 'read'});
   });

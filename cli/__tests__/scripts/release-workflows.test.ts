@@ -491,7 +491,7 @@ describe('zero-touch release workflow contracts', () => {
     expect(canary).toContain('reconcileRelease(materializeReleaseState(readEvents(ledger))).complete');
     expect(train).toContain("vars.RELEASE_AUTOMATION_ENABLED == 'true'");
     expect(train).toMatch(
-      /build:\n[\s\S]*?permissions:\n\s+contents: read\n\s+id-token: write\n\s+attestations: write/
+      /build:\n[\s\S]*?permissions:\n\s+actions: read\n\s+contents: read\n\s+id-token: write\n\s+attestations: write/
     );
     expect((yaml.load(train) as any).jobs.publish.permissions).toEqual({
       actions: 'read', contents: 'write', 'id-token': 'write',

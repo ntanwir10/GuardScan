@@ -95,6 +95,7 @@ jobs:
     if: vars.RELEASE_AUTOMATION_ENABLED != 'true' && vars.RELEASE_PROVIDER_REHEARSAL_ENABLED == 'true'
     needs: [validate]
     permissions:
+      actions: read
       contents: read
       id-token: write
       attestations: write

@@ -106,6 +106,7 @@ jobs:
     runs-on: ubuntu-24.04
     needs: [quality, npm-build]
     permissions:
+      actions: read
       contents: read
       id-token: write
       attestations: write
@@ -133,9 +134,15 @@ jobs:
           name: release-npm-input-${{ inputs.tag }}
           path: npm-artifact
       - name: Require artifact-service digest for npm input
+        shell: bash
         env:
-          ARTIFACT_DIGEST: ${{ steps.download-npm-input.outputs.artifact-digest }}
-        run: test -n "$ARTIFACT_DIGEST"
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_NAME: release-npm-input-${{ inputs.tag }}
+          ARTIFACT_DIRECTORY: npm-artifact
+        run: |
+          PYTHON=python3
+          if [ "$RUNNER_OS" = Windows ]; then PYTHON=python; fi
+          "$PYTHON" .github/scripts/verify-artifact-download.py "$ARTIFACT_NAME" "$ARTIFACT_DIRECTORY"
       - name: Verify npm artifact with trusted default-branch tooling
         env:
           EXPECTED_TAG: ${{ inputs.tag }}
@@ -265,6 +272,7 @@ jobs:
     needs: [quality, native-build]
     environment: ${{ matrix.os == 'darwin' && 'apple-notarization' || matrix.os == 'windows' && 'windows-signing' || inputs.channel == 'rc' && 'release-rc' || 'release-stable' }}
     permissions:
+      actions: read
       contents: read
       id-token: write
       attestations: write
@@ -301,9 +309,15 @@ jobs:
           name: release-native-input-${{ matrix.id }}-${{ inputs.tag }}
           path: standalone
       - name: Require artifact-service digest for native input
+        shell: bash
         env:
-          ARTIFACT_DIGEST: ${{ steps.download-native-input.outputs.artifact-digest }}
-        run: test -n "$ARTIFACT_DIGEST"
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_NAME: release-native-input-${{ matrix.id }}-${{ inputs.tag }}
+          ARTIFACT_DIRECTORY: standalone
+        run: |
+          PYTHON=python3
+          if [ "$RUNNER_OS" = Windows ]; then PYTHON=python; fi
+          "$PYTHON" .github/scripts/verify-artifact-download.py "$ARTIFACT_NAME" "$ARTIFACT_DIRECTORY"
       - name: Validate native input structure and digest before signing
         env:
           EXPECTED_REF: ${{ inputs.ref }}
@@ -838,6 +852,7 @@ jobs:
     needs: [provider-build]
     environment: ${{ matrix.os == 'darwin' && 'apple-notarization' || 'windows-signing' }}
     permissions:
+      actions: read
       contents: read
       id-token: write
     strategy:
@@ -870,9 +885,15 @@ jobs:
           name: provider-rehearsal-input-${{ matrix.id }}
           path: rehearsal-standalone
       - name: Require artifact-service digest for provider input
+        shell: bash
         env:
-          ARTIFACT_DIGEST: ${{ steps.download-provider-input.outputs.artifact-digest }}
-        run: test -n "$ARTIFACT_DIGEST"
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_NAME: provider-rehearsal-input-${{ matrix.id }}
+          ARTIFACT_DIRECTORY: rehearsal-standalone
+        run: |
+          PYTHON=python3
+          if [ "$RUNNER_OS" = Windows ]; then PYTHON=python; fi
+          "$PYTHON" .github/scripts/verify-artifact-download.py "$ARTIFACT_NAME" "$ARTIFACT_DIRECTORY"
       - name: Import Apple rehearsal certificate
         if: matrix.os == 'darwin'
         shell: bash
