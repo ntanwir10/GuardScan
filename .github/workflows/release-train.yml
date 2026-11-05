@@ -441,7 +441,7 @@ jobs:
           gh api "repos/$GITHUB_REPOSITORY/commits/$EXPECTED_HEAD/check-runs?per_page=100&filter=latest" \
             --jq '.check_runs' > release-readiness-check-runs.json
           gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/pulls/$REQUEST_RELEASE_PR/reviews?per_page=100" \
-            --jq 'add | map({id,state,commit_id,author_association,submitted_at,user:{login:.user.login}})' > release-readiness-reviews.json
+            | jq 'add | map({id,state,commit_id,author_association,submitted_at,user:{login:.user.login}})' > release-readiness-reviews.json
           node cli/scripts/release/index.js validate-pr \
             --pull-request release-pr-readiness-preflight.json \
             --check-runs release-readiness-check-runs.json \
@@ -475,7 +475,7 @@ jobs:
           gh api "repos/$GITHUB_REPOSITORY/commits/$EXPECTED_HEAD/check-runs?per_page=100&filter=latest" \
             --jq '.check_runs' > release-readiness-check-runs.json
           gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/pulls/$REQUEST_RELEASE_PR/reviews?per_page=100" \
-            --jq 'add | map({id,state,commit_id,author_association,submitted_at,user:{login:.user.login}})' > release-readiness-reviews.json
+            | jq 'add | map({id,state,commit_id,author_association,submitted_at,user:{login:.user.login}})' > release-readiness-reviews.json
           node cli/scripts/release/index.js validate-pr \
             --pull-request release-pr-readiness-refresh.json \
             --check-runs release-readiness-check-runs.json \
@@ -550,7 +550,7 @@ jobs:
             --jq '.check_runs' \
             > release-check-runs.json
           gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/pulls/$REQUEST_RELEASE_PR/reviews?per_page=100" \
-            --jq 'add | map({id,state,commit_id,author_association,submitted_at,user:{login:.user.login}})' > release-reviews.json
+            | jq 'add | map({id,state,commit_id,author_association,submitted_at,user:{login:.user.login}})' > release-reviews.json
           PR_POLICY_ARGS=(
             --pull-request release-pr.json
             --check-runs release-check-runs.json
@@ -914,6 +914,7 @@ jobs:
             echo "::error::Could not classify the remote release state"
             exit 1
           fi
+          cp release-state.json "$RUNNER_TEMP/classified-release-state.json"
           export ARCHIVE SIDECAR
           node - <<'NODE'
           const fs = require('fs');
@@ -963,6 +964,9 @@ jobs:
           path: source
           token: ${{ github.token }}
           persist-credentials: false
+      - name: Restore the classified release snapshot after checkouts
+        if: steps.remote.outputs.mode != 'build'
+        run: cp "$RUNNER_TEMP/classified-release-state.json" release-state.json
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         if: steps.remote.outputs.mode != 'build'
         with:
@@ -1101,15 +1105,37 @@ jobs:
             --schema-root "$GITHUB_WORKSPACE/cli" \
             --tag "$RELEASE_TAG" --commit "$RELEASE_REF" \
             --artifact-dir rehydrated/npm-artifact
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - name: Reuse only byte-identical current-run recovery handoffs
         if: steps.remote.outputs.mode != 'build'
+        id: existing-handoffs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+        run: |
+          gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts?per_page=100" > "$RUNNER_TEMP/current-run-artifacts.json"
+          for KIND in payload npm; do
+            NAME="release-$KIND-$RELEASE_TAG"
+            DIRECTORY=rehydrated/payload
+            if [ "$KIND" = npm ]; then DIRECTORY=rehydrated/npm-artifact; fi
+            COUNT="$(jq --arg name "$NAME" '[.[] | .artifacts[] | select(.name == $name)] | length' "$RUNNER_TEMP/current-run-artifacts.json")"
+            case "$COUNT" in
+              0) echo "${KIND}_exists=false" >> "$GITHUB_OUTPUT" ;;
+              1)
+                python3 .github/scripts/verify-artifact-download.py "$NAME" "$DIRECTORY"
+                echo "${KIND}_exists=true" >> "$GITHUB_OUTPUT"
+                ;;
+              *) echo "Ambiguous current-run recovery artifact: $NAME" >&2; exit 1 ;;
+            esac
+          done
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: steps.remote.outputs.mode != 'build' && steps.existing-handoffs.outputs.payload_exists == 'false'
         with:
           name: release-payload-${{ needs.prepare.outputs.tag }}
           path: rehydrated/payload/
           if-no-files-found: error
           retention-days: 30
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        if: steps.remote.outputs.mode != 'build'
+        if: steps.remote.outputs.mode != 'build' && steps.existing-handoffs.outputs.npm_exists == 'false'
         with:
           name: release-npm-${{ needs.prepare.outputs.tag }}
           path: rehydrated/npm-artifact/

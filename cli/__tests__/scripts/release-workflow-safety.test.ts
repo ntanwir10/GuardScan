@@ -222,7 +222,8 @@ describe('release workflow safety', () => {
         'RUNNER_TEMP="$PWD"; npm() { sh ./bin/npm "$@"; }; sleep() { :; };\n' + script], {
         cwd: root, encoding: 'utf8', timeout: 10000,
         env: {...process.env, PATH: bin + path.delimiter + process.env.PATH,
-          RUNNER_TEMP: root, NPM_MODE: mode, RELEASE_INPUT_CHANNEL: 'stable'},
+          RUNNER_TEMP: root, GITHUB_WORKSPACE: root, NPM_MODE: mode, RELEASE_INPUT_CHANNEL: 'stable',
+          RELEASE_INPUT_TAG: 'v1.2.3', RELEASE_INPUT_REF: 'a'.repeat(40)},
       });
     };
     try {

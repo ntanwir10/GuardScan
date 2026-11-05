@@ -3,6 +3,8 @@
 const REPOSITORY = 'ntanwir10/GuardScan';
 const BASE = 'main';
 const RELEASE_GATE = 'Release gate';
+const RELEASE_GATE_APP_ID = 15368;
+const RELEASE_GATE_APP_SLUG = 'github-actions';
 const SHA_PATTERN = /^[a-f0-9]{40}$/;
 const MAX_INPUT_BYTES = 128 * 1024;
 const MAX_COLLECTION_ITEMS = 1000;
@@ -110,13 +112,15 @@ function authorizePullRequest(input) {
     requireString(check.status, 'check run status');
     if (check.conclusion !== null) requireString(check.conclusion, 'check run conclusion');
   }
-  if (!checkRuns.some(check => (
+  const releaseGates = checkRuns.filter(check => (
     check.name === RELEASE_GATE
     && check.head_sha === head
-    && check.status === 'completed'
-    && check.conclusion === 'success'
-  ))) {
-    throw new Error('Release gate has not succeeded for the expected pull request head');
+    && check.app?.id === RELEASE_GATE_APP_ID
+    && check.app?.slug === RELEASE_GATE_APP_SLUG
+  ));
+  if (releaseGates.length !== 1 || releaseGates[0].status !== 'completed'
+      || releaseGates[0].conclusion !== 'success') {
+    throw new Error('Release gate has not succeeded uniquely from GitHub Actions for the expected pull request head');
   }
 
   const reviews = requireCollection(input.reviews, 'reviews');

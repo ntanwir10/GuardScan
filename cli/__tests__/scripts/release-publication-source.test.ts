@@ -116,3 +116,54 @@ describe('reconciliation promotion dispatch authority', () => {
     } finally { fs.rmSync(root, {recursive: true, force: true}); }
   });
 });
+
+describe('candidate npm restoration through trusted schemas', () => {
+  const restore = path.join(repository, 'cli/scripts/release/restore-npm-payload.js');
+  const check = (options: {tag?: string; commit?: string; drift?: boolean; invalidManifest?: boolean} = {}) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'candidate-npm-restore-'));
+    const product = path.join(root, 'source/cli');
+    const payload = path.join(root, 'payload');
+    const output = path.join(root, 'canonical-npm');
+    fs.mkdirSync(path.join(product, 'schemas'), {recursive: true});
+    fs.mkdirSync(payload);
+    const packageJson = {name: 'guardscan', version, engines: {node: '>=22.0.0'}};
+    fs.writeFileSync(path.join(product, 'package.json'), JSON.stringify(packageJson));
+    fs.writeFileSync(path.join(product, 'package-lock.json'), JSON.stringify({...packageJson, packages: {'': packageJson}}));
+    fs.writeFileSync(path.join(product, 'CHANGELOG.md'), `# Changelog\n\n## [${version}]\n`);
+    fs.writeFileSync(path.join(product, 'schemas/guardscan.release-manifest.v1.schema.json'), '{}');
+    const bytes = Buffer.from('authenticated canonical RC tarball');
+    const filename = `guardscan-${version}.tgz`;
+    const sha256 = crypto.createHash('sha256').update(bytes).digest('hex');
+    const manifest: any = {schemaVersion: 'guardscan.release-manifest.v1', version, tag, commit,
+      createdAt: '2026-01-01T00:00:00.000Z', producer: {provider: 'github-actions', repository: 'ntanwir10/GuardScan',
+        workflow: '.github/workflows/release-build.yml', workflowSha: 'b'.repeat(40), runId: '42', runAttempt: 1, sourceRef: `refs/tags/${tag}`},
+      toolchain: {node: '22.12.0', packageManager: {name: 'npm', version: '10.9.0'}, tools: [{name: 'esbuild', version: '0.28.1'}]},
+      artifacts: [{id: 'npm:guardscan', kind: 'npm-tarball', filename, size: bytes.length, sha256, source: {version, tag, commit},
+        capabilities: {coreScan: true, sbom: true, chartRendering: true, accurateTokenCounting: true},
+        url: `https://registry.npmjs.org/guardscan/-/${filename}`, integrity: 'sha512-' + crypto.createHash('sha512').update(bytes).digest('base64'),
+        provenance: {type: 'slsa', url: `https://github.com/ntanwir10/GuardScan/releases/download/${tag}/npm.provenance.sigstore.json`, verified: true,
+          sha256: 'c'.repeat(64), subjectSha256: sha256, sourceVersion: version, sourceTag: tag, sourceCommit: commit,
+          signerIdentity: 'https://github.com/ntanwir10/GuardScan/.github/workflows/release-build.yml', signerDigest: 'b'.repeat(40), predicateType: 'https://slsa.dev/provenance/v1'}}]};
+    if (options.invalidManifest) delete manifest.producer;
+    fs.writeFileSync(path.join(payload, 'release-manifest.json'), JSON.stringify(manifest));
+    fs.writeFileSync(path.join(payload, filename), options.drift ? Buffer.from('substituted bytes') : bytes);
+    const result = spawnSync(process.execPath, [restore, payload, output, options.tag || tag, product, path.join(root, 'source'),
+      path.join(repository, 'cli'), options.commit || commit], {encoding: 'utf8'});
+    const restored = fs.existsSync(path.join(output, filename)) ? fs.readFileSync(path.join(output, filename)) : undefined;
+    const metadata = fs.existsSync(path.join(output, 'npm-artifact.json')) ? JSON.parse(fs.readFileSync(path.join(output, 'npm-artifact.json'), 'utf8')) : undefined;
+    fs.rmSync(root, {recursive: true, force: true});
+    return {result, restored, metadata, bytes};
+  };
+  it('restores the RC from candidate roots through the trusted CLI and schemas', () => {
+    const {result, restored, metadata, bytes} = check();
+    expect(result.stderr).toBe('');
+    expect(result.status).toBe(0);
+    expect(restored).toEqual(bytes);
+    expect(metadata).toMatchObject({version, tag, commit});
+    const invocation = publication.jobs.github.steps.find((step: any) => step.name === 'Restore npm artifact from authenticated canonical payload').run;
+    expect(invocation).toContain('"$GITHUB_WORKSPACE/source/cli" "$GITHUB_WORKSPACE/source" "$GITHUB_WORKSPACE/cli" "$RELEASE_INPUT_REF"');
+  });
+  it.each([{tag: 'v1.2.4-rc.0'}, {commit: 'd'.repeat(40)}, {drift: true}, {invalidManifest: true}])('rejects source, bytes, or untrusted-schema substitution: %j', options => {
+    expect(check(options).result.status).not.toBe(0);
+  });
+});
