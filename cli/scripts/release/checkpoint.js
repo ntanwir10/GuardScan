@@ -10,8 +10,8 @@ const addFormats = require('ajv-formats');
 const {compareUtf8} = require('./deterministic');
 const {
   MAX_ARCHIVE_BYTES,
-  MAX_ARCHIVE_ENTRIES,
-  MAX_EXPANDED_BYTES,
+  MAX_CHECKPOINT_ENTRIES,
+  MAX_CHECKPOINT_EXPANDED_BYTES,
   inspectArchive,
   normalizeArchivePath,
   writeArchive,
@@ -19,7 +19,7 @@ const {
 
 const CHECKPOINT_SCHEMA = 'guardscan.release-checkpoint.v1';
 const ARCHIVE_FORMAT = 'tar.gz';
-const MAX_CHECKPOINT_FILES = MAX_ARCHIVE_ENTRIES;
+const MAX_CHECKPOINT_FILES = MAX_CHECKPOINT_ENTRIES;
 const SHA256_PATTERN = /^[a-f0-9]{64}$/;
 const COMMIT_PATTERN = /^[a-f0-9]{40}$/;
 const MAX_SIDECAR_BYTES = 1024 * 1024;
@@ -123,8 +123,13 @@ function assertRegularPath(root, relative) {
 }
 
 function readEntries(root, files) {
+  let expandedSize = 1024;
   return files.map(relative => {
     const {resolved, stat} = assertRegularPath(root, relative);
+    expandedSize += 512 + Math.ceil(stat.size / 512) * 512;
+    if (expandedSize > MAX_CHECKPOINT_EXPANDED_BYTES) {
+      throw new Error('checkpoint expanded size exceeds the supported limit');
+    }
     const data = fs.readFileSync(resolved);
     return {
       name: relative,
@@ -267,6 +272,7 @@ function assertSidecar(source, sidecar) {
   if (paths.join('\n') !== sidecar.files.map(file => file.path).join('\n')) {
     throw new Error('checkpoint files are not sorted');
   }
+  let expandedSize = 1024;
   for (const file of sidecar.files) {
     if (!file || Object.keys(file).sort(compareUtf8).join('\n') !== 'mode\npath\nsha256\nsize') {
       throw new Error('checkpoint file metadata contains unknown or missing fields');
@@ -275,11 +281,15 @@ function assertSidecar(source, sidecar) {
         || !/^[0-7]{4}$/.test(file.mode || '') || !SHA256_PATTERN.test(file.sha256 || '')) {
       throw new Error(`checkpoint file metadata is invalid: ${file.path}`);
     }
+    expandedSize += 512 + Math.ceil(file.size / 512) * 512;
+    if (expandedSize > MAX_CHECKPOINT_EXPANDED_BYTES) {
+      throw new Error('checkpoint expanded size exceeds the supported limit');
+    }
   }
 }
 
 function parseTarEntries(buffer) {
-  const tar = zlib.gunzipSync(buffer, {maxOutputLength: MAX_EXPANDED_BYTES});
+  const tar = zlib.gunzipSync(buffer, {maxOutputLength: MAX_CHECKPOINT_EXPANDED_BYTES});
   const entries = [];
   let offset = 0;
   let zeroBlocks = 0;
@@ -320,6 +330,7 @@ function parseTarEntries(buffer) {
     }
     const data = Buffer.from(tar.subarray(offset, offset + size));
     entries.push({name, data, mode});
+    if (entries.length > MAX_CHECKPOINT_FILES) throw new Error('checkpoint archive contains too many entries');
     offset += Math.ceil(size / 512) * 512;
   }
   if (zeroBlocks !== 2 || tar.subarray(offset).some(byte => byte !== 0)) {
@@ -337,7 +348,7 @@ function verifyExtractedFiles(archiveFile, sidecar, options = {}) {
   if (archive.length !== sidecar.archive.size || sha256(archive) !== sidecar.archive.sha256) {
     throw new Error('checkpoint archive digest does not match sidecar');
   }
-  const inspected = inspectArchive(archiveFile, ARCHIVE_FORMAT, sidecar.files.map(file => file.path));
+  const inspected = inspectArchive(archiveFile, ARCHIVE_FORMAT, sidecar.files.map(file => file.path), {checkpoint: true});
   if (inspected.sha256 !== sidecar.archive.sha256 || inspected.size !== sidecar.archive.size) {
     throw new Error('checkpoint archive inspection does not match sidecar');
   }
@@ -424,8 +435,8 @@ function createCheckpoint(source, options = {}) {
   const archiveTemp = `${archiveFile}.tmp-${process.pid}-${crypto.randomUUID()}`;
   const sidecarTemp = `${sidecarFile}.tmp-${process.pid}-${crypto.randomUUID()}`;
   try {
-    const archive = writeArchive(archiveTemp, ARCHIVE_FORMAT, entries, options.timestamp);
-    const inspected = inspectArchive(archiveTemp, ARCHIVE_FORMAT, files);
+    const archive = writeArchive(archiveTemp, ARCHIVE_FORMAT, entries, options.timestamp, {checkpoint: true});
+    const inspected = inspectArchive(archiveTemp, ARCHIVE_FORMAT, files, {checkpoint: true});
     if (archive.sha256 !== inspected.sha256 || canonicalJson(archive.entries) !== canonicalJson(inspected.entries)) {
       throw new Error('checkpoint archive failed deterministic structural verification');
     }

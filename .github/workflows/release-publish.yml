@@ -50,6 +50,12 @@ jobs:
           ref: ${{ job.workflow_sha }}
           fetch-depth: 0
           persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.ref }}
+          path: source
+          fetch-depth: 1
+          persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: ${{ env.RELEASE_NODE_VERSION }}
@@ -200,7 +206,12 @@ jobs:
           DIST_TAG=latest
           if [ "$RELEASE_CHANNEL" = rc ]; then DIST_TAG=next; fi
           : > "$RUNNER_TEMP/shared-tag-state"
-          npm run release:npm-preflight -- --artifact-dir ../canonical-npm \
+          npm run release:npm-preflight -- \
+            --package-root "$GITHUB_WORKSPACE/source/cli" \
+            --repository-root "$GITHUB_WORKSPACE/source" \
+            --schema-root "$GITHUB_WORKSPACE/cli" \
+            --tag "$RELEASE_INPUT_TAG" --commit "$RELEASE_INPUT_REF" \
+            --artifact-dir ../canonical-npm \
             --expected-dist-tag "$DIST_TAG" --github-output "$RUNNER_TEMP/shared-tag-state"
           if grep -Fxq 'dist-tag-repair-required=true' "$RUNNER_TEMP/shared-tag-state"; then
             echo 'Shared npm tag drift requires authority outside trusted publication; refusing all channel writes.' >&2
@@ -449,6 +460,10 @@ jobs:
           DIST_TAG=latest
           if [ "$RELEASE_INPUT_CHANNEL" = rc ]; then DIST_TAG=next; fi
           npm run release:npm-preflight -- \
+            --package-root "$GITHUB_WORKSPACE/source/cli" \
+            --repository-root "$GITHUB_WORKSPACE/source" \
+            --schema-root "$GITHUB_WORKSPACE/cli" \
+            --tag "$RELEASE_INPUT_TAG" --commit "$RELEASE_INPUT_REF" \
             --artifact-dir ../npm-artifact \
             --expected-dist-tag "$DIST_TAG" \
             --github-output "$GITHUB_OUTPUT"
@@ -473,6 +488,10 @@ jobs:
           for ATTEMPT in $(seq 1 30); do
             : > "$RUNNER_TEMP/npm-preflight-output"
             npm run release:npm-preflight -- \
+              --package-root "$GITHUB_WORKSPACE/source/cli" \
+              --repository-root "$GITHUB_WORKSPACE/source" \
+              --schema-root "$GITHUB_WORKSPACE/cli" \
+              --tag "$RELEASE_INPUT_TAG" --commit "$RELEASE_INPUT_REF" \
               --artifact-dir ../npm-artifact \
               --expected-dist-tag "$DIST_TAG" \
               --github-output "$RUNNER_TEMP/npm-preflight-output"

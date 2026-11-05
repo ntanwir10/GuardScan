@@ -2082,6 +2082,7 @@ jobs:
           private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
           owner: ntanwir10
           repositories: GuardScan,homebrew-tap
+          permission-actions: write
           permission-contents: write
           permission-pull-requests: write
           permission-metadata: read
