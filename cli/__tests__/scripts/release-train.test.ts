@@ -148,6 +148,59 @@ const source = {
   packageRoot: '/tmp/package',
 };
 const timestamp = '2026-07-20T00:00:00.000Z';
+const workflowSha = 'f'.repeat(40);
+
+describe('release-train workflow readiness boundary', () => {
+  it('validates candidate and draft readiness authorization before readiness mutation', () => {
+    const repositoryRoot = path.resolve(__dirname, '../../..');
+    const workflow = fs.readFileSync(
+      path.join(repositoryRoot, '.github/workflows/release-train.yml'),
+      'utf8'
+    );
+    const checkout = workflow.indexOf('path: source');
+    const candidate = workflow.indexOf('name: Derive bot-owned RC commit');
+    const preflight = workflow.indexOf('--readiness-preflight');
+    const readinessApp = workflow.indexOf('id: readiness-app');
+    const revalidation = workflow.indexOf('name: Refresh and revalidate exact release PR readiness authorization');
+    const readiness = workflow.indexOf('gh pr ready "$REQUEST_RELEASE_PR"');
+    const authorization = workflow.indexOf('name: Authorize exact release PR after readiness transition');
+    const candidateApp = workflow.indexOf('id: candidate-app');
+    const candidatePush = workflow.indexOf('name: Commit and push validated candidate source');
+    const promoteApp = workflow.indexOf('id: promote-app');
+    const promoteMerge = workflow.indexOf('gh pr merge "$RELEASE_PR"');
+    expect(checkout).toBeGreaterThan(-1);
+    expect(candidate).toBeGreaterThan(checkout);
+    expect(preflight).toBeGreaterThan(candidate);
+    expect(readinessApp).toBeGreaterThan(preflight);
+    expect(revalidation).toBeGreaterThan(readinessApp);
+    expect(readiness).toBeGreaterThan(revalidation);
+    expect(authorization).toBeGreaterThan(readiness);
+    expect(candidateApp).toBeGreaterThan(authorization);
+    expect(candidatePush).toBeGreaterThan(authorization);
+    expect(promoteApp).toBeGreaterThan(authorization);
+    expect(promoteMerge).toBeGreaterThan(authorization);
+    expect(workflow).toContain('repositories: GuardScan');
+    expect(workflow).toContain('permission-pull-requests: write');
+    expect(workflow).toContain('release PR must be ready after readiness transition');
+    expect(workflow).toContain('pulls/$REQUEST_RELEASE_PR');
+  });
+});
+
+function attestation(subjectSha256: string, name: string): Record<string, any> {
+  return {
+    type: 'slsa',
+    url: `https://github.com/ntanwir10/GuardScan/releases/download/${source.tag}/${name}.provenance.sigstore.json`,
+    verified: true,
+    sha256: 'e'.repeat(64),
+    subjectSha256,
+    sourceVersion: source.version,
+    sourceTag: source.tag,
+    sourceCommit: source.commit,
+    signerIdentity: 'https://github.com/ntanwir10/GuardScan/.github/workflows/release-build.yml',
+    signerDigest: workflowSha,
+    predicateType: 'https://slsa.dev/provenance/v1',
+  };
+}
 
 function eventInput(
   type: string,
@@ -180,7 +233,7 @@ function standalone(
   digest: string,
   libc?: string
 ): Record<string, any> {
-  const filename = `guardscan-${source.version}-${suffix}.${osName === 'windows' ? 'zip' : 'tar.gz'}`;
+  const filename = `guardscan-${source.version}-${suffix}.${osName === 'linux' ? 'tar.gz' : 'zip'}`;
   const entrypoint = osName === 'windows' ? 'guardscan.exe' : 'guardscan';
   const signatures = osName === 'darwin'
     ? [evidence('apple-code-signing'), evidence('apple-notarization')]
@@ -216,7 +269,7 @@ function standalone(
       },
     },
     platform: {os: osName, arch, ...(libc ? {libc} : {})},
-    archiveFormat: osName === 'windows' ? 'zip' : 'tar.gz',
+    archiveFormat: osName === 'linux' ? 'tar.gz' : 'zip',
     entrypoint,
     url: `https://github.com/ntanwir10/GuardScan/releases/download/${source.tag}/${filename}`,
     archiveEntries: [{
@@ -227,11 +280,7 @@ function standalone(
     }],
     signatures,
     sboms: [evidence('spdx'), evidence('cyclonedx')],
-    provenance: {
-      type: 'slsa',
-      url: `https://github.com/ntanwir10/GuardScan/attestations/${suffix}`,
-      verified: true,
-    },
+    provenance: attestation(digest.repeat(64), suffix),
   };
 }
 
@@ -247,11 +296,7 @@ function wheel(native: Record<string, any>, digest: string): Record<string, any>
     platform: native.platform,
     embeddedStandaloneId: native.id,
     embeddedExecutableSha256: native.archiveEntries[0].sha256,
-    provenance: {
-      type: 'slsa',
-      url: `https://github.com/ntanwir10/GuardScan/attestations/wheel-${digest}`,
-      verified: true,
-    },
+    provenance: attestation(digest.repeat(64), `wheel-${digest}`),
   };
 }
 
@@ -1092,7 +1137,8 @@ describe('append-only release train', () => {
     const ledger = path.join(root, 'ledger.jsonl');
     const authorityFile = path.join(root, 'authority.json');
     const repositoryRoot = path.resolve(__dirname, '../../..');
-    const packageRoot = path.join(repositoryRoot, 'cli');
+    const packageRoot = path.join(root, 'cli-source');
+    const schemaRoot = path.join(repositoryRoot, 'cli');
     const actualCommit = execFileSync('git', ['rev-parse', 'HEAD'], {
       cwd: repositoryRoot,
       encoding: 'utf8',
@@ -1104,6 +1150,23 @@ describe('append-only release train', () => {
     };
     const stdout = jest.spyOn(process.stdout, 'write').mockImplementation(() => true);
     try {
+      fs.mkdirSync(packageRoot, {recursive: true});
+      const packageJson = JSON.parse(
+        fs.readFileSync(path.join(schemaRoot, 'package.json'), 'utf8')
+      );
+      const packageLock = JSON.parse(
+        fs.readFileSync(path.join(schemaRoot, 'package-lock.json'), 'utf8')
+      );
+      // The withdrawal target remains v1.1.0 when this test runs in the 1.0.5 bootstrap.
+      packageJson.version = cliSource.version;
+      packageLock.version = cliSource.version;
+      packageLock.packages[''].version = cliSource.version;
+      fs.writeFileSync(path.join(packageRoot, 'package.json'), `${JSON.stringify(packageJson)}\n`);
+      fs.writeFileSync(path.join(packageRoot, 'package-lock.json'), `${JSON.stringify(packageLock)}\n`);
+      fs.writeFileSync(
+        path.join(packageRoot, 'CHANGELOG.md'),
+        `# GuardScan CLI changelog\n\n## [Unreleased]\n\n## [${cliSource.version}] - 2026-07-13\n`
+      );
       appendEvent(ledger, {
         ...cliSource,
         timestamp,
@@ -1123,6 +1186,7 @@ describe('append-only release train', () => {
       const args = [
         'rollback',
         '--package-root', packageRoot,
+        '--schema-root', schemaRoot,
         '--repository-root', repositoryRoot,
         '--commit', actualCommit,
         '--tag', 'v1.1.0',
@@ -1279,7 +1343,7 @@ describe('append-only release train', () => {
 
 describe('promotion policy and remote idempotency', () => {
   function decisionInput(): Record<string, any> {
-    const channels = ['npm', 'github', 'pypi'];
+    const channels = ['npm', 'pnpm', 'yarn', 'bun', 'github', 'homebrew', 'scoop', 'pypi'];
     const canaries = channels.flatMap(channel => Array.from({length: 24}, (_, index) => ({
       channel,
       status: 'passed',
@@ -1448,6 +1512,7 @@ describe('deterministic artifacts and manifest aggregation', () => {
         provider: 'github-actions',
         repository: 'ntanwir10/GuardScan',
         workflow: '.github/workflows/release-build.yml',
+        workflowSha,
         runId: '123456',
         runAttempt: 1,
         sourceRef: source.tag,
@@ -1475,6 +1540,11 @@ describe('deterministic artifacts and manifest aggregation', () => {
       producer: {
         provider: 'github-actions',
         repository: 'ntanwir10/GuardScan',
+        workflow: '.github/workflows/release-build.yml',
+        workflowSha,
+        runId: '123456',
+        runAttempt: 1,
+        sourceRef: source.tag,
       },
       toolchain: {node: '22.23.1', packageManager: {}, tools: [{}]},
       artifacts: mismatched,
@@ -1515,3 +1585,23 @@ describe('deterministic artifacts and manifest aggregation', () => {
 function cryptoDigest(value: string): string {
   return require('crypto').createHash('sha256').update(value).digest('hex');
 }
+
+
+test('Darwin builder emits the exact ZIP format required by notarization and consumers', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'guardscan-darwin-archive-'));
+  try {
+    const artifact = standalone('darwin', 'arm64', 'darwin-arm64', 'a');
+    const executable = path.join(root, 'guardscan');
+    fs.writeFileSync(executable, 'signed executable fixture');
+    const evidenceFile = path.join(root, 'evidence.json');
+    fs.writeFileSync(evidenceFile, JSON.stringify({schemaVersion: 'guardscan.standalone-evidence.v1',
+      ...source, platform: artifact.platform, optionalCapabilities: artifact.optionalCapabilities,
+      signatures: artifact.signatures, sboms: artifact.sboms, provenance: artifact.provenance}));
+    const output = require('../../scripts/release/standalone-artifact').buildStandaloneArtifact(
+      source, executable, artifact.platform, path.join(root, 'output'), timestamp, evidenceFile);
+    expect(output.metadata.artifact.archiveFormat).toBe('zip');
+    expect(output.metadata.artifact.filename).toMatch(/-darwin-arm64\.zip$/);
+    const archive = require('../../scripts/release/archive').inspectArchive(output.artifactFile, 'zip');
+    expect(archive.entries).toEqual([expect.objectContaining({path: 'guardscan', mode: '0755'})]);
+  } finally { fs.rmSync(root, {recursive: true, force: true}); }
+});

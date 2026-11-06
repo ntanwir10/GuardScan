@@ -19,19 +19,22 @@ function fixture() {
   const candidate = {sourcePr: 42, sourcePrHead: head, sourcePrBase: base, sourcePrTree: sourceTree};
   const rc = {version: '1.2.3-rc.1', tag: 'v1.2.3-rc.1', commit: 'c'.repeat(40),
     manifestSha256: 'd'.repeat(64), publishedAt, ...candidate};
+  const channels = ['github', 'npm', 'pnpm', 'yarn', 'bun', 'pypi', 'homebrew', 'scoop'];
   const decision = createPromotionDecision({rc, currentSourcePrHead: head, currentSourcePrBase: base, evaluatedAt,
-    requiredChannels: ['github'], canaries: Array.from({length: 24}, (_, index) => ({
-      channel: 'github', status: 'passed', checkedAt: index ? evaluatedAt : publishedAt,
-    })), incidents: []});
+    canaries: channels.flatMap(channel => Array.from({length: 26}, (_, index) => ({
+      channel, status: 'passed',
+      checkedAt: new Date(Date.parse(publishedAt) + (index + 1) * 60 * 60 * 1000).toISOString(),
+    }))), incidents: []});
   const text = `${JSON.stringify(decision, null, 2)}\n`;
   const events: any[] = [];
   const append = (type: string, payload: any, channel?: string) => {
     events.push(createEvent({version: rc.version, tag: rc.tag, commit: rc.commit,
-      timestamp: events.length < 3 ? publishedAt : evaluatedAt, type, payload,
+      timestamp: events.length < 3 ? publishedAt : evaluatedAt, type,
+      payload: type === 'canary_recorded' ? {evidenceUrl: 'https://example.test/canary', ...payload} : payload,
       idempotencyKey: `fixture:${events.length}`, ...(channel ? {channel} : {})}, events.at(-1)));
   };
   append('train_started', {profile: 'full', releasePr: 42, sourcePrHead: head, sourcePrBase: base,
-    sourcePrTree: sourceTree, channels: ['github']});
+    sourcePrTree: sourceTree, channels});
   append('manifest_created', {manifestSha256: rc.manifestSha256});
   const publication = createPublicationEvidence({channel: 'github', version: rc.version, tag: rc.tag,
     remoteIdentity: `github:${rc.tag}`, files: {'artifact.zip': '3'.repeat(64)}});

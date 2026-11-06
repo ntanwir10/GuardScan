@@ -3,6 +3,7 @@
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
+const {compareUtf8} = require('./deterministic');
 
 const SCHEMA = 'guardscan.provider-publication.v1';
 const CHANNELS = new Set(['github', 'npm', 'pypi']);
@@ -14,7 +15,7 @@ function sha256(value) {
 }
 
 function aggregateFiles(files) {
-  const names = Object.keys(files).sort();
+  const names = Object.keys(files).sort(compareUtf8);
   if (names.length < 1 || names.length > 100) {
     throw new Error('provider publication evidence requires 1-100 files');
   }
@@ -40,7 +41,7 @@ function createPublicationEvidence(input) {
     throw new Error('provider publication remote identity is invalid');
   }
   const files = Object.fromEntries(Object.entries(input.files || {}).sort(([left], [right]) => (
-    left < right ? -1 : left > right ? 1 : 0
+    compareUtf8(left, right)
   )));
   return {
     schemaVersion: SCHEMA,

@@ -13,9 +13,11 @@ const catalogWorkflow = path.join(
 const releaseWorkflows = [
   'release-build.yml',
   'release-canary.yml',
+  'release-credential-health.yml',
   'release-first-withdrawal.yml',
   'release-please.yml',
   'release-publish.yml',
+  'release-provider-rehearsal.yml',
   'release-train.yml',
 ];
 
@@ -166,6 +168,8 @@ describe('zero-touch release workflow contracts', () => {
             ...process.env,
             PATH: `${bin}${path.delimiter}${process.env.PATH}`,
             GITHUB_REPOSITORY: 'owner/repo',
+            RELEASE_INPUT_TAG: 'v1.2.3',
+            RELEASE_INPUT_CHANNEL: options.channel || 'stable',
             GH_CALL_LOG: log,
             RUNNER_TEMP: runnerTemp,
             GH_ASSET_JSON: JSON.stringify({assets}),
@@ -254,6 +258,8 @@ describe('zero-touch release workflow contracts', () => {
     expect(source).toContain('npm test -- --coverage --runInBand');
     expect(source).toContain('npm audit --audit-level=moderate');
     expect(source).not.toContain('npm audit --omit=dev');
+    expect(source).toContain('npm ci --omit=optional');
+    expect(source).toContain('Build without optional native dependencies');
     expect(source).toContain('npm run test:package');
     expect(source).toContain('npm run test:package-manager');
     expect(source).toContain('npm run lint:ratchet');
@@ -384,6 +390,36 @@ describe('zero-touch release workflow contracts', () => {
       .toContain('npm run test:package-manager -- --manager npm');
   });
 
+  it('keeps provider rehearsal explicit, non-publishing, and head-bound', () => {
+    const rehearsal = workflowSource('release-provider-rehearsal.yml');
+    const build = workflowSource('release-build.yml');
+    expect(rehearsal).toContain('workflow_dispatch:');
+    expect(rehearsal).toContain('expected_head:');
+    expect(rehearsal).toContain("vars.RELEASE_AUTOMATION_ENABLED != 'true'");
+    expect(rehearsal).toContain("vars.RELEASE_PROVIDER_REHEARSAL_ENABLED == 'true'");
+    expect(rehearsal).toContain("/^[1-9][0-9]*$/.test(pr || '')");
+    expect(rehearsal).toContain("/^[a-f0-9]{40}$/.test(head || '')");
+    expect(rehearsal).toContain('cli/scripts/release/index.js validate-pr');
+    expect(rehearsal).toContain('--expected-head "$REQUEST_EXPECTED_HEAD"');
+    expect(rehearsal).toContain('mode: rehearsal');
+    expect(rehearsal).not.toContain('gh release');
+    expect(rehearsal).not.toContain('npm publish');
+    expect(rehearsal).not.toContain('pypa/gh-action-pypi-publish');
+    expect(rehearsal).not.toContain('choco push');
+    expect(rehearsal).not.toContain('wingetcreate');
+    expect(build).toContain('mode:');
+    expect(build).toContain("if: inputs.mode == 'production'");
+    expect(build).toContain("if: inputs.mode == 'rehearsal'");
+    expect(build).toContain('provider-rehearsal.v1');
+    expect(build).toContain('Developer ID Application:');
+    expect(build).not.toContain('Developer ID Application: Nauman Tanwir');
+    expect(build).toContain('productionReady: false');
+    expect(build).toContain('Verify rehearsal Authenticode signature and timestamp');
+    expect(build).toContain('artifactSha256 = (Get-FileHash -Algorithm SHA256 $file)');
+    expect(build).toContain('authenticode-verification.json');
+    expect(build).toContain('publication: {tag: false, release: false, package: false, catalog: false, ledger: false}');
+  });
+
   it('keeps workflow heredoc terminators at shell column zero', () => {
     const sources = [
       ...['ci.yml', ...releaseWorkflows].map(workflowSource),
@@ -448,15 +484,64 @@ describe('zero-touch release workflow contracts', () => {
     expect(train).toContain("releaseTrainChannels(process.env.RELEASE_CHANNEL)");
     expect(train).not.toContain("? ['homebrew-core', 'winget', 'chocolatey']");
     expect(train).toContain('cannot start or promote while a stable train remains incomplete');
+    expect(train).toContain('sourcePrHead: process.env.SOURCE_PR_HEAD');
+    expect(train).toContain('`expected_head=${train.sourcePrHead}`');
+    expect(train).toContain('-f expected_head="$EXPECTED_HEAD"');
     expect(canary).toContain("train.channel !== 'stable'");
     expect(canary).toContain('reconcileRelease(materializeReleaseState(readEvents(ledger))).complete');
     expect(train).toContain("vars.RELEASE_AUTOMATION_ENABLED == 'true'");
     expect(train).toMatch(
-      /build:\n[\s\S]*?permissions:\n\s+contents: read\n\s+id-token: write\n\s+attestations: write/
+      /build:\n[\s\S]*?permissions:\n\s+actions: read\n\s+contents: read\n\s+id-token: write\n\s+attestations: write/
     );
     expect((yaml.load(train) as any).jobs.publish.permissions).toEqual({
       actions: 'read', contents: 'write', 'id-token': 'write',
     });
+  });
+
+  it('gates every release mutation and checkpoints signed bytes before publication', () => {
+    const trainSource = workflowSource('release-train.yml');
+    const publishSource = workflowSource('release-publish.yml');
+    const train = yaml.load(trainSource) as {jobs: Record<string, {if?: string; needs?: string[]}>};
+    const publish = yaml.load(publishSource) as {jobs: Record<string, {if?: string}>};
+    for (const job of [
+      'scheduler', 'catalog-hint', 'prepare', 'build', 'checkpoint',
+      'pypi-test', 'pypi', 'publish', 'record', 'reconcile',
+      'first-release-withdrawal', 'rollback',
+    ]) {
+      expect(train.jobs[job].if).toContain("vars.RELEASE_AUTOMATION_ENABLED == 'true'");
+    }
+    for (const job of ['github', 'npm', 'catalog', 'winget', 'chocolatey']) {
+      expect(publish.jobs[job].if).toContain("vars.RELEASE_AUTOMATION_ENABLED == 'true'");
+    }
+    const canary = yaml.load(workflowSource('release-canary.yml')) as {
+      jobs: Record<string, {if?: string}>;
+    };
+    const withdrawal = yaml.load(workflowSource('release-first-withdrawal.yml')) as {
+      jobs: Record<string, {if?: string}>;
+    };
+    expect(canary.jobs.record.if).toContain("vars.RELEASE_AUTOMATION_ENABLED == 'true'");
+    expect(withdrawal.jobs.withdraw.if).toContain("vars.RELEASE_AUTOMATION_ENABLED == 'true'");
+
+    expect(train.jobs.build.needs).toEqual(['prepare', 'resolve-checkpoint']);
+    expect(train.jobs.checkpoint.needs).toEqual(['prepare', 'resolve-checkpoint', 'build']);
+    expect(train.jobs['payload-ready'].needs).toEqual([
+      'prepare', 'resolve-checkpoint', 'build', 'checkpoint',
+    ]);
+    expect(train.jobs.publish.needs).toEqual(['prepare', 'payload-ready']);
+    expect(trainSource).toContain('guardscan-release-checkpoint-');
+    expect(trainSource).toContain("grep -Eq 'HTTP 404([ )]|$)' release-state.error");
+    expect(trainSource).toContain('Could not classify the remote release state');
+    expect(trainSource).toContain('mode=checkpoint');
+    expect(trainSource).toContain('mode=expanded');
+    expect(trainSource).toContain('mode=public');
+    expect(trainSource).toContain('verify-checkpoint');
+    expect(trainSource).toContain('cp checkpoint-npm/npm-artifact.json checkpoint-root/npm-artifact/');
+    expect(trainSource).toContain("new Date(process.argv[1]).toISOString()");
+    expect(trainSource).toContain('published release exposes partial checkpoint assets');
+    expect(trainSource).toContain("-name 'guardscan-release-checkpoint-*'");
+    expect(trainSource).toContain('expanded or published asset inventory is incomplete or unexpected');
+    expect(publishSource).toContain('publication has no persisted checkpoint release');
+    expect(publishSource).toContain('Remove private checkpoint only after the expanded draft is complete');
   });
 
   it('fails closed and persists an idempotent repository-side rollback recovery', () => {
@@ -506,7 +591,8 @@ describe('zero-touch release workflow contracts', () => {
     expect(train).toContain('EXPECTED_BASE="$(node -p \'require("./promotion-decision.json").stable.sourcePrBase\')"');
     expect(train).toContain('CURRENT_BASE="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$RELEASE_PR" --jq .base.sha)"');
     expect(train).toContain('test "$CURRENT_BASE" = "$EXPECTED_BASE"');
-    expect(train).toContain('--squash --match-head-commit "${{ steps.source.outputs.head_sha }}"');
+    expect(train).toContain('EXPECTED_HEAD: ${{ steps.source.outputs.head_sha }}');
+    expect(train).toContain('--squash --match-head-commit "$EXPECTED_HEAD"');
     expect(train).not.toContain('--auto --squash --match-head-commit');
     expect(train).toContain('const canonicalEntries = entries => entries.sort(([left], [right])');
     expect(train).toContain('npm: Object.fromEntries(canonicalEntries(');
@@ -551,19 +637,26 @@ describe('zero-touch release workflow contracts', () => {
     expect(withdrawal).not.toContain('npm unpublish');
     expect(train).toContain('sourcePrBase: process.env.SOURCE_PR_BASE');
     expect(train).toContain('sourcePrTree: process.env.SOURCE_PR_TREE');
-    expect(train).not.toMatch(/Persist refetched catalog publication evidence\n\s+if:[^\n]+\n\s+env:\s*\n/);
+    expect(train).toMatch(
+      /Persist refetched catalog publication evidence\n\s+if:[^\n]+\n\s+env:\n\s+RELEASE_APP_TOKEN: \$\{\{ steps\.app\.outputs\.token \}\}/
+    );
+    expect(train).toContain("-c credential.helper= -c 'credential.https://github.com.helper=!gh auth git-credential'");
+    expect(train).toContain('export GH_TOKEN="$RELEASE_APP_TOKEN"');
+    expect(train).not.toContain('http.extraheader=AUTHORIZATION: bearer');
   });
 
-  it('pins each canary train implementation to its immutable ledger identity and verifies its own version', () => {
+  it('pins canary tooling to its workflow and binds product tags to immutable ledger identities', () => {
     const canary = workflowSource('release-canary.yml');
     expect(canary).not.toContain('implementation_ref');
     expect(canary).not.toContain('trains[0]');
     const record = (yaml.load(canary) as any).jobs.record;
     expect(record.strategy.matrix.train).toBe('${{ fromJSON(needs.discover.outputs.trains) }}');
     const checkout = record.steps.find((step: any) => step.name === 'Checkout exact train implementation');
-    expect(checkout.with.ref).toBe('v${{ matrix.train.version }}');
+    expect(checkout.with.ref).toBe('${{ github.workflow_sha }}');
+    expect(checkout.with['persist-credentials']).toBe(false);
     expect(stepCommands(record)).toContain('if (commit !== checkoutCommit) throw new Error');
-    expect(stepCommands(record)).toContain("['rev-parse', 'HEAD']");
+    expect(stepCommands(record)).toContain("['rev-list', '-n', '1', tag]");
+    expect(stepCommands(record)).toContain('refs/tags/v$TRAIN_VERSION:refs/tags/v$TRAIN_VERSION');
     expect(stepCommands(record)).toContain('origin/release-ledger:events/${tag}.jsonl');
     expect(canary).toContain('VERSION: ${{ matrix.train.version }}');
     expect(canary).toContain('version = \'${{ matrix.train.version }}\'');
@@ -573,12 +666,14 @@ describe('zero-touch release workflow contracts', () => {
     expect(canary).toContain('PIPX_REPORTED_VERSION="$("$PIPX_APP" --version | tr -d \'\\r\')"');
     expect(canary).toContain('test "$PIPX_REPORTED_VERSION" = "$VERSION"');
     expect(canary).toContain('$installedVersion -ne $env:VERSION');
-    expect(canary).toContain('const expectedTargetCounts = {');
-    expect(canary).toContain('resolved.length === expectedCount');
-    expect(canary).toContain("type === 'channel_failed'");
-    expect(canary).toContain("error: 'one or more current public canary targets failed'");
-    expect(canary).toContain('const versionAggregateTimestamp = reports');
-    expect(canary).toContain('canaryChannelEventType(state, channel, passed, complete)');
+    const recorder = fs.readFileSync(path.resolve(__dirname, '../../scripts/release/canary.js'), 'utf8');
+    expect(canary).toContain('recordCanary({ledgerFile: ledger, reports: selectedReports');
+    expect(canary).toContain('const expectedTargets = {...DEFAULT_RC_CANARY_TARGETS}');
+    expect(recorder).toContain('reportList.length !== expectedCount');
+    expect(recorder).toContain("type: 'channel_failed'");
+    expect(recorder).toContain('canary failed for target ${report.target}');
+    expect(recorder).toContain('timestamp: monotonicTimestamp(options.ledgerFile, evaluated.toISOString())');
+    expect(recorder).toContain("canaryChannelEventType(state, channel, true, true) !== 'channel_verified'");
     expect(canary).not.toContain("? ['channel_accepted', 'channel_verified']");
     const train = workflowSource('release-train.yml');
     expect(train).toContain('catalogReconciliationAllowed(');
@@ -596,7 +691,8 @@ describe('zero-touch release workflow contracts', () => {
     const canary = workflowSource('release-canary.yml');
     expect(canary).toContain('$notPublic = $false');
     expect(canary).toContain('$notPublic = $true');
-    expect(canary.match(/\$report.reason = 'not_public'/g)).toHaveLength(2);
+    expect(canary.match(/if \(\$notPublic\) \{\s+\$report.status = 'pending'/g)).toHaveLength(2);
+    expect(canary).not.toContain('$report.reason');
     expect(canary).toContain("$report.status = 'failed'");
     expect(canary).toContain('throw "Unexpected moderated registry error: $unexpectedFailure"');
     expect(canary).toContain("$availabilityStatus -eq 2 -and $noResult");
@@ -606,16 +702,19 @@ describe('zero-touch release workflow contracts', () => {
   });
 
   it('tests every TestPyPI wheel natively before production PyPI publication', () => {
-    const source = workflowSource('release-publish.yml');
+    const source = workflowSource('release-train.yml');
+    const reusable = workflowSource('release-publish.yml');
     const workflow = yaml.load(source) as {
       jobs: Record<string, {
         needs?: string[];
+        environment?: string;
+        permissions?: Record<string, string>;
         'runs-on'?: string;
         strategy?: {matrix?: {target?: Array<{id: string; runner: string}>}};
       }>;
     };
     const lifecycle = workflow.jobs['pypi-test-lifecycle'];
-    expect(lifecycle.needs).toEqual(['pypi-test']);
+    expect(lifecycle.needs).toEqual(['prepare', 'pypi-test']);
     expect(lifecycle['runs-on']).toBe('${{ matrix.target.runner }}');
     expect(lifecycle.strategy?.matrix?.target).toEqual([
       {id: 'linux-x64-glibc', runner: 'ubuntu-24.04'},
@@ -624,7 +723,15 @@ describe('zero-touch release workflow contracts', () => {
       {id: 'darwin-x64', runner: 'macos-15-intel'},
       {id: 'windows-x64', runner: 'windows-2025'},
     ]);
-    expect(workflow.jobs.pypi.needs).toEqual(['pypi-test-lifecycle']);
+    expect(workflow.jobs['pypi-test'].environment).toBe('testpypi');
+    expect(workflow.jobs['pypi-test'].needs).toEqual(['prepare', 'publish']);
+    expect(workflow.jobs['pypi-test'].permissions).toEqual({contents: 'read', 'id-token': 'write'});
+    expect(workflow.jobs.pypi.environment).toBe('pypi');
+    expect(workflow.jobs.pypi.needs).toEqual(['prepare', 'pypi-test-lifecycle']);
+    expect(workflow.jobs.pypi.permissions).toEqual({contents: 'read', 'id-token': 'write'});
+    expect(workflow.jobs.record.needs).toEqual(['prepare', 'publish', 'pypi']);
+    expect(source).toContain('pypa/gh-action-pypi-publish@');
+    expect(reusable).not.toContain('pypa/gh-action-pypi-publish@');
     expect(source).toContain('Test TestPyPI wheel through pip and pipx on ${{ matrix.target.id }}');
     expect(source).toContain('python -m pipx environment --value PIPX_BIN_DIR');
     expect(source).toContain('exercise_guardscan guardscan pip');
@@ -634,19 +741,79 @@ describe('zero-touch release workflow contracts', () => {
     expect(source).toContain("scan.get('schemaVersion') != 'guardscan.scan.v1'");
   });
 
-  it('validates and readies the exact same-repository main release PR before candidate tagging', () => {
+  it('gives release-train dispatchers only explicit dispatch permissions', () => {
+    const train = yaml.load(workflowSource('release-train.yml')) as {
+      jobs: Record<string, {steps?: Array<{uses?: string; with?: Record<string, string>}>}>;
+    };
+    const appTokenStep = (jobName: string) => train.jobs[jobName].steps?.find(step => (
+      step.uses?.startsWith('actions/create-github-app-token@')
+    ));
+    const permissionKeys = (step: {with?: Record<string, string>} | undefined) => (
+      Object.keys(step?.with || {}).filter(key => key.startsWith('permission-')).sort()
+    );
+
+    expect(appTokenStep('scheduler')?.with).toMatchObject({
+      'permission-actions': 'write',
+      'permission-contents': 'read',
+      'permission-metadata': 'read',
+    });
+    expect(permissionKeys(appTokenStep('scheduler'))).toEqual([
+      'permission-actions', 'permission-contents', 'permission-metadata',
+    ]);
+    expect(appTokenStep('catalog-hint')?.with).toMatchObject({
+      'permission-actions': 'write',
+      'permission-contents': 'read',
+      'permission-metadata': 'read',
+    });
+    expect(permissionKeys(appTokenStep('catalog-hint'))).toEqual([
+      'permission-actions', 'permission-contents', 'permission-metadata',
+    ]);
+  });
+
+  it('preflights the draft before readiness mutation and strictly authorizes it before candidate tagging', () => {
     const train = workflowSource('release-train.yml');
-    expect(train).toContain("pr.state !== 'open'");
-    expect(train).toContain("pr.base?.ref !== 'main'");
-    expect(train).toContain('pr.head?.repo?.full_name?.toLowerCase()');
-    expect(train).toContain('process.env.GITHUB_REPOSITORY.toLowerCase()');
+    expect(train).toContain('Validate release request before provider access');
+    expect(train).toContain("['candidate', 'promote'].includes(action)");
+    expect(train).toContain('candidate and promotion require the exact reviewed PR head');
+    expect(train).toContain('cli/scripts/release/index.js validate-pr');
+    expect(train).toContain('--readiness-preflight');
+    expect(train).toContain('release-pr-readiness-preflight-authorization.json');
+    expect(train).toContain('release-pr-readiness-authorization.json');
+    expect(train).toContain('release-pr-authorization.json');
+    expect(train).toContain('PR_POLICY_ARGS+=(--allow-merged)');
     expect(train).toContain('REQUEST_RELEASE_PR: ${{ inputs.release_pr }}');
     expect(train).toContain('EXPECTED_HEAD: ${{ steps.source.outputs.head_sha }}');
-    expect(train).toContain('gh pr ready "$REQUEST_RELEASE_PR"');
-    expect(train.indexOf('gh pr ready "$REQUEST_RELEASE_PR"'))
-      .toBeLessThan(train.indexOf('Derive bot-owned RC commit from exact stable PR head'));
-    expect(train).toContain('--match-head-commit "${{ steps.source.outputs.head_sha }}"');
-    expect(train).not.toContain('gh pr ready "${{ inputs.release_pr }}"');
+    expect(train).toContain('id: readiness-app');
+    expect(train).toContain('repositories: GuardScan');
+    expect(train).toContain('permission-pull-requests: write');
+    const parsedTrain = yaml.load(train) as {
+      jobs: Record<string, {steps?: Array<{id?: string; with?: Record<string, string>}>}>;
+    };
+    const readinessApp = parsedTrain.jobs.prepare.steps?.find(step => step.id === 'readiness-app');
+    expect(readinessApp?.with).toMatchObject({
+      'permission-pull-requests': 'write',
+      'permission-metadata': 'read',
+    });
+    expect(Object.keys(readinessApp?.with || {}).filter(key => key.startsWith('permission-')).sort())
+      .toEqual(['permission-metadata', 'permission-pull-requests']);
+    expect(train).toContain('GH_TOKEN="$RELEASE_APP_TOKEN" gh pr ready "$REQUEST_RELEASE_PR"');
+    expect(train).toContain('--repo "$GITHUB_REPOSITORY"');
+    expect(train).toContain('release PR must be ready after readiness transition');
+    expect(train).toContain('expected_head:');
+    expect(train).toContain('--match-head-commit "$EXPECTED_HEAD"');
+    const candidate = train.indexOf('name: Derive bot-owned RC commit');
+    const preflight = train.indexOf('--readiness-preflight');
+    const readinessAppIndex = train.indexOf('id: readiness-app');
+    const refresh = train.indexOf('name: Refresh and revalidate exact release PR readiness authorization');
+    const ready = train.indexOf('gh pr ready "$REQUEST_RELEASE_PR"');
+    const strictAuthorization = train.indexOf('name: Authorize exact release PR after readiness transition');
+    const candidateApp = train.indexOf('id: candidate-app');
+    expect(candidate).toBeLessThan(preflight);
+    expect(preflight).toBeLessThan(readinessAppIndex);
+    expect(readinessAppIndex).toBeLessThan(refresh);
+    expect(refresh).toBeLessThan(ready);
+    expect(ready).toBeLessThan(strictAuthorization);
+    expect(strictAuthorization).toBeLessThan(candidateApp);
   });
 
   it('builds signed artifacts and publishes through isolated provider environments', () => {
@@ -657,6 +824,7 @@ describe('zero-touch release workflow contracts', () => {
       'release-rc',
       'release-stable',
       'npm-publish',
+      'testpypi',
       'pypi',
       'apple-notarization',
       'windows-signing',
@@ -666,28 +834,37 @@ describe('zero-touch release workflow contracts', () => {
       expect(combined).toContain(environment);
     }
     expect(build).toContain('cosign sign-blob --yes');
-    expect(build).toContain('xcrun notarytool submit');
-    expect(build).toContain('xcrun stapler staple');
-    expect(build).toContain('security find-identity -v -p codesigning "$KEYCHAIN" | grep -F "$IDENTITY"');
+    expect(build).toContain('name: Notarize exact macOS archive');
+    expect(build).toContain('xcrun notarytool submit "$NATIVE_ARCHIVE"');
+    expect(build).toContain('subject-path: native-output/guardscan-*.${{ matrix.archive }}');
+    expect(build).not.toContain('xcrun stapler staple "$RUNNER_TEMP/guardscan.dmg"');
+    expect(build).toContain('security find-identity -v -p codesigning "$KEYCHAIN"');
+    expect(build).toContain('awk -v team="($APPLE_TEAM_ID)"');
+    expect(build).toContain('test -n "$IDENTITY"');
     expect(build).toContain("if: always() && matrix.os == 'darwin'");
     expect(build).toContain('security delete-keychain "$RUNNER_TEMP/guardscan-signing.keychain-db" || true');
     expect(build).toContain('rm -f "$RUNNER_TEMP/certificate.p12" "$RUNNER_TEMP/AuthKey.p8"');
     expect(build).toContain('Azure/artifact-signing-action@');
     expect(build).toContain('actions/attest-build-provenance@');
+    expect(build).toContain('createVerifiedAttestationEvidence');
+    expect(build.match(/gh attestation verify/g)?.length).toBeGreaterThanOrEqual(3);
+    expect(build).toContain('workflowSha: process.env.RELEASE_BUILD_WORKFLOW_SHA');
+    expect(build).toContain('packageManager: {');
+    expect(build).toContain('artifactFiles: files');
     expect(build).toContain('release-manifest.json');
     expect(build).toContain('npm run test:package');
     expect(build).toContain('npm run test:package-manager');
     expect(publish).toContain('--provenance');
     expect(publish).toContain('RELEASE_NPM_VERSION: 11.21.0');
     expect(publish).toContain('npm install --global "npm@${RELEASE_NPM_VERSION}"');
-    expect(publish).toContain('pypa/gh-action-pypi-publish@');
+    expect(combined).toContain('pypa/gh-action-pypi-publish@');
     expect(publish).toContain('& .\\wingetcreate.exe submit');
     expect(publish.indexOf("throw 'Pinned wingetcreate executable failed SHA-256 verification'"))
       .toBeLessThan(publish.indexOf('& .\\wingetcreate.exe submit'));
-    expect(publish).toContain('cp payload/*.whl dist/');
-    expect(publish).toContain('Verify complete TestPyPI file set');
-    expect(publish).toContain('Verify complete PyPI file set');
-    expect(publish).toContain('remote == local');
+    expect(combined).toContain('cp payload/*.whl dist/');
+    expect(combined).toContain('Verify complete TestPyPI file set');
+    expect(combined).toContain('Verify complete PyPI file set');
+    expect(combined).toContain('remote == local');
     expect(publish).not.toContain('try:\n          try:');
     expect(publish).toContain('choco push');
     const producer = (yaml.load(publish) as any).jobs.github.steps.find((step: any) => (
@@ -700,6 +877,18 @@ describe('zero-touch release workflow contracts', () => {
     expect(producer).toContain('--certificate-github-workflow-sha "$BUILD_WORKFLOW_SHA"');
     expect(producer).toContain('.producer.runId == $run_id and (.producer.runAttempt | tostring) == $attempt');
     expect(producer).toContain('.commit == $tag_sha');
+    expect(publish).toContain('choco install guardscan --source "$feed" --version 1.0.5');
+    expect(publish).toContain('choco upgrade guardscan --source "$feed" --version "$candidateVersion"');
+    expect(combined).toContain('/.github/workflows/release-build.yml@refs/heads/main');
+    expect(combined).not.toContain('/.github/workflows/release-train.yml@');
+  });
+
+  it('preserves malformed canary artifacts as incident-producing invalid reports', () => {
+    const canary = workflowSource('release-canary.yml');
+    expect(canary).toContain('invalidCanaryReport: true');
+    expect(canary).toContain('artifact.startsWith(`canary-${candidate}-`)');
+    expect(canary).toContain('recordCanary({ledgerFile: ledger');
+    expect(canary).not.toContain('localeCompare');
   });
 
   it('binds moderated submissions to exact provider evidence and fail-closed preflights', () => {
@@ -746,7 +935,7 @@ describe('zero-touch release workflow contracts', () => {
     const publish = workflowSource('release-publish.yml');
     expect(canary).toContain('$installedVersion = (& guardscan --version | Out-String).Trim()');
     expect(canary.match(/\$reportedVersion -cne '\$\{\{ matrix.train.version \}\}'/g)).toHaveLength(2);
-    expect(publish.match(/\$installedVersion -ne '\$\{\{ inputs\.tag \}\}'\.TrimStart\('v'\)/g))
+    expect(publish.match(/\$installedVersion -ne \(\$env:RELEASE_INPUT_TAG\)\.TrimStart\('v'\)/g))
       .toHaveLength(2);
     expect(publish).toContain('WinGet is unavailable on the selected Windows runner');
     expect(publish).toContain('Chocolatey is unavailable on the selected Windows runner');
@@ -796,12 +985,12 @@ describe('zero-touch release workflow contracts', () => {
     const canary = workflowSource('release-canary.yml');
     const train = workflowSource('release-train.yml');
 
-    expect(build).toContain('--prototype-metadata "../standalone/standalone-prototype.json"');
-    expect(publish).toContain('remote == local');
-    expect(publish).toContain('PyPI has unexpected files for this version');
-    expect(publish).toContain('PyPI returned unexpected files for this version');
-    expect(publish).toContain('PyPI returned a conflicting wheel digest');
-    expect(publish).toContain('complete tested wheel set');
+    expect(build).toContain('--prototype-metadata standalone/standalone-prototype.json');
+    expect(train).toContain('remote == local');
+    expect(train).toContain('PyPI has unexpected files for this version');
+    expect(train).toContain('PyPI returned unexpected files for this version');
+    expect(train).toContain('PyPI returned a conflicting wheel digest');
+    expect(train).toContain('complete tested wheel set');
     expect(publish).toContain('--expected-dist-tag "$DIST_TAG"');
     expect(publish).toContain("steps.preflight.outputs.dist-tag-repair-required == 'true'");
     expect(publish).toContain('for ATTEMPT in $(seq 1 60)');
@@ -841,9 +1030,14 @@ describe('zero-touch release workflow contracts', () => {
     expect(train).toContain("catalogResult.state !== 'MERGED'");
     expect(train).toContain('catalogResult.lockSha256 !== lockSha256');
     expect(train).toContain('active.trains = (active.trains || []).filter');
-    expect(canary).toContain('monotonicLedgerTimestamp(readEvents(ledger), report.checkedAt, `canary:${suffix}`)');
-    expect(canary).toContain('checkedAt: report.checkedAt');
+    expect(canary).toContain('recordCanary({ledgerFile: ledger, reports: selectedReports');
+    const recorder = fs.readFileSync(path.resolve(__dirname, '../../scripts/release/canary.js'), 'utf8');
+    expect(recorder).toContain('timestamp: monotonicTimestamp(options.ledgerFile, report.checkedAt)');
+    expect(recorder).toContain('checkedAt: report.checkedAt');
     expect(train).toContain('Refuse a denied promotion after persistence');
+    expect(train.indexOf('Persist the machine promotion decision before applying its result'))
+      .toBeLessThan(train.indexOf('Refuse a denied promotion after persistence'));
+    expect(train).toContain("inputs.action == 'promote' && steps.promotion.outputs.status == '2'");
     expect(train).toContain('DIFF_STATUS=$?');
     expect(train).not.toContain('git commit -m "release ledger: ${RELEASE_TAG}" || exit 0');
     expect(canary).toContain('test "$(guardscan --version | tr -d \'\\r\')" = "$VERSION"');
@@ -867,5 +1061,6 @@ describe('zero-touch release workflow contracts', () => {
     ]) {
       expect(source).toContain(`  ${command}`);
     }
+    expect(source).toContain('  checkpoint, verify-checkpoint');
   });
 });

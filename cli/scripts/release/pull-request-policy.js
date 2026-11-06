@@ -1,0 +1,181 @@
+'use strict';
+
+const REPOSITORY = 'ntanwir10/GuardScan';
+const BASE = 'main';
+const RELEASE_GATE = 'Release gate';
+const RELEASE_GATE_APP_ID = 15368;
+const RELEASE_GATE_APP_SLUG = 'github-actions';
+const SHA_PATTERN = /^[a-f0-9]{40}$/;
+const MAX_INPUT_BYTES = 128 * 1024;
+const MAX_COLLECTION_ITEMS = 1000;
+const TRUSTED_ASSOCIATIONS = new Set(['OWNER', 'MEMBER', 'COLLABORATOR']);
+const REVIEW_ASSOCIATIONS = new Set([...TRUSTED_ASSOCIATIONS,
+  'CONTRIBUTOR', 'FIRST_TIMER', 'FIRST_TIME_CONTRIBUTOR', 'MANNEQUIN', 'NONE']);
+const REVIEW_STATES = new Set(['APPROVED', 'CHANGES_REQUESTED', 'COMMENTED', 'DISMISSED', 'PENDING']);
+
+function isObject(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function requireObject(value, label) {
+  if (!isObject(value)) throw new Error(`${label} must be an object`);
+  return value;
+}
+
+function requireString(value, label) {
+  if (typeof value !== 'string' || value.length === 0) {
+    throw new Error(`${label} must be a non-empty string`);
+  }
+  return value;
+}
+
+function requireSha(value, label) {
+  if (!SHA_PATTERN.test(value || '')) throw new Error(`${label} SHA is invalid`);
+  return value;
+}
+
+function requireCollection(value, label) {
+  if (!Array.isArray(value) || value.length > MAX_COLLECTION_ITEMS) {
+    throw new Error(`${label} must be an array with at most ${MAX_COLLECTION_ITEMS} items`);
+  }
+  return value;
+}
+
+function authorizePullRequest(input) {
+  requireObject(input, 'pull request authorization input');
+  let encoded;
+  try {
+    encoded = JSON.stringify(input);
+  } catch {
+    throw new Error('pull request authorization input is not serializable');
+  }
+  if (Buffer.byteLength(encoded, 'utf8') > MAX_INPUT_BYTES) {
+    throw new Error(`pull request authorization input is too large (maximum ${MAX_INPUT_BYTES} bytes)`);
+  }
+
+  const readinessPreflight = input.readinessPreflight === true;
+  if (readinessPreflight && input.allowMerged === true) {
+    throw new Error('readiness preflight cannot be combined with merged PR authorization');
+  }
+  if (readinessPreflight && (input.expectedNumber === undefined || input.expectedBase === undefined)) {
+    throw new Error('readiness preflight requires expected PR number and base SHA');
+  }
+  const expectedHead = requireSha(input.expectedHead, 'expected head');
+  const pullRequest = requireObject(input.pullRequest, 'pull request');
+  if (!Number.isSafeInteger(pullRequest.number) || pullRequest.number < 1) {
+    throw new Error('pull request number is invalid');
+  }
+  const resumableMerged = input.allowMerged === true
+    && pullRequest.state === 'closed'
+    && pullRequest.merged === true
+    && SHA_PATTERN.test(pullRequest.merge_commit_sha || '');
+  if (pullRequest.state !== 'open' && !resumableMerged) {
+    throw new Error('pull request must be OPEN or an explicitly allowed merged release');
+  }
+  if (readinessPreflight) {
+    if (pullRequest.state !== 'open' || pullRequest.draft !== true) {
+      throw new Error('readiness preflight requires an OPEN draft PR');
+    }
+  } else if (pullRequest.draft !== false) {
+    throw new Error('pull request must not be draft');
+  }
+  if (input.expectedNumber !== undefined) {
+    if (!Number.isSafeInteger(input.expectedNumber) || input.expectedNumber < 1) {
+      throw new Error('expected PR number is invalid');
+    }
+    if (pullRequest.number !== input.expectedNumber) {
+      throw new Error('pull request number does not match expected number');
+    }
+  }
+  const expectedBase = input.expectedBase === undefined
+    ? undefined
+    : requireSha(input.expectedBase, 'expected base');
+  if (expectedBase && pullRequest.base?.sha !== expectedBase) {
+    throw new Error('pull request base SHA does not match expected base');
+  }
+  if (pullRequest.base?.ref !== BASE) throw new Error('pull request must target main');
+  if (pullRequest.base?.repo?.full_name !== REPOSITORY) {
+    throw new Error('pull request base repository is not the GuardScan repository');
+  }
+  if (pullRequest.head?.repo?.full_name !== REPOSITORY) {
+    throw new Error('pull request head must originate from the GuardScan repository');
+  }
+  const head = requireSha(pullRequest.head?.sha, 'pull request head');
+  if (head !== expectedHead) throw new Error('pull request head does not match expected head');
+  const author = requireString(pullRequest.user?.login, 'pull request author').toLowerCase();
+
+  const checkRuns = requireCollection(input.checkRuns, 'check runs');
+  for (const check of checkRuns) {
+    requireObject(check, 'check run');
+    requireString(check.name, 'check run name');
+    requireSha(check.head_sha, 'check run head');
+    requireString(check.status, 'check run status');
+    if (check.conclusion !== null) requireString(check.conclusion, 'check run conclusion');
+  }
+  const releaseGates = checkRuns.filter(check => (
+    check.name === RELEASE_GATE
+    && check.head_sha === head
+    && check.app?.id === RELEASE_GATE_APP_ID
+    && check.app?.slug === RELEASE_GATE_APP_SLUG
+  ));
+  if (releaseGates.length !== 1 || releaseGates[0].status !== 'completed'
+      || releaseGates[0].conclusion !== 'success') {
+    throw new Error('Release gate has not succeeded uniquely from GitHub Actions for the expected pull request head');
+  }
+
+  const reviews = requireCollection(input.reviews, 'reviews');
+  const reviewIds = new Set();
+  const latestReviews = new Map();
+  for (const review of reviews) {
+    requireObject(review, 'review');
+    if (!REVIEW_STATES.has(review.state)) throw new Error('review state is invalid');
+    if (review.state === 'PENDING') continue;
+    requireSha(review.commit_id, 'review commit');
+    const reviewer = requireString(review.user?.login, 'review author').toLowerCase();
+    if (!Number.isSafeInteger(review.id) || review.id < 1 || reviewIds.has(review.id)) {
+      throw new Error('review ID must be a unique positive integer');
+    }
+    reviewIds.add(review.id);
+    if (!REVIEW_ASSOCIATIONS.has(review.author_association)) {
+      throw new Error('review author association is invalid');
+    }
+    const submittedAt = new Date(review.submitted_at);
+    if (typeof review.submitted_at !== 'string' || !Number.isFinite(submittedAt.getTime())
+        || (submittedAt.toISOString() !== review.submitted_at
+          && submittedAt.toISOString().replace('.000Z', 'Z') !== review.submitted_at)) {
+      throw new Error('review submitted_at must be a canonical ISO timestamp');
+    }
+    if (review.state === 'COMMENTED') continue;
+    const previous = latestReviews.get(reviewer);
+    if (!previous || submittedAt > new Date(previous.submitted_at)
+        || (submittedAt.getTime() === Date.parse(previous.submitted_at) && review.id > previous.id)) {
+      latestReviews.set(reviewer, review);
+    }
+  }
+  const trustedReviews = [...latestReviews.values()]
+    .filter(review => TRUSTED_ASSOCIATIONS.has(review.author_association));
+  if (trustedReviews.some(review => review.state === 'CHANGES_REQUESTED')) {
+    throw new Error('pull request has outstanding changes requested by a trusted reviewer');
+  }
+  if (!trustedReviews.some(review => (
+    review.state === 'APPROVED'
+    && review.commit_id === head
+    && review.user.login.toLowerCase() !== author
+  ))) {
+    throw new Error('expected a non-author approval from a trusted association bound to the exact pull request head');
+  }
+
+  return {
+    repository: REPOSITORY,
+    number: pullRequest.number,
+    base: BASE,
+    ...(expectedBase ? {baseSha: expectedBase} : {}),
+    head,
+  };
+}
+
+module.exports = {
+  authorizePullRequest,
+  BASE,
+  REPOSITORY,
+};

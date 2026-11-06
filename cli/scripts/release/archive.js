@@ -4,14 +4,14 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const zlib = require('zlib');
+const {compareUtf8} = require('./deterministic');
 
 const MAX_ARCHIVE_BYTES = 768 * 1024 * 1024;
 const MAX_EXPANDED_BYTES = 512 * 1024 * 1024;
 const MAX_ARCHIVE_ENTRIES = 32;
-
-function compareUtf8(left, right) {
-  return Buffer.compare(Buffer.from(left, 'utf8'), Buffer.from(right, 'utf8'));
-}
+// The complete five-target release payload requires 53 checkpoint files.
+const MAX_CHECKPOINT_ENTRIES = 64;
+const MAX_CHECKPOINT_EXPANDED_BYTES = 1024 * 1024 * 1024;
 
 const CRC_TABLE = (() => {
   const table = new Uint32Array(256);
@@ -49,9 +49,11 @@ function normalizeArchivePath(value) {
   return normalized;
 }
 
-function normalizeEntries(entries) {
-  if (!Array.isArray(entries) || entries.length < 1 || entries.length > MAX_ARCHIVE_ENTRIES) {
-    throw new Error(`archive must contain 1-${MAX_ARCHIVE_ENTRIES} entries`);
+function normalizeEntries(entries, checkpoint = false) {
+  const maximumEntries = checkpoint ? MAX_CHECKPOINT_ENTRIES : MAX_ARCHIVE_ENTRIES;
+  const maximumExpandedBytes = checkpoint ? MAX_CHECKPOINT_EXPANDED_BYTES : MAX_EXPANDED_BYTES;
+  if (!Array.isArray(entries) || entries.length < 1 || entries.length > maximumEntries) {
+    throw new Error(`archive must contain 1-${maximumEntries} entries`);
   }
   const names = new Set();
   let expandedSize = 0;
@@ -62,7 +64,7 @@ function normalizeEntries(entries) {
     names.add(caseFolded);
     const data = Buffer.isBuffer(entry.data) ? entry.data : Buffer.from(entry.data || '');
     expandedSize += data.length;
-    if (expandedSize > MAX_EXPANDED_BYTES) throw new Error('archive expanded size exceeds the supported limit');
+    if (expandedSize > maximumExpandedBytes) throw new Error('archive expanded size exceeds the supported limit');
     const mode = entry.mode === undefined ? 0o644 : entry.mode;
     if (!Number.isInteger(mode) || mode < 0 || mode > 0o777) {
       throw new Error(`archive entry mode is invalid: ${name}`);
@@ -150,12 +152,16 @@ function writeOctal(header, offset, length, value) {
   header[offset + length - 1] = 0;
 }
 
-function buildTar(entries, timestamp) {
-  const normalized = normalizeEntries(entries);
+function buildTar(entries, timestamp, checkpoint = false) {
+  const normalized = normalizeEntries(entries, checkpoint);
+  const maximumExpandedBytes = checkpoint ? MAX_CHECKPOINT_EXPANDED_BYTES : MAX_EXPANDED_BYTES;
   const seconds = Math.floor(new Date(timestamp).getTime() / 1000);
   if (!Number.isSafeInteger(seconds)) throw new Error('archive timestamp is invalid');
   const parts = [];
+  let expandedSize = 1024;
   for (const entry of normalized) {
+    expandedSize += 512 + Math.ceil(entry.data.length / 512) * 512;
+    if (expandedSize > maximumExpandedBytes) throw new Error('archive expanded size exceeds the supported limit');
     const name = Buffer.from(entry.name, 'utf8');
     if (name.length > 100) throw new Error(`tar entry path exceeds 100 bytes: ${entry.name}`);
     const header = Buffer.alloc(512);
@@ -188,13 +194,13 @@ function buildTar(entries, timestamp) {
 function buildArchive(format, entries, timestamp, options = {}) {
   if (format === 'zip') return buildZip(entries, timestamp, options.compression);
   if (format === 'tar.gz') {
-    return zlib.gzipSync(buildTar(entries, timestamp), {level: 9, mtime: 0});
+    return zlib.gzipSync(buildTar(entries, timestamp, options.checkpoint === true), {level: 9, mtime: 0});
   }
   throw new Error(`unsupported archive format: ${format}`);
 }
 
-function metadataForEntries(entries) {
-  return normalizeEntries(entries).map(entry => ({
+function metadataForEntries(entries, options = {}) {
+  return normalizeEntries(entries, options.checkpoint === true).map(entry => ({
     path: entry.name,
     size: entry.data.length,
     mode: entry.mode.toString(8).padStart(4, '0'),
@@ -202,9 +208,9 @@ function metadataForEntries(entries) {
   }));
 }
 
-function writeArchive(file, format, entries, timestamp) {
+function writeArchive(file, format, entries, timestamp, options = {}) {
   const resolved = path.resolve(file);
-  const archive = buildArchive(format, entries, timestamp);
+  const archive = buildArchive(format, entries, timestamp, options);
   if (archive.length <= 0 || archive.length > MAX_ARCHIVE_BYTES) {
     throw new Error('archive size is outside the supported range');
   }
@@ -215,7 +221,7 @@ function writeArchive(file, format, entries, timestamp) {
     format,
     size: archive.length,
     sha256: sha256(archive),
-    entries: metadataForEntries(entries),
+    entries: metadataForEntries(entries, options),
   };
 }
 
@@ -225,10 +231,12 @@ function parseTarOctal(buffer, offset, length, label) {
   return Number.parseInt(raw, 8);
 }
 
-function inspectTarGz(buffer) {
+function inspectTarGz(buffer, checkpoint = false) {
+  const maximumEntries = checkpoint ? MAX_CHECKPOINT_ENTRIES : MAX_ARCHIVE_ENTRIES;
+  const maximumExpandedBytes = checkpoint ? MAX_CHECKPOINT_EXPANDED_BYTES : MAX_EXPANDED_BYTES;
   let tar;
   try {
-    tar = zlib.gunzipSync(buffer, {maxOutputLength: MAX_EXPANDED_BYTES});
+    tar = zlib.gunzipSync(buffer, {maxOutputLength: maximumExpandedBytes});
   } catch (error) {
     throw new Error(`tar.gz payload is invalid or unbounded: ${error.message}`);
   }
@@ -262,7 +270,7 @@ function inspectTarGz(buffer) {
     if (size < 0 || offset + size > tar.length) throw new Error(`tar entry is truncated: ${name}`);
     const data = tar.subarray(offset, offset + size);
     entries.push({path: name, size, mode: mode.toString(8).padStart(4, '0'), sha256: sha256(data)});
-    if (entries.length > MAX_ARCHIVE_ENTRIES) throw new Error('archive contains too many entries');
+    if (entries.length > maximumEntries) throw new Error('archive contains too many entries');
     offset += Math.ceil(size / 512) * 512;
   }
   if (zeroBlocks !== 2) throw new Error('tar archive is missing its end marker');
@@ -354,7 +362,7 @@ function inspectZip(buffer) {
   return entries;
 }
 
-function inspectArchive(file, format, expectedEntries) {
+function inspectArchive(file, format, expectedEntries, options = {}) {
   const resolved = path.resolve(file);
   const stat = fs.statSync(resolved);
   if (!stat.isFile() || stat.size <= 0 || stat.size > MAX_ARCHIVE_BYTES) {
@@ -364,7 +372,7 @@ function inspectArchive(file, format, expectedEntries) {
   const entries = format === 'zip'
     ? inspectZip(buffer)
     : format === 'tar.gz'
-      ? inspectTarGz(buffer)
+      ? inspectTarGz(buffer, options.checkpoint === true)
       : (() => { throw new Error(`unsupported archive format: ${format}`); })();
   if (expectedEntries) {
     const expected = [...expectedEntries].sort(compareUtf8);
@@ -379,6 +387,8 @@ function inspectArchive(file, format, expectedEntries) {
 module.exports = {
   MAX_ARCHIVE_BYTES,
   MAX_ARCHIVE_ENTRIES,
+  MAX_CHECKPOINT_ENTRIES,
+  MAX_CHECKPOINT_EXPANDED_BYTES,
   MAX_EXPANDED_BYTES,
   buildArchive,
   crc32,

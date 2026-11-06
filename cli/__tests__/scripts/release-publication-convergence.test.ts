@@ -2,6 +2,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import yaml from 'js-yaml';
+import {spawnSync} from 'child_process';
 
 const workflow = (name: string): any => yaml.load(fs.readFileSync(
   path.resolve(__dirname, '../../../.github/workflows', name), 'utf8'));
@@ -78,7 +79,9 @@ describe('publication convergence', () => {
       .toBe('github-publication-evidence.json');
     for (const build of Object.values(workflow('release-build.yml').jobs) as any[]) {
       for (const upload of (build.steps || []).filter((s: any) => s.uses?.startsWith('actions/upload-artifact@'))) {
-        expect(upload.with.overwrite).toBe(upload.with.name.startsWith('release-canonical-') ? false : true);
+        expect(upload.with.overwrite).toBe(upload.with.name.startsWith('release-canonical-') ? false
+          : /^(release-npm-|release-native-|release-payload-)/.test(upload.with.name)
+            && !upload.with.name.includes('-input-') ? true : undefined);
       }
     }
     const canonical = Object.values(workflow('release-build.yml').jobs).flatMap((build: any) => build.steps || [])
@@ -221,4 +224,42 @@ describe('publication convergence', () => {
       expect(() => check({conflict: true})).not.toThrow(VerificationUnavailable);
     } finally { fs.rmSync(root, {recursive: true, force: true}); }
   });
+});
+
+
+describe('authenticated public release retry', () => {
+  const validate = workflow('release-publish.yml').jobs.github.steps.find((candidate: any) =>
+    candidate.name === 'Revalidate exact release asset IDs and digests immediately before publication')
+    .run.match(/node - <<'NODE'\n([\s\S]*?)\nNODE/)[1];
+  const check = (draft: boolean, observedDraft: boolean, bytes = 'verified bytes', extra: boolean | 'duplicate' = false) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'release-public-retry-'));
+    fs.mkdirSync(path.join(root, 'redownload'));
+    fs.writeFileSync(path.join(root, 'redownload/payload.txt'), 'verified bytes');
+    fs.writeFileSync(path.join(root, 'asset.txt'), bytes);
+    fs.writeFileSync(path.join(root, 'existing-release.json'), JSON.stringify({isDraft: observedDraft}));
+    const assets = [{id: 1, name: 'payload.txt'}];
+    if (extra) assets.push({id: 2, name: extra === 'duplicate' ? 'payload.txt' : 'unexpected.txt'});
+    fs.writeFileSync(path.join(root, 'release-before-publication.json'), JSON.stringify({draft, assets}));
+    fs.writeFileSync(path.join(root, 'gh'), '#!/bin/sh\ncat "$ASSET_CONTENT"\n', {mode: 0o755});
+    const result = spawnSync(process.execPath, ['-e', validate], {cwd: root, encoding: 'utf8', env: {
+      ...process.env, RUNNER_TEMP: root, GITHUB_REPOSITORY: 'ntanwir10/GuardScan',
+      ASSET_CONTENT: path.join(root, 'asset.txt'), PATH: root + path.delimiter + process.env.PATH,
+    }});
+    fs.rmSync(root, {recursive: true, force: true});
+    return result;
+  };
+  it('permits an already authenticated byte-identical public retry', () => {
+    const result = check(false, false);
+    expect(result.stderr).toBe('');
+    expect(result.status).toBe(0);
+  });
+  it('preserves draft first-publication verification', () => expect(check(true, true).status).toBe(0));
+  it.each([[false, true], [true, false]])('rejects concurrent state transition %s from %s', (draft, observed) => {
+    expect(check(draft, observed).status).not.toBe(0);
+  });
+  it.each([false, true])('rejects asset byte drift in draft=%s', draft => {
+    expect(check(draft, draft, 'modified bytes').status).not.toBe(0);
+  });
+  it('rejects unexpected public asset inventory', () => expect(check(false, false, 'verified bytes', true).status).not.toBe(0));
+  it('rejects duplicate public asset inventory', () => expect(check(false, false, 'verified bytes', 'duplicate').status).not.toBe(0));
 });

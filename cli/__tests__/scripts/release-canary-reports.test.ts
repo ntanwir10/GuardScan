@@ -27,16 +27,19 @@ describe('complete release canary coverage', () => {
       expect(() => validateCanaryReports([replacement, ...reports.slice(1)], '1.2.3-rc.1', evidenceUrl)).toThrow();
     }
     const workflow: any = yaml.load(fs.readFileSync(path.resolve(__dirname, '../../../.github/workflows/release-canary.yml'), 'utf8'));
+    for (const target of workflow.jobs['native-and-pypi'].strategy.matrix.target) {
+      expect(target.archive).toBe(target.id.startsWith('linux-') ? 'tar.gz' : 'zip');
+    }
     const expected = [
       ...workflow.jobs['package-managers'].strategy.matrix.manager.map((manager: string) => [manager.split('-')[0], manager]),
-      ...workflow.jobs['native-and-pypi'].strategy.matrix.target.flatMap((target: any) => ['github', 'pypi'].map(channel => [channel, target.id])),
-      ...workflow.jobs.adapters.strategy.matrix.adapter.map((adapter: string) => [adapter.startsWith('homebrew-') ? 'homebrew' : 'scoop', adapter]),
+      ...workflow.jobs['native-and-pypi'].strategy.matrix.target.flatMap((target: any) => ['github', 'pypi'].map(channel => [channel, channel === 'pypi' ? target.id.replace(/-glibc$/, '') : target.id])),
+      ...workflow.jobs.adapters.strategy.matrix.adapter.map((adapter: string) => [adapter.startsWith('homebrew-') ? 'homebrew' : 'scoop', adapter === 'homebrew-macos' ? 'macOS' : adapter === 'homebrew-linux' ? 'Linux' : 'Windows']),
       ...['winget', 'chocolatey'].map(channel => [channel, 'windows-x64']),
     ];
     expect([...EXPECTED_CANARY_TARGETS].map((item: string[]) => item.join(':')).sort())
       .toEqual(expected.map(item => item.join(':')).sort());
     const record = workflow.jobs.record.steps.find((step: any) => step.name === 'Append hash-chained canary and verification events');
-    expect(record.run.indexOf('validateCanaryReports(')).toBeLessThan(record.run.indexOf('appendEvent(ledger'));
+    expect(record.run.indexOf('validateCanaryReports(')).toBeLessThan(record.run.indexOf('recordCanary({ledgerFile: ledger'));
   });
 
   it('reads and appends realistic ledgers beyond 1 MiB without enlarging generic release files', () => {
@@ -53,7 +56,7 @@ describe('complete release canary coverage', () => {
         payload: index === 0
           ? {channels: ['github']}
           : {status: 'passed', checkedAt: timestamp, target: 'linux-x64-glibc',
-            evidenceUrl, note: 'a'.repeat(4096)},
+            evidenceUrl: `${evidenceUrl}/${'a'.repeat(4096)}`},
       }, events.at(-1)));
       fs.writeFileSync(file, events.map(event => JSON.stringify(event) + '\n').join(''));
       expect(fs.statSync(file).size).toBeGreaterThan(1024 * 1024);

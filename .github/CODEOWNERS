@@ -1,0 +1,18 @@
+# Release authority is intentionally narrow. Repository settings must require
+# code-owner review before these paths can merge to a protected branch.
+/.github/CODEOWNERS @ntanwir10
+/.github/workflows/release-*.yml @ntanwir10
+/.github/workflows/ci.yml @ntanwir10
+/.github/release-ledger/ @ntanwir10
+/.github/release-bootstrap-provenance.json @ntanwir10
+/.github/scripts/ @ntanwir10
+/cli/scripts/release/ @ntanwir10
+/cli/schemas/guardscan.*.schema.json @ntanwir10
+/cli/package.json @ntanwir10
+/cli/package-lock.json @ntanwir10
+/catalog/homebrew-tap/ @ntanwir10
+/docs/RELEASE_*.md @ntanwir10
+/docs/FUNCTIONAL_ACCEPTANCE.md @ntanwir10
+/docs/adrs/006-node-sea-standalone-distribution.md @ntanwir10
+/release-please-config.json @ntanwir10
+/.release-please-manifest.json @ntanwir10

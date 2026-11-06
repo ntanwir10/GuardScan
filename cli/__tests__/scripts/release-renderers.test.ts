@@ -69,7 +69,7 @@ function makeStandalone(
   digestCharacter: string,
   libc?: string
 ): Record<string, unknown> {
-  const filename = `guardscan-v1.2.3-${suffix}.${osName === 'windows' ? 'zip' : 'tar.gz'}`;
+  const filename = `guardscan-v1.2.3-${suffix}.${osName === 'linux' ? 'tar.gz' : 'zip'}`;
   const signatureTypes = {
     darwin: ['apple-code-signing', 'apple-notarization'],
     linux: ['sigstore'],
@@ -91,7 +91,7 @@ function makeStandalone(
       accurateTokenCounting: false,
     },
     platform: {os: osName, arch, ...(libc ? {libc} : {})},
-    archiveFormat: osName === 'windows' ? 'zip' : 'tar.gz',
+    archiveFormat: osName === 'linux' ? 'tar.gz' : 'zip',
     entrypoint,
     url: `https://github.com/ntanwir10/GuardScan/releases/download/v1.2.3/${filename}`,
     archiveEntries: [{
@@ -191,7 +191,7 @@ describe('release adapter rendering', () => {
 
     const formula = rendered.files['homebrew/Formula/guardscan.rb'];
     expect(formula).toContain('class Guardscan < Formula');
-    expect(formula).toContain('guardscan-v1.2.3-darwin-arm64.tar.gz');
+    expect(formula).toContain('guardscan-v1.2.3-darwin-arm64.zip');
     expect(formula).toContain('a'.repeat(64));
 
     const scoop = JSON.parse(rendered.files['scoop/bucket/guardscan.json']);
@@ -514,6 +514,30 @@ describe('release adapter rendering', () => {
 
       fs.appendFileSync(path.join(output, 'homebrew/Formula/guardscan.rb'), '# drift\n');
       expect(() => validateAdapters(manifest, output, 'homebrew')).toThrow(/missing or stale/);
+    } finally {
+      fs.rmSync(root, {recursive: true, force: true});
+    }
+  });
+
+  it('reports an unavailable Python validator as skipped unless native checks are required', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'guardscan-adapter-python-'));
+    try {
+      const output = path.join(root, 'adapters');
+      const manifest = makeManifest();
+      writeRenderedOutput(manifest, renderAdapters(manifest, 'pypi'), output);
+      const unavailable = Object.assign(new Error('python is unavailable'), {code: 'ENOENT'});
+      const options = {
+        native: true,
+        platform: 'linux',
+        runner: () => ({error: unavailable, status: null}),
+      };
+      expect(validateAdapters(manifest, output, 'pypi', options)).toMatchObject({
+        native: [{channel: 'pypi', skipped: true, reason: expect.stringContaining('unavailable')}],
+      });
+      expect(() => validateAdapters(manifest, output, 'pypi', {
+        ...options,
+        requireNative: true,
+      })).toThrow(/pypi.*unavailable/i);
     } finally {
       fs.rmSync(root, {recursive: true, force: true});
     }

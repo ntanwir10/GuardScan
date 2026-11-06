@@ -17,6 +17,10 @@ evidence until it is bound to the selected commit and exact artifact.
 - The stable Release Please PR remains at `1.1.0`. A bot-owned candidate commit derives `1.1.0-rc.1` from that exact PR head.
 - Release builds use Node `22.23.1`, esbuild `0.28.1`, and postject `1.0.0-alpha.6`.
 - Every public artifact is immutable and digest-bound to its source commit.
+- A signed build is persisted as a deterministic draft-release checkpoint
+  before any provider publication. Retries rehydrate those exact bytes or a
+  complete verified public release; they never rebuild an existing release
+  identity.
 - Missing remote versions are published. Identical remote digests are accepted as retries. Different remote digests open an integrity incident and stop the train.
 - Stable promotion is a machine decision after a full 24-hour window. It requires an unchanged release-PR head, fresh green canaries for every RC channel, and no open release incident.
 - WinGet and Chocolatey remain `submitted` until their public catalogs accept them and a clean public installation passes.
@@ -43,7 +47,8 @@ Core requires a separate reviewed enablement and remains nonblocking.
 | `.github/workflows/release-train.yml` | Derives RC commits, creates protected tags, dispatches builds/publication, reconciles every 30 minutes, promotes, rolls back, and persists release events. |
 | `.github/workflows/release-first-withdrawal.yml` | Withdraws the first stable train only when the protected ledger proves no verified predecessor exists; it never invents forward-fix source. |
 | `.github/workflows/release-build.yml` | Builds the exact npm tarball and five SEA targets, signs, notarizes, generates SPDX/CycloneDX, creates wheels, attests, archives deterministically, and aggregates the manifest/checksums. |
-| `.github/workflows/release-publish.yml` | Publishes tested registry handoffs through OIDC and opens the generated shared-catalog update PR. |
+| `.github/workflows/release-provider-rehearsal.yml` | Runs exact-head Apple and Azure signing rehearsals while publication automation is disabled; it emits non-production evidence only. |
+| `.github/workflows/release-publish.yml` | Expands a persisted checkpoint, publishes tested registry handoffs through OIDC, and opens the generated shared-catalog update PR. |
 | `.github/workflows/release-canary.yml` | Runs hourly public install/invoke/uninstall canaries and polls moderated registries. |
 
 Release workflows deliberately do not use dependency caches. Release-critical actions are pinned to immutable commits.
@@ -165,6 +170,38 @@ npm run release:render -- \
 
 `advance` and the v1 mutable state schema remain temporarily available for compatibility with earlier local evidence. New automation uses only the hash-chained event ledger and materialized v2 state.
 
+## Retry-safe release checkpoints
+
+Checkpoints allow at most 64 files, 768 MiB compressed, and 1 GiB of expanded TAR bytes including headers, padding, and end markers. Native archives and Python wheels retain their separate 32-entry and 512 MiB expansion limits. Checkpoint creation and verification buffer the payload in memory; the 1 GiB expansion bound is not a process-memory bound, and verification decompresses it twice. Full signed production payload sizes still require measurement on the five release platforms.
+
+The train resolves remote state before starting a signed build. A new release
+identity may build only when no matching GitHub release exists. Before
+publication, the train creates a draft release and uploads a deterministic
+`guardscan-release-checkpoint-VERSION.tar.gz` plus its
+`guardscan.release-checkpoint.v1` sidecar. The checkpoint contains the complete
+public payload and the npm handoff metadata; the duplicate npm tarball is
+restored from the payload during rehydration.
+
+A retry accepts only one of these states:
+
+- no remote release or an existing empty draft, which authorizes a fresh build;
+- a draft with both valid checkpoint assets, which skips the build and
+  rehydrates the exact bytes;
+- an expanded draft whose complete individual asset set, checksums, signature,
+  manifest, tag, and source commit all verify, which resumes publication after
+  checkpoint removal; or
+- a published release whose complete asset set, checksums, signature, manifest,
+  tag, and source commit all verify, which also skips the build.
+
+A partial checkpoint without a complete expanded asset inventory, an
+incomplete or unexpected expanded/public inventory, a digest mismatch, or a
+published release missing an asset is a release integrity incident. Publication
+expands and
+redownloads every individual asset, then removes the private checkpoint
+immediately before making the verified draft public. If that final transition
+is interrupted, the complete individual draft asset set remains recoverable
+without rebuilding signed bytes.
+
 ## Artifact contracts
 
 Five host-native artifacts are required:
@@ -236,18 +273,24 @@ The repository also contains:
 ## RC and promotion
 
 Before the first candidate, merge the inert automation bootstrap to `main`
-while `RELEASE_AUTOMATION_ENABLED=false`, complete every onboarding check, and
+while `RELEASE_AUTOMATION_ENABLED=false` and `RELEASE_PLEASE_ENABLED=false`,
+with `RELEASE_PROVIDER_ONBOARDING_ATTESTATION=false`; complete every onboarding
+check, set that provider attestation only as described in
+`RELEASE_ONBOARDING.md`, and
 verify that the release PR head and full gate are unchanged. Refetch the
 protected `release-ledger` branch and fail if its tree contains anything other
 than the empty `active-versions.json` seed; this is the explicit no-migration
-boundary for the first source-bound event schema. Then set the variable to
-`true` and start the candidate from the default-branch workflow:
+boundary for the first source-bound event schema. Then set
+`RELEASE_AUTOMATION_ENABLED=true` and start the candidate from the
+default-branch workflow:
 
 ```bash
+EXPECTED_HEAD="$(gh pr view RELEASE_PR_NUMBER --json headRefOid --jq .headRefOid)"
 gh workflow run release-train.yml \
   -f action=candidate \
   -f version=1.1.0-rc.1 \
-  -f release_pr=RELEASE_PR_NUMBER
+  -f release_pr=RELEASE_PR_NUMBER \
+  -f expected_head="$EXPECTED_HEAD"
 ```
 
 The train:
@@ -261,7 +304,9 @@ The train:
 7. records `publishedAt` and hourly canary evidence;
 8. reconciles every 30 minutes.
 
-Promotion produces `promotion-decision.json`. A permitted decision requires at least 24 green samples per required channel, a complete 24-hour wall-clock window, a fresh last sample, the same source PR head, and no open incident. The release App then auto-merges that unchanged PR, tags its exact merge commit, rebuilds stable artifacts, and publishes `latest`.
+Promotion produces `promotion-decision.json`. A permitted decision requires at least 24 distinct green check timestamps per required channel across all eight RC channels, a complete 24-hour wall-clock window, the same source PR head and base, and no open incident. The first sample must arrive within 90 minutes of publication, every consecutive sample gap must be at most 90 minutes, and the latest sample must reach the end of the 24-hour soak and be no more than 90 minutes old. Only passed samples at or after publication and at or before evaluation count toward the floor; duplicate timestamps do not add samples. Every recorded failure remains blocking, including evidence outside that counting window. A missed gap cannot recover by waiting for a later rolling window; correction requires a new `rc.N`. The release App then auto-merges that unchanged PR, tags its exact merge commit, rebuilds stable artifacts, and publishes `latest`.
+
+Release PR authorization uses the latest non-comment review per reviewer, ordered by submission timestamp and then review ID. It requires a non-author approval on the exact head from an `OWNER`, `MEMBER`, or `COLLABORATOR` association and rejects outstanding changes requests from those associations. Comments do not clear a changes request or revive a dismissed approval. Missing or malformed review metadata fails closed. These associations are the minimum trust filter; they do not establish current repository write permission or replace protected-branch review requirements.
 
 ## Public installation contracts
 
@@ -351,3 +396,5 @@ gh workflow run release-train.yml \
 A release is complete only when every selected blocking channel materializes
 as `verified`. Optional Homebrew Core submission/acceptance is tracked
 separately and never blocks the release train.
+
+A partial checkpoint upload can resume only from one retained original canonical checkpoint Actions artifact (90-day retention), after authentication and byte comparison of the existing asset. Missing, expired, legacy, or ambiguous artifacts fail closed. After an interrupted upload, rerun the full workflow or dispatch a new run so the resolver can resume the checkpoint; retrying only failed jobs can collide with the immutable artifact name.

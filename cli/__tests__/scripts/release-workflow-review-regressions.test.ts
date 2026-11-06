@@ -21,7 +21,7 @@ describe('release workflow review regressions', () => {
     const build = workflow('release-build.yml');
     const aggregateSteps = Object.values(build.jobs).flatMap((job: any) => job.steps || []);
     const collect = aggregateSteps.find((candidate: any) => (
-      candidate.name === 'Reject unexpected links and collect release assets'
+      candidate.name === 'Reject links and collect release assets'
     ));
     expect(collect).toBeTruthy();
     expect(collect.run).toContain("-name '*.apple-notarization.json'");
@@ -118,7 +118,7 @@ describe('release workflow review regressions', () => {
         commit: 'c'.repeat(40),
         producer: {
           provider: 'github-actions', repository: 'ntanwir10/GuardScan',
-          workflow: '.github/workflows/release-build.yml', runId: '123',
+          workflow: '.github/workflows/release-build.yml', workflowSha: 'a'.repeat(40), runId: '123',
           runAttempt: 2, sourceRef: 'refs/tags/v1.2.3',
         },
         artifacts: [{
@@ -130,10 +130,12 @@ describe('release workflow review regressions', () => {
         '-e', '--arg', 'repository', 'ntanwir10/GuardScan', '--arg', 'version', '1.2.3',
         '--arg', 'archive', archiveName, '--arg', 'archive_sha', digest,
         '--arg', 'run_id', '123', '--arg', 'attempt', '2', '--arg', 'tag_sha', 'c'.repeat(40),
+        '--arg', 'workflow_sha', 'a'.repeat(40),
         manifestPolicy,
       ], {input: JSON.stringify(manifest), encoding: 'utf8'});
       expect(checkManifest(trustedManifest).status).toBe(0);
       expect(checkManifest({...trustedManifest, version: '1.2.4'}).status).not.toBe(0);
+      expect(checkManifest({...trustedManifest, producer: {...trustedManifest.producer, workflowSha: 'b'.repeat(40)}}).status).not.toBe(0);
       expect(checkManifest({...trustedManifest, artifacts: [{...trustedManifest.artifacts[0], filename: 'other.tar.gz'}]}).status).not.toBe(0);
       expect(checkManifest({...trustedManifest, artifacts: [
         trustedManifest.artifacts[0], trustedManifest.artifacts[0],
@@ -256,7 +258,7 @@ describe('release workflow review regressions', () => {
     }
   });
 
-  it('records each canary train from its own tag and only its own reports', () => {
+  it('records each canary train using trusted tooling, its immutable tag and only its own reports', () => {
     const canary = workflow('release-canary.yml');
     const discover = canary.jobs.discover;
     expect(discover.outputs).not.toHaveProperty('implementation_ref');
@@ -264,20 +266,22 @@ describe('release workflow review regressions', () => {
     const record = canary.jobs.record;
     expect(record.strategy.matrix.train).toBe('${{ fromJSON(needs.discover.outputs.trains) }}');
     expect(record.if).toContain("needs.discover.outputs.trains != '[]'");
-    expect(step(record, 'Checkout exact train implementation').with.ref).toBe('v${{ matrix.train.version }}');
+    expect(step(record, 'Checkout exact train implementation').with.ref).toBe('${{ github.workflow_sha }}');
     expect(step(record, 'Download this train reports').with.pattern)
       .toBe('canary-${{ matrix.train.version }}-*');
     const append = step(record, 'Append hash-chained canary and verification events');
     expect(append.env.TRAIN_VERSION).toBe('${{ matrix.train.version }}');
     expect(append.run).toContain('report.version === process.env.TRAIN_VERSION');
     expect(append.run).toContain('commit !== checkoutCommit');
+    expect(append.run).toContain("['rev-list', '-n', '1', tag]");
+    expect(append.run).toContain('refs/tags/v$TRAIN_VERSION:refs/tags/v$TRAIN_VERSION');
   });
 
   it('authorizes release source PR metadata before checking out or mutating a ref', () => {
     const train = workflow('release-train.yml');
     const prepare = train.jobs.prepare;
     const validate = step(prepare, 'Validate request and resolve unchanged release PR head');
-    expect(validate.env.RELEASE_PR).toBe('${{ inputs.release_pr }}');
+    expect(prepare.env.REQUEST_RELEASE_PR).toBe('${{ inputs.release_pr }}');
     expect(validate.run).toContain('gh api "repos/${GITHUB_REPOSITORY}/pulls/$REQUEST_RELEASE_PR" > release-pr.json');
     expect(validate.run).toContain("pr.state !== 'open' && !resumableMergedPromotion");
     expect(validate.run).toContain("pr.base?.ref !== 'main'");
@@ -293,12 +297,13 @@ describe('release workflow review regressions', () => {
   it('reuses a stable tag only when its peeled commit is the exact merged PR commit', () => {
     const train = workflow('release-train.yml');
     const stable = step(train.jobs.prepare, 'Auto-merge unchanged stable release PR and create stable tag');
-    expect(stable.run).toContain('--match-head-commit "${{ steps.source.outputs.head_sha }}"');
+    expect(stable.env.EXPECTED_HEAD).toBe('${{ steps.source.outputs.head_sha }}');
+    expect(stable.run).toContain('--match-head-commit "$EXPECTED_HEAD"');
     expect(stable.run).toContain('git ls-remote --exit-code');
     expect(stable.run).toContain('git rev-list -n 1');
     expect(stable.run).toContain('EXISTING_TAG_SHA" != "$MERGE_SHA"');
     expect(stable.run.indexOf('EXISTING_TAG_SHA" != "$MERGE_SHA"'))
-      .toBeLessThan(stable.run.indexOf('git push origin "refs/tags/'));
+      .toBeLessThan(stable.run.indexOf('push origin "refs/tags/'));
     expect(stable.run).toContain('TAG_PUSH_REQUIRED=false');
     expect(stable.run).toContain('TAG_PUSH_REQUIRED=true');
   });
@@ -318,6 +323,7 @@ describe('release workflow review regressions', () => {
     fs.mkdirSync(bin);
     fs.writeFileSync(path.join(bin, 'git'), [
       '#!/bin/sh',
+      'while [ "$1" = -c ]; do shift 2; done',
       'printf "%s\\n" "$*" >> "$GIT_CALLS"',
       'case "$1" in',
       '  ls-remote) case "$TAG_MODE" in',
@@ -346,6 +352,7 @@ describe('release workflow review regressions', () => {
           TAG_OBJECT: 'b'.repeat(40),
           MERGE_SHA: 'a'.repeat(40),
           STABLE_VERSION: '1.2.3',
+          RELEASE_APP_TOKEN: 'test-token',
           WRONG_SHA: 'c'.repeat(40),
           LOCAL_TAG: 'false',
           ...extra,
@@ -434,10 +441,193 @@ describe('release workflow review regressions', () => {
     const moderated = step(canary.jobs.moderated, 'Poll, install, invoke, and uninstall public moderated channels');
     expect(moderated.run).toContain('$notPublic');
     expect(moderated.run).toContain("$report.status = 'pending'");
-    expect(moderated.run).toContain("$report.reason = 'not_public'");
+    expect(moderated.run).not.toContain('$report.reason');
     expect(moderated.run).toContain('Unexpected moderated registry error:');
+    expect(moderated.run).toContain("} catch {\n    $report.status = 'failed'\n    $report.error = $_.ToString()\n    $unexpectedFailure = $_.ToString()");
+    expect(moderated.run).toContain('throw "Unexpected moderated registry error: $unexpectedFailure"');
     expect(moderated.run).toContain('choco info guardscan --exact --version');
     expect(moderated.run).toContain('$exactVersion');
     expect(moderated.run).toContain('$LASTEXITCODE');
+  });
+});
+
+
+describe('release review recovery contracts', () => {
+  it('binds reusable callee signer provenance only in supported step contexts', () => {
+    const build = workflow('release-build.yml');
+    let readers = 0;
+    for (const job of Object.values(build.jobs) as any[]) {
+      expect(JSON.stringify(job.env || {})).not.toContain('job.workflow_sha');
+      for (const candidate of job.steps || []) {
+        if (candidate.run?.includes('RELEASE_BUILD_WORKFLOW_SHA')) {
+          expect(candidate.env?.RELEASE_BUILD_WORKFLOW_SHA).toBe('${{ job.workflow_sha }}');
+          readers++;
+        }
+        if (candidate.env?.SIGNER_WORKFLOW_SHA) {
+          expect(candidate.env.SIGNER_WORKFLOW_SHA).toBe('${{ job.workflow_sha }}');
+          readers++;
+        }
+      }
+    }
+    expect(readers).toBe(7);
+  });
+
+  it('declares and forwards exactly the publication secrets its consumers need', () => {
+    const publish = workflow('release-publish.yml');
+    const caller = workflow('release-train.yml').jobs.publish;
+    const inventory = ['RELEASE_APP_PRIVATE_KEY', 'WINGET_CREATE_GITHUB_TOKEN', 'WINGET_GITHUB_TOKEN', 'CHOCO_API_KEY'];
+    expect(Object.keys(publish.on.workflow_call.secrets).sort()).toEqual(inventory.sort());
+    expect(Object.keys(caller.secrets).sort()).toEqual(inventory.sort());
+    expect(publish.on.workflow_call.secrets.RELEASE_APP_PRIVATE_KEY.required).toBe(true);
+    for (const secret of inventory) expect(caller.secrets[secret]).toBe('${{ secrets.' + secret + ' }}');
+  });
+
+  it('authenticates the final canary ledger push without checkout credentials', () => {
+    const record = workflow('release-canary.yml').jobs.record;
+    const push = record.steps.find((candidate: any) => candidate.run?.includes('push origin HEAD:release-ledger'));
+    expect(push.run).toMatch(/git -c credential.helper= -c 'credential.https:\/\/github.com.helper=!gh auth git-credential'\s+push origin HEAD:release-ledger/);
+    expect(push.run).toContain('export GH_TOKEN="$RELEASE_APP_TOKEN"');
+  });
+
+  it('publishes recovered payloads only after both direct prerequisites succeed and without cancellation', () => {
+    const publish = workflow('release-train.yml').jobs.publish;
+    expect(publish.needs).toEqual(['prepare', 'payload-ready']);
+    const condition = publish.if.replace(/\s+/g, ' ').trim();
+    expect(condition).toContain('always()');
+    expect(condition).toContain('!cancelled()');
+    for (const prepare of ['success', 'failure', 'cancelled', 'skipped']) {
+      for (const payload of ['success', 'failure', 'cancelled', 'skipped']) {
+        for (const cancelled of [false, true]) {
+          const expression = condition.replace(/always\(\)/g, 'true')
+            .replace(/cancelled\(\)/g, String(cancelled))
+            .replace(/vars.RELEASE_AUTOMATION_ENABLED/g, "'true'")
+            .replace(/needs.prepare.outputs.build/g, "'true'")
+            .replace(/needs.prepare.result/g, JSON.stringify(prepare))
+            .replace(/needs.payload-ready.result/g, JSON.stringify(payload));
+          expect(Function('return (' + expression + ')')()).toBe(!cancelled && prepare === 'success' && payload === 'success');
+        }
+      }
+    }
+  });
+
+  it('compares catalog path inventories in byte order in both writers', () => {
+    for (const filename of ['release-train.yml', 'release-publish.yml']) {
+      const source = fs.readFileSync(path.join(workflowRoot, filename), 'utf8');
+      expect(source).toMatch(/CHANGED_PATHS="\$\(git[^\n]*diff --name-only origin\/main\.\.\.HEAD \| LC_ALL=C sort\)"/);
+    }
+  });
+});
+
+describe('immutable partial checkpoint workflow routing', () => {
+  it('routes only one exact canonical asset to partial recovery and rejects unknown checkpoint names', () => {
+    const job = workflow('release-train.yml').jobs['resolve-checkpoint'];
+    const classify = step(job, 'Classify remote checkpoint state').run.match(/node - <<'NODE'\n([\s\S]*?)\nNODE/)[1];
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'guardscan-checkpoint-classify-'));
+    const archive = 'guardscan-release-checkpoint-1.1.0.tar.gz';
+    const sidecar = archive + '.metadata.json';
+    const check = (names: string[], draft = true) => {
+      fs.writeFileSync(path.join(root, 'release-state.json'), JSON.stringify({draft, assets: names.map(name => ({name}))}));
+      const output = path.join(root, 'output');
+      fs.writeFileSync(output, '');
+      const result = spawnSync(process.execPath, ['-e', classify], {cwd: root, encoding: 'utf8',
+        env: {...process.env, ARCHIVE: archive, SIDECAR: sidecar, GITHUB_OUTPUT: output}});
+      return {status: result.status, mode: fs.readFileSync(output, 'utf8').trim()};
+    };
+    try {
+      expect(check([])).toEqual({status: 0, mode: 'mode=build'});
+      expect(check([archive])).toEqual({status: 0, mode: 'mode=partial'});
+      expect(check([sidecar])).toEqual({status: 0, mode: 'mode=partial'});
+      expect(check([archive, sidecar])).toEqual({status: 0, mode: 'mode=checkpoint'});
+      expect(check([archive, 'release-manifest.json']).mode).toBe('mode=expanded');
+      expect(check([archive, archive]).mode).not.toBe('mode=partial');
+      expect(check([archive], false).status).not.toBe(0);
+      expect(check([archive + '.unexpected']).status).not.toBe(0);
+      expect(check([archive, sidecar, archive + '.unexpected']).status).not.toBe(0);
+    } finally { fs.rmSync(root, {recursive: true, force: true}); }
+  });
+
+  it('persists the canonical checkpoint pair before any remote upload and protects partial repairs', () => {
+    const train = workflow('release-train.yml');
+    const checkpoint = train.jobs.checkpoint.steps;
+    const canonical = checkpoint.findIndex((candidate: any) => candidate.name === 'Persist canonical checkpoint pair before remote upload');
+    const upload = checkpoint.findIndex((candidate: any) => candidate.run?.includes('gh release upload'));
+    expect(canonical).toBeGreaterThan(0);
+    expect(canonical).toBeLessThan(upload);
+    expect(checkpoint[canonical].with.name).toBe('release-checkpoint-${{ needs.prepare.outputs.tag }}');
+    expect(checkpoint[canonical].with['retention-days']).toBe(90);
+    expect(checkpoint[canonical].with.overwrite).toBeUndefined();
+    const resolve = train.jobs['resolve-checkpoint'];
+    expect(resolve.permissions).toEqual({actions: 'read', contents: 'write'});
+    expect(resolve.environment).toContain("'release-rc' || 'release-stable'");
+    const repair = step(resolve, 'Resume an authenticated partial checkpoint without replacing existing bytes');
+    expect(repair.if).toBe("steps.remote.outputs.mode == 'partial'");
+    expect(repair.run).toContain('node .github/scripts/resume-release-checkpoint.js');
+  });
+
+  it('grants the prepare snapshot token only its required read permissions', () => {
+    const prepare = workflow('release-train.yml').jobs.prepare;
+    expect(prepare.permissions).toEqual({checks: 'read', contents: 'read', 'pull-requests': 'read'});
+    const snapshots = prepare.steps.filter((candidate: any) => candidate.run?.includes('/check-runs?per_page=100'));
+    expect(snapshots).toHaveLength(3);
+    for (const snapshot of snapshots) {
+      expect(snapshot.env.GH_TOKEN).toBe('${{ github.token }}');
+    }
+  });
+
+  it('flattens complete review history with CLI-compatible pagination for all four authorization snapshots', () => {
+    const snapshots = [workflow('release-train.yml').jobs.prepare, workflow('release-provider-rehearsal.yml').jobs.validate]
+      .flatMap(job => job.steps).filter(candidate => candidate.run?.includes('cli/scripts/release/index.js validate-pr'));
+    const fetches = snapshots.map(candidate => candidate.run.replace(/\\\n\s*/g, ' ').split('\n')
+      .find((line: string) => line.includes('/reviews?per_page=100')));
+    expect(fetches).toHaveLength(4);
+    const metadata = {id: 1, state: 'APPROVED', commit_id: 'a'.repeat(40), author_association: 'OWNER',
+      submitted_at: '2026-11-05T00:00:00Z', user: {login: 'maintainer'}};
+    const expanded = {...metadata, body: 'long review body'.repeat(10000), html_url: 'https://example.test/review',
+      user: {...metadata.user, avatar_url: 'https://example.test/avatar', links: {}}};
+    const later = {...expanded, id: 101, state: 'CHANGES_REQUESTED', submitted_at: '2026-11-05T00:01:00Z'};
+    const pending = {state: 'PENDING', commit_id: null, submitted_at: null};
+    const pages = [Array.from({length: 100}, (_, index) => ({...expanded, id: index + 1, ...(index === 0 ? pending : {})})), [later]];
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'guardscan-review-pages-'));
+    try {
+      fs.writeFileSync(path.join(root, 'pages.json'), JSON.stringify(pages));
+      fs.writeFileSync(path.join(root, 'gh'), `#!/usr/bin/env node
+const fs = require('fs');
+const args = process.argv.slice(2);
+if (args[0] !== 'api' || !args.includes('--paginate') || !args.includes('--slurp')) process.exit(2);
+if (args.includes('--jq') || args.includes('--template')) {
+  process.stderr.write('slurp option is not supported with jq or template'); process.exit(3);
+}
+process.stdout.write(fs.readFileSync(process.env.REVIEW_PAGES, 'utf8'));
+`, {mode: 0o755});
+      for (const fetch of fetches) {
+        const result = spawnSync('bash', ['-e', '-o', 'pipefail', '-c', fetch], {cwd: root, encoding: 'utf8',
+          env: {...process.env, PATH: root + path.delimiter + process.env.PATH, REVIEW_PAGES: path.join(root, 'pages.json'),
+            GITHUB_REPOSITORY: 'ntanwir10/GuardScan', REQUEST_RELEASE_PR: '42'}});
+        expect({status: result.status, stderr: result.stderr}).toEqual({status: 0, stderr: ''});
+        const file = fetch.match(/>\s*(release-[A-Za-z-]+\.json)\s*$/)[1];
+        const output = fs.readFileSync(path.join(root, file), 'utf8');
+        expect(JSON.parse(output)).toEqual([
+          ...Array.from({length: 100}, (_, index) => ({...metadata, id: index + 1, ...(index === 0 ? pending : {})})),
+          {...metadata, id: 101, state: 'CHANGES_REQUESTED', submitted_at: later.submitted_at},
+        ]);
+        expect(Buffer.byteLength(output)).toBeLessThan(128 * 1024);
+      }
+    } finally { fs.rmSync(root, {recursive: true, force: true}); }
+  });
+
+  it('preserves check-run App identity in every authorization evidence projection', () => {
+    const snapshots = [workflow('release-train.yml').jobs.prepare, workflow('release-provider-rehearsal.yml').jobs.validate]
+      .flatMap(job => job.steps).filter(candidate => candidate.run?.includes('cli/scripts/release/index.js validate-pr'));
+    expect(snapshots).toHaveLength(4);
+    const check = {name: 'Release gate', head_sha: 'a'.repeat(40), status: 'completed', conclusion: 'success',
+      app: {id: 15368, slug: 'github-actions'}};
+    for (const candidate of snapshots) {
+      const fetch = candidate.run.replace(/\\\n\s*/g, ' ').split('\n')
+        .find((line: string) => line.includes('/check-runs?per_page=100'));
+      const projection = fetch.match(/--jq '([^']+)'/)[1];
+      const result = spawnSync('jq', [projection], {input: JSON.stringify({check_runs: [check]}), encoding: 'utf8'});
+      expect(result.status).toBe(0);
+      expect(JSON.parse(result.stdout)).toEqual([check]);
+    }
   });
 });

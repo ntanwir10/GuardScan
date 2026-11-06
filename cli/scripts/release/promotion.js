@@ -1,9 +1,12 @@
 'use strict';
 
 const semver = require('semver');
+const {CHANNELS, REQUIRED_RC_CHANNELS} = require('./lib');
+const {compareUtf8} = require('./deterministic');
 
 const DECISION_SCHEMA = 'guardscan.promotion-decision.v1';
 const SOAK_MILLISECONDS = 24 * 60 * 60 * 1000;
+const CANARY_INTERVAL_MILLISECONDS = 60 * 60 * 1000;
 const DEFAULT_MINIMUM_SAMPLES = 24;
 const MAX_CANARY_AGE_MILLISECONDS = 90 * 60 * 1000;
 
@@ -23,29 +26,37 @@ function stableVersion(rcVersion) {
   return `${parsed.major}.${parsed.minor}.${parsed.patch}`;
 }
 
-function summarizeCanaries(samples, publishedAt, eligibleAt, evaluatedAt, minimumSamples) {
-  const normalized = [...samples].sort((a, b) => a.checkedAt.localeCompare(b.checkedAt));
-  for (const sample of normalized) canonicalTimestamp(sample.checkedAt, 'canary checkedAt');
+function summarizeCanaries(samples, publicationTimestamp, eligibleAt, evaluatedAt, minimumSamples) {
+  const publishedAt = canonicalTimestamp(publicationTimestamp, 'RC publishedAt');
+  const normalized = [...samples].sort((a, b) => compareUtf8(a.checkedAt, b.checkedAt));
+  const checked = normalized.map(sample => ({
+    sample,
+    date: canonicalTimestamp(sample.checkedAt, 'canary checkedAt'),
+  }));
   const failures = normalized.filter(sample => sample.status !== 'passed');
-  const latest = normalized.at(-1);
-  const first = normalized[0];
+  const first = checked[0];
+  const latest = checked.at(-1);
+  const validSamples = [...new Map(checked
+    .filter(({sample, date}) => sample.status === 'passed' && date >= publishedAt && date <= evaluatedAt)
+    .map(value => [value.sample.checkedAt, value])).values()];
+  const coversSoak = validSamples.length > 0 && validSamples.every(({date}, index) => (
+    date.getTime() - (index === 0 ? publishedAt : validSamples[index - 1].date).getTime()
+      <= MAX_CANARY_AGE_MILLISECONDS
+  ));
+  const latestAge = latest ? evaluatedAt.getTime() - latest.date.getTime() : undefined;
   return {
-    sampleCount: normalized.length,
-    passed: failures.length === 0 && normalized.length >= minimumSamples,
-    firstCheckedAt: first?.checkedAt,
-    lastCheckedAt: latest?.checkedAt,
+    sampleCount: validSamples.length,
+    passed: failures.length === 0 && validSamples.length >= minimumSamples,
+    firstCheckedAt: first?.sample.checkedAt,
+    lastCheckedAt: latest?.sample.checkedAt,
     failures: failures.length,
-    coversPublication: first ? first.checkedAt >= publishedAt : false,
-    startsNearPublication: first
-      ? new Date(first.checkedAt).getTime() - new Date(publishedAt).getTime()
-        <= MAX_CANARY_AGE_MILLISECONDS
-      : false,
-    coversSoakWindow: latest
-      ? new Date(latest.checkedAt).getTime() >= eligibleAt.getTime()
-      : false,
-    fresh: latest
-      ? evaluatedAt.getTime() - new Date(latest.checkedAt).getTime() <= MAX_CANARY_AGE_MILLISECONDS
-      : false,
+    coversPublication: first ? first.date >= publishedAt : false,
+    startsNearPublication: first ? first.date.getTime() - publishedAt.getTime() <= MAX_CANARY_AGE_MILLISECONDS : false,
+    coversSoakWindow: latest ? latest.date.getTime() >= eligibleAt.getTime() : false,
+    coversSoak,
+    fresh: latestAge !== undefined
+      && latestAge >= 0
+      && latestAge <= MAX_CANARY_AGE_MILLISECONDS,
   };
 }
 
@@ -53,17 +64,27 @@ function createPromotionDecision(input) {
   const publishedAt = canonicalTimestamp(input.rc.publishedAt, 'RC publishedAt');
   const evaluatedAt = canonicalTimestamp(input.evaluatedAt, 'promotion evaluatedAt');
   const eligibleAt = new Date(publishedAt.getTime() + SOAK_MILLISECONDS);
-  const requiredChannels = [...new Set(input.requiredChannels || [
-    'npm',
-    'pnpm',
-    'yarn',
-    'bun',
-    'github',
-    'homebrew',
-    'scoop',
-    'pypi',
-  ])].sort();
-  const minimumSamples = input.minimumSamples || DEFAULT_MINIMUM_SAMPLES;
+  const requestedChannels = input.requiredChannels === undefined
+    ? [...REQUIRED_RC_CHANNELS]
+    : input.requiredChannels;
+  if (!Array.isArray(requestedChannels) || requestedChannels.length === 0) {
+    throw new Error('promotion requiredChannels cannot weaken the immutable eight-channel RC floor');
+  }
+  if (requestedChannels.some(channel => typeof channel !== 'string'
+      || !CHANNELS.some(candidate => candidate.id === channel))) {
+    throw new Error('promotion requiredChannels contains an unsupported channel');
+  }
+  const requiredChannels = [...new Set(requestedChannels)].sort(compareUtf8);
+  if (requiredChannels.length !== requestedChannels.length
+      || REQUIRED_RC_CHANNELS.some(channel => !requiredChannels.includes(channel))) {
+    throw new Error('promotion requiredChannels cannot weaken the immutable eight-channel RC floor');
+  }
+  const minimumSamples = input.minimumSamples === undefined
+    ? DEFAULT_MINIMUM_SAMPLES
+    : input.minimumSamples;
+  if (!Number.isSafeInteger(minimumSamples) || minimumSamples < DEFAULT_MINIMUM_SAMPLES) {
+    throw new Error(`promotion minimumSamples cannot be less than ${DEFAULT_MINIMUM_SAMPLES}`);
+  }
   const reasons = [];
   if (evaluatedAt < eligibleAt) reasons.push('soak_window_incomplete');
   if (input.rc.sourcePrHead !== input.currentSourcePrHead) reasons.push('source_pr_head_changed');
@@ -81,12 +102,13 @@ function createPromotionDecision(input) {
       minimumSamples
     );
     canaryEvidence[channel] = summary;
+    if (summary.failures > 0) reasons.push(`canary_failed:${channel}`);
     if (summary.sampleCount === 0) reasons.push(`canary_missing:${channel}`);
-    else {
-      if (summary.failures > 0) reasons.push(`canary_failed:${channel}`);
+    if (summary.firstCheckedAt !== undefined) {
       if (summary.sampleCount < minimumSamples) reasons.push(`canary_samples_insufficient:${channel}`);
       if (!summary.coversPublication) reasons.push(`canary_predates_publication:${channel}`);
       if (!summary.startsNearPublication) reasons.push(`canary_start_late:${channel}`);
+      if (!summary.coversSoak) reasons.push(`canary_soak_coverage_incomplete:${channel}`);
       if (!summary.coversSoakWindow) reasons.push(`canary_soak_incomplete:${channel}`);
       if (!summary.fresh) reasons.push(`canary_stale:${channel}`);
     }
@@ -126,15 +148,16 @@ function createPromotionDecision(input) {
     activeIncidents: activeIncidents.map(incident => ({
       incidentId: incident.incidentId,
       kind: incident.kind,
-    })).sort((a, b) => a.incidentId.localeCompare(b.incidentId)),
+    })).sort((a, b) => compareUtf8(a.incidentId, b.incidentId)),
     result: reasons.length === 0 ? 'permitted' : 'denied',
     eligible: reasons.length === 0,
-    reasons: [...new Set(reasons)].sort(),
+    reasons: [...new Set(reasons)].sort(compareUtf8),
   };
 }
 
 module.exports = {
   DECISION_SCHEMA,
+  CANARY_INTERVAL_MILLISECONDS,
   DEFAULT_MINIMUM_SAMPLES,
   MAX_CANARY_AGE_MILLISECONDS,
   SOAK_MILLISECONDS,

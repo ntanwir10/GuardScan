@@ -13,6 +13,7 @@ const {
   bundledComponents,
   externalPackages,
   hostPlatform,
+  releaseToolchainVersions,
   renameWithTransientRetry,
 } = require('../../scripts/release/standalone') as {
   OPTIONAL_EXTERNALS: string[];
@@ -23,6 +24,7 @@ const {
   bundledComponents: (metafile: Record<string, any>, lock: Record<string, any>) => Array<Record<string, string>>;
   externalPackages: (metafile: Record<string, any>) => string[];
   hostPlatform: () => {os: string; arch: string};
+  releaseToolchainVersions: () => {esbuild: string; postject: string};
   renameWithTransientRetry: (
     source: string,
     destination: string,
@@ -147,6 +149,13 @@ describe('standalone executable builder contract', () => {
     ]));
     expect(OPTIONAL_EXTERNALS).toEqual(['chartjs-node-canvas', 'tiktoken']);
     expect(PROTOTYPE_SCHEMA).toBe('guardscan.standalone-prototype.v1');
+  });
+
+  it('reports the pinned standalone toolchain through supported package interfaces', () => {
+    expect(releaseToolchainVersions()).toEqual({
+      esbuild: '0.28.1',
+      postject: '1.0.0-alpha.6',
+    });
   });
 
   it('accepts observed reduced-capability evidence from the standalone executable', () => {

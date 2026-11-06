@@ -84,9 +84,9 @@ describe('hosted release review regressions', () => {
 
   it('grants reusable callers the least union of callee permissions', () => {
     const train = workflow('release-train.yml');
-    expect(train.jobs.build.permissions).toEqual({contents: 'read', 'id-token': 'write', attestations: 'write'});
+    expect(train.jobs.build.permissions).toEqual({actions: 'read', contents: 'read', 'id-token': 'write', attestations: 'write'});
     expect(train.jobs.publish.permissions).toEqual({contents: 'write', actions: 'read', 'id-token': 'write'});
-    expect(train.permissions).toEqual({contents: 'read'});
+    expect(train.permissions).toEqual({contents: 'read', 'pull-requests': 'read'});
   });
 
   it('installs dependencies and pinned Node before publication ledger imports', () => {
@@ -96,7 +96,7 @@ describe('hosted release review regressions', () => {
     ]) {
       const job = workflow(file).jobs.record;
       const node = job.steps.findIndex((item: any) => item.uses?.startsWith('actions/setup-node@'));
-      const install = job.steps.findIndex((item: any) => item.run === 'npm ci' && item['working-directory'] === 'cli');
+      const install = job.steps.findIndex((item: any) => item.run === 'npm ci --ignore-scripts' && item['working-directory'] === 'cli');
       const append = job.steps.indexOf(step(job, name));
       expect(node).toBeGreaterThan(0);
       expect(job.steps[node].with['node-version']).toBe('${{ env.RELEASE_NODE_VERSION }}');
@@ -206,7 +206,7 @@ describe('hosted release review regressions', () => {
     expect(script).toBeTruthy();
     let output = '';
     vm.runInNewContext(script!, {
-      require: () => ({existsSync: () => true, readFileSync: () => JSON.stringify({trains: [
+      require: (name: string) => name.endsWith('/deterministic') ? require('../../scripts/release/deterministic') : ({existsSync: () => true, readFileSync: () => JSON.stringify({trains: [
         {version: '1.0.0', channel: 'stable', releasePr: 1},
         {version: '1.2.3-rc.1', channel: 'rc', releasePr: 42},
         {version: '2.0.0-rc.1', channel: 'rc', releasePr: 50},
@@ -225,13 +225,13 @@ describe('hosted release review regressions', () => {
     expect(validation).toContain('pr.merged === true');
     expect(validation).toContain('pr.merge_commit_sha');
     const decision = step(prepare, 'Materialize machine promotion decision').run as string;
-    expect(decision).toContain('candidate.sourcePr !== Number(process.env.RELEASE_PR)');
+    expect(decision).toContain('candidate.sourcePr !== Number(process.env.REQUEST_RELEASE_PR)');
     expect(decision).toContain('candidate.sourcePrHead !== process.env.CURRENT_HEAD');
-    const script = decision.match(/node - <<'NODE'\n([\s\S]*?)\nNODE/)?.[1];
+    const script = [...decision.matchAll(/node - <<'NODE'\n([\s\S]*?)\nNODE/g)].find(match => match[1].includes("fs.writeFileSync('promotion-input.json'"))?.[1];
     expect(script).toBeTruthy();
     const head = 'a'.repeat(40);
     const evaluate = (candidate: any, recordedHead = head) => vm.runInNewContext(script!, {
-      process: {env: {RELEASE_PR: '42', CURRENT_HEAD: head}}, Date,
+      process: {env: {REQUEST_RELEASE_PR: '42', CURRENT_HEAD: head}}, Date,
       require: (name: string) => name === 'fs' ? {
         readFileSync: () => JSON.stringify(candidate), writeFileSync: () => {},
       } : {
