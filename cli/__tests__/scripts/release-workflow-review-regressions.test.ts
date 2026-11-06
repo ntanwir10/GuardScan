@@ -516,6 +516,50 @@ describe('release review recovery contracts', () => {
       expect(source).toMatch(/CHANGED_PATHS="\$\(git[^\n]*diff --name-only origin\/main\.\.\.HEAD \| LC_ALL=C sort\)"/);
     }
   });
+
+  it('grants workflow writes only to homebrew-scoped catalog push tokens', () => {
+    const publish = workflow('release-publish.yml').jobs.catalog;
+    const train = workflow('release-train.yml');
+    const catalogPermissions = {
+      owner: 'ntanwir10', repositories: 'homebrew-tap',
+      'permission-contents': 'write', 'permission-pull-requests': 'write',
+      'permission-workflows': 'write', 'permission-metadata': 'read',
+    };
+    expect(publish.steps.find((candidate: any) => candidate.id === 'app').with)
+      .toMatchObject(catalogPermissions);
+    for (const [jobName, writerName, validationName, pushCount] of [
+      ['reconcile', 'Authoritatively refetch and reconcile the shared catalog', 'Materialize and reconcile ledger', 1],
+      ['rollback', 'Restore the shared catalog to the exact known-good projection', 'Prepare or verify the deterministic forward-fix pull request', 2],
+    ] as const) {
+      const job = train.jobs[jobName];
+      const token = job.steps.find((candidate: any) => candidate.id === 'catalog-app');
+      expect(token?.with).toMatchObject(catalogPermissions);
+      expect(Object.keys(token.with).filter(key => key.startsWith('permission-')).sort())
+        .toEqual(Object.keys(catalogPermissions).filter(key => key.startsWith('permission-')).sort());
+      const writer = step(job, writerName);
+      expect(job.steps.indexOf(step(job, validationName))).toBeLessThan(job.steps.indexOf(token));
+      expect(job.steps.indexOf(token)).toBeLessThan(job.steps.indexOf(writer));
+      expect(writer.env.GH_TOKEN).toBe('${{ steps.app.outputs.token }}');
+      expect(writer.env.CATALOG_APP_TOKEN).toBe('${{ steps.catalog-app.outputs.token }}');
+      const pushes = writer.run.replace(/\\\n\s*/g, ' ').split('\n').filter((line: string) => /\bgit\b.*\bpush\b/.test(line));
+      expect(pushes).toHaveLength(pushCount);
+      for (const push of pushes) expect(push).toMatch(/^\s*GH_TOKEN="\$CATALOG_APP_TOKEN" git .*credential\.https:\/\/github\.com\.helper=!gh auth git-credential.*\bpush\b/);
+      const pullRequestWrites = writer.run.replace(/\\\n\s*/g, ' ').split('\n')
+        .filter((line: string) => /\bgh pr (create|merge|edit|reopen|close)\b/.test(line));
+      expect(pullRequestWrites).toHaveLength(2);
+      for (const mutation of pullRequestWrites) expect(mutation).toMatch(/^\s*GH_TOKEN="\$CATALOG_APP_TOKEN" gh pr (create|merge)\b/);
+    }
+    for (const filename of ['release-train.yml', 'release-publish.yml', 'release-first-withdrawal.yml']) {
+      for (const job of Object.values(workflow(filename).jobs) as any[]) {
+        for (const candidate of job.steps || []) {
+          if (candidate.with?.['permission-workflows']) {
+            expect(candidate.with['permission-workflows']).toBe('write');
+            expect(candidate.with.repositories).toBe('homebrew-tap');
+          }
+        }
+      }
+    }
+  });
 });
 
 describe('immutable partial checkpoint workflow routing', () => {

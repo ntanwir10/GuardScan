@@ -3,6 +3,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import {spawnSync} from 'child_process';
+import yaml from 'js-yaml';
 
 const {
   assertDocumentMatchesSource,
@@ -358,6 +359,54 @@ describe('release planning and state summaries', () => {
     expect(materializeReleaseState([event]).version).toBe('1.2.3');
     expect(() => require('../../scripts/release/lib').validateDocument('event', ledger,
       path.resolve(__dirname, '../..'))).not.toThrow();
+  });
+
+  it('runs the trusted rollback CLI against an older tagged product without executing its hooks or scripts', () => {
+    const version = '1.0.4';
+    for (const name of ['package.json', 'package-lock.json', 'CHANGELOG.md']) {
+      const file = path.join(packageRoot, name);
+      fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace(/1\.2\.3/g, version));
+    }
+    const git = (...args: string[]) => {
+      const result = spawnSync('git', ['-c', 'core.hooksPath=/dev/null', '-c', 'commit.gpgsign=false', ...args], {
+        cwd: root, encoding: 'utf8', env: {...process.env, GIT_AUTHOR_NAME: 'Fixture', GIT_AUTHOR_EMAIL: 'fixture@example.invalid',
+          GIT_COMMITTER_NAME: 'Fixture', GIT_COMMITTER_EMAIL: 'fixture@example.invalid'},
+      });
+      if (result.status !== 0) throw new Error(result.stderr);
+      return result.stdout.trim();
+    };
+    git('init'); git('add', 'cli'); git('commit', '-m', 'old product');
+    const defectiveCommit = git('rev-parse', 'HEAD');
+    git('tag', `v${version}`);
+    for (const name of ['package.json', 'package-lock.json', 'CHANGELOG.md']) {
+      const file = path.join(packageRoot, name);
+      fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace(/1\.0\.4/g, '1.1.0'));
+    }
+    git('add', 'cli'); git('commit', '-m', 'new controller');
+    fs.writeFileSync(path.join(root, '.git/hooks/post-checkout'), '#!/bin/sh\ntouch hook-executed\n', {mode: 0o755});
+    const event = createEvent({version, tag: `v${version}`, commit: defectiveCommit,
+      type: 'train_started', timestamp: '2026-07-20T12:00:00.000Z', idempotencyKey: 'old-product', payload: {channels: ['npm']}});
+    fs.writeFileSync(path.join(root, 'release-events.jsonl'), JSON.stringify(event) + '\n');
+    const workflow = yaml.load(fs.readFileSync(path.resolve(__dirname, '../../../.github/workflows/release-train.yml'), 'utf8')) as any;
+    const run = workflow.jobs.rollback.steps.find((step: any) => step.name === 'Generate and persist the append-only recovery start').run;
+    const checkout = run.match(/DEFECTIVE_TAG="v\$DEFECTIVE_VERSION"\n([\s\S]*?)\s*git show/)[1];
+    const command = run.replace(/\\\n\s*/g, ' ').split('\n')
+      .find((line: string) => line.startsWith('node cli/scripts/release/index.js rollback '))
+      .replace('cli/scripts/release/index.js', JSON.stringify(path.resolve(__dirname, '../../scripts/release/index.js')));
+    const execute = (script: string, commit = defectiveCommit) => spawnSync('bash', ['-euo', 'pipefail', '-c', script], {
+      cwd: root, encoding: 'utf8', env: {...process.env, GITHUB_WORKSPACE: root, DEFECTIVE_VERSION: version,
+        DEFECTIVE_TAG: `v${version}`, DEFECTIVE_COMMIT: commit, KNOWN_GOOD_VERSION: '1.0.3', KNOWN_GOOD_COMMIT: 'b'.repeat(40),
+        ROLLBACK_KEY: `rollback:${version}`, ROLLBACK_TIMESTAMP: '2026-07-20T13:00:00.000Z'},
+    });
+    const result = execute(checkout + '\n' + command);
+    expect({status: result.status, stderr: result.stderr.replace(/^Preparing worktree[^\n]*\n/, '')}).toEqual({status: 0, stderr: ''});
+    expect(JSON.parse(fs.readFileSync(path.join(root, 'rollback-plan.json'), 'utf8')).version).toBe(version);
+    const ledger = fs.readFileSync(path.join(root, 'release-events.jsonl'), 'utf8');
+    expect(ledger).toContain(defectiveCommit);
+    expect(execute(command, 'f'.repeat(40)).status).not.toBe(0);
+    expect(execute(command.replace(/\$GITHUB_WORKSPACE\/defective-source/g, '$GITHUB_WORKSPACE')).status).not.toBe(0);
+    expect(fs.readFileSync(path.join(root, 'release-events.jsonl'), 'utf8')).toBe(ledger);
+    expect(fs.existsSync(path.join(root, 'hook-executed'))).toBe(false);
   });
 
   it('keeps generic profile validation separate from complete source-bound train provenance', () => {

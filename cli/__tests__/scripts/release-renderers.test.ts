@@ -158,6 +158,60 @@ function makeManifest(): Record<string, any> {
   };
 }
 
+describe('catalog reconciliation source context', () => {
+  it('runs the initial RC render with product source and trusted schemas, rejecting source drift', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'catalog-reconcile-source-'));
+    try {
+      const version = '1.2.3-rc.1';
+      const manifest = JSON.parse(JSON.stringify(makeManifest()).replace(/1\.2\.3/g, version));
+      manifest.producer = {provider: 'github-actions', repository: 'ntanwir10/GuardScan',
+        workflow: '.github/workflows/release-build.yml', workflowSha: 'b'.repeat(40), runId: '42', runAttempt: 1,
+        sourceRef: `refs/tags/v${version}`};
+      manifest.toolchain = {node: '22.12.0', packageManager: {name: 'npm', version: '10.9.0'},
+        tools: [{name: 'fixture', version: '1.0.0'}]};
+      for (const artifact of manifest.artifacts) {
+        if (artifact.kind === 'standalone') artifact.optionalCapabilities = {
+          schemaVersion: 'guardscan.runtime-capabilities.v1',
+          tokenCounting: {dependency: 'tiktoken', dependencyAvailable: false, mode: 'estimated', sampleTokenCount: 1, safeFallbackObserved: true},
+          chartRendering: {dependency: 'chartjs-node-canvas', dependencyAvailable: false, mode: 'unavailable', safeFallbackObserved: true},
+        };
+        Object.assign(artifact.provenance, {sha256: 'f'.repeat(64), subjectSha256: artifact.sha256,
+          sourceVersion: version, sourceTag: `v${version}`, sourceCommit: commit,
+          signerIdentity: 'https://github.com/ntanwir10/GuardScan/.github/workflows/release-build.yml',
+          signerDigest: 'b'.repeat(40), predicateType: 'https://slsa.dev/provenance/v1'});
+      }
+      for (const directory of ['source/cli', 'cli/schemas', 'catalog-verification']) {
+        fs.mkdirSync(path.join(root, directory), {recursive: true});
+      }
+      fs.writeFileSync(path.join(root, 'source/cli/package.json'), JSON.stringify({name: 'guardscan', version, engines: {node: '>=22.0.0'}}));
+      fs.writeFileSync(path.join(root, 'source/cli/package-lock.json'), JSON.stringify({name: 'guardscan', version,
+        packages: {'': {name: 'guardscan', version, engines: {node: '>=22.0.0'}}}}));
+      fs.writeFileSync(path.join(root, 'source/cli/CHANGELOG.md'), `## [${version}]\n`);
+      for (const name of ['guardscan.release-manifest.v1.schema.json', 'guardscan.channel-catalog.v1.schema.json']) {
+        fs.copyFileSync(path.resolve(__dirname, '../../schemas', name), path.join(root, 'cli/schemas', name));
+      }
+      const bytes = JSON.stringify(manifest);
+      fs.writeFileSync(path.join(root, 'catalog-verification/release-manifest.json'), bytes);
+      const workflow = yaml.load(fs.readFileSync(path.resolve(__dirname, '../../../.github/workflows/release-train.yml'), 'utf8')) as any;
+      const run = workflow.jobs.reconcile.steps.find((step: any) => step.name === 'Authoritatively refetch and reconcile the shared catalog').run;
+      const command = run.replace(/\\\n\s*/g, ' ').split('\n')
+        .find((line: string) => line.startsWith('node cli/scripts/release/index.js catalog '))
+        .replace('cli/scripts/release/index.js', JSON.stringify(path.resolve(__dirname, '../../scripts/release/index.js')));
+      const execute = (sourceCommit = commit, script = command) => spawnSync('bash', ['-euo', 'pipefail', '-c', script], {
+        cwd: root, encoding: 'utf8', env: {...process.env, GITHUB_WORKSPACE: root, SOURCE_COMMIT: sourceCommit,
+          RELEASE_VERSION: version, GITHUB_REPOSITORY: 'ntanwir10/GuardScan',
+          MANIFEST_SHA256: crypto.createHash('sha256').update(bytes).digest('hex')},
+      });
+      const result = execute();
+      expect({status: result.status, stderr: result.stderr}).toEqual({status: 0, stderr: ''});
+      const lock = JSON.parse(fs.readFileSync(path.join(root, 'catalog-verification/rendered/channel-lock.json'), 'utf8'));
+      expect(lock.source).toMatchObject({version, tag: `v${version}`, commit});
+      expect(execute('f'.repeat(40)).stderr).toContain('manifest commit does not match');
+      expect(execute(commit, command.replace('$GITHUB_WORKSPACE/source/cli', '$GITHUB_WORKSPACE/cli')).status).not.toBe(0);
+    } finally { fs.rmSync(root, {recursive: true, force: true}); }
+  });
+});
+
 describe('release adapter rendering', () => {
   it('passes the exact rendered Chocolatey package file names through retry preflight', () => {
     const {files} = renderAdapters(makeManifest(), 'chocolatey');

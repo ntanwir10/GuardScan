@@ -611,6 +611,7 @@ jobs:
           repositories: homebrew-tap
           permission-contents: write
           permission-pull-requests: write
+          permission-workflows: write
           permission-metadata: read
       - name: Push one deterministic catalog update
         env:
