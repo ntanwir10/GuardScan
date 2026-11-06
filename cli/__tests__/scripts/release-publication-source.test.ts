@@ -39,16 +39,32 @@ function preflightFixture(script: string, options: {tag?: string; drift?: boolea
   }
   fs.writeFileSync(path.join(root, 'tools/npm'), '#!' + process.execPath + '\n' + [
     "const {spawnSync}=require('child_process'); const args=process.argv.slice(2);",
-    "if(args[0]==='run'){const result=spawnSync(process.execPath,[process.env.TRUSTED_RELEASE_CLI,'npm-preflight',...args.slice(args.indexOf('--')+1)],{stdio:'inherit'});process.exit(result.status || 0);}",
+    "if(args[0]==='run'){const result=spawnSync(process.execPath,[process.env.TRUSTED_RELEASE_CLI,'npm-preflight',...args.slice(args.indexOf('--')+1)],{stdio:'inherit'});process.exit(result.status ?? 1);}",
     "if(args[0]!=='view')throw new Error('unexpected npm command');",
     "console.log(JSON.stringify(args.includes('dist-tags')?{next:process.env.FIXTURE_VERSION}:process.env.FIXTURE_INTEGRITY));",
   ].join('\n'), {mode: 0o755});
-  const result = spawnSync('bash', ['-euo', 'pipefail', '-c', script], {cwd: path.join(root, 'cli'), encoding: 'utf8', env: {
-    ...process.env, PATH: path.join(root, 'tools') + path.delimiter + process.env.PATH,
+  const shim = path.join(root, 'fixture-commands.cjs');
+  fs.writeFileSync(shim, `const cp=require('child_process');const original=cp.spawnSync;
+cp.spawnSync=function(command,args,options){
+  if(command==='npm'||command==='npm.cmd')return original.call(this,process.execPath,[${JSON.stringify(path.join(root, 'tools/npm'))},...args],options);
+  return original.call(this,command,args,options);
+};`);
+  const env = {
+    ...process.env, NODE_OPTIONS: `--require "${shim.replace(/\\/g, '/')}"`, PATH: path.join(root, 'tools') + path.delimiter + process.env.PATH,
     TRUSTED_RELEASE_CLI: trustedCli, FIXTURE_VERSION: version, FIXTURE_INTEGRITY: integrity,
     GITHUB_WORKSPACE: root, RUNNER_TEMP: path.join(root, 'tmp'), GITHUB_OUTPUT: path.join(root, 'output'),
     RELEASE_INPUT_TAG: options.tag || tag, RELEASE_INPUT_REF: commit, RELEASE_INPUT_CHANNEL: 'rc', RELEASE_CHANNEL: 'rc',
-  }});
+  };
+  const probe = spawnSync(process.execPath, ['-e', `
+    const assert=require('assert/strict');const {spawnSync}=require('child_process');
+    for(const command of ['npm','npm.cmd']) {
+      const result=spawnSync(command,['view','guardscan','dist.integrity'],{encoding:'utf8'});
+      assert.equal(result.status,0);assert.equal(JSON.parse(result.stdout),process.env.FIXTURE_INTEGRITY);
+    }
+  `], {encoding: 'utf8', env});
+  expect(probe.stderr).toBe('');
+  expect(probe.status).toBe(0);
+  const result = spawnSync('bash', ['-euo', 'pipefail', '-c', script], {cwd: path.join(root, 'cli'), encoding: 'utf8', env});
   const after = fs.readFileSync(path.join(root, 'npm-artifact', filename));
   fs.rmSync(root, {recursive: true, force: true});
   return {result, after, bytes};

@@ -10,9 +10,10 @@ const catalogWorkflow = path.join(
 );
 const source = fs.readFileSync(catalogWorkflow, 'utf8');
 
-function lockValidationScript(): string {
+function lockValidationScript(input = source): string {
   const marker = '      - name: Validate the untrusted lock before using it';
-  const section = source.slice(source.indexOf(marker));
+  const normalized = input.replace(/\r\n?/g, '\n');
+  const section = normalized.slice(normalized.indexOf(marker));
   const match = section.match(/node <<'NODE'\n([\s\S]*?)^          NODE$/m);
   if (!match) throw new Error('catalog lock validation script was not found');
   return match[1].replace(/^          /gm, '');
@@ -89,6 +90,11 @@ function validatePublishedCatalog(version: string) {
 }
 
 describe('shared catalog verification workflow', () => {
+  it('extracts the same executable lock validator from CRLF workflow input', () => {
+    const crlf = source.replace(/\r\n?/g, '\n').replace(/\n/g, '\r\n');
+    expect(lockValidationScript(crlf)).toBe(lockValidationScript());
+  });
+
   it('accepts only the exact unpublished bootstrap tree', () => {
     const expected = validateCatalog([
       'README.md',

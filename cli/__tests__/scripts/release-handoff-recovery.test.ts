@@ -69,6 +69,9 @@ describe('release handoff recovery regressions', () => {
     expect(fs.existsSync(path.join(root, 'npm-provenance/npm-artifact.metadata.json'))).toBe(true);
     const evidence = build.jobs.aggregate.steps.find((candidate: any) => candidate.with?.name === 'release-npm-provenance-${{ inputs.tag }}');
     expect(evidence).toBeTruthy();
+    for (const target of ['linux-x64-glibc', 'linux-arm64-glibc', 'darwin-arm64', 'darwin-x64', 'windows-x64']) {
+      fs.mkdirSync(path.join(root, 'collected', target), {recursive: true});
+    }
     fs.mkdirSync(path.join(root, 'collected/npm'), {recursive: true});
     fs.mkdirSync(path.join(root, 'collected/npm-provenance'), {recursive: true});
     fs.copyFileSync(path.join(root, 'npm-artifact', metadata.filename), path.join(root, 'collected/npm', metadata.filename));

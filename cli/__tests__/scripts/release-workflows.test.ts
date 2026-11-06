@@ -232,7 +232,13 @@ describe('zero-touch release workflow contracts', () => {
   it('collects the exact Apple notarization evidence filename emitted by the producer', () => {
     const build = workflowSource('release-build.yml');
     expect(build).toContain("'apple-notarization.json'");
-    expect(build).toContain("-name '*.apple-notarization.json'");
+    const collect = (yaml.load(build) as any).jobs.aggregate.steps.find((candidate: any) =>
+      candidate.name === 'Reject links and collect release assets').run;
+    const assetPattern = new RegExp(collect.match(/else if \((\/[^\n]+\/)\.test\(name\)/)[1].slice(1, -1));
+    for (const name of ['darwin-arm64.apple-notarization.json', 'darwin-x64.dmg.apple-notarization.json']) {
+      expect(assetPattern.test(name)).toBe(true);
+    }
+    expect(assetPattern.test('darwin-arm64.apple-notarization.json.untrusted')).toBe(false);
   });
   it('validates the production or inert-bootstrap CI gates without allowing publication', () => {
     const source = workflowSource('ci.yml');

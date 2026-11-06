@@ -240,9 +240,16 @@ describe('authenticated public release retry', () => {
     const assets = [{id: 1, name: 'payload.txt'}];
     if (extra) assets.push({id: 2, name: extra === 'duplicate' ? 'payload.txt' : 'unexpected.txt'});
     fs.writeFileSync(path.join(root, 'release-before-publication.json'), JSON.stringify({draft, assets}));
-    fs.writeFileSync(path.join(root, 'gh'), '#!/bin/sh\ncat "$ASSET_CONTENT"\n', {mode: 0o755});
+    const fakeGh = path.join(root, 'gh.cjs');
+    fs.writeFileSync(fakeGh, "process.stdout.write(require('fs').readFileSync(process.env.ASSET_CONTENT));");
+    const shim = path.join(root, 'fixture-commands.cjs');
+    fs.writeFileSync(shim, `const cp=require('child_process');const original=cp.execFileSync;
+cp.execFileSync=function(command,args,options){
+  if(command==='gh')return original.call(this,process.execPath,[${JSON.stringify(fakeGh)},...args],options);
+  return original.call(this,command,args,options);
+};`);
     const result = spawnSync(process.execPath, ['-e', validate], {cwd: root, encoding: 'utf8', env: {
-      ...process.env, RUNNER_TEMP: root, GITHUB_REPOSITORY: 'ntanwir10/GuardScan',
+      ...process.env, NODE_OPTIONS: `--require "${shim.replace(/\\/g, '/')}"`, RUNNER_TEMP: root, GITHUB_REPOSITORY: 'ntanwir10/GuardScan',
       ASSET_CONTENT: path.join(root, 'asset.txt'), PATH: root + path.delimiter + process.env.PATH,
     }});
     fs.rmSync(root, {recursive: true, force: true});

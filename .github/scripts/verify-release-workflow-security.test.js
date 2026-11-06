@@ -66,6 +66,11 @@ test('provider onboarding attestation is deterministic and content-bound', () =>
           : `${file}\n`);
       }
     }
+    const securityHelpers = [
+      '.github/scripts/verify-artifact-download.py',
+      '.github/scripts/resume-release-checkpoint.js',
+    ];
+    for (const file of securityHelpers) fs.writeFileSync(path.join(fixture, file), `${file}\n`);
     const first = computeProviderOnboardingAttestation(fixture);
     assert.match(first, /^sha256:[a-f0-9]{64}$/);
     assert.equal(computeProviderOnboardingAttestation(fixture), first);
@@ -107,6 +112,17 @@ test('provider onboarding attestation is deterministic and content-bound', () =>
       false
     );
     assert.throws(() => createProviderOnboardingAttestation(first, issuedAt, 31), /between 1 and 30/);
+    for (const file of securityHelpers) {
+      const absolute = path.join(fixture, file);
+      const original = fs.readFileSync(absolute);
+      fs.appendFileSync(absolute, 'changed security helper\n');
+      const changedSubject = computeProviderOnboardingAttestation(fixture);
+      assert.notEqual(changedSubject, first, `${file} bytes must bind the subject`);
+      assert.equal(validateProviderOnboardingAttestation(attestation, changedSubject, issuedAt).reason,
+        'subject-mismatch');
+      fs.writeFileSync(absolute, original);
+      assert.equal(computeProviderOnboardingAttestation(fixture), first);
+    }
     fs.appendFileSync(path.join(fixture, ATTESTED_PATHS[0]), 'changed\n');
     assert.notEqual(computeProviderOnboardingAttestation(fixture), first);
     const beforeNestedChange = computeProviderOnboardingAttestation(fixture);
