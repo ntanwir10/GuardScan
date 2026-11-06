@@ -1,3 +1,8 @@
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
+import {spawnSync} from 'child_process';
+
 const {
   execArgs,
   installArgs,
@@ -38,4 +43,27 @@ describe('package-manager smoke command contracts', () => {
     expect(() => parseTarball(['--tarball', tarball])).toThrow();
     expect(parseTarball([])).toBeUndefined();
   });
+});
+
+it('reaches isolated installation without checkout dependencies when given a tarball', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'smoke-clean-checkout-'));
+  try {
+    fs.cpSync(path.resolve(__dirname, '../../scripts'), path.join(root, 'scripts'), {recursive: true});
+    fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({version: '1.2.3'}));
+    fs.writeFileSync(path.join(root, 'fixture.tgz'), 'fixture');
+    const shim = path.join(root, 'fixture.cjs');
+    fs.writeFileSync(shim, `require('child_process').spawnSync = (command, args, options) => {
+      if (!args.includes('install') || !args.includes('--ignore-scripts')
+          || options.cwd === ${JSON.stringify(root)}) throw new Error('unexpected invocation');
+      return {status: 7, stdout: '', stderr: 'ISOLATED_INSTALL_REACHED'};
+    };`);
+    const result = spawnSync(process.execPath, [path.join(root, 'scripts/package-manager-smoke.js'),
+      '--manager', 'npm', '--tarball', path.join(root, 'fixture.tgz')], {
+      encoding: 'utf8', env: {...process.env, NODE_PATH: '',
+        NODE_OPTIONS: `--require "${shim.replace(/\\/g, '/')}"`},
+    });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('ISOLATED_INSTALL_REACHED');
+    expect(result.stderr).not.toContain('Cannot find module');
+  } finally { fs.rmSync(root, {recursive: true, force: true}); }
 });

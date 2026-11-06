@@ -359,17 +359,40 @@ jobs:
               || names.some(name => !assets.has(name))) {
             throw new Error('release asset inventory changed before publication');
           }
-          for (const name of names) {
-            const asset = assets.get(name);
-            if (!asset || !Number.isSafeInteger(asset.id) || asset.id < 1) throw new Error(`release asset identity is missing for ${name}`);
-            const bytes = cp.execFileSync('gh', [
-              'api', '-H', 'Accept: application/octet-stream',
-              `repos/${process.env.GITHUB_REPOSITORY}/releases/assets/${asset.id}`,
-            ], {maxBuffer: 128 * 1024 * 1024});
-            const digest = crypto.createHash('sha256').update(bytes).digest('hex');
-            const expected = crypto.createHash('sha256').update(fs.readFileSync(path.join('redownload', name))).digest('hex');
-            if (digest !== expected) throw new Error(`release asset bytes changed before publication: ${name}`);
+          async function verifyAssets() {
+            for (const name of names) {
+              const asset = assets.get(name);
+              if (!asset || !Number.isSafeInteger(asset.id) || asset.id < 1) throw new Error(`release asset identity is missing for ${name}`);
+              const file = path.join('redownload', name);
+              const expectedSize = fs.statSync(file).size;
+              const expectedHash = crypto.createHash('sha256');
+              for await (const chunk of fs.createReadStream(file)) expectedHash.update(chunk);
+              const digest = await new Promise((resolve, reject) => {
+                const hash = crypto.createHash('sha256');
+                let size = 0;
+                const child = cp.spawn('gh', [
+                  'api', '-H', 'Accept: application/octet-stream',
+                  `repos/${process.env.GITHUB_REPOSITORY}/releases/assets/${asset.id}`,
+                ], {stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true});
+                child.on('error', reject);
+                child.stdout.on('error', error => { child.kill(); reject(error); });
+                child.stdout.on('data', chunk => {
+                  size += chunk.length;
+                  if (size > expectedSize) {
+                    child.kill();
+                    reject(new Error(`release asset exceeds expected size: ${name}`));
+                  } else hash.update(chunk);
+                });
+                child.on('close', code => {
+                  if (code !== 0) reject(new Error(`release asset download failed: ${name}`));
+                  else if (size !== expectedSize) reject(new Error(`release asset size changed: ${name}`));
+                  else resolve(hash.digest('hex'));
+                });
+              });
+              if (digest !== expectedHash.digest('hex')) throw new Error(`release asset bytes changed before publication: ${name}`);
+            }
           }
+          verifyAssets().catch(error => { console.error(error.message); process.exitCode = 1; });
           NODE
       - name: Publish verified draft
         env:
