@@ -679,7 +679,11 @@ jobs:
             .map(name => path.join('decision-ledger/decisions', name))
             .filter(file => crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex')
               === promotion.payload.decisionSha256);
-          if (matches.length !== 1) throw new Error('persisted promotion decision cannot be resolved uniquely by digest');
+          if (matches.length === 0) throw new Error('persisted promotion decision cannot be resolved by digest');
+          const decisionBytes = fs.readFileSync(matches[0]);
+          if (matches.some(file => !fs.readFileSync(file).equals(decisionBytes))) {
+            throw new Error('persisted promotion decision digest matches have different bytes');
+          }
           const decision = validateDocument('decision', matches[0], 'cli');
           if (!decision.eligible || decision.result !== 'permitted'
               || decision.rc.version !== state.version || decision.rc.tag !== state.tag
@@ -2152,10 +2156,23 @@ jobs:
             --schema-root "$GITHUB_WORKSPACE/cli" \
             > reconciliation.json
           cat reconciliation.json
+      - name: Create short-lived catalog workflow writer token
+        id: catalog-app
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        with:
+          app-id: ${{ vars.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          owner: ntanwir10
+          repositories: homebrew-tap
+          permission-contents: write
+          permission-pull-requests: write
+          permission-workflows: write
+          permission-metadata: read
       - name: Authoritatively refetch and reconcile the shared catalog
         id: catalog
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
+          CATALOG_APP_TOKEN: ${{ steps.catalog-app.outputs.token }}
           AUTOMATION_ENABLED: ${{ vars.RELEASE_AUTOMATION_ENABLED }}
         run: |
           ACTIVE_CHANNEL="$(gh api \
@@ -2198,7 +2215,12 @@ jobs:
             --manifest-url "https://github.com/${GITHUB_REPOSITORY}/releases/download/v$RELEASE_VERSION/release-manifest.json" \
             --manifest-sha256 "$MANIFEST_SHA256" \
             --generator-repository "$GITHUB_REPOSITORY" \
-            --generator-commit "$SOURCE_COMMIT"
+            --generator-commit "$SOURCE_COMMIT" \
+            --package-root "$GITHUB_WORKSPACE/source/cli" \
+            --repository-root "$GITHUB_WORKSPACE/source" \
+            --schema-root "$GITHUB_WORKSPACE/cli" \
+            --tag "v$RELEASE_VERSION" \
+            --commit "$SOURCE_COMMIT"
           validate_catalog_pr() {
             PR_DETAILS="$(gh pr view --repo ntanwir10/homebrew-tap "$PR_NUMBER" \
               --json state,baseRefName,headRefOid,headRepository,mergeCommit)"
@@ -2298,7 +2320,7 @@ jobs:
                 channel-lock.json .github/workflows/verify.yml
               git -C catalog-checkout commit -m "guardscan v$RELEASE_VERSION"
               assert_exact_catalog_branch
-              git -C catalog-checkout \
+              GH_TOKEN="$CATALOG_APP_TOKEN" git -C catalog-checkout \
                 -c credential.helper= -c 'credential.https://github.com.helper=!gh auth git-credential' push \
                 --force-with-lease="refs/heads/$UPDATE_BRANCH" \
                 origin HEAD:"$UPDATE_BRANCH"
@@ -2314,7 +2336,7 @@ jobs:
                 --body "Generated from GuardScan's immutable release manifest and bound by channel-lock.json."
               )
               if [ "$ACTIVE_CHANNEL" = rc ]; then PR_ARGS+=(--draft); fi
-              gh pr create "${PR_ARGS[@]}"
+              GH_TOKEN="$CATALOG_APP_TOKEN" gh pr create "${PR_ARGS[@]}"
               PR_NUMBER="$(gh pr list --repo ntanwir10/homebrew-tap \
                 --head "$UPDATE_BRANCH" --state all --limit 1 --json number --jq '.[0].number')"
             fi
@@ -2332,7 +2354,7 @@ jobs:
               "$EXPECTED_HEAD" "$PROJECTION_BASE"
             if [ "$ACTIVE_CHANNEL" = stable ]; then
               if [ "$PR_STATE" != MERGED ]; then
-                gh pr merge --repo ntanwir10/homebrew-tap "$PR_NUMBER" --squash --match-head-commit "$EXPECTED_HEAD"
+                GH_TOKEN="$CATALOG_APP_TOKEN" gh pr merge --repo ntanwir10/homebrew-tap "$PR_NUMBER" --squash --match-head-commit "$EXPECTED_HEAD"
               fi
               for ATTEMPT in $(seq 1 60); do
                 REQUIRE_MERGED=false
@@ -2701,6 +2723,8 @@ jobs:
           git -c credential.helper= -c 'credential.https://github.com.helper=!gh auth git-credential' \
             fetch origin release-ledger
           DEFECTIVE_TAG="v$DEFECTIVE_VERSION"
+          DEFECTIVE_COMMIT="$(git rev-parse "$DEFECTIVE_TAG^{commit}")"
+          git -c core.hooksPath=/dev/null worktree add --detach defective-source "$DEFECTIVE_TAG"
           git show "origin/release-ledger:events/$DEFECTIVE_TAG.jsonl" > release-events.jsonl
           ROLLBACK_KEY="rollback:$DEFECTIVE_VERSION"
           export ROLLBACK_KEY
@@ -2716,6 +2740,10 @@ jobs:
             --timestamp "$ROLLBACK_TIMESTAMP" \
             --idempotency-key "$ROLLBACK_KEY" \
             --tag "$DEFECTIVE_TAG" \
+            --commit "$DEFECTIVE_COMMIT" \
+            --package-root "$GITHUB_WORKSPACE/defective-source/cli" \
+            --repository-root "$GITHUB_WORKSPACE/defective-source" \
+            --schema-root "$GITHUB_WORKSPACE/cli" \
             --known-good "$KNOWN_GOOD_VERSION" \
             --known-good-commit "$KNOWN_GOOD_COMMIT" \
             > rollback-plan.json
@@ -2928,10 +2956,23 @@ jobs:
           echo "branch=$FORWARD_FIX_BRANCH" >> "$GITHUB_OUTPUT"
           echo "pull_request=$FORWARD_FIX_PR" >> "$GITHUB_OUTPUT"
           echo "commit=$FORWARD_FIX_HEAD" >> "$GITHUB_OUTPUT"
+      - name: Create short-lived catalog workflow writer token
+        id: catalog-app
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        with:
+          app-id: ${{ vars.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          owner: ntanwir10
+          repositories: homebrew-tap
+          permission-contents: write
+          permission-pull-requests: write
+          permission-workflows: write
+          permission-metadata: read
       - name: Restore the shared catalog to the exact known-good projection
         id: catalog-rollback
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
+          CATALOG_APP_TOKEN: ${{ steps.catalog-app.outputs.token }}
           KNOWN_GOOD_COMMIT: ${{ steps.known-good.outputs.commit }}
           KNOWN_GOOD_CATALOG_COMMIT: ${{ steps.known-good.outputs.catalog_commit }}
         run: |
@@ -3006,12 +3047,12 @@ jobs:
             }
           NODE
           if [ -n "$CATALOG_REMOTE_HEAD" ]; then
-            git -C catalog-rollback \
+            GH_TOKEN="$CATALOG_APP_TOKEN" git -C catalog-rollback \
               -c credential.helper= -c 'credential.https://github.com.helper=!gh auth git-credential' push \
               --force-with-lease="refs/heads/$CATALOG_BRANCH:$CATALOG_REMOTE_HEAD" \
               origin "HEAD:refs/heads/$CATALOG_BRANCH"
           else
-            git -C catalog-rollback \
+            GH_TOKEN="$CATALOG_APP_TOKEN" git -C catalog-rollback \
               -c credential.helper= -c 'credential.https://github.com.helper=!gh auth git-credential' \
               push origin "HEAD:refs/heads/$CATALOG_BRANCH"
           fi
@@ -3051,7 +3092,7 @@ jobs:
           CATALOG_PR="$(node -p 'String(JSON.parse(process.env.CATALOG_PR_INFO).number)')"
           CATALOG_MERGE_SHA="$(node -p 'JSON.parse(process.env.CATALOG_PR_INFO).mergeCommit')"
           if [ -z "$CATALOG_PR" ]; then
-            gh pr create \
+            GH_TOKEN="$CATALOG_APP_TOKEN" gh pr create \
               --repo ntanwir10/homebrew-tap \
               --base main \
               --head "$CATALOG_BRANCH" \
@@ -3110,7 +3151,7 @@ jobs:
             catalog-rollback catalog-rollback-trusted catalog-rollback-trusted/.github/workflows/verify.yml \
             "$CATALOG_HEAD" "$PROJECTION_BASE"
           if [ "$CATALOG_PR_STATE" = OPEN ]; then
-            gh pr merge --repo ntanwir10/homebrew-tap "$CATALOG_PR" --squash --match-head-commit "$CATALOG_HEAD"
+            GH_TOKEN="$CATALOG_APP_TOKEN" gh pr merge --repo ntanwir10/homebrew-tap "$CATALOG_PR" --squash --match-head-commit "$CATALOG_HEAD"
             for ATTEMPT in $(seq 1 60); do
               CATALOG_PR_STATE="$(gh pr view --repo ntanwir10/homebrew-tap "$CATALOG_PR" --json state --jq .state)"
               if [ "$CATALOG_PR_STATE" = MERGED ]; then break; fi

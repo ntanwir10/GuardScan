@@ -228,4 +228,68 @@ describe('immutable stable promotion approval recovery', () => {
       .toContain("steps.recovery.outputs.recovered != 'true'");
     expect(steps[recovery].run).toContain('recoverPromotionApproval');
   });
+
+  it('recovers the embedded merged path after two interrupted decision persistence attempts', () => {
+    const f = fixture();
+    const workflow = yaml.load(fs.readFileSync(path.resolve(__dirname, '../../../.github/workflows/release-train.yml'), 'utf8')) as any;
+    const steps = workflow.jobs.prepare.steps;
+    const materialize = steps.find((step: any) => step.id === 'promotion');
+    const script = materialize.run.match(/if \[ "\$PR_STATE" = MERGED \]; then\n\s+node - <<'NODE'\n([\s\S]*?)\nNODE/)[1]
+      .replace(/require\('\.\/cli\/scripts\/release\/([^']+)'\)/g,
+        (_match: string, module: string) => `require(${JSON.stringify(path.resolve(__dirname, '../../scripts/release', module))})`);
+    const persistence = steps.find((step: any) => step.name === 'Persist the machine promotion decision before applying its result');
+    const copy = persistence.run.match(/cp promotion-decision\.json \\\n\s+"[^"\n]+"/)[0];
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'promotion-embedded-recovery-'));
+    const decisions = path.join(root, 'decision-ledger/decisions');
+    try {
+      fs.mkdirSync(decisions, {recursive: true});
+      fs.mkdirSync(path.join(root, 'rc-source'));
+      fs.mkdirSync(path.join(root, 'cli/schemas'), {recursive: true});
+      fs.copyFileSync(path.resolve(__dirname, '../../schemas/guardscan.promotion-decision.v1.schema.json'),
+        path.join(root, 'cli/schemas/guardscan.promotion-decision.v1.schema.json'));
+      fs.writeFileSync(path.join(root, 'rc-source/.release-candidate.json'), JSON.stringify(f.input.candidate));
+      fs.writeFileSync(path.join(root, 'release-pr.json'), JSON.stringify({head: {sha: head}, merged: true, merge_commit_sha: merge}));
+      const writeEvents = () => fs.writeFileSync(path.join(root, 'release-events.jsonl'),
+        f.events.map(event => JSON.stringify(event)).join('\n') + '\n');
+      writeEvents();
+      fs.writeFileSync(path.join(decisions, 'v1.2.3-rc.1-1-1.json'), f.text);
+      const run = () => spawnSync(process.execPath, ['-e', script], {cwd: root, encoding: 'utf8',
+        env: {...process.env, REQUEST_RELEASE_PR: '42'}});
+      for (let attempt = 1; attempt <= 3; attempt += 1) {
+        const result = run();
+        expect({status: result.status, stderr: result.stderr}).toEqual({status: 0, stderr: ''});
+        expect(fs.readFileSync(path.join(root, 'promotion-decision.json'), 'utf8')).toBe(f.text);
+        if (attempt < 3) {
+          const persisted = spawnSync('bash', ['-euo', 'pipefail', '-c', copy], {cwd: root, encoding: 'utf8',
+            env: {...process.env, REQUEST_VERSION: '1.2.3-rc.1', GITHUB_RUN_ID: String(attempt + 1), GITHUB_RUN_ATTEMPT: '1'}});
+          expect({status: persisted.status, stderr: persisted.stderr}).toEqual({status: 0, stderr: ''});
+        }
+      }
+      expect(fs.readdirSync(decisions)).toHaveLength(3);
+      expect(materialize.run.indexOf('if [ "$PR_STATE" = MERGED ]; then'))
+        .toBeLessThan(materialize.run.indexOf('else\n  CURRENT_HEAD='));
+      expect(script).not.toContain('createPromotionDecision');
+      const replaceDecision = (text: string, authenticate: boolean) => {
+        for (const name of fs.readdirSync(decisions)) fs.writeFileSync(path.join(decisions, name), text);
+        if (authenticate) {
+          f.events.pop();
+          f.append('promotion_decided', {result: 'permitted', eligible: true, reasons: [],
+            decisionSha256: crypto.createHash('sha256').update(text).digest('hex')});
+          writeEvents();
+        }
+      };
+      replaceDecision(`${f.text} `, false);
+      expect(run().status).not.toBe(0);
+      replaceDecision(JSON.stringify({...f.decision, stable: {...f.decision.stable, sourcePrHead: 'f'.repeat(40)}}), true);
+      expect(run().stderr).toContain('does not bind the merged release source');
+      replaceDecision(JSON.stringify({...f.decision, policy: {...f.decision.policy, soakHours: 0}}), true);
+      expect(run().stderr).toContain('decision is invalid');
+      replaceDecision(JSON.stringify({...f.decision, eligible: false}), true);
+      expect(run().status).not.toBe(0);
+      fs.rmSync(decisions, {recursive: true});
+      fs.mkdirSync(decisions);
+      expect(run().status).not.toBe(0);
+      expect(fs.existsSync(path.join(root, 'promotion-input.json'))).toBe(false);
+    } finally { fs.rmSync(root, {recursive: true, force: true}); }
+  });
 });
