@@ -718,8 +718,24 @@ jobs:
         run: npm ci --ignore-scripts
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          pattern: release-native-*-${{ inputs.tag }}
-          path: collected
+          name: release-native-linux-x64-glibc-${{ inputs.tag }}
+          path: collected/linux-x64-glibc
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-native-linux-arm64-glibc-${{ inputs.tag }}
+          path: collected/linux-arm64-glibc
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-native-darwin-arm64-${{ inputs.tag }}
+          path: collected/darwin-arm64
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-native-darwin-x64-${{ inputs.tag }}
+          path: collected/darwin-x64
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-native-windows-x64-${{ inputs.tag }}
+          path: collected/windows-x64
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: release-npm-${{ inputs.tag }}
@@ -728,24 +744,40 @@ jobs:
         with:
           name: release-npm-provenance-${{ inputs.tag }}
           path: collected/npm-provenance
-      - name: Authenticate npm provenance transport before manifest assembly
+      - name: Authenticate every release transport before manifest assembly
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          ARTIFACT_NAME: release-npm-provenance-${{ inputs.tag }}
-          ARTIFACT_DIRECTORY: collected/npm-provenance
-        run: python3 .github/scripts/verify-artifact-download.py "$ARTIFACT_NAME" "$ARTIFACT_DIRECTORY"
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          for target in linux-x64-glibc linux-arm64-glibc darwin-arm64 darwin-x64 windows-x64; do
+            python3 .github/scripts/verify-artifact-download.py "release-native-$target-$RELEASE_TAG" "collected/$target"
+          done
+          python3 .github/scripts/verify-artifact-download.py "release-npm-$RELEASE_TAG" collected/npm
+          python3 .github/scripts/verify-artifact-download.py "release-npm-provenance-$RELEASE_TAG" collected/npm-provenance
       - name: Reject links and collect release assets
         shell: bash
         run: |
-          if find collected -type l -print -quit | grep -q .; then exit 1; fi
-          mkdir release
-          find collected -type f \( \
-              -name '*.tar.gz' -o -name '*.zip' -o -name '*.whl' -o -name '*.tgz' -o -name '*.dmg' \
-              -o -name 'guardscan-*.spdx.json' -o -name 'guardscan-*.cyclonedx.json' \
-              -o -name '*.sigstore.json' -o -name '*.apple-notarization.json' -o -name '*.txt' \
-            \) \
-            -exec cp {} release/ \;
+          node - <<'NODE'
+          const fs = require('fs');
+          const path = require('path');
+          const expected = ['linux-x64-glibc', 'linux-arm64-glibc', 'darwin-arm64', 'darwin-x64', 'windows-x64', 'npm', 'npm-provenance'].sort();
+          if (JSON.stringify(fs.readdirSync('collected').sort()) !== JSON.stringify(expected)) throw new Error('Unexpected release transport inventory');
+          fs.mkdirSync('release');
+          const walk = directory => {
+            for (const name of fs.readdirSync(directory)) {
+              const file = path.join(directory, name);
+              const stat = fs.lstatSync(file);
+              if (stat.isDirectory()) walk(file);
+              else if (!stat.isFile()) throw new Error('Release transport contains a link or special file');
+              else if (/\.(?:tar\.gz|zip|whl|tgz|dmg|sigstore\.json|apple-notarization\.json|txt)$/.test(name)
+                || /^guardscan-.*\.(?:spdx|cyclonedx)\.json$/.test(name)) {
+                fs.copyFileSync(file, path.join('release', name), fs.constants.COPYFILE_EXCL);
+              }
+            }
+          };
+          walk('collected');
+          NODE
       - name: Build production manifest from all native and wheel metadata
         shell: bash
         env:
@@ -800,6 +832,11 @@ jobs:
           RELEASE_BUILD_WORKFLOW_SHA: ${{ job.workflow_sha }}
         run: |
           [[ "$RELEASE_BUILD_WORKFLOW_SHA" =~ ^[a-f0-9]{40}$ ]] || exit 1
+          node - <<'NODE'
+          const fs = require('fs');
+          const {verifyManifestFiles} = require('./cli/scripts/release/manifest');
+          verifyManifestFiles(JSON.parse(fs.readFileSync('release/release-manifest.json', 'utf8')), 'release');
+          NODE
           printf '%s\n' "{\"schemaVersion\":\"guardscan.release-build-provenance.v1\",\"workflow\":\".github/workflows/release-build.yml\",\"ref\":\"refs/heads/main\",\"sha\":\"$RELEASE_BUILD_WORKFLOW_SHA\"}" > release/release-build-provenance.json
           HASH_CMD=(sha256sum); command -v sha256sum >/dev/null 2>&1 || HASH_CMD=(shasum -a 256)
           find release -type f ! -name 'SHA256SUMS*' -print0 | sort -z | xargs -0 "${HASH_CMD[@]}" | sed 's#  release/#  #' > release/SHA256SUMS

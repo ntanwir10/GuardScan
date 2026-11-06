@@ -24,8 +24,23 @@ describe('release workflow review regressions', () => {
       candidate.name === 'Reject links and collect release assets'
     ));
     expect(collect).toBeTruthy();
-    expect(collect.run).toContain("-name '*.apple-notarization.json'");
-    expect(collect.run).not.toContain("-name 'apple-notarization.json'");
+
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'versioned-apple-receipts-'));
+    const receipts = ['darwin-arm64.apple-notarization.json', 'darwin-x64.dmg.apple-notarization.json'];
+    try {
+      for (const target of ['linux-x64-glibc', 'linux-arm64-glibc', 'darwin-arm64', 'darwin-x64', 'windows-x64', 'npm', 'npm-provenance']) {
+        fs.mkdirSync(path.join(root, 'collected', target), {recursive: true});
+      }
+      for (const name of [...receipts, 'darwin-arm64.apple-notarization.json.untrusted']) {
+        fs.writeFileSync(path.join(root, 'collected/darwin-arm64', name), `${name}\n`);
+      }
+      const code = collect.run.match(/node - <<'NODE'\n([\s\S]*?)\nNODE/)[1];
+      const result = spawnSync(process.execPath, ['-e', code], {cwd: root, encoding: 'utf8'});
+      expect(result.stderr).toBe('');
+      expect(result.status).toBe(0);
+      expect(fs.readdirSync(path.join(root, 'release')).sort()).toEqual(receipts);
+      for (const name of receipts) expect(fs.readFileSync(path.join(root, 'release', name), 'utf8')).toBe(`${name}\n`);
+    } finally { fs.rmSync(root, {recursive: true, force: true}); }
   });
 
   it('authenticates producer runs before trusting signed release metadata in every checksum consumer', () => {

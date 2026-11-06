@@ -12,6 +12,8 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const ATTESTED_PATHS = Object.freeze([
   '.github/CODEOWNERS',
   '.github/scripts/provider-onboarding-attestation.js',
+  '.github/scripts/resume-release-checkpoint.js',
+  '.github/scripts/verify-artifact-download.py',
   '.github/scripts/verify-release-workflow-security.test.js',
   '.github/workflows/ci.yml',
   '.github/workflows/release-build.yml',

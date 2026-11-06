@@ -106,7 +106,7 @@ describe('catalog reconciliation and rollback integrity', () => {
   ])('never reaches the extracted merge command for an extra-path or unsafe-mode head: %s', (name, checkout, renderedName, headVariable) => {
     const run = step(name);
     const check = run.match(/node -e '[^\n]*verifyCatalogProjection[^\n]*' \\\n[^\n]*\\\n[^\n]*/)?.[0];
-    const merge = run.match(/^\s*gh pr merge[^\n]*--match-head-commit[^\n]*/m)?.[0];
+    const merge = run.match(/^\s*GH_TOKEN="\$CATALOG_APP_TOKEN" gh pr merge[^\n]*--match-head-commit[^\n]*/m)?.[0];
     expect(check).toBeTruthy();
     expect(merge).toBeTruthy();
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'catalog-before-merge-'));
@@ -135,10 +135,11 @@ describe('catalog reconciliation and rollback integrity', () => {
       }
       const good = commit();
       const execute = (head: string) => spawnSync('bash', ['-euo', 'pipefail', '-c', [
-        'gh() { echo merged > merge-invoked; }', check!.replace(/\r\n/g, '\n'), merge!.replace(/\r\n/g, '\n'),
+        'gh() { test "$GH_TOKEN" = fixture-catalog-token || return 1; echo merged > merge-invoked; }', check!.replace(/\r\n/g, '\n'), merge!.replace(/\r\n/g, '\n'),
       ].join('\n')], {cwd: root, encoding: 'utf8', env: {...process.env,
         PATH: `${path.dirname(process.execPath)}${path.delimiter}${process.env.PATH}`,
-        [headVariable]: head, PROJECTION_BASE: base, PR_NUMBER: '1', CATALOG_PR: '1'}});
+        [headVariable]: head, PROJECTION_BASE: base, PR_NUMBER: '1', CATALOG_PR: '1',
+        CATALOG_APP_TOKEN: 'fixture-catalog-token', GH_TOKEN: 'fixture-release-token'}});
       expect(execute(good).status).toBe(0);
       fs.unlinkSync(path.join(root, 'merge-invoked'));
       fs.writeFileSync(path.join(repo, 'extra'), 'unreviewed\n');
