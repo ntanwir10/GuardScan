@@ -231,26 +231,46 @@ describe('authenticated public release retry', () => {
   const validate = workflow('release-publish.yml').jobs.github.steps.find((candidate: any) =>
     candidate.name === 'Revalidate exact release asset IDs and digests immediately before publication')
     .run.match(/node - <<'NODE'\n([\s\S]*?)\nNODE/)[1];
-  const check = (draft: boolean, observedDraft: boolean, bytes = 'verified bytes', extra: boolean | 'duplicate' = false) => {
+  const check = (draft: boolean, observedDraft: boolean, bytes = 'verified bytes', extra: boolean | 'duplicate' = false, mode = '') => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'release-public-retry-'));
     fs.mkdirSync(path.join(root, 'redownload'));
     fs.writeFileSync(path.join(root, 'redownload/payload.txt'), 'verified bytes');
     fs.writeFileSync(path.join(root, 'asset.txt'), bytes);
+    if (mode === 'large') {
+      const file = fs.openSync(path.join(root, 'redownload/payload.txt'), 'w');
+      fs.ftruncateSync(file, 129 * 1024 * 1024);
+      fs.closeSync(file);
+    }
     fs.writeFileSync(path.join(root, 'existing-release.json'), JSON.stringify({isDraft: observedDraft}));
     const assets = [{id: 1, name: 'payload.txt'}];
     if (extra) assets.push({id: 2, name: extra === 'duplicate' ? 'payload.txt' : 'unexpected.txt'});
     fs.writeFileSync(path.join(root, 'release-before-publication.json'), JSON.stringify({draft, assets}));
     const fakeGh = path.join(root, 'gh.cjs');
-    fs.writeFileSync(fakeGh, "process.stdout.write(require('fs').readFileSync(process.env.ASSET_CONTENT));");
+    fs.writeFileSync(fakeGh, `
+      if (process.env.ASSET_MODE === 'failure') process.exit(7);
+      if (['large', 'oversize'].includes(process.env.ASSET_MODE)) {
+        const chunk = Buffer.alloc(64 * 1024);
+        let remaining = process.env.ASSET_MODE === 'large' ? 129 * 1024 * 1024 : 1024 * 1024;
+        const write = () => {
+          while (remaining > 0) {
+            const bytes = chunk.subarray(0, Math.min(chunk.length, remaining));
+            remaining -= bytes.length;
+            if (!process.stdout.write(bytes)) { process.stdout.once('drain', write); return; }
+          }
+        };
+        write();
+      } else require('fs').createReadStream(process.env.ASSET_CONTENT).pipe(process.stdout);
+    `);
     const shim = path.join(root, 'fixture-commands.cjs');
-    fs.writeFileSync(shim, `const cp=require('child_process');const original=cp.execFileSync;
-cp.execFileSync=function(command,args,options){
+    fs.writeFileSync(shim, `const cp=require('child_process');const original=cp.spawn;
+cp.spawn=function(command,args,options){
+  if(command==='gh' && process.env.ASSET_MODE==='spawn-error')return original.call(this,'guardscan-nonexistent-command',args,options);
   if(command==='gh')return original.call(this,process.execPath,[${JSON.stringify(fakeGh)},...args],options);
   return original.call(this,command,args,options);
 };`);
     const result = spawnSync(process.execPath, ['-e', validate], {cwd: root, encoding: 'utf8', env: {
       ...process.env, NODE_OPTIONS: `--require "${shim.replace(/\\/g, '/')}"`, RUNNER_TEMP: root, GITHUB_REPOSITORY: 'ntanwir10/GuardScan',
-      ASSET_CONTENT: path.join(root, 'asset.txt'), PATH: root + path.delimiter + process.env.PATH,
+      ASSET_MODE: mode, ASSET_CONTENT: path.join(root, 'asset.txt'), PATH: root + path.delimiter + process.env.PATH,
     }});
     fs.rmSync(root, {recursive: true, force: true});
     return result;
@@ -268,5 +288,30 @@ cp.execFileSync=function(command,args,options){
     expect(check(draft, draft, 'modified bytes').status).not.toBe(0);
   });
   it('rejects unexpected public asset inventory', () => expect(check(false, false, 'verified bytes', true).status).not.toBe(0));
+  it('streams an archive beyond the old 128 MiB buffer limit', () => {
+    const result = check(false, false, 'verified bytes', false, 'large');
+    expect(result.stderr).toBe('');
+    expect(result.status).toBe(0);
+  });
+  it('terminates a stream beyond the expected local size', () => {
+    const result = check(false, false, 'verified bytes', false, 'oversize');
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('exceeds expected size');
+  });
+  it('rejects truncated downloads', () => {
+    const result = check(false, false, 'short');
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('size changed');
+  });
+  it('propagates spawn errors', () => {
+    const result = check(false, false, 'verified bytes', false, 'spawn-error');
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('ENOENT');
+  });
+  it('propagates download command failure', () => {
+    const result = check(false, false, 'verified bytes', false, 'failure');
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('download failed');
+  });
   it('rejects duplicate public asset inventory', () => expect(check(false, false, 'verified bytes', 'duplicate').status).not.toBe(0));
 });

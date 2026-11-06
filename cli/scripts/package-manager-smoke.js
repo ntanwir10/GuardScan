@@ -6,7 +6,6 @@ const os = require('os');
 const path = require('path');
 const {spawnSync} = require('child_process');
 const {resolveToolInvocation} = require('./process-invocation');
-const {parseNpmPackResult} = require('./release/npm-artifact');
 
 const SUPPORTED_MANAGERS = new Set(['npm', 'pnpm', 'yarn', 'bun']);
 
@@ -70,6 +69,7 @@ function main(argv = process.argv.slice(2)) {
     const suppliedTarball = parseTarball(argv);
     let tarball = suppliedTarball;
     if (!tarball) {
+      const {parseNpmPackResult} = require('./release/npm-artifact');
       const pack = runCommand('npm', ['pack', '--json', '--pack-destination', tempRoot], packageRoot, npmEnv);
       const packed = parseNpmPackResult(pack.stdout);
       tarball = path.join(tempRoot, packed.filename);

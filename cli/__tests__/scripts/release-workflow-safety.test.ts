@@ -146,7 +146,11 @@ describe('release workflow safety', () => {
     expect(signing).toMatch(/codesign[^\n]+guardscan-notarization\.dmg/);
     expect(namedStep(build.jobs['native-finalize'], 'Archive signed executable with trusted tooling').run)
       .toContain('standalone/stapled-notarization.dmg');
-    expect(JSON.stringify(build.jobs.aggregate.steps)).toContain("*.dmg");
+    const collect = namedStep(build.jobs.aggregate, 'Reject links and collect release assets').run as string;
+    const extensions = collect.match(/else if \((\/.*\/)\.test\(name\)/)?.[1];
+    expect(extensions).toBeTruthy();
+    expect(vm.runInNewContext(`${extensions}.test('darwin-arm64.stapled-notarization.dmg')`)).toBe(true);
+    expect(collect).toContain("walk('collected')");
     const canary = namedStep(load('release-canary.yml').jobs['native-and-pypi'],
       'Verify macOS signing and Gatekeeper').run as string;
     expect(canary).not.toContain('spctl --assess --type execute');
