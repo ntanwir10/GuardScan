@@ -441,8 +441,10 @@ describe('release workflow review regressions', () => {
     const moderated = step(canary.jobs.moderated, 'Poll, install, invoke, and uninstall public moderated channels');
     expect(moderated.run).toContain('$notPublic');
     expect(moderated.run).toContain("$report.status = 'pending'");
-    expect(moderated.run).toContain("$report.reason = 'not_public'");
+    expect(moderated.run).not.toContain('$report.reason');
     expect(moderated.run).toContain('Unexpected moderated registry error:');
+    expect(moderated.run).toContain("} catch {\n    $report.status = 'failed'\n    $report.error = $_.ToString()\n    $unexpectedFailure = $_.ToString()");
+    expect(moderated.run).toContain('throw "Unexpected moderated registry error: $unexpectedFailure"');
     expect(moderated.run).toContain('choco info guardscan --exact --version');
     expect(moderated.run).toContain('$exactVersion');
     expect(moderated.run).toContain('$LASTEXITCODE');
@@ -560,6 +562,16 @@ describe('immutable partial checkpoint workflow routing', () => {
     const repair = step(resolve, 'Resume an authenticated partial checkpoint without replacing existing bytes');
     expect(repair.if).toBe("steps.remote.outputs.mode == 'partial'");
     expect(repair.run).toContain('node .github/scripts/resume-release-checkpoint.js');
+  });
+
+  it('grants the prepare snapshot token only its required read permissions', () => {
+    const prepare = workflow('release-train.yml').jobs.prepare;
+    expect(prepare.permissions).toEqual({checks: 'read', contents: 'read', 'pull-requests': 'read'});
+    const snapshots = prepare.steps.filter((candidate: any) => candidate.run?.includes('/check-runs?per_page=100'));
+    expect(snapshots).toHaveLength(3);
+    for (const snapshot of snapshots) {
+      expect(snapshot.env.GH_TOKEN).toBe('${{ github.token }}');
+    }
   });
 
   it('flattens complete review history with CLI-compatible pagination for all four authorization snapshots', () => {

@@ -163,6 +163,7 @@ describe('release canary public seams', () => {
     const validatePromotion = ajv.compile(promotionSchema);
     expect(validateReport(reports()[0])).toBe(true);
     expect(validateReport({...reports()[0], status: 'pending'})).toBe(true);
+    expect(validateReport({...reports()[0], reason: 'not_public'})).toBe(false);
     expect(validateReport({...reports()[0], target: undefined})).toBe(false);
     expect(validateReport({...reports()[0], evidenceUrl: 'http://example.test/evidence'})).toBe(false);
     expect(eventSchema.definitions.canaryRecorded.properties.status.enum).toContain('pending');
@@ -339,6 +340,8 @@ describe('release canary public seams', () => {
   test.each([
     ['missing', (all: Array<Record<string, string>>) => all.slice(1)],
     ['malformed', (all: Array<Record<string, string>>) => [{...all[0], status: 'unknown'}]],
+    ['unexpected fields', (all: Array<Record<string, string>>) => all.map((report, index) =>
+      index === 0 ? {...report, reason: 'not_public'} : report)],
     ['stale', (all: Array<Record<string, string>>) => [{...all[0], checkedAt: '2026-08-19T10:00:00.000Z'}]],
     ['insecure evidence', (all: Array<Record<string, string>>) => [{...all[0], evidenceUrl: 'http://example.test/evidence'}]],
   ])('%s reports fail and create incident evidence', (_kind, mutate) => {
@@ -411,26 +414,42 @@ describe('release canary public seams', () => {
     });
   });
 
-  test('records pending moderation reports without treating them as failures or incidents', () => {
+  test('records both workflow not-public reports as pending, then accepts later passing reports without incidents', () => {
+    const yaml = require('js-yaml');
+    const workflow = yaml.load(fs.readFileSync(path.resolve(__dirname, '../../../.github/workflows/release-canary.yml'), 'utf8'));
+    const polling = workflow.jobs.moderated.steps.find((item: any) => item.name === 'Poll, install, invoke, and uninstall public moderated channels').run;
+    const template = polling.match(/\$report = @\{([\s\S]*?)\n\s+\}/)[1];
+    const branches = [...polling.matchAll(/if \(\$notPublic\) \{([\s\S]*?)\n\s+\}/g)];
+    expect(branches).toHaveLength(2);
+    const moderatedReports = ['winget', 'chocolatey'].map((channel, index) => {
+      const values: Record<string, string> = {
+        "'${{ matrix.train.version }}'": VERSION,
+        '$channel': channel,
+        "(Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.fffZ')": EVALUATED_AT,
+        '"${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"': 'https://github.com/ntanwir10/GuardScan/actions/runs/42',
+      };
+      const report = Object.fromEntries([...template.matchAll(/^\s+(\w+) = (.+)$/gm)].map(([, key, expression]: any) => {
+        const value = values[expression] ?? expression.match(/^'([^']*)'$/)?.[1];
+        if (value === undefined) throw new Error(`unsupported report expression: ${expression}`);
+        return [key, value];
+      }));
+      for (const [, key, value] of branches[index][1].matchAll(/\$report\.(\w+) = '([^']+)'/g)) {
+        report[key] = value;
+      }
+      return report;
+    });
     const channels = [...Object.keys(DEFAULT_RC_CANARY_TARGETS), 'winget', 'chocolatey'];
     const expectedTargets = {
       ...DEFAULT_RC_CANARY_TARGETS,
-      winget: ['Windows'],
-      chocolatey: ['Windows'],
+      winget: ['windows-x64'],
+      chocolatey: ['windows-x64'],
     };
     withLedger(ledger => {
       const result = recordCanary({
         ledgerFile: ledger,
         reports: [
           ...reports(),
-          ...['winget', 'chocolatey'].map(channel => ({
-            version: VERSION,
-            channel,
-            target: 'Windows',
-            status: 'pending',
-            checkedAt: EVALUATED_AT,
-            evidenceUrl: `https://example.test/${channel}/pending`,
-          })),
+          ...moderatedReports,
         ],
         expectedTargets,
         evaluatedAt: EVALUATED_AT,
@@ -447,6 +466,20 @@ describe('release canary public seams', () => {
       expect(events.some((event: any) => event.type === 'channel_failed'
         && ['winget', 'chocolatey'].includes(event.channel))).toBe(false);
       expect(events.some((event: any) => event.type === 'incident_opened')).toBe(false);
+      const later = '2026-08-19T13:30:00.000Z';
+      const passed = recordCanary({
+        ledgerFile: ledger,
+        reports: [...reports().map(report => ({...report, checkedAt: later})),
+          ...moderatedReports.map(report => ({...report, status: 'passed', checkedAt: later}))],
+        expectedTargets,
+        evaluatedAt: later,
+      });
+      expect(passed.failures).toEqual([]);
+      expect(passed.incidents).toEqual([]);
+      expect(readEvents(ledger).filter((event: any) => event.type === 'canary_recorded'
+        && ['winget', 'chocolatey'].includes(event.channel)).map((event: any) => event.payload.status))
+        .toEqual(['pending', 'pending', 'passed', 'passed']);
+      expect(readEvents(ledger).some((event: any) => event.type === 'incident_opened')).toBe(false);
     }, channels);
   });
 

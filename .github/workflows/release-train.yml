@@ -240,6 +240,10 @@ jobs:
       CHOCO_API_KEY: ${{ secrets.CHOCO_API_KEY }}
 
   prepare:
+    permissions:
+      checks: read
+      contents: read
+      pull-requests: read
     name: Resolve exact source and create protected tag
     if: >-
       github.event_name == 'workflow_dispatch'

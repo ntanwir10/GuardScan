@@ -691,7 +691,8 @@ describe('zero-touch release workflow contracts', () => {
     const canary = workflowSource('release-canary.yml');
     expect(canary).toContain('$notPublic = $false');
     expect(canary).toContain('$notPublic = $true');
-    expect(canary.match(/\$report.reason = 'not_public'/g)).toHaveLength(2);
+    expect(canary.match(/if \(\$notPublic\) \{\s+\$report.status = 'pending'/g)).toHaveLength(2);
+    expect(canary).not.toContain('$report.reason');
     expect(canary).toContain("$report.status = 'failed'");
     expect(canary).toContain('throw "Unexpected moderated registry error: $unexpectedFailure"');
     expect(canary).toContain("$availabilityStatus -eq 2 -and $noResult");
