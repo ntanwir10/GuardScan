@@ -1,6 +1,6 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "https://guardscancli.com/schemas/guardscan.scan.v1.schema.json",
+  "$id": "https://guardscancli.vercel.app/schemas/guardscan.scan.v1.schema.json",
   "title": "GuardScan comprehensive scan result",
   "type": "object",
   "additionalProperties": false,

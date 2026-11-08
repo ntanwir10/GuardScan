@@ -348,7 +348,7 @@ describe('CLI end-to-end contracts', () => {
       dataLicense: 'CC0-1.0',
       name: 'project',
     });
-    expect(sbom.documentNamespace).toMatch(/^https:\/\/guardscancli\.com\/spdx\/project\//);
+    expect(sbom.documentNamespace).toMatch(/^https:\/\/guardscancli\.vercel\.app\/spdx\/project\//);
     const spdxSchema = JSON.parse(fs.readFileSync(
       path.join(__dirname, '../../schemas/spdx-2.3.schema.json'),
       'utf8'

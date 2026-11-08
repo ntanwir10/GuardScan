@@ -1,6 +1,6 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "https://guardscancli.com/schemas/guardscan.release-state.v2.schema.json",
+  "$id": "https://guardscancli.vercel.app/schemas/guardscan.release-state.v2.schema.json",
   "title": "GuardScan materialized append-only release state",
   "type": "object",
   "additionalProperties": false,

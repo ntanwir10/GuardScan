@@ -368,7 +368,7 @@ function toSarif(results: DependencyScanResult[]): Record<string, unknown> {
       tool: {
         driver: {
           name: 'GuardScan',
-          informationUri: 'https://guardscancli.com',
+          informationUri: 'https://guardscancli.vercel.app',
           rules: [...uniqueRules.values()].map(value => ({
             id: value.canonicalId,
             name: value.canonicalId,
