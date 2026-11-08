@@ -58,6 +58,19 @@ afterEach(() => {
 });
 
 describe('deterministic release checkpoints', () => {
+  it('rejects mismatched new archive names without installing either file', () => {
+    const {root, output} = fixture();
+    try {
+      expect(() => createCheckpoint(source, {
+        root, outputDir: output, archiveFile: path.join(output, 'wrong.tar.gz'),
+        files: ['README.md'], producer, timestamp,
+      })).toThrow(/archive filename/);
+      expect(fs.existsSync(output)).toBe(false);
+    } finally {
+      fs.rmSync(root, {recursive: true, force: true});
+    }
+  });
+
   it('creates a sorted archive and verifies its sidecar and extraction', () => {
     const first = fixture();
     const second = fixture();

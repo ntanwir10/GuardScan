@@ -428,6 +428,9 @@ function createCheckpoint(source, options = {}) {
   if (fs.existsSync(archiveFile) || fs.existsSync(sidecarFile)) {
     return {created: false, ...verifyCheckpoint(source, {archiveFile, sidecarFile, root})};
   }
+  if (path.basename(archiveFile) !== names.archiveFilename) {
+    throw new Error('checkpoint archive filename does not match sidecar');
+  }
   fs.mkdirSync(path.dirname(archiveFile), {recursive: true, mode: 0o700});
   if (path.dirname(sidecarFile) !== path.dirname(archiveFile)) {
     fs.mkdirSync(path.dirname(sidecarFile), {recursive: true, mode: 0o700});

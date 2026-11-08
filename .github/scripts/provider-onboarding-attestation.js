@@ -3,6 +3,7 @@
 
 const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
+const {execFileSync} = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 
@@ -38,22 +39,20 @@ function sha256(value) {
 }
 
 function relativeFiles(repositoryRoot, entry) {
-  const files = [];
-  const walk = relative => {
-    const absolute = path.join(repositoryRoot, relative);
-    const stat = fs.lstatSync(absolute);
-    assert.equal(stat.isSymbolicLink(), false, `${relative} must not be a symlink`);
-    if (stat.isFile()) {
-      files.push(relative);
-      return;
+  const files = execFileSync('git', ['ls-files', '-z', '--', entry], {
+    cwd: repositoryRoot, encoding: 'utf8',
+  }).split('\0').filter(Boolean).sort();
+  assert(files.length > 0, `${entry} must contain tracked files`);
+  for (const relative of files) {
+    const parts = relative.split('/');
+    for (let index = 1; index <= parts.length; index++) {
+      const current = parts.slice(0, index).join('/');
+      const stat = fs.lstatSync(path.join(repositoryRoot, current));
+      assert.equal(stat.isSymbolicLink(), false, `${current} must not be a symlink`);
+      assert.equal(index === parts.length ? stat.isFile() : stat.isDirectory(), true,
+        `${current} must be a regular file or directory`);
     }
-    assert.equal(stat.isDirectory(), true, `${relative} must be a regular file or directory`);
-    for (const name of fs.readdirSync(absolute).sort()) {
-      walk(path.posix.join(relative, name));
-    }
-  };
-  walk(entry);
-  assert(files.length > 0, `${entry} must not be empty`);
+  }
   return files;
 }
 

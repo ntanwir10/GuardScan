@@ -35,13 +35,51 @@ describe('release handoff recovery regressions', () => {
     fs.mkdirSync(temp);
     const original = JSON.stringify({draft: true, tag_name: 'v1.2.3', assets: [{name: 'guardscan-release-checkpoint-1.2.3.tar.gz'}]});
     const result = shell('gh() { printf "%s" "$RELEASE_FIXTURE"; };\n' + classify.run, root, {
-      RUNNER_TEMP: temp, RELEASE_FIXTURE: original, RELEASE_TAG: 'v1.2.3', GITHUB_REPOSITORY: 'ntanwir10/GuardScan', GITHUB_OUTPUT: path.join(temp, 'output'),
+      RUNNER_TEMP: temp, RELEASE_FIXTURE: JSON.stringify([JSON.parse(original)]), RELEASE_TAG: 'v1.2.3', GITHUB_REPOSITORY: 'ntanwir10/GuardScan', GITHUB_OUTPUT: path.join(temp, 'output'),
     });
     expect(result.status).toBe(0);
     fs.rmSync(path.join(root, 'release-state.json'));
     expect(shell(restore.run, root, {RUNNER_TEMP: temp}).status).toBe(0);
-    expect(fs.readFileSync(path.join(root, 'release-state.json'), 'utf8')).toBe(original);
+    expect(JSON.parse(fs.readFileSync(path.join(root, 'release-state.json'), 'utf8'))).toEqual(JSON.parse(original));
   }));
+
+  it('finds drafts on later REST pages and fails closed on lookup errors', () => temporary(root => {
+    const classify = step(train.jobs['resolve-checkpoint'], 'Classify remote checkpoint state');
+    const temp = path.join(root, 'runner-temp');
+    fs.mkdirSync(temp);
+    const output = path.join(temp, 'output');
+    const release = {draft: true, tag_name: 'v1.2.3', assets: [
+      {name: 'guardscan-release-checkpoint-1.2.3.tar.gz'},
+      {name: 'guardscan-release-checkpoint-1.2.3.tar.gz.metadata.json'},
+    ]};
+    const env = {RUNNER_TEMP: temp, RELEASE_TAG: 'v1.2.3', GITHUB_REPOSITORY: 'ntanwir10/GuardScan', GITHUB_OUTPUT: output};
+    const stub = 'gh() { printf "%s" "$RELEASE_FIXTURE"; };\n';
+    const run = (pages: unknown[]) => shell(stub + classify.run, root, {
+      ...env, RELEASE_FIXTURE: pages.map(page => JSON.stringify(page)).join('\n'),
+    });
+    expect(run([[{tag_name: 'v0.0.1'}], [release]]).status).toBe(0);
+    expect(fs.readFileSync(output, 'utf8')).toBe('mode=checkpoint\n');
+    expect(JSON.parse(fs.readFileSync(path.join(temp, 'classified-release-state.json'), 'utf8'))).toEqual(release);
+    fs.unlinkSync(output);
+    expect(run([[], []]).status).toBe(0);
+    expect(fs.readFileSync(output, 'utf8')).toBe('mode=build\n');
+    fs.unlinkSync(output);
+    expect(run([[release], [release]]).status).not.toBe(0);
+    for (const code of [4, 22]) {
+      expect(shell(`gh() { echo 'HTTP 404 or provider failure' >&2; return ${code}; };\n` + classify.run, root, env).status).toBe(code);
+      expect(fs.existsSync(output)).toBe(false);
+    }
+  }));
+
+  it('uses draft-capable lookup URLs before both publication API reads', () => {
+    for (const name of ['Remove private checkpoint only after the expanded draft is complete',
+      'Revalidate exact release asset IDs and digests immediately before publication']) {
+      const script = step(Object.values(publish.jobs).find((job: any) => job.steps?.some((candidate: any) => candidate.name === name)), name).run;
+      expect(script).toContain('--json apiUrl --jq .apiUrl');
+      expect(script).toContain('gh api "$RELEASE_API_URL"');
+      expect(script).not.toContain('/releases/tags/');
+    }
+  });
 
   it('keeps canonical npm bytes separate from verified provenance and retains the public proof', () => temporary(root => {
     const job = build.jobs['npm-finalize'];

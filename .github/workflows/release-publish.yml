@@ -328,7 +328,8 @@ jobs:
           RELEASE_TAG: ${{ inputs.tag }}
         run: |
           if [ "$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)" = true ]; then
-            gh api "repos/${GITHUB_REPOSITORY}/releases/tags/$RELEASE_TAG" \
+            RELEASE_API_URL="$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json apiUrl --jq .apiUrl)"
+            gh api "$RELEASE_API_URL" \
               --jq '.assets[] | select(.name | startswith("guardscan-release-checkpoint-")) | .id' \
               > checkpoint-asset-ids.txt
             while IFS= read -r ASSET_ID; do
@@ -341,7 +342,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh api "repos/${GITHUB_REPOSITORY}/releases/tags/$RELEASE_INPUT_TAG" > release-before-publication.json
+          RELEASE_API_URL="$(gh release view "$RELEASE_INPUT_TAG" --repo "$GITHUB_REPOSITORY" --json apiUrl --jq .apiUrl)"
+          gh api "$RELEASE_API_URL" > release-before-publication.json
           node - <<'NODE'
           const crypto = require('crypto');
           const cp = require('child_process');

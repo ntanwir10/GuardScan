@@ -71,7 +71,13 @@ test('provider onboarding attestation is deterministic and content-bound', () =>
       '.github/scripts/resume-release-checkpoint.js',
     ];
     for (const file of securityHelpers) fs.writeFileSync(path.join(fixture, file), `${file}\n`);
+    for (const args of [['init', '--quiet'], ['add', '--', '.']]) {
+      const git = spawnSync('git', args, {cwd: fixture, encoding: 'utf8'});
+      assert.equal(git.status, 0, git.stderr);
+    }
     const first = computeProviderOnboardingAttestation(fixture);
+    fs.mkdirSync(path.join(fixture, 'cli/scripts/release/__pycache__'));
+    fs.writeFileSync(path.join(fixture, 'cli/scripts/release/__pycache__/untracked.pyc'), 'local bytecode');
     assert.match(first, /^sha256:[a-f0-9]{64}$/);
     assert.equal(computeProviderOnboardingAttestation(fixture), first);
     for (const file of ['cli/package.json', 'cli/package-lock.json']) {
@@ -128,6 +134,15 @@ test('provider onboarding attestation is deterministic and content-bound', () =>
     const beforeNestedChange = computeProviderOnboardingAttestation(fixture);
     fs.appendFileSync(path.join(fixture, 'cli/scripts/release/fixture.json'), 'nested-change\n');
     assert.notEqual(computeProviderOnboardingAttestation(fixture), beforeNestedChange);
+    const tracked = path.join(fixture, 'cli/schemas/fixture.json');
+    fs.unlinkSync(tracked);
+    fs.symlinkSync(packageFile, tracked);
+    assert.throws(() => computeProviderOnboardingAttestation(fixture), /symlink/);
+    fs.unlinkSync(tracked);
+    assert.throws(() => computeProviderOnboardingAttestation(fixture), /ENOENT/);
+    fs.rmSync(path.join(fixture, 'cli/schemas'), {recursive: true});
+    fs.symlinkSync(path.join(fixture, 'cli/scripts/release'), path.join(fixture, 'cli/schemas'));
+    assert.throws(() => computeProviderOnboardingAttestation(fixture), /symlink/);
     assert.throws(
       () => computeProviderOnboardingAttestation(fixture, 'other/repository'),
       /repository identity drifted/
@@ -239,6 +254,13 @@ test('release train requires explicit preflight eligibility while monitoring pre
   assert.equal(workflow.jobs['credential-health'].permissions?.contents, 'read');
   assert.equal(workflow.jobs['credential-health'].with?.release_preflight, true);
   assert.match(train, /needs\.credential-health\.outputs\.release_eligible == 'true'/);
+  assert.match(workflow.jobs.prepare.if, /needs\.credential-health\.outputs\.release_eligible == 'true'/);
+  assert.doesNotMatch(workflow.jobs.reconcile.if, /release_eligible/);
+  assert.match(workflow.jobs.reconcile.if, /always\(\) && !cancelled\(\)/);
+  const promotion = workflow.jobs.reconcile.steps.find(step => step.name === 'Trigger promotion when the machine policy is eligible');
+  assert.match(promotion.if, /needs\.credential-health\.outputs\.release_eligible == 'true'/);
+  assert.match(promotion.if, /needs\.credential-health\.result == 'success'/);
+
   for (const name of ['rollback', 'first-release-withdrawal']) {
     assert.deepEqual(workflow.jobs[name].needs, ['validate-request']);
     assert.doesNotMatch(workflow.jobs[name].if, /credential-health/);
@@ -395,4 +417,9 @@ test('native archive optional evidence absence succeeds while copy failures prop
       fs.unlinkSync(path.join(root, 'standalone', file));
     }
   } finally { fs.rmSync(root, {recursive: true, force: true}); }
+});
+
+test('macOS signing entitlements require the release code owner', () => {
+  assert.match(fs.readFileSync(path.join(root, '.github/CODEOWNERS'), 'utf8'),
+    /^\/\.github\/release\/macos-entitlements\.plist @ntanwir10$/m);
 });
