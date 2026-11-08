@@ -125,9 +125,11 @@ There is no GuardScan-hosted endpoint or default. Whoever operates the
 self-hosted endpoint is responsible for publishing its retention, deletion,
 access-control, and jurisdiction terms.
 
-After `1.1.0` is published, the retired endpoint returns `410 Gone` for seven
-days without accepting, storing, or redirecting telemetry, and is then deleted.
-Users of `1.0.5` and earlier should upgrade or disable telemetry. Existing local
+The hosted service at `api.guardscancli.com` was deleted in November 2026, and
+GuardScan no longer controls the `guardscancli.com` domain. Versions `1.0.5`
+and earlier with telemetry enabled still try to send events there, and a future
+owner of the domain could receive them. Users of those versions should upgrade
+or disable telemetry. Existing local
 queues are not transferred and remain available to inspect, explicitly sync to
 a user-operated collector, or delete.
 

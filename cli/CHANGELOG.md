@@ -49,11 +49,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - The GuardScan-hosted Cloudflare telemetry service at
   `api.guardscancli.com`, its implicit default endpoint, and the legacy
-  `GUARDSCAN_API_URL` setting. After `1.1.0` is published, the retired endpoint
-  returns `410 Gone` without accepting, storing, or redirecting data for seven
-  days and is then deleted. Users of `1.0.5` and earlier should upgrade or run
-  `guardscan config --telemetry=false`; self-hosted operators must use
-  `GUARDSCAN_TELEMETRY_URL`. Existing queues remain local.
+  `GUARDSCAN_API_URL` setting. The service was deleted in November 2026, and
+  GuardScan no longer controls the `guardscancli.com` domain, so a future owner
+  could receive requests sent there. Users of `1.0.5` and earlier who enabled
+  telemetry should upgrade or run `guardscan config --telemetry=false`;
+  self-hosted operators must use `GUARDSCAN_TELEMETRY_URL`. Existing queues
+  remain local.
 
 ### Fixed
 
