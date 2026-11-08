@@ -92,7 +92,7 @@ function createArtifactSboms(input) {
     dataLicense: 'CC0-1.0',
     SPDXID: 'SPDXRef-DOCUMENT',
     name: `guardscan-${input.version}-${input.platformId}`,
-    documentNamespace: `https://guardscancli.com/spdx/artifact/${sha256(Buffer.from(namespaceSeed))}`,
+    documentNamespace: `https://guardscancli.vercel.app/spdx/artifact/${sha256(Buffer.from(namespaceSeed))}`,
     creationInfo: {
       created: input.createdAt,
       creators: [`Tool: GuardScan-release-${input.version}`],

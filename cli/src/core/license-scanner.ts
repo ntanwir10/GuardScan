@@ -937,7 +937,7 @@ export class LicenseScanner {
       dataLicense: 'CC0-1.0',
       SPDXID: 'SPDXRef-DOCUMENT',
       name: projectName,
-      documentNamespace: `https://guardscancli.com/spdx/${encodeURIComponent(projectName)}/${randomUUID()}`,
+      documentNamespace: `https://guardscancli.vercel.app/spdx/${encodeURIComponent(projectName)}/${randomUUID()}`,
       creationInfo: { created, creators: [`Tool: GuardScan-${PACKAGE_VERSION}`] },
       packages: [...dependencyPackages, rootPackage],
       relationships: [{

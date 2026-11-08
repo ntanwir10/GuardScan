@@ -1,6 +1,6 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "https://guardscancli.com/schemas/guardscan.release-manifest.v1.schema.json",
+  "$id": "https://guardscancli.vercel.app/schemas/guardscan.release-manifest.v1.schema.json",
   "title": "GuardScan release artifact manifest",
   "type": "object",
   "additionalProperties": false,

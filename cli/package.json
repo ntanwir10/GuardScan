@@ -56,7 +56,7 @@
     "url": "https://github.com/ntanwir10/GuardScan.git",
     "directory": "cli"
   },
-  "homepage": "https://guardscancli.com",
+  "homepage": "https://guardscancli.vercel.app",
   "bugs": {
     "url": "https://github.com/ntanwir10/GuardScan/issues"
   },

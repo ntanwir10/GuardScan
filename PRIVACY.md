@@ -75,8 +75,9 @@ configure a user-operated collector with `GUARDSCAN_TELEMETRY_URL` and run
 GuardScan does not operate a hosted telemetry collector. The former Cloudflare
 service at `api.guardscancli.com` is retired under
 [ADR 007](./docs/adrs/007-retire-hosted-cloudflare-telemetry.md). It is not a
-valid default or self-hosting target. The apex `guardscancli.com` website and
-document identifiers remain active and are separate from that retired service.
+valid default or self-hosting target. The GuardScan website and document
+identifiers moved to `guardscancli.vercel.app` in November 2026, and GuardScan
+no longer serves anything from `guardscancli.com`.
 
 An event may contain:
 

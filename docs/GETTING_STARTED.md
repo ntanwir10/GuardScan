@@ -430,7 +430,7 @@ done
 
 ## Getting Help
 
-- Documentation: <https://guardscancli.com/docs>
+- Documentation: <https://guardscancli.vercel.app/docs>
 - Issues: <https://github.com/ntanwir10/GuardScan/issues>
 
 ## Next Steps

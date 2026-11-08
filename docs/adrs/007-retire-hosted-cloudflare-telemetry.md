@@ -81,8 +81,9 @@ GuardScan telemetry service or a compatibility promise to CLI users.
 
 ## Unchanged contracts
 
-- `guardscancli.com`, the GuardScan website, schema identifiers, package
-  metadata, and SBOM namespaces remain active.
+- The GuardScan website, schema identifiers, package metadata, and SBOM
+  namespaces remain active. In November 2026 they moved from `guardscancli.com`
+  to `guardscancli.vercel.app`.
 - BYOK AI requests continue to go directly to the provider selected by the
   user.
 - Local static analysis, advisory lookups, update checks, and the private
