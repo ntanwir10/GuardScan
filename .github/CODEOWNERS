@@ -3,6 +3,7 @@
 /.github/CODEOWNERS @ntanwir10
 /.github/workflows/release-*.yml @ntanwir10
 /.github/workflows/ci.yml @ntanwir10
+/.github/release/macos-entitlements.plist @ntanwir10
 /.github/release-ledger/ @ntanwir10
 /.github/release-bootstrap-provenance.json @ntanwir10
 /.github/scripts/ @ntanwir10

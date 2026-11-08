@@ -912,15 +912,13 @@ jobs:
           VERSION="${RELEASE_TAG#v}"
           ARCHIVE="guardscan-release-checkpoint-$VERSION.tar.gz"
           SIDECAR="$ARCHIVE.metadata.json"
-          if ! gh api "repos/${GITHUB_REPOSITORY}/releases/tags/$RELEASE_TAG" \
-            > release-state.json 2> release-state.error; then
-            if grep -Eq 'HTTP 404([ )]|$)' release-state.error; then
-              echo "mode=build" >> "$GITHUB_OUTPUT"
-              exit 0
-            fi
-            cat release-state.error >&2
-            echo "::error::Could not classify the remote release state"
-            exit 1
+          gh api --paginate "repos/${GITHUB_REPOSITORY}/releases?per_page=100" > release-pages.json
+          jq -s --arg tag "$RELEASE_TAG" '[.[][] | select(.tag_name == $tag)] |
+            if length > 1 then error("duplicate release tag") else .[0] // null end' \
+            release-pages.json > release-state.json
+          if [ "$(jq 'type' release-state.json)" = '"null"' ]; then
+            echo "mode=build" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
           cp release-state.json "$RUNNER_TEMP/classified-release-state.json"
           export ARCHIVE SIDECAR
@@ -2082,9 +2080,9 @@ jobs:
   reconcile:
     name: Reconcile remote state and trigger eligible promotion
     if: >-
-      github.event_name == 'workflow_dispatch'
+      always() && !cancelled()
+      && github.event_name == 'workflow_dispatch'
       && vars.RELEASE_AUTOMATION_ENABLED == 'true'
-      && needs.credential-health.outputs.release_eligible == 'true'
       && inputs.action == 'reconcile'
     needs: [credential-health]
     runs-on: ubuntu-24.04
@@ -2509,7 +2507,11 @@ jobs:
             git -c credential.helper= -c 'credential.https://github.com.helper=!gh auth git-credential' push origin HEAD:release-ledger
           )
       - name: Trigger promotion when the machine policy is eligible
-        if: vars.RELEASE_AUTOMATION_ENABLED == 'true' && contains(inputs.version, '-rc.')
+        if: >-
+          vars.RELEASE_AUTOMATION_ENABLED == 'true'
+          && needs.credential-health.result == 'success'
+          && needs.credential-health.outputs.release_eligible == 'true'
+          && contains(inputs.version, '-rc.')
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
         run: |

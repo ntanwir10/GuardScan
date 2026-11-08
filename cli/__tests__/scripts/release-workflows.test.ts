@@ -535,8 +535,9 @@ describe('zero-touch release workflow contracts', () => {
     ]);
     expect(train.jobs.publish.needs).toEqual(['prepare', 'payload-ready']);
     expect(trainSource).toContain('guardscan-release-checkpoint-');
-    expect(trainSource).toContain("grep -Eq 'HTTP 404([ )]|$)' release-state.error");
-    expect(trainSource).toContain('Could not classify the remote release state');
+    expect(trainSource).toContain('gh api --paginate "repos/${GITHUB_REPOSITORY}/releases?per_page=100"');
+    expect(trainSource).toContain('select(.tag_name == $tag)');
+    expect(trainSource).not.toContain('/releases/tags/');
     expect(trainSource).toContain('mode=checkpoint');
     expect(trainSource).toContain('mode=expanded');
     expect(trainSource).toContain('mode=public');
