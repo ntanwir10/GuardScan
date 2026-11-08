@@ -35,10 +35,10 @@ GuardScan telemetry service or a compatibility promise to CLI users.
 - Consent allows events to be queued locally; it does not authorize background
   delivery. Queued events remain local until an explicit successful sync or an
   explicit clear/disable/reset action.
-- After stable `1.1.0` is publicly verified on every selected channel, the retired endpoint will return `410 Gone` for
-  seven days without accepting, storing, or redirecting telemetry. The hosted
-  route is then deleted. Ownership of the apex domain and GuardScan website is
-  retained.
+- The original plan was a seven-day `410 Gone` window after stable `1.1.0`.
+  In November 2026 the hosted route was deleted before `1.1.0` shipped, and the
+  `guardscancli.com` registration was allowed to lapse, so there is no `410`
+  window. The GuardScan website moved to `guardscancli.vercel.app`.
 - `GuardScan-Monitoring` remains private and unchanged for possible future
   Grafana work. Reusing it for CLI ingestion would require a new ADR and a new
   explicit user contract.
@@ -75,9 +75,10 @@ GuardScan telemetry service or a compatibility promise to CLI users.
 
 - GuardScan receives no first-party product telemetry.
 - Existing self-hosted operators must update the environment variable name.
-- Older clients may attempt the retired endpoint until they are upgraded or
-  telemetry is disabled; the temporary `410 Gone` response makes that failure
-  explicit without forwarding or accepting data.
+- Older clients with telemetry enabled keep posting to the retired endpoint
+  until they are upgraded or telemetry is disabled. Because the domain lapsed,
+  a future owner of `guardscancli.com` could receive those requests. The CLI
+  ignores the response, so this exposes event data but cannot change behavior.
 
 ## Unchanged contracts
 
