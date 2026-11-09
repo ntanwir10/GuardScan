@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted; amended August 2, 2026.
+Accepted; amended August 2, 2026. History note (November 2026): earlier drafts assumed a GuardScan-operated backend; none exists.
 
 ## Context
 
@@ -36,6 +36,6 @@ GuardScan analyzes sensitive repositories. Its product contract must distinguish
 ## Active contract
 
 The self-hosted collector wire schema is `guardscan.telemetry.v1`; see
-[API Documentation](../API.md). The earlier client-ID, repository-hash,
+[Self-hosted telemetry collector protocol](../TELEMETRY_COLLECTOR.md). The earlier client-ID, repository-hash,
 free-form metadata, hosted monitoring endpoint, automatic batching, and
 `GUARDSCAN_API_URL` designs are retired and are not compatibility contracts.

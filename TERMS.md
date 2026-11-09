@@ -1,6 +1,6 @@
 # Terms of Service
 
-**Last Updated**: November 24, 2025
+**Last Updated**: November 8, 2026
 
 By using GuardScan, you agree to these Terms of Service. Please read them carefully.
 
@@ -39,7 +39,7 @@ GuardScan is **100% free and open source**:
 - Security scanning
 - Code quality analysis
 - Static analysis
-- All 21 commands
+- All commands (see the [command reference](https://github.com/ntanwir10/GuardScan/blob/main/docs/COMMANDS.md))
 
 ---
 
@@ -54,10 +54,13 @@ AI-powered features require **your own API keys**:
 
 **Supported AI Providers:**
 
-- OpenAI (GPT-4, GPT-3.5)
-- Anthropic Claude (Opus, Sonnet, Haiku)
+- OpenAI
+- Anthropic Claude
 - Google Gemini
-- Ollama (local AI)
+- OpenRouter
+- Ollama and LM Studio (local AI)
+
+`guardscan models list` shows GuardScan's built-in model catalog; confirm exact model IDs with your provider.
 
 ---
 
@@ -250,5 +253,5 @@ By using GuardScan, you acknowledge that:
 
 ---
 
-*Last Updated: 2025-11-24*
+*Last Updated: 2026-11-08*
 

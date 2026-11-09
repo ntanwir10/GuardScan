@@ -72,12 +72,7 @@ GuardScan to queue an allowlisted event locally; delivery happens only when you
 configure a user-operated collector with `GUARDSCAN_TELEMETRY_URL` and run
 `guardscan telemetry sync`.
 
-GuardScan does not operate a hosted telemetry collector. The former Cloudflare
-service at `api.guardscancli.com` is retired under
-[ADR 007](./docs/adrs/007-retire-hosted-cloudflare-telemetry.md). It is not a
-valid default or self-hosting target. The GuardScan website and document
-identifiers moved to `guardscancli.vercel.app` in November 2026, and GuardScan
-no longer serves anything from `guardscancli.com`.
+GuardScan does not operate a hosted telemetry collector and there is no default endpoint. See [Retirement of the hosted collector](#retirement-of-the-hosted-collector) below.
 
 An event may contain:
 
@@ -121,17 +116,11 @@ guardscan telemetry status
 guardscan telemetry clear --force
 ```
 
-There is no GuardScan-hosted endpoint or default. Whoever operates the
-self-hosted endpoint is responsible for publishing its retention, deletion,
-access-control, and jurisdiction terms.
+Whoever operates a self-hosted endpoint is responsible for publishing its retention, deletion, access-control, and jurisdiction terms. The wire protocol is documented in [Self-hosted telemetry collector protocol](./docs/TELEMETRY_COLLECTOR.md).
 
-The hosted service at `api.guardscancli.com` was deleted in November 2026, and
-GuardScan no longer controls the `guardscancli.com` domain. Versions `1.0.5`
-and earlier with telemetry enabled still try to send events there, and a future
-owner of the domain could receive them. Users of those versions should upgrade
-or disable telemetry. Existing local
-queues are not transferred and remain available to inspect, explicitly sync to
-a user-operated collector, or delete.
+### Retirement of the hosted collector
+
+The Cloudflare service at `api.guardscancli.com` was deleted in November 2026 under [ADR 007](./docs/adrs/007-retire-hosted-cloudflare-telemetry.md), and GuardScan no longer controls the `guardscancli.com` domain. Documentation and identifiers moved to `guardscancli.vercel.app`. Versions `1.0.5` and earlier with telemetry enabled still try to send events to the retired address, and a future owner of the domain could receive them. Upgrade to 1.1.0 or later. For 1.0.5, you can also set `GUARDSCAN_NO_TELEMETRY=true` in the environment of each GuardScan process; this does not delete queued events. Existing local queues are not transferred; inspect, explicitly sync to a user-operated collector, or delete them.
 
 ## Local storage
 

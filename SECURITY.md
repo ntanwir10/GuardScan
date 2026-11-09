@@ -184,7 +184,7 @@ All security updates are announced via:
 For security-related questions or concerns:
 
 - **Email**: <ntanwir10@outlook.com>
-- **GitHub Security**: Use GitHub's private vulnerability reporting (if enabled)
+- **GitHub Security**: GitHub private vulnerability reporting is not enabled for this repository; use email
 - **Response Time**: We aim to respond within 48 hours
 
 ---
@@ -195,4 +195,4 @@ We appreciate the security research community's efforts to keep GuardScan secure
 
 ---
 
-**Last Updated**: 2026-07-13
+**Last Updated**: 2026-11-08

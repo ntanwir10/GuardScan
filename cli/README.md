@@ -34,7 +34,7 @@ GuardScan is **100% free and open source**! No credit system, no paywalls, no su
 ## 🚀 Quick Start
 
 ```bash
-# Install globally via npm
+# Install globally via npm (Node.js 22+)
 npm install -g guardscan
 
 # Initialize GuardScan
@@ -56,6 +56,10 @@ guardscan run
 # Check status
 guardscan status
 ```
+
+### 🐳 Docker / Alpine Linux
+
+No GuardScan Docker image is published; run the npm package inside a Node.js 22+ base image. See the [Docker guide](https://github.com/ntanwir10/GuardScan/blob/main/docs/DOCKER_GUIDE.md) for Alpine setup, `GUARDSCAN_HOME`, volumes and CI.
 
 ---
 
@@ -84,9 +88,11 @@ GuardScan includes **comprehensive security scanners**:
 ### 🧪 Testing & Performance (FREE, Offline)
 
 13. **Test Runner** - Execute and analyze Jest, pytest, JUnit tests
-14. **Mutation Testing** - Validate test suite effectiveness
-15. **Performance Testing** - Load testing and benchmarking
+14. **Mutation Testing** - Validate test suite effectiveness (requires Stryker - optional)
+15. **Performance Testing** - Load testing and benchmarking (requires k6 - optional)
 16. **SBOM Generation** - Software Bill of Materials (CycloneDX, SPDX)
+
+**Note**: Performance and mutation testing require optional external tools.
 
 ### 🤖 AI-Enhanced Features (BYOK - Bring Your Own Key)
 
@@ -119,12 +125,14 @@ GuardScan includes **comprehensive security scanners**:
 
 Configure any AI provider you prefer:
 
-- **OpenAI** (GPT-4, GPT-4 Turbo, GPT-3.5)
-- **Anthropic Claude** (Claude 3 Opus, Sonnet, Haiku)
-- **Google Gemini** (Gemini Pro)
-- **Ollama** (Local, privacy-focused - llama2, codellama, mistral)
-- **LM Studio** (Local models)
-- **OpenRouter** (Access to multiple models)
+- **OpenAI**
+- **Anthropic Claude**
+- **Google Gemini**
+- **Ollama** (local, privacy-focused)
+- **LM Studio** (local models)
+- **OpenRouter** (access to multiple models)
+
+Run `guardscan models list` for the current model catalog.
 
 **You pay the AI provider directly** - GuardScan charges nothing!
 
@@ -147,12 +155,12 @@ All commands are **100% FREE** with no limits!
 
 | Command              | Description                               |
 | -------------------- | ----------------------------------------- |
-| `guardscan security` | Run comprehensive security scanning       |
+| `guardscan security` | Run comprehensive local security scan      |
 | `guardscan scan`     | Static-safe security, quality, and SBOM scan |
 | `guardscan vuln`     | Audit exact dependency versions with OSV  |
 | `guardscan run`      | Required local review with optional AI enrichment |
 
-Dependency scanning details, offline snapshots, severity limitations, and CI examples are documented in [Dependency Vulnerability Scanning](../docs/VULNERABILITY_SCANNING.md).
+Dependency scanning details, offline snapshots, severity limitations, and CI examples are documented in [Dependency Vulnerability Scanning](https://github.com/ntanwir10/GuardScan/blob/main/docs/VULNERABILITY_SCANNING.md).
 
 ### CI output and exit codes
 
@@ -161,7 +169,7 @@ guardscan security --ci --format json --output guardscan.json --fail-on high
 guardscan security --format sarif --output guardscan.sarif
 ```
 
-Structured scan output uses the `guardscan.scan.v1` envelope and includes security, quality, SBOM, AI, scanner status, errors, and policy state. Exit code `0` means the run and policy passed, `1` means findings violated policy, and `2` means scanner coverage or execution failed. `--allow-partial` is an explicit relaxation for incomplete coverage.
+Structured scan output uses the `guardscan.scan.v1` envelope and includes security, quality, SBOM, AI, scanner status, errors, and policy state. Exit code `0` means the run and policy passed, `1` means findings violated policy, and `2` means scanner coverage or execution failed. `--allow-partial` is an explicit relaxation for incomplete coverage. See the [exit-code table](https://github.com/ntanwir10/GuardScan/blob/main/docs/COMMANDS.md#exit-codes) and [Offline mode and CI](https://github.com/ntanwir10/GuardScan/blob/main/docs/OFFLINE_AND_CI.md).
 
 `guardscan scan` does not execute repository-controlled tests or linters by default. Use
 `--run-project-code` only for a trusted repository; reports record whether they are
@@ -171,11 +179,13 @@ OS-backed network sandbox and fails the affected checks if the platform sandbox 
 
 ### Testing & Quality Commands
 
-| Command              | Description                        |
-| -------------------- | ---------------------------------- |
-| `guardscan test`     | Run tests & code quality analysis  |
-| `guardscan perf`     | Performance testing & load testing |
-| `guardscan mutation` | Mutation testing for test quality  |
+| Command              | Description                                                     |
+| -------------------- | --------------------------------------------------------------- |
+| `guardscan test`     | Run tests & code quality analysis                               |
+| `guardscan perf`     | Performance testing & load testing (requires k6 - optional)     |
+| `guardscan mutation` | Mutation testing for test quality (requires Stryker - optional) |
+
+**Note**: `perf` and `mutation` commands require optional external tools. See the [Testing Tools Guide](https://github.com/ntanwir10/GuardScan/blob/main/cli/docs/TESTING_TOOLS.md) for installation and usage details.
 
 ### Utility Commands
 
@@ -191,7 +201,7 @@ OS-backed network sandbox and fails the affected checks if the platform sandbox 
 
 | Command                     | Description                          |
 | --------------------------- | ------------------------------------ |
-| `guardscan explain <file>`          | Explain how code works               |
+| `guardscan explain <target>`        | Explain how code works               |
 | `guardscan review --file <path>`    | Comprehensive AI code review         |
 | `guardscan commit`                  | Generate commit messages             |
 | `guardscan docs --type <type>`      | Auto-generate documentation          |
@@ -237,7 +247,7 @@ Local AI/RAG features can store prompts, responses, file paths, and code-derived
 - Retained through bounded maintenance (newest 1,000 events, 30 days, 20 quarantine artifacts)
 - Serialized across processes during explicit synchronization
 
-See the [Privacy Policy](../PRIVACY.md) for the exact event allowlist and local retention behavior.
+See the [Privacy Policy](https://github.com/ntanwir10/GuardScan/blob/main/PRIVACY.md) for the exact event allowlist and local retention behavior.
 
 ---
 
@@ -280,20 +290,9 @@ How it works:
 
 ---
 
-## 💰 Pricing
+## 💰 Costs
 
-### GuardScan: **$0** (100% Free)
-
-No credit system. No subscriptions. No paywalls.
-
-### AI Providers (If You Use AI Features)
-
-**You pay providers directly (not GuardScan):**
-
-- Cloud providers bill through your own account and pricing plan.
-- Ollama and LM Studio are local in offline mode only at literal `127/8` or `::1` endpoints.
-  Remote self-hosted endpoints require online mode and `allowRemoteSelfHosted: true`.
-- Static analysis only does not require an AI provider.
+GuardScan is free. If you use AI features you pay your AI provider directly through your own account; GuardScan has no billing, credits, or hosted service. Ollama and LM Studio are local in offline mode only at literal `127/8` or `::1` endpoints (remote self-hosted endpoints require online mode and `allowRemoteSelfHosted: true`). Static analysis does not require an AI provider.
 
 ---
 
@@ -354,53 +353,31 @@ GuardScan follows a **privacy-first, client-side architecture** where all code a
   endpoint.
 - Operators may deploy their own compatible HTTPS collector.
 - Delivery occurs only through `guardscan telemetry sync` after setting `GUARDSCAN_TELEMETRY_URL`.
-- The payload is the strict aggregate event allowlist described in [PRIVACY.md](../PRIVACY.md); errors and findings are excluded.
+- The payload is the strict aggregate event allowlist described in [PRIVACY.md](https://github.com/ntanwir10/GuardScan/blob/main/PRIVACY.md); errors and findings are excluded.
 
 ---
 
 ## 📦 Installation
 
-### Via NPM (Recommended)
-
 ```bash
 npm install -g guardscan
+guardscan --version
 ```
 
-This will automatically install all required runtime dependencies, including TypeScript which is needed for AST parsing.
+GuardScan requires Node.js 22 or newer and installs its runtime dependencies (including `typescript`, needed for AST parsing) automatically. If you see "Cannot find module 'typescript'", reinstall GuardScan.
 
-### Via Source
+pnpm, Yarn and Bun are also supported. Homebrew, Scoop, PyPI (`pipx`), WinGet, Chocolatey and standalone binaries are planned for 1.1.1 and are **not yet available**. See the [install, upgrade and uninstall guide](https://github.com/ntanwir10/GuardScan/blob/main/docs/INSTALL.md) for every channel.
+
+### From source
 
 ```bash
-# Clone repository
 git clone https://github.com/ntanwir10/GuardScan.git
 cd GuardScan/cli
-
-# Install dependencies
-npm install
-
-# Build
+npm ci
 npm run build
-
-# Link globally
 npm link
-
-# Verify
 guardscan --help
 ```
-
-### Runtime Dependencies
-
-GuardScan requires the following runtime dependencies (automatically installed with npm):
-
-- **TypeScript** (`typescript`) - Required for AST parsing of TypeScript/JavaScript files
-  - Automatically included when installing via `npm install -g guardscan`
-  - If you encounter "Cannot find module 'typescript'" errors, ensure it's installed:
-
-    ```bash
-    npm install typescript
-    ```
-
-All other dependencies are automatically managed by npm during installation.
 
 ---
 
@@ -416,10 +393,18 @@ GuardScan is **open source** and we welcome contributions!
 
 ## 📚 Documentation
 
-- [Installation Guide](../docs/GETTING_STARTED.md)
-- [AI Features](../docs/AI_QUICK_REFERENCE.md)
-- [API Documentation](../docs/API.md)
-- [Dependency Vulnerability Scanning](../docs/VULNERABILITY_SCANNING.md)
+Website: <https://guardscancli.vercel.app>
+
+- [Getting started](https://github.com/ntanwir10/GuardScan/blob/main/docs/GETTING_STARTED.md)
+- [Install, upgrade and uninstall](https://github.com/ntanwir10/GuardScan/blob/main/docs/INSTALL.md)
+- [Command reference](https://github.com/ntanwir10/GuardScan/blob/main/docs/COMMANDS.md) (every command, flag and exit code)
+- [Offline mode and CI](https://github.com/ntanwir10/GuardScan/blob/main/docs/OFFLINE_AND_CI.md)
+- [Chat guide](https://github.com/ntanwir10/GuardScan/blob/main/docs/CHAT_GUIDE.md) and [AI quick reference](https://github.com/ntanwir10/GuardScan/blob/main/docs/AI_QUICK_REFERENCE.md)
+- [Dependency vulnerability scanning](https://github.com/ntanwir10/GuardScan/blob/main/docs/VULNERABILITY_SCANNING.md)
+- [Docker guide](https://github.com/ntanwir10/GuardScan/blob/main/docs/DOCKER_GUIDE.md)
+- [Language parsers](https://github.com/ntanwir10/GuardScan/blob/main/docs/LANGUAGE_PARSERS.md)
+- [Self-hosted telemetry collector protocol](https://github.com/ntanwir10/GuardScan/blob/main/docs/TELEMETRY_COLLECTOR.md)
+- [Privacy](https://github.com/ntanwir10/GuardScan/blob/main/PRIVACY.md), [Terms](https://github.com/ntanwir10/GuardScan/blob/main/TERMS.md), [Security policy](https://github.com/ntanwir10/GuardScan/blob/main/SECURITY.md)
 
 ---
 
@@ -450,7 +435,7 @@ A: Star the repo on GitHub, contribute code, report bugs, or sponsor the project
 
 ## 📝 License
 
-MIT License - see [LICENSE](LICENSE)
+MIT License - see [LICENSE](https://github.com/ntanwir10/GuardScan/blob/main/LICENSE)
 
 ---
 
@@ -469,7 +454,7 @@ GuardScan is built with these amazing open-source tools:
 
 - **Issues**: [GitHub Issues](https://github.com/ntanwir10/GuardScan/issues)
 - **Discussions**: [GitHub Discussions](https://github.com/ntanwir10/GuardScan/discussions)
-- **Email**: <support@guardscan.com> (coming soon)
+- **Security reports**: see the [security policy](https://github.com/ntanwir10/GuardScan/blob/main/SECURITY.md)
 
 ---
 
