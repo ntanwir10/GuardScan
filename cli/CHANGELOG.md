@@ -52,7 +52,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `GUARDSCAN_API_URL` setting. The service was deleted in November 2026, and
   GuardScan no longer controls the `guardscancli.com` domain, so a future owner
   could receive requests sent there. Users of `1.0.5` and earlier who enabled
-  telemetry should upgrade or run `guardscan config --telemetry=false`;
+  telemetry should upgrade, or set `GUARDSCAN_NO_TELEMETRY=true` until they can
+  (1.0.5 has no `config --telemetry` option);
   self-hosted operators must use `GUARDSCAN_TELEMETRY_URL`. Existing queues
   remain local.
 
