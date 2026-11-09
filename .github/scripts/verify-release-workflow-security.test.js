@@ -423,3 +423,71 @@ test('macOS signing entitlements require the release code owner', () => {
   assert.match(fs.readFileSync(path.join(root, '.github/CODEOWNERS'), 'utf8'),
     /^\/\.github\/release\/macos-entitlements\.plist @ntanwir10$/m);
 });
+
+test('native signing is keyed off the committed signing policy, with Sigstore last on every OS', () => {
+  const build = parseWorkflow('release-build.yml');
+  const finalize = build.jobs['native-finalize'];
+  const steps = finalize.steps;
+  const index = name => {
+    const found = steps.findIndex(step => step.name === name);
+    assert.ok(found >= 0, `missing native-finalize step: ${name}`);
+    return found;
+  };
+  const provider = id => `contains(fromJSON(needs.signing-policy.outputs.providers), '${id}')`;
+
+  assert.deepEqual(finalize.needs, ['quality', 'native-build', 'signing-policy']);
+  assert.equal(finalize.environment, "${{ matrix.os == 'darwin' && "
+    + `${provider('apple-signing-notary')} && 'apple-notarization' || matrix.os == 'windows' && `
+    + `${provider('azure-artifact-signing')} && 'windows-signing' || inputs.channel == 'rc' && 'release-rc' || 'release-stable' }}`);
+  for (const name of ['Import Apple Developer ID certificate', 'Sign, notarize, staple, and verify macOS executable',
+    'Notarize exact macOS archive']) {
+    assert.equal(steps[index(name)].if, `matrix.os == 'darwin' && ${provider('apple-signing-notary')}`);
+  }
+  assert.equal(steps[index('Remove ephemeral Apple signing material')].if, "always() && matrix.os == 'darwin'");
+  for (const name of ['Azure OIDC login', 'Authenticode-sign through Azure Artifact Signing']) {
+    assert.equal(steps[index(name)].if, `matrix.os == 'windows' && ${provider('azure-artifact-signing')}`);
+  }
+  assert.equal(steps[index('Verify Authenticode signature and timestamp')].if,
+    "matrix.os == 'windows' && contains(fromJSON(needs.signing-policy.outputs.windows), 'authenticode')");
+
+  const install = index('Install Sigstore cosign');
+  const sign = index('Keyless-sign native executable');
+  for (const position of [install, sign]) assert.equal(steps[position].if, undefined);
+  assert.match(steps[install].uses, /^sigstore\/cosign-installer@[0-9a-f]{40}$/);
+  assert.equal(steps[sign].env.EXECUTABLE, '${{ matrix.executable }}');
+  assert.match(steps[sign].run, /cosign sign-blob --yes --bundle standalone\/guardscan\.sigstore\.json "standalone\/\$EXECUTABLE"/);
+  assert.match(steps[sign].run, /--certificate-oidc-issuer "https:\/\/token\.actions\.githubusercontent\.com" "standalone\/\$EXECUTABLE"/);
+  const adHoc = index('Verify macOS ad-hoc or Developer ID code signature');
+  assert.equal(steps[adHoc].if, "matrix.os == 'darwin'");
+  assert.equal(steps[adHoc].run, 'codesign --verify --strict --verbose=2 standalone/guardscan');
+  const lastVendor = Math.max(...['Sign, notarize, staple, and verify macOS executable',
+    'Authenticode-sign through Azure Artifact Signing', 'Verify Authenticode signature and timestamp'].map(index));
+  assert.ok(lastVendor < adHoc && adHoc < install && install < sign, 'cosign must sign the final vendor-signed bytes');
+  assert.ok(sign < index('Generate SBOM with trusted default-branch tooling'));
+  assert.ok(sign < index('Attest signed executable'));
+
+  const evidence = steps[index('Create verified evidence descriptor')].run;
+  assert.match(evidence, /requiredSignatures\(RELEASE_SIGNING_POLICY, process\.env\.ARTIFACT_OS\)/);
+  assert.match(evidence, /required signatures were not produced/);
+  assert.match(steps[index('Archive signed executable with trusted tooling')].run,
+    /if \[ -f standalone\/stapled-notarization\.dmg \]; then/);
+});
+
+test('signing-policy jobs are unprivileged and pinned to the executing workflow SHA', () => {
+  for (const [name, trigger] of [['release-build.yml', "inputs.mode == 'production'"],
+    ['release-credential-health.yml', "vars.RELEASE_CREDENTIAL_MONITOR_ENABLED == 'true'"]]) {
+    const job = parseWorkflow(name).jobs['signing-policy'];
+    assert.ok(job, `${name} must define a signing-policy job`);
+    assert.ok(job.if.includes(trigger));
+    assert.deepEqual(job.permissions, {contents: 'read'});
+    assert.equal(job.environment, undefined);
+    assert.equal(job.steps.length, 2);
+    const [checkout, run] = job.steps;
+    assert.match(checkout.uses, /^actions\/checkout@[0-9a-f]{40}$/);
+    assert.equal(checkout.with.ref, '${{ job.workflow_sha }}');
+    assert.equal(checkout.with['persist-credentials'], false);
+    assert.equal(checkout.with['sparse-checkout'], 'cli/scripts/release');
+    assert.equal(run.run, 'node cli/scripts/release/signing-policy.js >> "$GITHUB_OUTPUT"');
+    assert.deepEqual(Object.keys(job.outputs).sort(), ['darwin', 'linux', 'policy', 'providers', 'windows']);
+  }
+});

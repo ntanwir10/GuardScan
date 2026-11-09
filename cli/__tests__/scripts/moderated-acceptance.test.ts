@@ -14,7 +14,7 @@ const checkedAt = '2026-10-01T00:00:00.000Z', future = '2099-01-01T00:00:00.000Z
 const sha256 = (bytes: any) => crypto.createHash('sha256').update(bytes).digest('hex');
 function manifest() {
   const url = 'https://github.com/ntanwir10/GuardScan/releases/download/v1.2.3/guardscan-windows.zip';
-  return {...source, schemaVersion: 'guardscan.release-manifest.v1', createdAt: checkedAt,
+  return {...source, schemaVersion: 'guardscan.release-manifest.v1', signingPolicy: 'community', createdAt: checkedAt,
     producer: {provider: 'github-actions', repository: 'ntanwir10/GuardScan', workflow: '.github/workflows/release-build.yml', workflowSha: 'f'.repeat(40), runId: '1', runAttempt: 1, sourceRef: 'refs/tags/v1.2.3'},
     toolchain: {node: '22.12.0', packageManager: {name: 'npm', version: '10.9.0'}, tools: [{name: 'esbuild', version: '1'}]},
     artifacts: [{id: 'windows', kind: 'standalone', productionReady: true, filename: 'guardscan-windows.zip', size: 123, sha256: 'b'.repeat(64), source,
@@ -24,7 +24,7 @@ function manifest() {
         tokenCounting: {dependency: 'tiktoken', dependencyAvailable: false, mode: 'estimated', sampleTokenCount: 1, safeFallbackObserved: true},
         chartRendering: {dependency: 'chartjs-node-canvas', dependencyAvailable: false, mode: 'unavailable', safeFallbackObserved: true}},
       archiveEntries: [{path: 'guardscan.exe', size: 12, mode: '0755', sha256: 'c'.repeat(64)}],
-      signatures: [{type: 'authenticode', url: url + '.sig', verified: true}],
+      signatures: [{type: 'sigstore', url: url + '.sig', verified: true}],
       sboms: ['spdx', 'cyclonedx'].map(type => ({type, url: url + '.' + type, verified: true})),
       provenance: {type: 'slsa', url: url + '.attestation', verified: true, sha256: 'd'.repeat(64),
         subjectSha256: 'b'.repeat(64), sourceVersion: source.version, sourceTag: source.tag, sourceCommit: source.commit,

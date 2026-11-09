@@ -271,6 +271,30 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+  signing-policy:
+    name: Committed release signing policy
+    if: inputs.mode == 'production'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      policy: ${{ steps.policy.outputs.policy }}
+      providers: ${{ steps.policy.outputs.providers }}
+      darwin: ${{ steps.policy.outputs.darwin }}
+      linux: ${{ steps.policy.outputs.linux }}
+      windows: ${{ steps.policy.outputs.windows }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+          sparse-checkout: cli/scripts/release
+      - name: Export the attested signing policy
+        id: policy
+        run: node cli/scripts/release/signing-policy.js >> "$GITHUB_OUTPUT"
+
   native-finalize:
     name: Sign and attest native ${{ matrix.id }}
     if: inputs.mode == 'production'
@@ -278,8 +302,8 @@ jobs:
     defaults:
       run:
         shell: bash
-    needs: [quality, native-build]
-    environment: ${{ matrix.os == 'darwin' && 'apple-notarization' || matrix.os == 'windows' && 'windows-signing' || inputs.channel == 'rc' && 'release-rc' || 'release-stable' }}
+    needs: [quality, native-build, signing-policy]
+    environment: ${{ matrix.os == 'darwin' && contains(fromJSON(needs.signing-policy.outputs.providers), 'apple-signing-notary') && 'apple-notarization' || matrix.os == 'windows' && contains(fromJSON(needs.signing-policy.outputs.providers), 'azure-artifact-signing') && 'windows-signing' || inputs.channel == 'rc' && 'release-rc' || 'release-stable' }}
     permissions:
       actions: read
       contents: read
@@ -375,23 +399,8 @@ jobs:
             fs.appendFileSync(process.env.GITHUB_ENV,
               "SOURCE_TIMESTAMP=" + resolveGitTimestamp("source", process.env.SOURCE_REF) + "\n");
           '
-      - name: Install Sigstore cosign
-        if: matrix.os == 'linux'
-        uses: sigstore/cosign-installer@d58896d6a1865668819e1d91763c7751a165e159 # v3.9.2
-      - name: Keyless-sign Linux executable
-        if: matrix.os == 'linux'
-        shell: bash
-        env:
-          RELEASE_BUILD_WORKFLOW_SHA: ${{ job.workflow_sha }}
-        run: |
-          cosign sign-blob --yes --bundle standalone/guardscan.sigstore.json standalone/guardscan
-          cosign verify-blob --bundle standalone/guardscan.sigstore.json \
-            --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release-build.yml@refs/heads/main" \
-            --certificate-github-workflow-ref "refs/heads/main" \
-            --certificate-github-workflow-sha "$RELEASE_BUILD_WORKFLOW_SHA" \
-            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" standalone/guardscan
       - name: Import Apple Developer ID certificate
-        if: matrix.os == 'darwin'
+        if: matrix.os == 'darwin' && contains(fromJSON(needs.signing-policy.outputs.providers), 'apple-signing-notary')
         shell: bash
         env:
           APPLE_CERTIFICATE_P12: ${{ secrets.APPLE_CERTIFICATE_P12 }}
@@ -406,7 +415,7 @@ jobs:
           security list-keychain -d user -s "$KEYCHAIN"
           security set-key-partition-list -S apple-tool:,apple: -s -k "$RUNNER_TEMP" "$KEYCHAIN"
       - name: Sign, notarize, staple, and verify macOS executable
-        if: matrix.os == 'darwin'
+        if: matrix.os == 'darwin' && contains(fromJSON(needs.signing-policy.outputs.providers), 'apple-signing-notary')
         shell: bash
         env:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
@@ -466,14 +475,14 @@ jobs:
           security delete-keychain "$RUNNER_TEMP/guardscan-signing.keychain-db" || true
           rm -f "$RUNNER_TEMP/certificate.p12" "$RUNNER_TEMP/AuthKey.p8"
       - name: Azure OIDC login
-        if: matrix.os == 'windows'
+        if: matrix.os == 'windows' && contains(fromJSON(needs.signing-policy.outputs.providers), 'azure-artifact-signing')
         uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3
         with:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
       - name: Authenticode-sign through Azure Artifact Signing
-        if: matrix.os == 'windows'
+        if: matrix.os == 'windows' && contains(fromJSON(needs.signing-policy.outputs.providers), 'azure-artifact-signing')
         uses: Azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2
         with:
           endpoint: ${{ vars.AZURE_SIGNING_ENDPOINT }}
@@ -485,13 +494,31 @@ jobs:
           timestamp-digest: SHA256
           cache-dependencies: false
       - name: Verify Authenticode signature and timestamp
-        if: matrix.os == 'windows'
+        if: matrix.os == 'windows' && contains(fromJSON(needs.signing-policy.outputs.windows), 'authenticode')
         shell: pwsh
         run: |
           $signature = Get-AuthenticodeSignature standalone\guardscan.exe
           if ($signature.Status -ne 'Valid') { throw "Invalid Authenticode status: $($signature.Status)" }
           if ($null -eq $signature.TimeStamperCertificate) { throw 'Authenticode timestamp is missing' }
           $signature | Format-List * | Out-File standalone\authenticode.txt
+      - name: Verify macOS ad-hoc or Developer ID code signature
+        if: matrix.os == 'darwin'
+        run: codesign --verify --strict --verbose=2 standalone/guardscan
+      # Runs after every vendor signer because vendor signing rewrites the executable bytes.
+      - name: Install Sigstore cosign
+        uses: sigstore/cosign-installer@d58896d6a1865668819e1d91763c7751a165e159 # v3.9.2
+      - name: Keyless-sign native executable
+        shell: bash
+        env:
+          RELEASE_BUILD_WORKFLOW_SHA: ${{ job.workflow_sha }}
+          EXECUTABLE: ${{ matrix.executable }}
+        run: |
+          cosign sign-blob --yes --bundle standalone/guardscan.sigstore.json "standalone/$EXECUTABLE"
+          cosign verify-blob --bundle standalone/guardscan.sigstore.json \
+            --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release-build.yml@refs/heads/main" \
+            --certificate-github-workflow-ref "refs/heads/main" \
+            --certificate-github-workflow-sha "$RELEASE_BUILD_WORKFLOW_SHA" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" "standalone/$EXECUTABLE"
       - name: Generate SBOM with trusted default-branch tooling
         shell: bash
         run: |
@@ -532,8 +559,12 @@ jobs:
           const smoke = prototype.smoke;
           if (smoke?.valid !== true || smoke.nodeAbsentFromPath !== true || smoke.packageManagersAbsentFromPath !== true || smoke.optionalCapabilitiesUnavailableSafely !== true) throw new Error('native smoke evidence is incomplete');
           const sbom = JSON.parse(fs.readFileSync('standalone-sbom/artifact-sbom.json'));
-          const signatures = process.env.ARTIFACT_OS === 'darwin' ? ['apple-code-signing', 'apple-notarization'] : [process.env.ARTIFACT_OS === 'windows' ? 'authenticode' : 'sigstore'];
+          const {RELEASE_SIGNING_POLICY, requiredSignatures} = require('./cli/scripts/release/signing-policy');
+          const signatures = requiredSignatures(RELEASE_SIGNING_POLICY, process.env.ARTIFACT_OS);
           const signatureFile = {'apple-code-signing': 'apple-code-signing.txt', 'apple-notarization': 'apple-notarization.json', authenticode: 'authenticode.txt', sigstore: 'guardscan.sigstore.json'};
+          // Each file is written only after its signer verified it, so a missing file means an unproduced signature.
+          const unproduced = signatures.filter(type => !signatureFile[type] || !fs.existsSync(path.join('standalone', signatureFile[type])));
+          if (unproduced.length > 0) throw new Error(`required signatures were not produced: ${unproduced.join(', ')}`);
           const provenance = createVerifiedAttestationEvidence({
             bundleFile: path.join('standalone', process.env.BUNDLE_FILE),
             subjectFile: path.join('standalone', process.env.ARTIFACT_OS === 'windows' ? 'guardscan.exe' : 'guardscan'),
@@ -552,13 +583,13 @@ jobs:
           node cli/scripts/release/index.js build "${ARGS[@]}"
           cp standalone-sbom/guardscan-*.json native-output/
           cp "standalone/${{ matrix.id }}.executable.provenance.sigstore.json" native-output/
-          if [ "${{ matrix.os }}" = darwin ]; then
+          if [ -f standalone/stapled-notarization.dmg ]; then
             cp standalone/stapled-notarization.dmg "native-output/${{ matrix.id }}.stapled-notarization.dmg"
             cp standalone/apple-notarization.json "native-output/${{ matrix.id }}.dmg.apple-notarization.json"
           fi
           for file in guardscan.sigstore.json apple-code-signing.txt authenticode.txt; do if [ -f "standalone/$file" ]; then cp "standalone/$file" "native-output/${{ matrix.id }}.$file"; fi; done
       - name: Notarize exact macOS archive
-        if: matrix.os == 'darwin'
+        if: matrix.os == 'darwin' && contains(fromJSON(needs.signing-policy.outputs.providers), 'apple-signing-notary')
         shell: bash
         env:
           APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}

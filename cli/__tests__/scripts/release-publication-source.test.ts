@@ -150,7 +150,7 @@ describe('candidate npm restoration through trusted schemas', () => {
     const bytes = Buffer.from('authenticated canonical RC tarball');
     const filename = `guardscan-${version}.tgz`;
     const sha256 = crypto.createHash('sha256').update(bytes).digest('hex');
-    const manifest: any = {schemaVersion: 'guardscan.release-manifest.v1', version, tag, commit,
+    const manifest: any = {schemaVersion: 'guardscan.release-manifest.v1', version, tag, commit, signingPolicy: 'community',
       createdAt: '2026-01-01T00:00:00.000Z', producer: {provider: 'github-actions', repository: 'ntanwir10/GuardScan',
         workflow: '.github/workflows/release-build.yml', workflowSha: 'b'.repeat(40), runId: '42', runAttempt: 1, sourceRef: `refs/tags/${tag}`},
       toolchain: {node: '22.12.0', packageManager: {name: 'npm', version: '10.9.0'}, tools: [{name: 'esbuild', version: '0.28.1'}]},

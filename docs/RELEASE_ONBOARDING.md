@@ -1,63 +1,57 @@
 # One-time release provider onboarding
 
-The repository contains the zero-touch release implementation. The following provider-owned identity and account steps must be completed once before `1.1.0-rc.1`. Automation must not fabricate or bypass them.
+The repository contains the zero-touch release implementation. The provider-owned identity and account steps below must be completed once before `1.1.1-rc.1`. Automation must not fabricate or bypass them.
 
 The release remains closed until the evidence in
 [`FUNCTIONAL_ACCEPTANCE.md`](./FUNCTIONAL_ACCEPTANCE.md) is satisfied for the
-candidate commit and artifacts.
+candidate commit and artifacts. The signing policy (`community`, committed in
+`cli/scripts/release/signing-policy.js`) is described in
+[`RELEASE_AUTOMATION.md`](./RELEASE_AUTOMATION.md#signing-policy). Sections marked
+**platform policy only** do not apply while the policy is `community`.
 
 ## Activation order while automation is off
 
-Use this order for the first train:
+Use this order for the first train (`1.1.1`; see [First train: 1.1.1](#first-train-111)):
 
-1. Reauthenticate the maintainer and set the GuardScan repository variable
-   `RELEASE_AUTOMATION_ENABLED=false` and the independent variable
-   `RELEASE_PLEASE_ENABLED=false`, plus
+1. Reauthenticate the maintainer and set the GuardScan repository variables
+   `RELEASE_AUTOMATION_ENABLED=false`, `RELEASE_PLEASE_ENABLED=false`,
    `RELEASE_PROVIDER_REHEARSAL_ENABLED=false` and
-   `RELEASE_PROVIDER_ONBOARDING_ATTESTATION=false`, **before** merging release
-   automation to the default branch.
-2. Land a reviewed bootstrap PR on `main` containing the inert release
-   workflows, schemas, renderer, and ledger seed. It must not change a public
-   version, create a tag, or publish an artifact.
-3. Confirm GitHub lists the workflows from `main`, CI passes, Release Please is
-   skipped, scheduled train jobs are skipped, and publication jobs reject the
-   disabled state. A manual canary validation may run read-only checks, but it
-   cannot authorize publication or a ledger transition.
-4. Complete the GitHub App, branch/tag protections, environments, catalog, OIDC
-   publishers, signing identities, moderated-registry accounts, and monitoring
-   below. Keep the automation variable false throughout.
-5. Temporarily enable `RELEASE_PROVIDER_REHEARSAL_ENABLED`, dispatch
-   `release-provider-rehearsal.yml` with the exact reviewed PR head, require
-   Apple and Azure evidence with `productionReady=false`, and turn the rehearsal
-   flag off again. This operation signs and notarizes transient bytes but cannot
-   create a tag, release, package publication, catalog update, or ledger event.
-6. Recheck that the protected `release/1.1.0` PR head is unchanged and that its
-   complete release gate passes. The bootstrap merge to `main` is not release
-   approval.
-7. After every provider-owned binding and account check below is complete, run
-   `node .github/scripts/provider-onboarding-attestation.js --attestation` from the reviewed
-   bootstrap on `main` and set `RELEASE_PROVIDER_ONBOARDING_ATTESTATION` to the
-   exact printed value. This authority is bound to the reviewed provider
-   control-plane bytes and expires after 30 days; it never changes monitoring
-   evidence from `unknown`. Then set
-   `RELEASE_AUTOMATION_ENABLED=true` and dispatch exactly the candidate command
-   in `RELEASE_AUTOMATION.md`.
+   `RELEASE_PROVIDER_ONBOARDING_ATTESTATION=false`.
+2. Complete the GitHub App, protections, environments, catalog, OIDC publishers,
+   moderated-registry accounts, and monitoring below. Skip Apple, Azure, and the
+   provider rehearsal: they apply to the `platform` policy only. Keep the
+   automation variable false throughout.
+3. Squash-merge the policy PR to `main` as `fix(release): ...` with a
+   `Release-As: 1.1.1` footer in the squash message. Confirm GitHub lists the
+   workflows from `main`, CI passes, scheduled train jobs are skipped, and
+   publication jobs reject the disabled state. A manual canary validation may run
+   read-only checks, but it cannot authorize publication or a ledger transition.
+4. Set `RELEASE_PLEASE_ENABLED=true` and dispatch `release-please.yml`. It opens
+   the `1.1.1` release PR on `release-please--branches--main`. Review it, approve
+   the exact head as the owner, and confirm the full `Release gate` passes.
+5. Run `node .github/scripts/provider-onboarding-attestation.js --attestation`
+   on a clean `main` and set `RELEASE_PROVIDER_ONBOARDING_ATTESTATION` to the
+   exact printed value. It is bound to the reviewed provider control-plane
+   bytes, is valid for at most 30 days, and never changes monitoring evidence from
+   `unknown`. Freeze the attested paths until promotion.
+6. Set `RELEASE_AUTOMATION_ENABLED=true` and dispatch exactly the candidate
+   command in `RELEASE_AUTOMATION.md`.
+7. After promotion, relabel the merged release PR from `autorelease: pending` to
+   `autorelease: tagged`. Release Please blocks future PRs until you do.
 
 GitHub only accepts manual and scheduled workflow execution from workflow files
-present on the default branch. Keeping the implementation solely on the release
-PR would therefore leave the orchestrator unavailable; the inert bootstrap is a
-required first-release exception.
+present on the default branch, so the release implementation must already be on
+`main` before step 4.
 
 ### Inert 1.0.5 bootstrap CI exception
 
-The temporary default-branch bootstrap preserves the complete public `1.0.5`
-application and production dependency graph. Its CI therefore substitutes strict
+Historical. The earlier default-branch bootstrap preserved the complete public
+`1.0.5` application and dependency graph, so its CI substituted strict
 source-byte, package-graph, installed-package, audit-regression, and workflow
-security gates for the package-manager and five-host SEA checks that exercise the
-`1.1.0` product/runtime changes. The complete release gate, including those
-package-manager and SEA matrices, must pass on the exact protected release source
-and again after that source lands. Bootstrap CI is not acceptance evidence for
-product changes that it intentionally does not contain.
+security gates for the package-manager and five-host SEA checks. That exception
+ended when `1.1.0` source landed on `main`. The complete release gate, including
+the package-manager and SEA matrices, must pass on the exact release PR head and
+again after it lands.
 
 ## GitHub
 
@@ -66,22 +60,24 @@ product changes that it intentionally does not contain.
 - Create or verify `ntanwir10/homebrew-tap` as the public shared Homebrew/Scoop
   catalog.
 - Create `guardscan-release-bot` as a GitHub App owned by `ntanwir10`.
-- Grant the App Actions, Contents, Pull requests, Issues, and Workflows
-  **write** permission plus Metadata **read** permission.
+- Grant the App Actions, Contents, Issues, Pull requests, and Workflows
+  **write** permission, plus Checks **read**, Commit statuses **read**, and
+  Metadata **read**.
 - Install the App only on GuardScan and `ntanwir10/homebrew-tap`; do not grant
   organization-wide or all-repository access.
 - Store `RELEASE_APP_ID` as a repository variable and
   `RELEASE_APP_PRIVATE_KEY` as a secret in each installed repository. The key is
   exchanged only for short-lived installation tokens; there is no PAT fallback.
 - Seed the orphan `release-ledger` branch from
-  `.github/release-ledger/active-versions.json`, then protect the branch and
-  require the App identity for writes. Do not copy application source onto the
+  `.github/release-ledger/active-versions.json`, then protect the branch so
+  only the App identity can write. Do not copy application source onto the
   ledger branch. Before merging the bootstrap, refetch this branch and require
   its complete tree to contain only `active-versions.json` with an empty
   `trains` array. The first source-bound and moderated event contracts have no
   migration path from experimental pre-release ledger records; any unexpected
   `events/` path is a launch blocker, not data to coerce.
-- Protect `v*` tags so only the release App can create them.
+- Add a `v*` tag ruleset that gives the release App the bypass, so only it can
+  create or move tags.
 - Enable immutable releases for GuardScan.
 - Enable squash merge and auto-merge, and require the full `Release gate`
   status on the stable release PR.
@@ -91,30 +87,34 @@ product changes that it intentionally does not contain.
   through the same branch rule, dismiss stale approvals, and require the latest
   push to be approved by someone other than its author. Before activation,
   `CODEOWNERS` must name an independent maintainer or team in addition to the
-  change author; the bootstrap's single-owner seed is not sufficient when that
-  owner authors the change. This approval guards changes to publication
+  change author; a single-owner seed is not sufficient when that owner authors
+  the change (solo-maintainer fallback: see
+  [Solo-maintainer controls](#solo-maintainer-controls)). This approval guards changes to publication
   authority and is the immutable control used for production PyPI OIDC. It does
   not require a per-release promotion click after an exact reviewed workflow
   revision and candidate have passed every automated gate.
 - Keep repository variables `RELEASE_AUTOMATION_ENABLED=false` and
   `RELEASE_PLEASE_ENABLED=false` until their separate activation gates pass.
-  Keep `RELEASE_PROVIDER_REHEARSAL_ENABLED=false` except for an explicitly
-  authorized non-publishing rehearsal window. Keep
-  `RELEASE_PROVIDER_ONBOARDING_ATTESTATION=false` until the full provider
-  checklist and rehearsal have passed.
-  Scheduled reconciliation and automatic canaries remain dormant while release
-  automation is false; Release Please remains dormant until its own flag is
-  deliberately enabled after the first train is aligned.
+  Keep `RELEASE_PROVIDER_REHEARSAL_ENABLED=false` (it matters only under the
+  platform policy). Keep `RELEASE_PROVIDER_ONBOARDING_ATTESTATION=false` until
+  the full provider checklist has passed. Scheduled reconciliation and automatic
+  canaries stay dormant while release automation is false; Release Please stays
+  dormant until activation step 4.
+- Release Please needs `"separate-pull-requests": false` in
+  `release-please-config.json`, so its PR branch is exactly
+  `release-please--branches--main`. The App authors that PR, so the owner's
+  approval of the exact head counts as the required non-author approval.
 
-Create environments without manual reviewers:
+Create these environments. Only `pypi` has a required reviewer (the owner; see
+[Solo-maintainer controls](#solo-maintainer-controls)); the rest have none:
 
 - `release-rc`
 - `release-stable`
 - `npm-publish`
 - `testpypi`
 - `pypi`
-- `apple-notarization`
-- `windows-signing`
+- `apple-notarization` (platform policy only)
+- `windows-signing` (platform policy only)
 - `winget`
 - `chocolatey`
 
@@ -186,8 +186,8 @@ generated projection.
 
 ## TestPyPI and PyPI
 
-- Reserve `guardscan-cli`.
-- Configure pending trusted publishers for both TestPyPI and PyPI.
+- Configure pending trusted publishers for `guardscan-cli` on both TestPyPI and
+  PyPI.
 - Bind them exactly to GitHub owner `ntanwir10`, repository `GuardScan`, and
   workflow filename `release-train.yml`. Bind TestPyPI to environment
   `testpypi` and production PyPI to environment `pypi`; never share their OIDC
@@ -195,17 +195,19 @@ generated projection.
 - Do not activate the production PyPI trusted publisher until the protected
   workflow paths have an independent code-owner approval and the branch rule
   requires approval of the latest push by someone other than its author. If an
-  independent reviewer cannot be configured, add required reviewers to the
-  `pypi` environment and accept the per-release approval instead; never remove
-  both controls to preserve zero-touch behavior.
-- Confirm both publishers accept the PEP 440 identity `1.1.0rc1` derived from
-  tag `v1.1.0-rc.1`. TestPyPI must converge to all five tested wheels and pass
+  independent reviewer cannot be configured (solo maintainer), add required
+  reviewers to the `pypi` environment and accept the per-release approval
+  instead; never remove both controls to preserve zero-touch behavior.
+- Confirm both publishers accept the PEP 440 identity `1.1.1rc1` derived from
+  tag `v1.1.1-rc.1`. TestPyPI must converge to all five tested wheels and pass
   pip/pipx native lifecycles before the production PyPI job can run.
 - Do not configure passwords or API-token fallbacks in the `pypi` environment.
 
-## Apple
+## Apple (platform policy only)
 
-Enroll the publisher and provision:
+Not required under `community`: macOS binaries are ad-hoc signed and the Apple
+credential health check reports `not-required`. Under `platform`, enroll the
+publisher and provision:
 
 - `APPLE_CERTIFICATE_P12`
 - `APPLE_CERTIFICATE_PASSWORD`
@@ -224,9 +226,10 @@ downloaded ZIP and require both `codesign` and `spctl` verification of its
 executable before publication. Delete the keychain and temporary key material
 at job cleanup.
 
-## Azure Artifact Signing
+## Azure Artifact Signing (platform policy only)
 
-Create a Public Trust signing account/profile and GitHub OIDC federation.
+Not required under `community`: Windows binaries are unsigned (no Authenticode)
+and the Azure check reports `not-required`. Under `platform`, create a Public Trust signing account/profile and GitHub OIDC federation.
 Configure these GitHub environment **variables** (not secrets) in
 `windows-signing`:
 
@@ -249,6 +252,8 @@ executable is archived. Do not add an Azure client secret fallback.
 
 ## WinGet and Chocolatey
 
+Both publish at stable only, never for an RC.
+
 - Accept the Microsoft CLA for the submitting identity.
 - Store an expiry-bounded classic PAT named `WINGET_CREATE_GITHUB_TOKEN` in
   `winget`, with only the `public_repo` scope required by `winget-create`.
@@ -260,16 +265,16 @@ executable is archived. Do not add an Azure client secret fallback.
 - Create/validate the Chocolatey publisher account.
 - Store `CHOCO_API_KEY` in `chocolatey`.
 
-Rehearse WinGet local-manifest install before submission and Chocolatey
-install/upgrade/invoke/uninstall from a local feed before `choco push`. A
-successful submission is not deployment.
+Rehearse WinGet local-manifest install (package `NaumanTanwir.GuardScan`) before
+submission and Chocolatey `guardscan` install/upgrade/invoke/uninstall from a
+local feed before `choco push`. A successful submission is not deployment.
 
 WinGet review and Chocolatey validation, verification, VirusTotal, and moderation are external states. The ledger keeps them `submitted` until public installation passes.
 
 ## Optional Homebrew Core
 
 Homebrew Core is **not selected** for the current release train. Do not submit a
-Core formula and do not advertise `brew install guardscan` during `1.1.0`.
+Core formula and do not advertise `brew install guardscan` during `1.1.1`.
 Users install from the first-party tap until a separate reviewed enablement is
 merged and verified.
 
@@ -286,30 +291,57 @@ Enabling Core later requires all of the following:
 Core remains nonblocking for first-party release completion even after an
 optional submission is tracked.
 
-## First `1.1.0` bootstrap exception
+## First train: 1.1.1
 
-The first stable train does not ask Release Please to regenerate `1.1.0`.
-The protected `release/1.1.0` pull request is the bootstrap release source
-because the previous `main` baseline and the new Release Please seed disagree
-about whether `1.1.0` is already prepared. Derive `1.1.0-rc.1` from that exact
-PR head, require the normal release gates, and merge/tag it through the release
-train. After `v1.1.0` is verified, align the Release Please manifest to `1.1.0`
-so subsequent stable release PRs follow the normal automated path.
+`1.1.0` was published to npm by hand on 2026-11-08 from `main` 0ef97f4, outside
+the release train. It has no provenance and no ledger record. GitHub Release
+v1.1.0 is published and immutable, holding only `guardscan-1.1.0.tgz` and
+`SHA256SUMS`. Release PR #32 merged without a promotion decision, so the former
+"first 1.1.0 bootstrap exception" no longer exists.
 
-Because v1.0.5 predates the protected release ledger, it is not a valid
-automated rollback target for this train. Before enabling automation, rehearse
-the first-release withdrawal contract: an empty `known_good` must be accepted
-only when the protected ledger proves there is no completed predecessor; it
-must retain immutable assets, remove or verify the exact empty shared catalog,
-open a recovery incident, record provider-owned actions, and avoid generating
-a forward-fix branch. A separately reviewed v1.1.1 is required after such a
+`1.1.1` is the first release through the train, for every channel:
+`1.1.1-rc.1`, a 24-hour soak, then `1.1.1`. Only npm (and pnpm/Yarn/Bun) is live
+today, at `1.1.0`; every other channel is planned for `1.1.1`.
+
+Bootstrap, in the order given under [Activation order](#activation-order-while-automation-is-off):
+
+1. Squash-merge the policy PR as `fix(release): ...` with a `Release-As: 1.1.1`
+   footer.
+2. Set `RELEASE_PLEASE_ENABLED=true` and dispatch `release-please.yml`.
+3. Approve the exact head of the App-authored release PR, set the provider
+   attestation, enable automation, and dispatch the candidate.
+
+`1.1.0` is not a valid rollback target: it has no ledger record or provenance,
+so no `known_good` can name it. Rehearse the first-release withdrawal contract
+before enabling automation. An empty `known_good` is accepted only when the
+protected ledger proves there is no completed predecessor; the workflow must
+retain immutable assets, remove or verify the exact empty shared catalog, open a
+recovery incident, record provider-owned actions, and avoid generating a
+forward-fix branch. A separately reviewed `1.1.2` is required after such a
 withdrawal. Later releases must supply a verified ledger-backed `known_good`.
 Repository withdrawal is not provider withdrawal: the protected state remains
 `provider-actions-pending`, with the recovery incident open, until the recorded
 npm, PyPI, WinGet, Chocolatey, or optional Core authorities complete their
-actions. Retrying the workflow re-verifies the empty catalog and closes the
-exact stale catalog publication PR; it does not turn pending provider work into
-success.
+actions. Retrying re-verifies the empty catalog and closes the exact stale
+catalog publication PR; it does not turn pending provider work into success.
+
+## Solo-maintainer controls
+
+With one owner and no independent code owner:
+
+- `pypi` environment: required reviewer is the owner. This is the documented
+  fallback for the missing independent code owner.
+- `testpypi` environment: create it, without reviewers.
+- `release-ledger` branch: protected so only the App writes.
+- `v*` tag ruleset: the App has the bypass.
+- npm trusted publisher: `release-train.yml`, environment `npm-publish`.
+- TestPyPI and PyPI pending publishers for `guardscan-cli`.
+- WinGet: Microsoft CLA plus a classic `public_repo` PAT as
+  `WINGET_CREATE_GITHUB_TOKEN` in the `winget` environment.
+- Chocolatey: `CHOCO_API_KEY` in the `chocolatey` environment.
+- Provider onboarding attestation: see activation step 5. Re-issue it at least
+  every 30 days and whenever an attested path or binding changes.
+- Relabel the merged release PR `autorelease: tagged` after promotion.
 
 ## Expiry monitoring
 
@@ -319,11 +351,11 @@ status/expiry metadata, never secret values.
 
 | Identity/binding | Automated signal | Alert/rehearsal policy |
 | --- | --- | --- |
-| GitHub App | Installation exists on exactly both repositories; required permissions remain; token mint succeeds | Check daily and before every candidate. Alert immediately on installation/permission drift and at the configured private-key age limit. |
+| GitHub App | Installation exists on exactly both repositories; required permissions (including Checks and Commit statuses read) remain; token mint succeeds | Check daily and before every candidate. Alert immediately on installation/permission drift and at the configured private-key age limit. |
 | npm trusted publisher | Repository, caller workflow, and `npm-publish` environment match; no token fallback exists | Check before every candidate and monthly. A mismatch keeps automation off. |
 | TestPyPI/PyPI trusted publishers | Project, repository, caller workflow, and the distinct `testpypi`/`pypi` environments match | Check both services before every candidate and monthly; rehearse TestPyPI before production. |
-| Apple certificate/notary identity | Certificate subject/team, expiry, and notary authentication are valid | Check daily; alert at 60, 30, 14, and 7 days. Renewal/identity revalidation requires the publisher. |
-| Azure federation/signing profile | Federated subject, signer role, account/profile state, and timestamp service are healthy | Check weekly and before every candidate with a non-secret signing preflight. Alert immediately on role or federation drift. |
+| Apple certificate/notary identity (platform policy only; `not-required` under `community`) | Certificate subject/team, expiry, and notary authentication are valid | Check daily; alert at 60, 30, 14, and 7 days. Renewal/identity revalidation requires the publisher. |
+| Azure federation/signing profile (platform policy only; `not-required` under `community`) | Federated subject, signer role, account/profile state, and timestamp service are healthy | Check weekly and before every candidate with a non-secret signing preflight. Alert immediately on role or federation drift. |
 | WinGet submitter | Token expiry/scope and Microsoft CLA state are valid | Check weekly; alert at 30, 14, and 7 days. CLA or account challenges remain external authority boundaries. |
 | Chocolatey publisher | Account/package ownership and API-key authentication remain valid | Check weekly with a non-publishing endpoint; alert at 30, 14, and 7 days when expiry metadata is available. |
 | Shared catalog connection | App installation, required check, dispatch permission, and scheduled reconciliation are healthy | Check daily. A missed dispatch is recovered by reconciliation; an invalid lock/digest is an integrity incident. |
@@ -338,8 +370,8 @@ release preflight only, it separately requires
 from the exact trusted control plane and rejects every machine-observed
 `warning` or `unhealthy` provider status. Only the documented Azure,
 Chocolatey, trusted-publisher, and WinGet visibility boundaries may remain
-`unknown`. Keep the attestation false until all provider configuration and
-rehearsal steps above have passed; set it false again whenever a binding,
+`unknown`. Keep the attestation false until all provider configuration steps above (and
+the rehearsal, under the platform policy) have passed; set it false again whenever a binding,
 account, environment, publisher identity, or attested control-plane file
 changes. A control-plane edit changes the computed subject and therefore blocks
 release eligibility until the provider bindings are rechecked. Re-run the

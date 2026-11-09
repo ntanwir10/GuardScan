@@ -6,6 +6,7 @@ const path = require('path');
 const semver = require('semver');
 const {readJson} = require('./lib');
 const {compareUtf8} = require('./deterministic');
+const {requiredSignatures} = require('./signing-policy');
 
 const RENDER_SCHEMA = 'guardscan.release-render.v1';
 const MARKER_FILE = '.guardscan-release-render.json';
@@ -53,13 +54,10 @@ function assertImmutableReleaseArtifact(manifest, artifact, expectedEntrypoint) 
       || !isSecureUrl(artifact.provenance.url)) {
     throw new Error(`standalone artifact has no secure provenance: ${artifact.id}`);
   }
-  const requiredSignatures = {
-    darwin: ['apple-code-signing', 'apple-notarization'],
-    linux: ['sigstore'],
-    windows: ['authenticode'],
-  }[artifact.platform.os];
+  if (!manifest.signingPolicy) throw new Error('release manifest has no signingPolicy');
+  const requiredSignatureTypes = requiredSignatures(manifest.signingPolicy, artifact.platform.os);
   const signatures = new Map((artifact.signatures || []).map(signature => [signature.type, signature]));
-  for (const requiredSignature of requiredSignatures) {
+  for (const requiredSignature of requiredSignatureTypes) {
     const signature = signatures.get(requiredSignature);
     if (signature?.verified !== true || !isSecureUrl(signature.url)) {
       throw new Error(`standalone artifact lacks required ${requiredSignature} evidence: ${artifact.id}`);

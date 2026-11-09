@@ -122,4 +122,11 @@ describe('production standalone artifact evidence', () => {
       /standalone reduced-capability contract failed/
     );
   });
+
+  it('rejects standalone evidence without the required sigstore signature', () => {
+    const descriptor = evidence();
+    descriptor.signatures = [];
+
+    expect(() => withArtifact(descriptor, () => undefined)).toThrow(/sigstore/);
+  });
 });

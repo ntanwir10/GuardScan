@@ -1,5 +1,13 @@
 # GuardScan release automation
 
+> **Status (2026-11-08).** Live: npm, pnpm, Yarn, and Bun at `1.1.0`. That
+> release was published to npm by hand from `main` 0ef97f4, outside the train: no
+> provenance, no ledger record. GitHub Release v1.1.0 is immutable and holds only
+> `guardscan-1.1.0.tgz` and `SHA256SUMS`. **Planned for `1.1.1`** (the first train
+> release: `1.1.1-rc.1`, a 24-hour soak, then `1.1.1`): npm with provenance, the
+> five standalone binaries, Homebrew tap, Scoop bucket, PyPI `guardscan-cli`, and,
+> at stable only, WinGet and Chocolatey. Signing policy: `community`.
+
 GuardScan uses one RC-first, append-only release train for npm, standalone GitHub assets, Homebrew, Scoop, WinGet, Chocolatey, and PyPI. pnpm, both Yarn generations, and Bun consume the npm package and are verified as separate install channels.
 
 The automation is fail-closed. A tag is an identity created by the release train, never publication authority. General CI has no tag trigger, publication permission, registry command, or GitHub release job.
@@ -14,7 +22,7 @@ evidence until it is bound to the selected commit and exact artifact.
 ## Release invariants
 
 - `cli/package.json`, `cli/package-lock.json`, `cli/CHANGELOG.md`, the tag, and the exact commit agree.
-- The stable Release Please PR remains at `1.1.0`. A bot-owned candidate commit derives `1.1.0-rc.1` from that exact PR head.
+- The stable Release Please PR remains at `1.1.1`. A bot-owned candidate commit derives `1.1.1-rc.1` from that exact PR head.
 - Release builds use Node `22.23.1`, esbuild `0.28.1`, and postject `1.0.0-alpha.6`.
 - Every public artifact is immutable and digest-bound to its source commit.
 - A signed build is persisted as a deterministic draft-release checkpoint
@@ -43,11 +51,11 @@ Core requires a separate reviewed enablement and remains nonblocking.
 | Workflow | Authority |
 | --- | --- |
 | `.github/workflows/ci.yml` | Required source, test, coverage, package, package-manager, audit, and five-host SEA gates. It cannot publish. |
-| `.github/workflows/release-please.yml` | Maintains the stable release PR only, using a short-lived GitHub App token. |
+| `.github/workflows/release-please.yml` | Maintains the stable release PR only (branch `release-please--branches--main`), using a short-lived GitHub App token. |
 | `.github/workflows/release-train.yml` | Derives RC commits, creates protected tags, dispatches builds/publication, reconciles every 30 minutes, promotes, rolls back, and persists release events. |
 | `.github/workflows/release-first-withdrawal.yml` | Withdraws the first stable train only when the protected ledger proves no verified predecessor exists; it never invents forward-fix source. |
-| `.github/workflows/release-build.yml` | Builds the exact npm tarball and five SEA targets, signs, notarizes, generates SPDX/CycloneDX, creates wheels, attests, archives deterministically, and aggregates the manifest/checksums. |
-| `.github/workflows/release-provider-rehearsal.yml` | Runs exact-head Apple and Azure signing rehearsals while publication automation is disabled; it emits non-production evidence only. |
+| `.github/workflows/release-build.yml` | Builds the exact npm tarball and five SEA targets, signs per the signing policy, generates SPDX/CycloneDX, creates wheels, attests, archives deterministically, and aggregates the manifest/checksums. |
+| `.github/workflows/release-provider-rehearsal.yml` | Platform policy only: runs exact-head Apple and Azure signing rehearsals while publication automation is disabled; it emits non-production evidence only. |
 | `.github/workflows/release-publish.yml` | Expands a persisted checkpoint, publishes tested registry handoffs through OIDC, and opens the generated shared-catalog update PR. |
 | `.github/workflows/release-canary.yml` | Runs hourly public install/invoke/uninstall canaries and polls moderated registries. |
 
@@ -85,8 +93,8 @@ projection without trying to include the catalog commit in its own contents:
   "schemaVersion": "guardscan.channel-catalog.v1",
   "source": {
     "repository": "ntanwir10/GuardScan",
-    "version": "1.1.0",
-    "tag": "v1.1.0",
+    "version": "1.1.1",
+    "tag": "v1.1.1",
     "commit": "GUARDSCAN_SOURCE_COMMIT",
     "manifestUrl": "IMMUTABLE_RELEASE_MANIFEST_URL",
     "manifestSha256": "RELEASE_MANIFEST_SHA256"
@@ -159,13 +167,13 @@ npm run release:validate
 npm run release:plan -- --profile full
 npm run release:prepare -- \
   --profile full \
-  --output-dir ../release-evidence/v1.1.0-rc.1 \
-  --ledger ../release-evidence/v1.1.0-rc.1/events.jsonl \
+  --output-dir ../release-evidence/v1.1.1-rc.1 \
+  --ledger ../release-evidence/v1.1.1-rc.1/events.jsonl \
   --timestamp 2026-07-25T18:00:00.000Z \
-  --idempotency-key train:v1.1.0-rc.1
+  --idempotency-key train:v1.1.1-rc.1
 npm run release:render -- \
-  --manifest ../release-evidence/v1.1.0-rc.1/release-manifest.json \
-  --output-dir ../release-evidence/v1.1.0-rc.1/adapters
+  --manifest ../release-evidence/v1.1.1-rc.1/release-manifest.json \
+  --output-dir ../release-evidence/v1.1.1-rc.1/adapters
 ```
 
 `advance` and the v1 mutable state schema remain temporarily available for compatibility with earlier local evidence. New automation uses only the hash-chained event ledger and materialized v2 state.
@@ -202,6 +210,42 @@ immediately before making the verified draft public. If that final transition
 is interrupted, the complete individual draft asset set remains recoverable
 without rebuilding signed bytes.
 
+## Signing policy
+
+The policy is committed in `cli/scripts/release/signing-policy.js`
+(`RELEASE_SIGNING_POLICY`, currently `community`). Changing it needs a reviewed PR
+and a new provider onboarding attestation.
+
+| Policy | macOS | Linux | Windows | Providers |
+| --- | --- | --- | --- | --- |
+| `community` (current) | Sigstore + build attestation; ad-hoc signed only, no Developer ID or notarization | Sigstore + attestation | Sigstore + attestation; no Authenticode | none; Apple and Azure health checks report `not-required` |
+| `platform` (kept for later) | Sigstore + Apple code signing + notarization | Sigstore | Sigstore + Authenticode | Apple signing/notary, Azure Artifact Signing |
+
+Under both policies every artifact gets a Sigstore/cosign keyless signature plus
+a GitHub build attestation (`attest-build-provenance`). A free Windows
+Authenticode path through the SignPath Foundation OSS program is planned as a
+future policy row.
+
+User verification:
+
+```bash
+cosign verify-blob --bundle <target>.guardscan.sigstore.json \
+  --certificate-identity "https://github.com/ntanwir10/GuardScan/.github/workflows/release-build.yml@refs/heads/main" \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com <binary>
+gh attestation verify <archive> --repo ntanwir10/GuardScan \
+  --signer-workflow ntanwir10/GuardScan/.github/workflows/release-build.yml
+```
+
+The identity string matches the one `release-canary.yml` checks.
+
+User experience under `community`:
+
+- brew, pip/pipx, npm, Scoop, WinGet, and Chocolatey installs are unaffected by
+  quarantine.
+- A macOS browser download of the zip is quarantined and Gatekeeper blocks it.
+  After verifying, run `xattr -d com.apple.quarantine ./guardscan`.
+- A Windows direct download shows SmartScreen ("unknown publisher").
+
 ## Artifact contracts
 
 Five host-native artifacts are required:
@@ -234,7 +278,7 @@ The standalone profile reports:
 
 Archives have normalized entry names, ordering, modes, timestamps, ownership, and compression. Inspection rejects traversal, absolute paths, links, duplicate/case-colliding entries, unexpected files, truncation, trailing data, invalid checksums, excessive entry counts, and excessive expanded size.
 
-Each PyPI wheel contains the exact signed executable already represented by its standalone archive. Its standard-library-only launcher verifies the embedded executable digest, forwards arguments and exit status, and uses `exec` for POSIX signal behavior. Wheel tags are derived from the actual platform:
+Each PyPI wheel contains the exact signed (per policy) executable already represented by its standalone archive. Its standard-library-only launcher verifies the embedded executable digest, forwards arguments and exit status, and uses `exec` for POSIX signal behavior. Wheel tags are derived from the actual platform:
 
 | Target | Wheel platform tag |
 | --- | --- |
@@ -288,7 +332,7 @@ default-branch workflow:
 EXPECTED_HEAD="$(gh pr view RELEASE_PR_NUMBER --json headRefOid --jq .headRefOid)"
 gh workflow run release-train.yml \
   -f action=candidate \
-  -f version=1.1.0-rc.1 \
+  -f version=1.1.1-rc.1 \
   -f release_pr=RELEASE_PR_NUMBER \
   -f expected_head="$EXPECTED_HEAD"
 ```
@@ -297,9 +341,9 @@ The train:
 
 1. resolves the exact stable PR head;
 2. creates a candidate commit containing only RC identity changes;
-3. creates `v1.1.0-rc.1` with the release GitHub App;
+3. creates `v1.1.1-rc.1` with the release GitHub App;
 4. builds, signs, attests, and verifies every artifact;
-5. publishes npm under `next`, GitHub as a prerelease, TestPyPI then PyPI, and the shared catalog preview branch `channel-preview/v1.1.0-rc.1`;
+5. publishes npm under `next`, GitHub as a prerelease, TestPyPI then PyPI, and the shared catalog preview branch `channel-preview/v1.1.1-rc.1`;
 6. renders and validates WinGet/Chocolatey without publishing an RC;
 7. records `publishedAt` and hourly canary evidence;
 8. reconciles every 30 minutes.
@@ -381,10 +425,10 @@ Once any earlier stable release has reached completion, omitting `known_good`
 fails closed and the normal verified-baseline rollback is mandatory.
 
 ```bash
-# First ledger-backed stable release only; protected-ledger proof is mandatory.
+# First ledger-backed stable release only (1.1.1; 1.1.0 has no ledger record); protected-ledger proof is mandatory.
 gh workflow run release-train.yml \
   -f action=rollback \
-  -f version=1.1.0
+  -f version=1.1.1
 
 # Every later stable release requires an exact verified predecessor.
 gh workflow run release-train.yml \

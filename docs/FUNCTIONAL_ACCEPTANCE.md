@@ -1,6 +1,6 @@
 # GuardScan functional acceptance
 
-This document is the launch evidence map for GuardScan `1.1.0`. It separates
+This document is the launch evidence map for GuardScan `1.1.1`, the first release through the train (`1.1.0` was published to npm by hand and is not train evidence). It separates
 implemented behavior from behavior proven in the exact artifact that users will
 install. A command appearing in help, compiling successfully, or passing a mock
 does not by itself make that command production-verified.
@@ -11,7 +11,7 @@ time. Every current-source change invalidates older exact-artifact evidence unti
 the required jobs rerun against the new commit.
 
 The current launch posture is **closed**: `RELEASE_AUTOMATION_ENABLED` remains
-`false` until onboarding is complete. No `1.1.0-rc.1` soak or `1.1.0` public
+`false` until onboarding is complete. No `1.1.1-rc.1` soak or `1.1.1` public
 verification is implied by this matrix.
 
 ## Evidence classes
@@ -81,14 +81,14 @@ not proved today.
 | AI-assisted commands | Mocked boundary plus bounded live BYOK/local-provider rehearsal | Factories, routers, decorators, cost controls, explanation/refactor, and RAG tests are deterministic. | OpenAI, Anthropic, Gemini, OpenRouter, Ollama, and LM Studio must each be explicitly supported, skipped with reason, or removed from the release claim. |
 | Telemetry | Exact disabled path plus opt-in delivery boundary | Exact artifacts prove disabled status; queue, redaction, endpoint, and collector contracts are tested. | Run an authorized live opt-in delivery rehearsal and prove opt-out leaves no queued/sent event. |
 | npm ecosystem | Exact tested tarball, then public-registry install | Three-OS Node 22/24 npm smoke and Linux npm/pnpm/Yarn/Bun consumer contracts are encoded in CI. | Publish RC with OIDC/provenance, redownload it, compare digest, and run public `next` canaries for 24 hours. |
-| Native GitHub release | Signed/notarized exact executable and immutable redownload | Five-host unsigned SEA build/smoke, deterministic archive, manifest, checksum, SBOM, signature, and attestation contracts exist. | Provider signing must succeed, every draft asset must redownload identically, and the release must become immutable. |
+| Native GitHub release | Exact executable with Sigstore signature and build attestation (`community` policy: macOS ad-hoc signed, Windows unsigned) and immutable redownload | Five-host SEA build/smoke, deterministic archive, manifest, checksum, SBOM, signature, and attestation contracts exist. | cosign and `gh attestation` verification must succeed for every asset, every draft asset must redownload identically, and the release must become immutable. |
 | PyPI/pip/pipx | Wheel containing the exact signed SEA executable | Wheel construction, platform tags, launcher integrity, and release-manifest binding have contract tests. | TestPyPI then PyPI OIDC publication and pip/pipx install/invoke/uninstall must pass on all supported hosts. |
 | Shared Homebrew/Scoop catalog | Generated projection bound to the immutable release manifest | Empty bootstrap and atomic formula/manifest/lock generation and validation are implemented. | The first stable catalog PR must pass native install/upgrade/invoke/uninstall and GuardScan must verify the merged lock callback or reconciliation result. |
 | WinGet | Generated portable manifest plus upstream state | Rendering, validation commands, and append-only submitted/accepted/verified states are implemented. | Local manifest install must pass, then upstream PR acceptance and public-catalog install must be observed. |
 | Chocolatey | Deterministic `.nupkg` plus moderated public state | Renderer, local validation command, and append-only moderation states are implemented. | Local-feed lifecycle must pass, then validation, verification, VirusTotal, moderation, and public install must complete. |
 | RC soak and promotion | Public canaries, unchanged PR head, no incident, 24-hour decision | Promotion policy and reconciliation contracts are tested. | At least 24 hourly green samples per required channel and a complete 24-hour wall-clock window are mandatory. |
 | Rollback/forward fix | Append-only recovery evidence | Known-good restoration and first-release withdrawal model supersession, exact catalog correction/removal, provider-owned yanking/deprecation, and recovery incidents without overwriting immutable artifacts. | Rehearse both a partial-publication failure and the no-predecessor first-release path before stable; require a separately reviewed patch when no verified baseline exists. |
-| Homebrew Core | Separately authorized submission and public-Core canary | A renderer/validator exists, but Core is not selected by the current release train. | A reviewed enablement change, Core submission/acceptance, and `brew install guardscan` public canary are required. It never blocks `1.1.0`. |
+| Homebrew Core | Separately authorized submission and public-Core canary | A renderer/validator exists, but Core is not selected by the current release train. | A reviewed enablement change, Core submission/acceptance, and `brew install guardscan` public canary are required. It never blocks `1.1.1`. |
 
 ## Install and runtime variants
 
@@ -99,10 +99,10 @@ not proved today.
 | pnpm global/dlx | Same npm tarball and Node requirement | Pinned pnpm `10.34.0` package-consumer smoke | Public registry global/dlx install, invoke, and uninstall. |
 | Yarn Classic global / Yarn Modern dlx | Same npm tarball and Node requirement | Yarn `1.22.22` and `4.9.2` package-consumer smoke | Public registry lifecycle for both generations. |
 | Bun global/bunx | Same npm tarball; GuardScan still requires Node 22 | Bun `1.3.14` package-consumer smoke | Public registry global/bunx lifecycle with Node present. |
-| SEA archives | Embedded pinned Node runtime | Linux glibc x64/arm64, macOS x64/arm64, Windows x64 | Current-SHA signing/notarization, attestation, immutable release, and public redownload. |
-| PyPI wheels | Exact signed SEA plus standard-library launcher | `manylinux_2_28_x86_64`, `manylinux_2_28_aarch64`, `macosx_11_0_x86_64`, `macosx_11_0_arm64`, `win_amd64` | TestPyPI/PyPI OIDC and pip/pipx native lifecycles. |
-| First-party Homebrew tap | Signed SEA selected by host CPU/OS | Four macOS/Linux targets from the shared catalog | Stable catalog merge and public tap lifecycle. |
-| Scoop, WinGet, Chocolatey | Signed Windows x64 SEA | One manifest/package per catalog, all bound to the same release digest | Public catalog acceptance and clean Windows lifecycle. |
+| SEA archives | Embedded pinned Node runtime | Linux glibc x64/arm64, macOS x64/arm64, Windows x64 | Current-SHA Sigstore signature and attestation (no notarization or Authenticode under `community`), immutable release, and public redownload. |
+| PyPI wheels | Exact Sigstore-signed SEA plus standard-library launcher | `manylinux_2_28_x86_64`, `manylinux_2_28_aarch64`, `macosx_11_0_x86_64`, `macosx_11_0_arm64`, `win_amd64` | TestPyPI/PyPI OIDC and pip/pipx native lifecycles. |
+| First-party Homebrew tap | Sigstore-signed SEA selected by host CPU/OS | Four macOS/Linux targets from the shared catalog | Stable catalog merge and public tap lifecycle. |
+| Scoop, WinGet, Chocolatey | Sigstore-signed Windows x64 SEA (no Authenticode) | One manifest/package per catalog, all bound to the same release digest | Public catalog acceptance and clean Windows lifecycle. |
 | Homebrew Core | Source build with Homebrew `node` dependency | Not selected | Separate reviewed enablement and public-Core verification. |
 
 ## Release decision rule
@@ -116,4 +116,4 @@ Stable release completion additionally requires every selected distribution
 channel to materialize as `verified` in the append-only ledger. Moderated
 channels may remain `submitted`, but the release is then still incomplete.
 Homebrew Core is not selected and therefore is neither a current install promise
-nor a `1.1.0` completion gate.
+nor a `1.1.1` completion gate.

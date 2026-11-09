@@ -132,11 +132,33 @@ describe('release credential and provider health workflow', () => {
       {provider: 'apple-signing-notary', status: 'unknown'},
     ])).toBe(false);
     expect(isReleaseEligible(true, true, [
+      {provider: 'apple-signing-notary', status: 'not-required'},
+      {provider: 'azure-artifact-signing', status: 'not-required'},
+    ])).toBe(true);
+    expect(isReleaseEligible(true, true, [
       {provider: 'trusted-publishers', status: 'warning'},
     ])).toBe(false);
     expect(isReleaseEligible(true, true, [
       {provider: 'trusted-publishers', status: 'unhealthy'},
     ])).toBe(false);
+  });
+
+  it('gates signing-provider jobs on the committed signing policy instead of secrets', () => {
+    const {workflow} = loadWorkflow();
+    const jobs = workflow.jobs as Record<string, any>;
+    const policy = jobs['signing-policy'];
+    expect(policy.permissions).toEqual({contents: 'read'});
+    expect(policy.environment).toBeUndefined();
+    expect(policy.steps[0].with).toMatchObject({
+      ref: '${{ job.workflow_sha }}', 'persist-credentials': false, 'sparse-checkout': 'cli/scripts/release',
+    });
+    expect(policy.steps[1].run).toBe('node cli/scripts/release/signing-policy.js >> "$GITHUB_OUTPUT"');
+    for (const [job, provider] of [['apple', 'apple-signing-notary'], ['azure', 'azure-artifact-signing']]) {
+      expect(jobs[job].needs).toBe('signing-policy');
+      expect(jobs[job].if).toContain(`&& contains(fromJSON(needs.signing-policy.outputs.providers), '${provider}')`);
+    }
+    expect(jobs.report.needs).toContain('signing-policy');
+    expect(jobs.report.if).toMatch(/^always\(\)/);
   });
 
   it('executes the aggregate report with the attestation helper in report scope', () => {
@@ -146,63 +168,101 @@ describe('release credential and provider health workflow', () => {
       step => step.name === 'Build machine-readable health report'
     )?.run;
     expect(reportRun).toContain("const {validateProviderOnboardingAttestation} = require(");
+    expect(reportRun).toContain("'./release-control-plane/cli/scripts/release/signing-policy'");
     const script = reportRun?.match(/node - <<'NODE'\n([\s\S]*?)\nNODE/)?.[1];
     expect(script).toBeTruthy();
+    const committedPolicy = /const RELEASE_SIGNING_POLICY = '[a-z]+';/;
+    const policySource = fs.readFileSync(
+      path.resolve(__dirname, '../../scripts/release/signing-policy.js'), 'utf8'
+    );
+    expect(policySource).toMatch(committedPolicy);
 
-    const fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'guardscan-health-report-'));
-    try {
-      const evidenceRoot = path.join(fixture, 'credential-health-evidence');
-      const helperRoot = path.join(fixture, 'release-control-plane', '.github', 'scripts');
-      fs.mkdirSync(evidenceRoot, {recursive: true});
-      fs.mkdirSync(helperRoot, {recursive: true});
-      fs.copyFileSync(
-        path.resolve(__dirname, '../../../.github/scripts/provider-onboarding-attestation.js'),
-        path.join(helperRoot, 'provider-onboarding-attestation.js')
-      );
-      const statuses = {
-        'apple-signing-notary': 'healthy',
-        'azure-artifact-signing': 'unknown',
-        'chocolatey-publisher': 'unknown',
-        'github-app-catalog': 'healthy',
-        'trusted-publishers': 'unknown',
-        'winget-submitter': 'unknown',
-      };
-      for (const [provider, status] of Object.entries(statuses)) {
-        fs.writeFileSync(path.join(evidenceRoot, `${provider}.json`), JSON.stringify({
-          schemaVersion: 'guardscan.credential-health.v1',
-          provider,
-          status,
-        }));
+    const runReport = (policy: string, statuses: Record<string, string>) => {
+      const fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'guardscan-health-report-'));
+      try {
+        const evidenceRoot = path.join(fixture, 'credential-health-evidence');
+        const helperRoot = path.join(fixture, 'release-control-plane', '.github', 'scripts');
+        const policyRoot = path.join(fixture, 'release-control-plane', 'cli', 'scripts', 'release');
+        for (const directory of [evidenceRoot, helperRoot, policyRoot]) fs.mkdirSync(directory, {recursive: true});
+        fs.copyFileSync(
+          path.resolve(__dirname, '../../../.github/scripts/provider-onboarding-attestation.js'),
+          path.join(helperRoot, 'provider-onboarding-attestation.js')
+        );
+        fs.writeFileSync(path.join(policyRoot, 'signing-policy.js'),
+          policySource.replace(committedPolicy, `const RELEASE_SIGNING_POLICY = '${policy}';`));
+        for (const [provider, status] of Object.entries(statuses)) {
+          fs.writeFileSync(path.join(evidenceRoot, `${provider}.json`), JSON.stringify({
+            schemaVersion: 'guardscan.credential-health.v1',
+            provider,
+            status,
+          }));
+        }
+        const scriptPath = path.join(fixture, 'report.js');
+        const output = path.join(fixture, 'github-output.txt');
+        fs.writeFileSync(scriptPath, script || '');
+        const subject = `sha256:${'a'.repeat(64)}`;
+        const issuedAt = new Date();
+        const expiresAt = new Date(issuedAt.getTime() + 24 * 60 * 60 * 1000);
+        const result = spawnSync(process.execPath, [scriptPath], {
+          cwd: fixture,
+          env: {
+            ...process.env,
+            RELEASE_PREFLIGHT: 'true',
+            EXPECTED_PROVIDER_ONBOARDING_ATTESTATION: subject,
+            RELEASE_PROVIDER_ONBOARDING_ATTESTATION: [
+              'guardscan.provider-onboarding.v1',
+              subject,
+              `issued=${issuedAt.toISOString()}`,
+              `expires=${expiresAt.toISOString()}`,
+            ].join('|'),
+            GITHUB_OUTPUT: output,
+            GITHUB_STEP_SUMMARY: path.join(fixture, 'summary.md'),
+          },
+          encoding: 'utf8',
+        });
+        const reportFile = path.join(fixture, 'credential-health-report.json');
+        return {
+          status: result.status,
+          stderr: result.stderr,
+          output: fs.existsSync(output) ? fs.readFileSync(output, 'utf8') : '',
+          report: fs.existsSync(reportFile) ? JSON.parse(fs.readFileSync(reportFile, 'utf8')) : undefined,
+        };
+      } finally {
+        fs.rmSync(fixture, {recursive: true, force: true});
       }
-      const scriptPath = path.join(fixture, 'report.js');
-      const output = path.join(fixture, 'github-output.txt');
-      fs.writeFileSync(scriptPath, script || '');
-      const subject = `sha256:${'a'.repeat(64)}`;
-      const issuedAt = new Date();
-      const expiresAt = new Date(issuedAt.getTime() + 24 * 60 * 60 * 1000);
-      const result = spawnSync(process.execPath, [scriptPath], {
-        cwd: fixture,
-        env: {
-          ...process.env,
-          RELEASE_PREFLIGHT: 'true',
-          EXPECTED_PROVIDER_ONBOARDING_ATTESTATION: subject,
-          RELEASE_PROVIDER_ONBOARDING_ATTESTATION: [
-            'guardscan.provider-onboarding.v1',
-            subject,
-            `issued=${issuedAt.toISOString()}`,
-            `expires=${expiresAt.toISOString()}`,
-          ].join('|'),
-          GITHUB_OUTPUT: output,
-          GITHUB_STEP_SUMMARY: path.join(fixture, 'summary.md'),
-        },
-        encoding: 'utf8',
-      });
-      expect(result.status).toBe(0);
-      expect(result.stderr).toBe('');
-      expect(fs.readFileSync(output, 'utf8')).toContain('release_eligible=true');
-    } finally {
-      fs.rmSync(fixture, {recursive: true, force: true});
-    }
+    };
+    const unsigned = {
+      'chocolatey-publisher': 'unknown',
+      'github-app-catalog': 'healthy',
+      'trusted-publishers': 'unknown',
+      'winget-submitter': 'unknown',
+    };
+
+    const community = runReport('community', unsigned);
+    expect(community.status).toBe(0);
+    expect(community.stderr).toBe('');
+    expect(community.output).toContain('release_eligible=true');
+    expect(community.output).toContain('status=unknown');
+    expect(community.report.providers).toEqual(expect.arrayContaining([
+      {provider: 'apple-signing-notary', status: 'not-required'},
+      {provider: 'azure-artifact-signing', status: 'not-required'},
+    ]));
+
+    const injected = runReport('community', {...unsigned, 'apple-signing-notary': 'healthy'});
+    expect(injected.status).not.toBe(0);
+    expect(injected.stderr).toContain('provider the signing policy does not require');
+    expect(injected.report).toBeUndefined();
+
+    const platformMissingApple = runReport('platform', {...unsigned, 'azure-artifact-signing': 'unknown'});
+    expect(platformMissingApple.status).not.toBe(0);
+    expect(platformMissingApple.stderr).toContain('provider health evidence is missing, duplicated, or malformed');
+
+    const platform = runReport('platform', {
+      ...unsigned, 'apple-signing-notary': 'healthy', 'azure-artifact-signing': 'unknown',
+    });
+    expect(platform.status).toBe(0);
+    expect(platform.output).toContain('release_eligible=true');
+    expect(platform.report.providers.some((item: {status: string}) => item.status === 'not-required')).toBe(false);
   });
 
   it('is non-publishing and does not contain secret-printing constructs', () => {
