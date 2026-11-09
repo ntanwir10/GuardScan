@@ -32,7 +32,8 @@ describe('release pull request automation', () => {
       },
     });
     expect(Object.keys(config.packages)).toEqual(['cli']);
-    expect(manifest).toEqual({cli: packageJson.version});
+    // RC candidate commits bump package.json to X.Y.Z-rc.N while the Release Please manifest stays at X.Y.Z.
+    expect(manifest).toEqual({cli: packageJson.version.replace(/-rc\.(0|[1-9][0-9]*)$/, '')});
   });
 
   it('uses a short-lived GitHub App token and pinned action commits', () => {
