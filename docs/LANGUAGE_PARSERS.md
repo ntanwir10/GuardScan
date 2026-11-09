@@ -40,6 +40,8 @@ interface Parser {
 
 ### Common Return Structure
 
+The shape below is the typical result for the function-oriented parsers (Python, Go, and similar). The exact fields vary by language; the Java parser returns `package`, `imports`, `classes`, `interfaces` and `enums` (each a class-like entry with `methods`) and has no top-level `functions`, `complexity` or `loc`. Check the parser's source before relying on a field.
+
 ```typescript
 interface ParsedFile {
   language: string;           // Language name
@@ -1173,7 +1175,9 @@ async function extractFunctions(filePath: string) {
 
   const result = await parser.parseFile(filePath);
   // The Java parser returns classes (with methods) rather than a flat functions list
-  return 'functions' in result ? result.functions : result.classes.flatMap(c => c.methods);
+  if ('functions' in result) return result.functions;
+  // Java: collect methods from classes, interfaces and enums
+  return [...result.classes, ...result.interfaces, ...result.enums].flatMap(c => c.methods);
 }
 
 // Usage
@@ -1216,7 +1220,10 @@ async function findComplexFunctions(threshold: number = 10) {
     const parser = getParserForFile(file);
     const result = await parser.parseFile(file);
 
-    const complex = result.functions.filter(
+    const functions = 'functions' in result
+      ? result.functions
+      : [...result.classes, ...result.interfaces, ...result.enums].flatMap(c => c.methods); // Java
+    const complex = functions.filter(
       fn => fn.complexity >= threshold
     );
 
