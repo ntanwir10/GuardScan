@@ -5,6 +5,13 @@ All notable changes to GuardScan will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.1](https://github.com/ntanwir10/GuardScan/compare/v1.1.0...v1.1.1) (2026-11-09)
+
+
+### Bug Fixes
+
+* **release:** add a community signing policy for unsigned native channels ([#38](https://github.com/ntanwir10/GuardScan/issues/38)) ([4b9d458](https://github.com/ntanwir10/GuardScan/commit/4b9d458a791538526eb8d4192463015a1dac98f1))
+
 ## [1.1.0] - 2026-11-08
 
 ### Added
