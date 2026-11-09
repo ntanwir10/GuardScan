@@ -27,7 +27,12 @@ function hostPlatform() {
   if (!['arm64', 'x64'].includes(process.arch)) {
     throw new Error(`standalone prototypes do not support host architecture ${process.arch}`);
   }
-  return {os: osName, arch: process.arch};
+  if (osName !== 'linux') return {os: osName, arch: process.arch};
+  // Release targets are glibc-only; record it so signing can bind the matrix libc exactly.
+  if (!process.report?.getReport?.().header?.glibcVersionRuntime) {
+    throw new Error('standalone prototypes support only glibc Linux hosts');
+  }
+  return {os: osName, arch: process.arch, libc: 'glibc'};
 }
 
 function assertEmbeddableNodeRuntime() {
