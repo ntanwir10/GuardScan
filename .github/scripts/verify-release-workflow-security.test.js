@@ -271,7 +271,8 @@ test('release train requires explicit preflight eligibility while monitoring pre
   assert.match(health, /ref: \$\{\{ job\.workflow_sha \}\}/);
   assert.match(health, /item\.status === 'unknown' && allowedUnknown\.has\(item\.provider\)/);
   assert.match(health, /report\.releaseEligibility\.status !== 'eligible'/);
-  assert.match(health, /report\.status !== 'healthy'/);
+  assert.match(health, /report\.monitoring\.status !== 'ok'/);
+  assert.match(health, /providers\.filter\(item => !isReleaseEligible\(true, true, \[item\]\)\)/);
 });
 
 test('canary aggregation delegates fail-closed incident handling to record-canary', () => {

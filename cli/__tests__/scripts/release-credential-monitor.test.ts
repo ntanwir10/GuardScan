@@ -108,7 +108,7 @@ describe('release credential and provider health workflow', () => {
     expect(source).toContain("'winget-submitter'");
     expect(source).toContain("status: releaseEligible ? 'eligible' : 'blocked'");
     expect(source).toContain("report.releaseEligibility.status !== 'eligible'");
-    expect(source).toContain("report.status !== 'healthy'");
+    expect(source).toContain("report.monitoring.status !== 'ok'");
 
     const policySource = source.match(
       /function isReleaseEligible\([^)]*\) \{[\s\S]*?\n          \}/
@@ -243,6 +243,11 @@ describe('release credential and provider health workflow', () => {
     expect(community.stderr).toBe('');
     expect(community.output).toContain('release_eligible=true');
     expect(community.output).toContain('status=unknown');
+    // Allowlisted unobservable providers must not keep the daily monitor permanently red.
+    expect(community.report.monitoring).toEqual({status: 'ok', alerts: []});
+    const expiring = runReport('community', {...unsigned, 'winget-submitter': 'warning'});
+    expect(expiring.report.monitoring).toEqual({status: 'alert', alerts: ['winget-submitter:warning']});
+    expect(expiring.output).toContain('release_eligible=false');
     expect(community.report.providers).toEqual(expect.arrayContaining([
       {provider: 'apple-signing-notary', status: 'not-required'},
       {provider: 'azure-artifact-signing', status: 'not-required'},
