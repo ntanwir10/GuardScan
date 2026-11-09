@@ -5,6 +5,15 @@ All notable changes to GuardScan will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.1](https://github.com/ntanwir10/GuardScan/compare/v1.1.0...v1.1.1) (2026-11-09)
+
+
+### Bug Fixes
+
+* **release:** add a community signing policy for unsigned native channels ([#38](https://github.com/ntanwir10/GuardScan/issues/38)) ([4b9d458](https://github.com/ntanwir10/GuardScan/commit/4b9d458a791538526eb8d4192463015a1dac98f1))
+* **release:** record glibc in Linux standalone prototype metadata ([#43](https://github.com/ntanwir10/GuardScan/issues/43)) ([da805da](https://github.com/ntanwir10/GuardScan/commit/da805da69d291e8f403a9474b235afb686bd3702))
+* **release:** stop flaky Windows smoke timeouts and a permanently red health monitor ([#42](https://github.com/ntanwir10/GuardScan/issues/42)) ([9620dae](https://github.com/ntanwir10/GuardScan/commit/9620dae1a11e034bce0912de9975cdb9dd86ce36))
+
 ## [1.1.0] - 2026-11-08
 
 ### Added
