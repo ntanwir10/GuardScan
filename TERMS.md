@@ -60,7 +60,7 @@ AI-powered features require **your own API keys**:
 - OpenRouter
 - Ollama and LM Studio (local AI)
 
-The current model list is available with `guardscan models list`.
+`guardscan models list` shows GuardScan's built-in model catalog; confirm exact model IDs with your provider.
 
 ---
 

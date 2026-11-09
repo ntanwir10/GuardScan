@@ -26,15 +26,15 @@ GuardScan includes **8 language parsers** that extract code structure, functions
 
 ## Common API Pattern
 
-All parsers implement the same interface:
+Every parser implements `parseFile`. Most language parsers also provide `parseCode`; the TypeScript/JavaScript `ASTParser` provides `parseFile` only. The result type differs by language (for example the Java parser returns `classes`, `interfaces` and `enums` rather than a flat `functions` list):
 
 ```typescript
 interface Parser {
   // Parse a file from disk
   parseFile(filePath: string): Promise<ParsedFile>;
 
-  // Parse code from string
-  parseCode(code: string, filePath: string): Promise<ParsedFile>;
+  // Parse code from string (not available on ASTParser)
+  parseCode?(code: string, filePath: string): Promise<ParsedFile>;
 }
 ```
 
@@ -1172,7 +1172,8 @@ async function extractFunctions(filePath: string) {
   }
 
   const result = await parser.parseFile(filePath);
-  return result.functions;
+  // The Java parser returns classes (with methods) rather than a flat functions list
+  return 'functions' in result ? result.functions : result.classes.flatMap(c => c.methods);
 }
 
 // Usage

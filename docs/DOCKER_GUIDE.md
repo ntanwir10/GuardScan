@@ -65,7 +65,7 @@ GuardScan stores configuration and caches under `~/.guardscan`, or under `GUARDS
 docker volume create guardscan-state
 docker run --rm -v guardscan-state:/guardscan -e GUARDSCAN_HOME=/guardscan \
   -v "$PWD":/workspace -w /workspace node:22-alpine \
-  sh -c "npm install -g guardscan && guardscan init && guardscan vuln db update . && guardscan vuln . --offline"
+  sh -c "npm install -g guardscan && guardscan init && guardscan config --offline=false && guardscan vuln db update . && guardscan vuln . --offline"
 ```
 
 Never bake API keys into an image. Pass provider keys at run time with `-e`, or use your CI system's secret store.
@@ -96,9 +96,9 @@ Build your own image if you scan often (this is your image, not a GuardScan rele
 
 ```dockerfile
 FROM node:22-alpine
-RUN npm install -g guardscan && addgroup -g 1000 scanner && adduser -D -u 1000 -G scanner scanner
-USER scanner
-ENV GUARDSCAN_HOME=/home/scanner/.guardscan
+RUN npm install -g guardscan
+USER node
+ENV GUARDSCAN_HOME=/home/node/.guardscan
 WORKDIR /workspace
 ENTRYPOINT ["guardscan"]
 ```
@@ -133,7 +133,7 @@ docker run --rm --read-only --tmpfs /tmp --network none \
   --memory 1g --cpus 2 \
   -v "$PWD":/workspace:ro -w /workspace \
   -e GUARDSCAN_HOME=/tmp/guardscan \
-  my-guardscan security --offline --no-cve
+  my-guardscan security --offline --no-cve --output /tmp/guardscan-report.md
 ```
 
 `--network none` only works with a pre-built image (the install step needs network access) and with `--offline` runs that use `--no-cve` or a prepared vulnerability snapshot.

@@ -143,17 +143,16 @@ Override the AI model for this chat session.
 
 ```bash
 guardscan chat --model gpt-4o
-guardscan chat --model claude-sonnet-4.5
 guardscan chat --model gemini-2.5-flash
 ```
 
-**Available models** depend on your configured AI provider. List the current catalog with:
+**Available models** depend on your configured AI provider. `guardscan models list` prints GuardScan's built-in static catalog, not a live availability list, and the override is passed to the provider unchanged, so confirm the exact model ID in your provider's documentation. Print the catalog with:
 
 ```bash
 guardscan models list
 ```
 
-Examples from the built-in registry at the time of writing: `gpt-5.1`, `gpt-4o`, `gpt-4.1-mini` (OpenAI); `claude-sonnet-4.5` (Claude); `gemini-3-pro`, `gemini-2.5-pro`, `gemini-2.5-flash` (Gemini); `codellama`, `mistral` (Ollama). The registry is defined in [`cli/src/providers/model-registry.ts`](https://github.com/ntanwir10/GuardScan/blob/main/cli/src/providers/model-registry.ts).
+Examples from the built-in registry at the time of writing: `gpt-5.1`, `gpt-4o`, `gpt-4.1-mini` (OpenAI); `gemini-3-pro`, `gemini-2.5-pro`, `gemini-2.5-flash` (Gemini); `codellama`, `mistral` (Ollama). The registry is defined in [`cli/src/providers/model-registry.ts`](https://github.com/ntanwir10/GuardScan/blob/main/cli/src/providers/model-registry.ts).
 
 ### `--temperature <value>`
 

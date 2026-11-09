@@ -67,6 +67,7 @@ jobs:
     permissions:
       contents: read
       security-events: write   # needed to upload SARIF
+      actions: read            # also needed for upload-sarif in private repositories
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -89,7 +90,7 @@ jobs:
 
 `actions/*` and `github/codeql-action` are third-party GitHub actions; pin them to commit SHAs if your policy requires it. Pin the GuardScan version too (`npm i -g guardscan@1.1.0`) for reproducible runs.
 
-To add dependency CVE coverage, drop `--offline --no-cve` and let the job reach the OSV service, or restore a prepared snapshot from your own cache.
+`guardscan init` in CI persists offline mode, and `security` only scans dependencies with `--cve`. For online CVE coverage, run `guardscan config --offline=false` after `init` and add `--cve` (and drop `--offline --no-cve`). To reuse a snapshot restored from your own cache, keep `--offline` and add `--cve`. SARIF upload also requires code scanning to be enabled for the repository.
 
 ## Pre-commit hook
 

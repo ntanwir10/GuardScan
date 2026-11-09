@@ -108,6 +108,6 @@ guardscan status
 
 ## Telemetry notice for old versions
 
-Versions 1.0.5 and earlier still try to send telemetry to a retired address. Upgrade to 1.1.0 or later, or run `guardscan config --telemetry=false`. See [PRIVACY.md](../PRIVACY.md).
+Versions 1.0.5 and earlier with telemetry enabled still try to send telemetry to a retired address. Upgrade to 1.1.0 or later. For version 1.0.5, you can also set `GUARDSCAN_NO_TELEMETRY=true` in the environment of each GuardScan process; this does not delete queued events. See [PRIVACY.md](../PRIVACY.md).
 
 Next: [Getting started](GETTING_STARTED.md) · [Command reference](COMMANDS.md).

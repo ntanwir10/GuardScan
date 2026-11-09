@@ -65,7 +65,7 @@ guardscan review --file src/index.ts       # AI review of one file
 guardscan config --telemetry=false         # telemetry is already off by default
 ```
 
-Exit codes: `0` passed, `1` policy violated or error, `2` required coverage failed. See [COMMANDS.md](docs/COMMANDS.md#exit-codes).
+Exit codes: `0` passed, `1` policy violated, `2` required coverage failed or the command itself errored (for `scan`, `security`, `vuln`, `run`). See [COMMANDS.md](docs/COMMANDS.md#exit-codes).
 
 ## More
 

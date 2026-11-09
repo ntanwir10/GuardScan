@@ -404,7 +404,7 @@ See [PRIVACY.md](https://github.com/ntanwir10/GuardScan/blob/main/PRIVACY.md) fo
 
 ### Self-hosted model endpoints
 
-Point GuardScan at a local Ollama or LM Studio server with `guardscan config` (see above). Non-loopback endpoints need explicit approval (`allowRemoteSelfHosted` in `config.yml`).
+Point GuardScan at a local Ollama or LM Studio server with `guardscan config` (see above). A non-loopback endpoint additionally requires offline mode to be disabled and `allowRemoteSelfHosted: true` in `config.yml`; use an HTTPS endpoint.
 
 ### Multiple Profiles
 

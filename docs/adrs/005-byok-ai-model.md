@@ -261,7 +261,7 @@ async function reviewCode(filePath: string): Promise<string> {
 
 ### Cost visibility
 
-Because requests go straight to the provider, cost appears on the user's own provider bill. `guardscan budget status` and `guardscan metrics show` report local estimates; they are not billing records.
+Because requests go straight to the provider, cost appears on the user's own provider bill. `guardscan budget status` and `guardscan metrics show` report local estimates only. `budget status` may omit AI usage (for example after `guardscan run --with-ai`, which records metrics but not budget usage records), so use your provider's bill for actual spending.
 
 ## Alternatives Considered
 

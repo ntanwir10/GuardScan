@@ -29,8 +29,8 @@ One table for every command. Values come from the CLI source (`cli/src/commands/
 | Code | Meaning | Where it applies |
 |---|---|---|
 | `0` | The command completed and, where a policy applies, the policy passed. | All commands |
-| `1` | Findings violated the policy (`--fail-on`, `--max-findings`, `--max-vulnerabilities`), or the command failed with an error (invalid input, missing configuration, unhandled exception). | `scan`, `security`, `vuln` for policy; all commands for errors |
-| `2` | A required scanner or coverage step failed, for example a scanner crashed or CVE coverage was missing, stale or incomplete and `--allow-partial` was not given. | `scan`, `security`, `vuln`, `run` |
+| `1` | Findings violated the policy (`--fail-on`, `--max-findings`, `--max-vulnerabilities`). Other commands also use `1` for errors such as invalid input or missing configuration. | Policy: `scan`, `security`, `vuln`. Errors: most other commands |
+| `2` | A required scanner or coverage step failed, or the command itself failed (for example an invalid option value or report format). CVE coverage that is missing, stale or incomplete also exits `2` unless `--allow-partial` is given. | `scan`, `security`, `vuln`, `run` |
 
 When several results apply in one run, the highest code wins. Use `--ci` to opt in to the CI exit-code policy and see [Offline mode and CI](OFFLINE_AND_CI.md).
 

@@ -120,7 +120,7 @@ Whoever operates a self-hosted endpoint is responsible for publishing its retent
 
 ### Retirement of the hosted collector
 
-The Cloudflare service at `api.guardscancli.com` was deleted in November 2026 under [ADR 007](./docs/adrs/007-retire-hosted-cloudflare-telemetry.md), and GuardScan no longer controls the `guardscancli.com` domain. Documentation and identifiers moved to `guardscancli.vercel.app`. Versions `1.0.5` and earlier with telemetry enabled still try to send events to the retired address, and a future owner of the domain could receive them. Upgrade to 1.1.0 or later, or run `guardscan config --telemetry=false`. Existing local queues are not transferred; inspect, explicitly sync to a user-operated collector, or delete them.
+The Cloudflare service at `api.guardscancli.com` was deleted in November 2026 under [ADR 007](./docs/adrs/007-retire-hosted-cloudflare-telemetry.md), and GuardScan no longer controls the `guardscancli.com` domain. Documentation and identifiers moved to `guardscancli.vercel.app`. Versions `1.0.5` and earlier with telemetry enabled still try to send events to the retired address, and a future owner of the domain could receive them. Upgrade to 1.1.0 or later. For 1.0.5, you can also set `GUARDSCAN_NO_TELEMETRY=true` in the environment of each GuardScan process; this does not delete queued events. Existing local queues are not transferred; inspect, explicitly sync to a user-operated collector, or delete them.
 
 ## Local storage
 
