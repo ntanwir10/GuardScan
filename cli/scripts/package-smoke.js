@@ -196,7 +196,8 @@ function run(command, args, cwd, env = process.env, allowed = [0]) {
     env,
     encoding: 'utf8',
     shell: false,
-    timeout: 120000,
+    // Windows runners sometimes need over two minutes for the global registry install.
+    timeout: 300000,
     maxBuffer: 16 * 1024 * 1024,
     windowsHide: true,
   });
