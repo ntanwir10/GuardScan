@@ -221,7 +221,9 @@ and a new provider onboarding attestation.
 | `community` (current) | Sigstore + build attestation; ad-hoc signed only, no Developer ID or notarization | Sigstore + attestation | Sigstore + attestation; no Authenticode | none; Apple and Azure health checks report `not-required` |
 | `platform` (kept for later) | Sigstore + Apple code signing + notarization | Sigstore | Sigstore + Authenticode | Apple signing/notary, Azure Artifact Signing |
 
-Under both policies every artifact gets a Sigstore/cosign keyless signature plus
+Under both policies each native executable and `SHA256SUMS` get a Sigstore/cosign
+keyless signature; `SHA256SUMS` covers every release file. The npm tarball, each
+executable, archive, and wheel, plus `release-manifest.json` and `SHA256SUMS`, carry
 a GitHub build attestation (`attest-build-provenance`). A free Windows
 Authenticode path through the SignPath Foundation OSS program is planned as a
 future policy row.
