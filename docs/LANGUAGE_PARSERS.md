@@ -2,8 +2,8 @@
 
 **GuardScan Multi-Language Parser API Reference**
 
-**Version:** 1.0.0
-**Last Updated:** 2025-11-16
+**Applies to:** GuardScan 1.1.x
+**Last Updated:** 2026-11-08
 
 ---
 
@@ -1322,6 +1322,6 @@ const results = await Promise.all(
 
 ---
 
-**Last Updated:** 2025-11-16
-**Version:** 1.0.0
+**Last Updated:** 2026-11-08
+**Applies to:** GuardScan 1.1.x
 **Maintainer:** GuardScan Team

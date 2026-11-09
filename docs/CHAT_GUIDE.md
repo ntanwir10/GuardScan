@@ -147,11 +147,13 @@ guardscan chat --model claude-sonnet-4.5
 guardscan chat --model gemini-2.5-flash
 ```
 
-**Available models** depend on your configured AI provider:
+**Available models** depend on your configured AI provider. List the current catalog with:
 
-- **OpenAI**: `gpt-5.1`, `gpt-4o`, `gpt-4.1-mini`, `gpt-3.5-turbo`
-- **Claude**: `claude-opus-4.5`, `claude-sonnet-4.5`, `claude-haiku-4.5`
-- **Gemini**: `gemini-3-pro`, `gemini-2.5-pro`, `gemini-2.5-flash`, `gemini-2.5-flash-lite`
+```bash
+guardscan models list
+```
+
+Examples from the built-in registry at the time of writing: `gpt-5.1`, `gpt-4o`, `gpt-4.1-mini` (OpenAI); `claude-sonnet-4.5` (Claude); `gemini-3-pro`, `gemini-2.5-pro`, `gemini-2.5-flash` (Gemini); `codellama`, `mistral` (Ollama). The registry is defined in [`cli/src/providers/model-registry.ts`](https://github.com/ntanwir10/GuardScan/blob/main/cli/src/providers/model-registry.ts).
 
 ### `--temperature <value>`
 
@@ -456,9 +458,9 @@ Exported conversations contain:
 ## Next Steps
 
 - Read the [Getting Started Guide](GETTING_STARTED.md) for basic usage
-- Check [Configuration Guide](CONFIGURATION.md) for AI provider setup
-- Explore [API Documentation](API.md) for programmatic access
-- Review [Security Scanners](SECURITY_SCANNERS.md) for security features
+- See the [Command reference](COMMANDS.md) for every command and flag
+- Run offline or in CI: [Offline mode and CI](OFFLINE_AND_CI.md)
+- Review [Dependency Vulnerability Scanning](VULNERABILITY_SCANNING.md)
 
 ## Getting Help
 

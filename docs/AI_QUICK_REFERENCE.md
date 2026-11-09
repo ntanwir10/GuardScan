@@ -37,6 +37,8 @@ guardscan cache stats
 guardscan cache clear --repo --force
 ```
 
+`guardscan models list` prints the current model catalog; do not rely on a model name copied from documentation. Examples from the built-in registry: `gpt-5.1`, `gpt-4o`, `claude-sonnet-4.5`, `gemini-2.5-flash`, `codellama`. Source: [`model-registry.ts`](https://github.com/ntanwir10/GuardScan/blob/main/cli/src/providers/model-registry.ts).
+
 ## Advanced Settings
 
 Edit `~/.guardscan/config.yml` for nested settings:

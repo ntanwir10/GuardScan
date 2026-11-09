@@ -20,18 +20,21 @@ GuardScan is a privacy-first CLI tool that uses AI to automatically review your 
 
 ## Installation
 
-### Via NPM (Recommended)
+### Via npm
 
 ```bash
 npm install -g guardscan
+guardscan --version
 ```
+
+Requires Node.js 22 or newer. pnpm, Yarn and Bun work too; other channels (Homebrew, Scoop, PyPI, WinGet, Chocolatey, standalone binaries) are planned for 1.1.1 and not yet available. See [Install, upgrade and uninstall](INSTALL.md) for every channel and its status.
 
 ### From Source
 
 ```bash
 git clone https://github.com/ntanwir10/GuardScan.git
 cd GuardScan/cli
-npm install
+npm ci
 npm run build
 npm link
 ```
@@ -205,9 +208,8 @@ Actionable suggestions for improving your codebase.
 git checkout feature/my-feature
 guardscan run
 
-# Review and generate HTML report
-guardscan run > review.md
-# Open review.md in browser
+# Write a Markdown report (formats: markdown, json, sarif; there is no HTML format)
+guardscan scan --format markdown --output review.md
 ```
 
 ### Pre-Commit Security Check
@@ -262,8 +264,8 @@ guardscan security -f src/**/*.ts
 # Generate commit message without body
 guardscan commit --no-body
 
-# Run with AI enhancement disabled
-guardscan run --no-with-ai
+# Run the combined scan without the AI review step
+guardscan scan --skip-ai
 ```
 
 ### CI results
@@ -275,7 +277,7 @@ guardscan security --ci --format json --output guardscan.json --fail-on high
 guardscan scan --ci --format sarif --output guardscan.sarif --max-findings 25
 ```
 
-Exit code `0` means execution and policy passed, `1` means findings violated policy, and `2` means a required scanner or coverage step failed. JSON includes the same policy exit code and each scanner's succeeded, failed, or skipped state.
+Exit code `0` means execution and policy passed, `1` means findings violated policy, and `2` means a required scanner or coverage step failed. See the [exit-code table](COMMANDS.md#exit-codes) and [Offline mode and CI](OFFLINE_AND_CI.md) for the full policy, SARIF upload and a GitHub Actions example.
 
 ### Flag Naming Convention
 
@@ -316,6 +318,24 @@ GUARDSCAN_DEBUG=true guardscan <command>
 # Or using --debug flag (for security command)
 guardscan security --debug
 ```
+
+### "Configuration not found"
+
+Run `guardscan init` first.
+
+### "AI provider not configured"
+
+Either run `guardscan config` to set up a BYOK provider or switch to a local AI provider such as Ollama or LM Studio.
+
+### "Could not connect to provider"
+
+- Check your API key
+- Verify internet connection
+- Test provider endpoint
+
+### Rate Limited by AI Provider
+
+Most providers have rate limits. Wait a minute and try again, or upgrade your provider account.
 
 ## Configuration Options
 
@@ -378,43 +398,20 @@ guardscan telemetry sync
 Failed delivery leaves the batch queued. `guardscan config --telemetry=false`
 deletes the queue. Use `guardscan telemetry status` and
 `guardscan telemetry clear --force` to inspect or delete it explicitly.
-`GUARDSCAN_API_URL` and the former `api.guardscancli.com` service are retired.
-
-## Troubleshooting
-
-### "Configuration not found"
-
-Run `guardscan init` first.
-
-### "AI provider not configured"
-
-Either run `guardscan config` to set up a BYOK provider or switch to a local AI provider such as Ollama or LM Studio.
-
-### "Could not connect to provider"
-
-- Check your API key
-- Verify internet connection
-- Test provider endpoint
-
-### Rate Limited by AI Provider
-
-Most providers have rate limits. Wait a minute and try again, or upgrade your provider account.
+See [PRIVACY.md](https://github.com/ntanwir10/GuardScan/blob/main/PRIVACY.md) for the telemetry retirement notice.
 
 ## Advanced Usage
 
-### Custom API Endpoints
+### Self-hosted model endpoints
 
-```bash
-export API_BASE_URL=https://your-custom-api.com
-guardscan run
-```
+Point GuardScan at a local Ollama or LM Studio server with `guardscan config` (see above). Non-loopback endpoints need explicit approval (`allowRemoteSelfHosted` in `config.yml`).
 
 ### Multiple Profiles
 
-You can maintain different configs by using environment variables:
+Set `GUARDSCAN_HOME` to keep a separate configuration directory:
 
 ```bash
-export AI_REVIEW_CONFIG_DIR=~/.guardscan-work
+export GUARDSCAN_HOME=~/.guardscan-work
 guardscan init
 ```
 
@@ -435,5 +432,9 @@ done
 
 ## Next Steps
 
-- Read the [API Documentation](./API.md)
+- [Install, upgrade and uninstall](INSTALL.md)
+- [Command reference](COMMANDS.md) (every command, flag and exit code)
+- [Offline mode and CI](OFFLINE_AND_CI.md)
+- [Chat guide](CHAT_GUIDE.md) and [AI quick reference](AI_QUICK_REFERENCE.md)
+- [Self-hosted telemetry collector protocol](TELEMETRY_COLLECTOR.md)
 - Open a focused pull request with tests and a clear rationale
