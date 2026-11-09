@@ -60,6 +60,7 @@ function makeManifest(): JsonDocument {
     version: '1.2.0-rc.1+build.7',
     tag: 'v1.2.0-rc.1+build.7',
     commit,
+    signingPolicy: 'community',
     createdAt: timestamp,
     producer: {
       provider: 'github-actions',

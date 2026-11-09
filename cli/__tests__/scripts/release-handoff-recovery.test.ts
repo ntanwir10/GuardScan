@@ -120,7 +120,7 @@ describe('release handoff recovery regressions', () => {
   }));
 
   it.each([
-    ['native-finalize', 'Restore executable permissions after native input authentication', 'standalone', 'Validate native input structure and digest before signing', 'Keyless-sign Linux executable'],
+    ['native-finalize', 'Restore executable permissions after native input authentication', 'standalone', 'Validate native input structure and digest before signing', 'Keyless-sign native executable'],
     ['provider-finalize', 'Restore executable permissions after provider input authentication', 'rehearsal-standalone', 'Require artifact-service digest for provider input', 'Sign and notarize Apple rehearsal executable'],
   ])('restores authenticated 0644 Unix executables before signing: %s', (jobName, name, directory, validation, signing) => temporary(root => {
     const job = build.jobs[jobName];

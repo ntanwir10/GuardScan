@@ -131,6 +131,7 @@ describe('release workflow review regressions', () => {
         version: '1.2.3',
         tag: 'v1.2.3',
         commit: 'c'.repeat(40),
+        signingPolicy: 'community',
         producer: {
           provider: 'github-actions', repository: 'ntanwir10/GuardScan',
           workflow: '.github/workflows/release-build.yml', workflowSha: 'a'.repeat(40), runId: '123',
@@ -150,6 +151,7 @@ describe('release workflow review regressions', () => {
       ], {input: JSON.stringify(manifest), encoding: 'utf8'});
       expect(checkManifest(trustedManifest).status).toBe(0);
       expect(checkManifest({...trustedManifest, version: '1.2.4'}).status).not.toBe(0);
+      expect(checkManifest({...trustedManifest, signingPolicy: undefined}).status).not.toBe(0);
       expect(checkManifest({...trustedManifest, producer: {...trustedManifest.producer, workflowSha: 'b'.repeat(40)}}).status).not.toBe(0);
       expect(checkManifest({...trustedManifest, artifacts: [{...trustedManifest.artifacts[0], filename: 'other.tar.gz'}]}).status).not.toBe(0);
       expect(checkManifest({...trustedManifest, artifacts: [

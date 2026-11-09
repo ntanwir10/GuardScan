@@ -5,6 +5,7 @@ const path = require('path');
 const {inspectArchive, writeArchive} = require('./archive');
 const {readJson} = require('./lib');
 const {assertReducedCapabilityEvidence} = require('./standalone');
+const {RELEASE_SIGNING_POLICY, requiredSignatures} = require('./signing-policy');
 
 const ARTIFACT_METADATA_SCHEMA = 'guardscan.artifact-metadata.v1';
 const EVIDENCE_SCHEMA = 'guardscan.standalone-evidence.v1';
@@ -26,6 +27,10 @@ function assertEvidence(source, platform, evidence) {
   if (!Array.isArray(evidence.signatures) || !Array.isArray(evidence.sboms)
       || !evidence.provenance) {
     throw new Error('standalone evidence is incomplete');
+  }
+  const signed = new Set(evidence.signatures.map(signature => signature.type));
+  for (const required of requiredSignatures(RELEASE_SIGNING_POLICY, platform.os)) {
+    if (!signed.has(required)) throw new Error(`standalone evidence lacks required ${required} signature`);
   }
   assertReducedCapabilityEvidence(evidence.optionalCapabilities);
   return evidence;

@@ -257,7 +257,12 @@ jobs:
             --pattern "guardscan-$VERSION-$TARGET.$ARCHIVE" \
             --pattern "SHA256SUMS" \
             --pattern "SHA256SUMS.sigstore.json" \
-            --pattern "release-manifest.json"
+            --pattern "release-manifest.json" \
+            --pattern "$TARGET.guardscan.sigstore.json" \
+            --pattern "$TARGET.archive.provenance.sigstore.json"
+          # gh fails only when no pattern matches, so require each per-target bundle explicitly.
+          test -f "release/$TARGET.guardscan.sigstore.json"
+          test -f "release/$TARGET.archive.provenance.sigstore.json"
       - name: Authenticate the release-build producer and verify signed checksums
         id: release-build-identity
         shell: bash
@@ -319,6 +324,7 @@ jobs:
             --arg attempt "$(jq -r '.producer.runAttempt' release/release-manifest.json)" \
             --arg workflow_sha "$BUILD_WORKFLOW_SHA" --arg tag_sha "$TAG_SHA" '
               .schemaVersion == "guardscan.release-manifest.v1" and
+              (.signingPolicy | type == "string") and
               .version == $version and .tag == ("v" + $version) and .commit == $tag_sha and
               .producer.provider == "github-actions" and
               (.producer.repository | ascii_downcase) == ($repository | ascii_downcase) and
@@ -333,6 +339,30 @@ jobs:
               echo 'Signed release manifest does not match the exact train and immutable tag.' >&2
               exit 1
             }
+      - name: Resolve required signatures from the verified manifest policy
+        id: signing
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target.id }}
+        run: |
+          POLICY="$(jq -er '.signingPolicy | select(type == "string")' release/release-manifest.json)"
+          node cli/scripts/release/signing-policy.js "$POLICY" "${TARGET%%-*}" >> "$GITHUB_OUTPUT"
+      - name: Verify archive build provenance
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ matrix.train.version }}
+          TARGET: ${{ matrix.target.id }}
+          ARCHIVE: ${{ matrix.target.archive }}
+          BUILD_WORKFLOW_SHA: ${{ steps.release-build-identity.outputs.workflow_sha }}
+        run: |
+          ARCHIVE_NAME="guardscan-$VERSION-$TARGET.$ARCHIVE"
+          gh attestation verify "release/$ARCHIVE_NAME" \
+            --bundle "release/$TARGET.archive.provenance.sigstore.json" \
+            --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release-build.yml" \
+            --signer-digest "$BUILD_WORKFLOW_SHA" \
+            --predicate-type 'https://slsa.dev/provenance/v1'
       - name: Extract verified GitHub archive
         shell: bash
         env:
@@ -346,26 +376,26 @@ jobs:
             mkdir executable
             tar -xzf "release/guardscan-$VERSION-$TARGET.$ARCHIVE" -C executable
           fi
-      - name: Verify Linux Sigstore identity
-        if: startsWith(matrix.target.id, 'linux-')
+      - name: Verify native Sigstore identity
         shell: bash
         env:
-          GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ matrix.train.version }}
           TARGET: ${{ matrix.target.id }}
+          EXECUTABLE: ${{ matrix.target.executable }}
           BUILD_WORKFLOW_SHA: ${{ steps.release-build-identity.outputs.workflow_sha }}
         run: |
-          gh release download "v$VERSION" --repo "${GITHUB_REPOSITORY}" \
-            --dir release --pattern "$TARGET.guardscan.sigstore.json"
           cosign verify-blob \
             --bundle "release/$TARGET.guardscan.sigstore.json" \
             --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release-build.yml@refs/heads/main" \
             --certificate-github-workflow-ref "refs/heads/main" \
             --certificate-github-workflow-sha "$BUILD_WORKFLOW_SHA" \
             --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
-            executable/guardscan
-      - name: Verify macOS signing and Gatekeeper
+            "executable/$EXECUTABLE"
+      - name: Verify macOS code signature
         if: startsWith(matrix.target.id, 'darwin-')
+        shell: bash
+        run: codesign --verify --strict --verbose=2 executable/guardscan
+      - name: Verify macOS signing and Gatekeeper
+        if: startsWith(matrix.target.id, 'darwin-') && contains(steps.signing.outputs.required, ',apple-notarization,')
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -389,7 +419,7 @@ jobs:
           trap 'hdiutil detach "$MOUNT_POINT"' EXIT
           cmp "$MOUNT_POINT/guardscan" executable/guardscan
       - name: Verify Windows Authenticode
-        if: startsWith(matrix.target.id, 'windows-')
+        if: startsWith(matrix.target.id, 'windows-') && contains(steps.signing.outputs.required, ',authenticode,')
         shell: pwsh
         run: |
           $signature = Get-AuthenticodeSignature executable\guardscan.exe

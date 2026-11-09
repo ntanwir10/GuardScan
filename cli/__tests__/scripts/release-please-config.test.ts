@@ -20,6 +20,7 @@ describe('release pull request automation', () => {
     ));
 
     expect(config).toMatchObject({
+      'separate-pull-requests': false,
       'skip-github-release': true,
       packages: {
         cli: {

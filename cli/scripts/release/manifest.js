@@ -12,6 +12,7 @@ const {
 const {canonicalJson} = require('./events');
 const {compareUtf8} = require('./deterministic');
 const {assertVerifiedAttestation} = require('./provenance');
+const {RELEASE_SIGNING_POLICY, requiredSignatures} = require('./signing-policy');
 
 const MANIFEST_SCHEMA = 'guardscan.release-manifest.v1';
 const INPUT_SCHEMA = 'guardscan.release-manifest-input.v1';
@@ -22,11 +23,6 @@ const REQUIRED_NATIVE_TARGETS = Object.freeze([
   'linux-x64-glibc',
   'windows-x64',
 ]);
-const REQUIRED_SIGNATURE = Object.freeze({
-  darwin: ['apple-code-signing', 'apple-notarization'],
-  linux: ['sigstore'],
-  windows: ['authenticode'],
-});
 
 function sha256Text(value) {
   return crypto.createHash('sha256').update(value).digest('hex');
@@ -104,7 +100,7 @@ function assertArtifactProvenance(source, producer, artifact) {
   }, `${artifact.id} provenance`);
 }
 
-function assertStandaloneArtifact(source, producer, artifact) {
+function assertStandaloneArtifact(source, producer, artifact, policy) {
   if (artifact.productionReady !== true) {
     throw new Error(`standalone artifact is not production ready: ${artifact.id}`);
   }
@@ -132,7 +128,7 @@ function assertStandaloneArtifact(source, producer, artifact) {
     }
   }
   const signatures = assertEvidenceCollection(artifact.signatures, 'signature', artifact.id);
-  for (const required of REQUIRED_SIGNATURE[artifact.platform.os]) {
+  for (const required of requiredSignatures(policy, artifact.platform.os)) {
     if (!signatures.has(required)) throw new Error(`${artifact.id} lacks required ${required} evidence`);
   }
   const sbomFormats = assertEvidenceCollection(artifact.sboms, 'SBOM', artifact.id);
@@ -147,7 +143,7 @@ function assertStandaloneArtifact(source, producer, artifact) {
   }
 }
 
-function assertArtifact(source, producer, artifact) {
+function assertArtifact(source, producer, artifact, policy) {
   if (!artifact || typeof artifact !== 'object' || typeof artifact.id !== 'string') {
     throw new Error('artifact metadata is invalid');
   }
@@ -157,7 +153,7 @@ function assertArtifact(source, producer, artifact) {
   }
   assertDigest(artifact.sha256, artifact.id);
   if (artifact.url) assertHttps(artifact.url, `${artifact.id} URL`);
-  if (artifact.kind === 'standalone') assertStandaloneArtifact(source, producer, artifact);
+  if (artifact.kind === 'standalone') assertStandaloneArtifact(source, producer, artifact, policy);
   if (artifact.kind === 'npm-tarball') {
     if (!/^sha512-[A-Za-z0-9+/]+={0,2}$/.test(artifact.integrity || '')) {
       throw new Error(`npm tarball integrity is invalid: ${artifact.id}`);
@@ -174,7 +170,7 @@ function assertArtifact(source, producer, artifact) {
   return artifact;
 }
 
-function createReleaseManifest(source, input) {
+function createReleaseManifest(source, input, policy = RELEASE_SIGNING_POLICY) {
   if (input.schemaVersion !== INPUT_SCHEMA) {
     throw new Error(`manifest input schema must be ${INPUT_SCHEMA}`);
   }
@@ -191,7 +187,7 @@ function createReleaseManifest(source, input) {
   if (!Array.isArray(input.artifacts) || input.artifacts.length === 0) {
     throw new Error('manifest input contains no artifacts');
   }
-  const artifacts = input.artifacts.map(artifact => assertArtifact(source, input.producer, artifact));
+  const artifacts = input.artifacts.map(artifact => assertArtifact(source, input.producer, artifact, policy));
   const ids = new Set();
   const filenames = new Set();
   for (const artifact of artifacts) {
@@ -232,6 +228,7 @@ function createReleaseManifest(source, input) {
     version: source.version,
     tag: source.tag,
     commit: source.commit,
+    signingPolicy: policy,
     createdAt: input.createdAt,
     producer: input.producer,
     toolchain: input.toolchain,

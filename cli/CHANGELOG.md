@@ -5,7 +5,7 @@ All notable changes to GuardScan will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.1.0] - Unreleased
+## [1.1.0] - 2026-11-08
 
 ### Added
 
@@ -52,7 +52,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `GUARDSCAN_API_URL` setting. The service was deleted in November 2026, and
   GuardScan no longer controls the `guardscancli.com` domain, so a future owner
   could receive requests sent there. Users of `1.0.5` and earlier who enabled
-  telemetry should upgrade or run `guardscan config --telemetry=false`;
+  telemetry should upgrade, or set `GUARDSCAN_NO_TELEMETRY=true` until they can
+  (1.0.5 has no `config --telemetry` option);
   self-hosted operators must use `GUARDSCAN_TELEMETRY_URL`. Existing queues
   remain local.
 
@@ -81,7 +82,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Windows `npm`/`npx` command resolution and shell-dependent child processes.
 
 The strict ESLint gate remains a per-file non-regression ratchet; this release does not claim that the existing codebase is lint-clean.
-This entry is unreleased and does not assert publication, tagging, or release-automation enablement.
+1.1.0 was published to npm by hand on 2026-11-08, outside the release train; it has no npm provenance and no release-ledger record.
 
 ## [1.0.5] - 2025-12-09
 

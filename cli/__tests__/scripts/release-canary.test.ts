@@ -3,6 +3,7 @@ import os from 'os';
 import path from 'path';
 import Ajv from 'ajv';
 import addFormats from 'ajv-formats';
+import yaml from 'js-yaml';
 
 const {
   appendEvent,
@@ -103,6 +104,66 @@ describe('release canary public seams', () => {
     expect(nativeAndPypi).toContain(
       'target: channel === "pypi" ? process.env.TARGET.replace(/-glibc$/, "") : process.env.TARGET',
     );
+  });
+
+  test('native canary verifies Sigstore and provenance everywhere and vendor signatures only when the manifest policy requires them', () => {
+    const workflow = yaml.load(fs.readFileSync(
+      path.resolve(__dirname, '../../../.github/workflows/release-canary.yml'),
+      'utf8',
+    )) as any;
+    const job = workflow.jobs['native-and-pypi'];
+    const steps = job.steps as any[];
+    const step = (name: string) => {
+      const index = steps.findIndex(candidate => candidate.name === name);
+      if (index < 0) throw new Error(`missing canary step: ${name}`);
+      return {index, ...steps[index]};
+    };
+    expect(job.strategy.matrix.target.map((target: any) => target.id)).toEqual([
+      'linux-x64-glibc', 'linux-arm64-glibc', 'darwin-arm64', 'darwin-x64', 'windows-x64',
+    ]);
+
+    const download = step('Download immutable GitHub archive and evidence');
+    expect(download.run).toContain('--pattern "$TARGET.guardscan.sigstore.json"');
+    expect(download.run).toContain('--pattern "$TARGET.archive.provenance.sigstore.json"');
+    expect(download.run).toContain('test -f "release/$TARGET.archive.provenance.sigstore.json"');
+    const manifest = step('Verify signed checksums and bind the manifest to the immutable tag');
+    expect(manifest.run).toContain('(.signingPolicy | type == "string") and');
+
+    const signing = step('Resolve required signatures from the verified manifest policy');
+    expect(signing.id).toBe('signing');
+    expect(signing.if).toBeUndefined();
+    expect(signing.run).toContain(`jq -er '.signingPolicy | select(type == "string")' release/release-manifest.json`);
+    expect(signing.run).toContain('node cli/scripts/release/signing-policy.js "$POLICY" "${TARGET%%-*}" >> "$GITHUB_OUTPUT"');
+    expect(steps[0].with['sparse-checkout']).toBe('cli/scripts/release');
+    expect(signing.index).toBeGreaterThan(manifest.index);
+
+    const provenance = step('Verify archive build provenance');
+    expect(provenance.if).toBeUndefined();
+    expect(provenance.run).toContain('gh attestation verify "release/$ARCHIVE_NAME"');
+    expect(provenance.run).toContain('--bundle "release/$TARGET.archive.provenance.sigstore.json"');
+    expect(provenance.run).toContain('--signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release-build.yml"');
+    expect(provenance.run).toContain('--signer-digest "$BUILD_WORKFLOW_SHA"');
+    expect(provenance.env.BUILD_WORKFLOW_SHA).toBe('${{ steps.release-build-identity.outputs.workflow_sha }}');
+
+    const sigstore = step('Verify native Sigstore identity');
+    expect(sigstore.if).toBeUndefined();
+    expect(sigstore.env.EXECUTABLE).toBe('${{ matrix.target.executable }}');
+    expect(sigstore.run).toContain('--bundle "release/$TARGET.guardscan.sigstore.json"');
+    expect(sigstore.run).toContain('--certificate-github-workflow-sha "$BUILD_WORKFLOW_SHA"');
+    expect(sigstore.run).toContain('"executable/$EXECUTABLE"');
+    expect(sigstore.run).not.toContain('gh release download');
+
+    const adHoc = step('Verify macOS code signature');
+    expect(adHoc.if).toBe("startsWith(matrix.target.id, 'darwin-')");
+    expect(adHoc.run).toBe('codesign --verify --strict --verbose=2 executable/guardscan');
+    expect(step('Verify macOS signing and Gatekeeper').if).toBe(
+      "startsWith(matrix.target.id, 'darwin-') && contains(steps.signing.outputs.required, ',apple-notarization,')",
+    );
+    expect(step('Verify Windows Authenticode').if).toBe(
+      "startsWith(matrix.target.id, 'windows-') && contains(steps.signing.outputs.required, ',authenticode,')",
+    );
+    const extract = step('Extract verified GitHub archive');
+    for (const verify of [sigstore, adHoc]) expect(verify.index).toBeGreaterThan(extract.index);
   });
 
   test('malformed workflow report persists an incident before the job reports failure', () => {

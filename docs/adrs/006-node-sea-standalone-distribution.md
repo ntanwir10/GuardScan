@@ -106,6 +106,21 @@ or advertised as production-ready:
 - Prove production archive reproducibility and archive extraction safety.
 - Verify macOS notarization, Windows Authenticode, Linux Sigstore evidence, checksums, SBOMs, attestations, and provenance against the exact downloadable artifacts.
 
+## Update (2026-11): community signing policy
+
+The signing requirements above (macOS notarization, Windows Authenticode) hold
+only under the `platform` policy, which needs paid Apple and Azure accounts. The
+committed policy in `cli/scripts/release/signing-policy.js` is now `community`:
+every artifact carries a Sigstore/cosign keyless signature and a GitHub build
+attestation; macOS binaries are ad-hoc signed only and Windows binaries are
+unsigned. Consequences: browser-downloaded macOS zips are quarantined by
+Gatekeeper and Windows direct downloads show SmartScreen; package-manager
+installs are unaffected. `platform` is kept for later, and free Windows
+Authenticode through the SignPath Foundation OSS program is a planned policy row.
+Changing the policy needs a reviewed PR and a new provider onboarding
+attestation. The decision above is otherwise unchanged. See
+[`RELEASE_AUTOMATION.md`](../RELEASE_AUTOMATION.md#signing-policy).
+
 ## Related decisions
 
 - [ADR 003: Privacy-First Architecture](./003-privacy-first-architecture.md)

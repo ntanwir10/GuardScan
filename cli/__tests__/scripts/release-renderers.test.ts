@@ -59,6 +59,9 @@ const {
   ) => Record<string, any>;
 };
 
+const {requiredSignatures} = require('../../scripts/release/signing-policy') as {
+  requiredSignatures: (policy: string, os: string) => string[];
+};
 const commit = 'a'.repeat(40);
 const source = {version: '1.2.3', tag: 'v1.2.3', commit};
 
@@ -67,14 +70,11 @@ function makeStandalone(
   arch: string,
   suffix: string,
   digestCharacter: string,
-  libc?: string
+  libc?: string,
+  policy = 'community'
 ): Record<string, unknown> {
   const filename = `guardscan-v1.2.3-${suffix}.${osName === 'linux' ? 'tar.gz' : 'zip'}`;
-  const signatureTypes = {
-    darwin: ['apple-code-signing', 'apple-notarization'],
-    linux: ['sigstore'],
-    windows: ['authenticode'],
-  }[osName] as string[];
+  const signatureTypes = requiredSignatures(policy, osName) as string[];
   const entrypoint = osName === 'windows' ? 'guardscan.exe' : 'guardscan';
   return {
     id: `binary:${suffix}`,
@@ -118,20 +118,21 @@ function makeStandalone(
   };
 }
 
-function makeManifest(): Record<string, any> {
+function makeManifest(policy = 'community'): Record<string, any> {
   return {
     schemaVersion: 'guardscan.release-manifest.v1',
     version: '1.2.3',
     tag: 'v1.2.3',
     commit,
+    signingPolicy: policy,
     createdAt: '2026-07-20T12:00:00.000Z',
     toolchain: {},
     artifacts: [
-      makeStandalone('darwin', 'arm64', 'darwin-arm64', 'a'),
-      makeStandalone('darwin', 'x64', 'darwin-x64', 'b'),
-      makeStandalone('linux', 'arm64', 'linux-arm64-glibc', 'c', 'glibc'),
-      makeStandalone('linux', 'x64', 'linux-x64-glibc', 'd', 'glibc'),
-      makeStandalone('windows', 'x64', 'windows-x64', 'e'),
+      makeStandalone('darwin', 'arm64', 'darwin-arm64', 'a', undefined, policy),
+      makeStandalone('darwin', 'x64', 'darwin-x64', 'b', undefined, policy),
+      makeStandalone('linux', 'arm64', 'linux-arm64-glibc', 'c', 'glibc', policy),
+      makeStandalone('linux', 'x64', 'linux-x64-glibc', 'd', 'glibc', policy),
+      makeStandalone('windows', 'x64', 'windows-x64', 'e', undefined, policy),
       {
         id: 'pypi:guardscan-cli@1.2.3:linux-x64',
         kind: 'python-wheel',
@@ -316,6 +317,37 @@ describe('release adapter rendering', () => {
     expect(run).not.toMatch(/brew (?:audit|install|test)[^\n]*Formula\//);
   });
 
+  describe('signing policy matrix', () => {
+    const osIndex: Record<string, number> = {darwin: 0, linux: 2, windows: 4};
+    for (const policy of ['community', 'platform']) {
+      it(`${policy} manifests render every channel`, () => {
+        const rendered = renderAdapters(makeManifest(policy), 'homebrew,scoop,winget,chocolatey,pypi');
+        expect(Object.keys(rendered.files ?? rendered).length).toBeGreaterThan(0);
+        expect(() => renderChannelCatalog(makeManifest(policy), catalogOptions)).not.toThrow();
+      });
+      for (const osName of Object.keys(osIndex)) {
+        const channel = osName === 'darwin' ? 'homebrew' : osName === 'windows' ? 'scoop' : 'homebrew';
+        it(`${policy}/${osName} rejects removal of each required signature`, () => {
+          for (const type of requiredSignatures(policy, osName)) {
+            const manifest = makeManifest(policy);
+            const artifact = manifest.artifacts[osIndex[osName]];
+            artifact.signatures = artifact.signatures.filter((signature: any) => signature.type !== type);
+            expect(() => renderAdapters(manifest, channel)).toThrow(new RegExp(type));
+          }
+        });
+      }
+    }
+    it('accepts extra signatures and rejects a missing or unknown policy', () => {
+      const extra = makeManifest();
+      extra.artifacts[4].signatures.push({...extra.artifacts[4].signatures[0], type: 'authenticode'});
+      expect(() => renderAdapters(extra, 'scoop')).not.toThrow();
+      const missing = makeManifest();
+      delete missing.signingPolicy;
+      expect(() => renderAdapters(missing, 'scoop')).toThrow(/signingPolicy/);
+      expect(() => renderAdapters(makeManifest('bogus'), 'scoop')).toThrow(/unknown release signing policy/);
+    });
+  });
+
   it('rejects mutable URLs, missing signatures, and PyPI plans without built wheels', () => {
     const mutable = makeManifest();
     mutable.artifacts[0].url = 'https://github.com/ntanwir10/GuardScan/releases/latest/download/guardscan.tar.gz';
@@ -323,7 +355,11 @@ describe('release adapter rendering', () => {
 
     const unsigned = makeManifest();
     unsigned.artifacts[4].signatures = [];
-    expect(() => renderAdapters(unsigned, 'scoop')).toThrow(/authenticode/);
+    expect(() => renderAdapters(unsigned, 'scoop')).toThrow(/sigstore/);
+    const platformUnsigned = makeManifest('platform');
+    platformUnsigned.artifacts[4].signatures = platformUnsigned.artifacts[4].signatures
+      .filter((signature: any) => signature.type !== 'authenticode');
+    expect(() => renderAdapters(platformUnsigned, 'scoop')).toThrow(/authenticode/);
 
     const noWheels = makeManifest();
     noWheels.artifacts = noWheels.artifacts.filter((artifact: Record<string, unknown>) => (

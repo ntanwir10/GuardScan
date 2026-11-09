@@ -102,6 +102,9 @@ const {
     defectiveCommit: string
   ) => Record<string, any>;
 };
+const {requiredSignatures} = require('../../scripts/release/signing-policy') as {
+  requiredSignatures: (policy: string, os: string) => string[];
+};
 const {releaseTrainChannels} = require('../../scripts/release/lib') as {
   releaseTrainChannels: (
     channel: string,
@@ -123,7 +126,8 @@ const {
 } = require('../../scripts/release/manifest') as {
   createReleaseManifest: (
     source: Record<string, string>,
-    input: Record<string, any>
+    input: Record<string, any>,
+    policy?: string
   ) => Record<string, any>;
 };
 const {
@@ -235,9 +239,7 @@ function standalone(
 ): Record<string, any> {
   const filename = `guardscan-${source.version}-${suffix}.${osName === 'linux' ? 'tar.gz' : 'zip'}`;
   const entrypoint = osName === 'windows' ? 'guardscan.exe' : 'guardscan';
-  const signatures = osName === 'darwin'
-    ? [evidence('apple-code-signing'), evidence('apple-notarization')]
-    : [evidence(osName === 'windows' ? 'authenticode' : 'sigstore')];
+  const signatures = requiredSignatures('community', osName).map(type => evidence(type));
   return {
     id: `standalone:${suffix}`,
     kind: 'standalone',
@@ -1549,6 +1551,51 @@ describe('deterministic artifacts and manifest aggregation', () => {
       toolchain: {node: '22.23.1', packageManager: {}, tools: [{}]},
       artifacts: mismatched,
     })).toThrow(/embedded executable does not match/);
+  });
+
+  describe('signing policy in createReleaseManifest', () => {
+    const input = (artifact: Record<string, any>) => ({
+      schemaVersion: 'guardscan.release-manifest-input.v1',
+      profile: 'partial',
+      createdAt: timestamp,
+      producer: {
+        provider: 'github-actions',
+        repository: 'ntanwir10/GuardScan',
+        workflow: '.github/workflows/release-build.yml',
+        workflowSha,
+        runId: '123456',
+        runAttempt: 1,
+        sourceRef: source.tag,
+      },
+      toolchain: {node: '22.23.1', packageManager: {name: 'npm'}, tools: [{name: 'esbuild'}]},
+      artifacts: [artifact],
+    });
+    const targets: Record<string, [string, string, string?]> = {
+      darwin: ['arm64', 'darwin-arm64'],
+      linux: ['x64', 'linux-x64-glibc', 'glibc'],
+      windows: ['x64', 'windows-x64'],
+    };
+    for (const policy of ['community', 'platform']) {
+      for (const osName of Object.keys(targets)) {
+        const [arch, suffix, libc] = targets[osName];
+        const build = (types: string[]) => {
+          const artifact = standalone(osName, arch, suffix, '1', libc);
+          artifact.signatures = types.map(type => evidence(type));
+          return createReleaseManifest(source, input(artifact), policy);
+        };
+        it(`${policy}/${osName} stamps the policy and rejects each missing signature`, () => {
+          const required = requiredSignatures(policy, osName);
+          expect(build([...new Set([...required, 'authenticode'])]).signingPolicy).toBe(policy);
+          for (const type of required) {
+            expect(() => build(required.filter(t => t !== type))).toThrow(new RegExp(`lacks required ${type}|no signature evidence`));
+          }
+        });
+      }
+    }
+    it('rejects an unknown policy', () => {
+      expect(() => createReleaseManifest(source, input(standalone('windows', 'x64', 'windows-x64', '1')), 'bogus'))
+        .toThrow(/unknown release signing policy/);
+    });
   });
 
   it('builds a deterministic platform wheel containing the exact standalone executable', () => {
