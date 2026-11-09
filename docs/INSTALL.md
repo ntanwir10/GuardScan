@@ -48,7 +48,7 @@ yarn global upgrade guardscan
 yarn global remove guardscan
 ```
 
-Yarn Berry (2+) has no global installs; use `npm install -g guardscan` instead.
+Yarn Berry (2+) has no global installs; use `npm install -g guardscan`, or run it once with `yarn dlx guardscan`.
 
 ### Bun
 
@@ -76,12 +76,12 @@ npx guardscan@latest security --offline --no-cve
 
 ## Planned for 1.1.1 (not yet available)
 
-> **None of these channels is live.** The names below are the intended identifiers. Do not rely on them until the 1.1.1 release notes announce each channel. The binaries will be unsigned or ad-hoc signed with Sigstore, so macOS Gatekeeper and Windows SmartScreen are expected to warn about them.
+> **None of these channels is live.** The names below are the intended identifiers. Do not rely on them until the 1.1.1 release notes announce each channel. macOS binaries will be ad-hoc signed and Windows binaries unsigned; every artifact will carry a Sigstore signature and a GitHub build attestation. Gatekeeper and SmartScreen will warn on direct browser downloads; package-manager installs are unaffected.
 
 | Channel | Install | Upgrade | Uninstall |
 |---|---|---|---|
 | Homebrew tap | `brew install ntanwir10/tap/guardscan` | `brew upgrade guardscan` | `brew uninstall guardscan` |
-| Scoop | published with 1.1.1 | `scoop update guardscan` | `scoop uninstall guardscan` |
+| Scoop | `scoop bucket add guardscan https://github.com/ntanwir10/homebrew-tap` then `scoop install guardscan` | `scoop update guardscan` | `scoop uninstall guardscan` |
 | PyPI | `pipx install guardscan-cli` | `pipx upgrade guardscan-cli` | `pipx uninstall guardscan-cli` |
 | WinGet | `winget install NaumanTanwir.GuardScan` | `winget upgrade NaumanTanwir.GuardScan` | `winget uninstall NaumanTanwir.GuardScan` |
 | Chocolatey | `choco install guardscan` | `choco upgrade guardscan` | `choco uninstall guardscan` |
