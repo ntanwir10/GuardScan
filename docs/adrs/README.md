@@ -31,7 +31,7 @@ recoverable architecture decision.
 
 - [ADR 005: BYOK (Bring Your Own Key) AI Model](./005-byok-ai-model.md)
   - **Status**: Accepted
-  - **Summary**: Users provide their own AI API keys for AI features, enabling privacy, cost control, and sustainability
+  - **Summary**: Users provide their own AI API keys for AI features; requests go straight to the provider
 
 - [ADR 006: Node.js SEA for standalone distribution](./006-node-sea-standalone-distribution.md)
   - **Status**: Accepted; production launch evidence remains gated
@@ -55,7 +55,7 @@ When creating a new ADR, use this template:
 # ADR NNN: [Short Title]
 
 ## Status
-[Proposed | Accepted | Deprecated | Superseded by [ADR-NNN](./NNN-title.md)]
+[Proposed | Accepted | Deprecated | Superseded by ADR NNN]
 
 ## Date
 YYYY-MM-DD

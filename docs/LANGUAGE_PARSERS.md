@@ -2,8 +2,8 @@
 
 **GuardScan Multi-Language Parser API Reference**
 
-**Version:** 1.0.0
-**Last Updated:** 2025-11-16
+**Applies to:** GuardScan 1.1.x
+**Last Updated:** 2026-11-08
 
 ---
 
@@ -26,19 +26,21 @@ GuardScan includes **8 language parsers** that extract code structure, functions
 
 ## Common API Pattern
 
-All parsers implement the same interface:
+Every parser implements `parseFile`. Most language parsers also provide `parseCode`; the TypeScript/JavaScript `ASTParser` provides `parseFile` only. The result type differs by language (for example the Java parser returns `classes`, `interfaces` and `enums` rather than a flat `functions` list):
 
 ```typescript
 interface Parser {
   // Parse a file from disk
   parseFile(filePath: string): Promise<ParsedFile>;
 
-  // Parse code from string
-  parseCode(code: string, filePath: string): Promise<ParsedFile>;
+  // Parse code from string (not available on ASTParser)
+  parseCode?(code: string, filePath: string): Promise<ParsedFile>;
 }
 ```
 
 ### Common Return Structure
+
+The shape below is the typical result for the function-oriented parsers (Python, Go, and similar). The exact fields vary by language; the Java parser returns `package`, `imports`, `classes`, `interfaces` and `enums` (each a class-like entry with `methods`) and has no top-level `functions`, `complexity` or `loc`. Check the parser's source before relying on a field.
 
 ```typescript
 interface ParsedFile {
@@ -1172,7 +1174,10 @@ async function extractFunctions(filePath: string) {
   }
 
   const result = await parser.parseFile(filePath);
-  return result.functions;
+  // The Java parser returns classes (with methods) rather than a flat functions list
+  if ('functions' in result) return result.functions;
+  // Java: collect methods from classes, interfaces and enums
+  return [...result.classes, ...result.interfaces, ...result.enums].flatMap(c => c.methods);
 }
 
 // Usage
@@ -1215,7 +1220,10 @@ async function findComplexFunctions(threshold: number = 10) {
     const parser = getParserForFile(file);
     const result = await parser.parseFile(file);
 
-    const complex = result.functions.filter(
+    const functions = 'functions' in result
+      ? result.functions
+      : [...result.classes, ...result.interfaces, ...result.enums].flatMap(c => c.methods); // Java
+    const complex = functions.filter(
       fn => fn.complexity >= threshold
     );
 
@@ -1322,6 +1330,6 @@ const results = await Promise.all(
 
 ---
 
-**Last Updated:** 2025-11-16
-**Version:** 1.0.0
+**Last Updated:** 2026-11-08
+**Applies to:** GuardScan 1.1.x
 **Maintainer:** GuardScan Team

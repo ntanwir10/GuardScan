@@ -3,22 +3,21 @@
 ## Status
 Accepted
 
+> **History note (November 2026):** This ADR was written when billing models were still an open option. GuardScan has no hosted backend, billing, or credits; it never proxies AI requests. Alternatives that involved those are summarized below as rejected history, not as current or planned features.
+
 ## Date
 2024-11-19
 
 ## Context
 GuardScan includes AI-enhanced features like code review, explanation, test generation, and refactoring suggestions. These features require Large Language Models (LLMs) which have several cost and privacy considerations:
 
-1. **Cost**: AI API calls are expensive ($0.01-$0.10 per request)
+1. **Cost**: AI API calls are billed per request by the provider
 2. **Privacy**: Sending code to AI providers raises concerns
 3. **Control**: Users want choice in AI provider and model
 4. **Vendor lock-in**: Don't want dependency on single AI provider
-5. **Sustainability**: Hard to offer free AI features at scale
+5. **Sustainability**: A free, open-source tool cannot absorb AI usage costs
 
-Traditional SaaS approaches:
-- **Vendor-paid**: Company pays for all AI calls (expensive, unsustainable)
-- **Subscription**: Users pay monthly fee (bundled cost, inflexible)
-- **Hosted prepaid usage model**: rejected due to complexity and vendor lock-in
+Bundled approaches (vendor-paid AI, subscriptions, prepaid usage) were considered and rejected; see Alternatives Considered.
 
 ## Decision
 We adopted a **BYOK (Bring Your Own Key)** model where:
@@ -47,7 +46,7 @@ We adopted a **BYOK (Bring Your Own Key)** model where:
 
 3. **Cost Transparency**
    - Users see exact AI costs on their bill
-   - No markup or bundled pricing
+   - No markup
    - Pay for what they use
    - Can optimize by choosing cheaper models
 
@@ -115,7 +114,7 @@ guardscan test-gen src/calculator.ts
 
 ### Privacy Benefits
 
-**Traditional (Code through GuardScan backend):**
+**Rejected (code through a GuardScan-operated intermediary):**
 ```
 User -> GuardScan Backend -> AI Provider
       ❌ GuardScan sees code
@@ -260,57 +259,24 @@ async function reviewCode(filePath: string): Promise<string> {
 }
 ```
 
-### Cost Estimation
-```typescript
-function estimateCost(prompt: string, model: string): number {
-  const tokenCount = estimateTokens(prompt);
-  
-  const pricing: Record<string, number> = {
-    'gpt-4': 0.03,          // $0.03 per 1K tokens
-    'gpt-3.5-turbo': 0.002, // $0.002 per 1K tokens
-    'claude-3-opus': 0.015, // $0.015 per 1K tokens
-    'claude-3-sonnet': 0.003, // $0.003 per 1K tokens
-    'ollama': 0,            // Free (local)
-  };
-  
-  return (tokenCount / 1000) * (pricing[model] || 0);
-}
+### Cost visibility
 
-// Show before API call
-console.log(`Estimated cost: $${estimateCost(prompt, model).toFixed(4)}`);
-```
+Because requests go straight to the provider, cost appears on the user's own provider bill. `guardscan budget status` and `guardscan metrics show` report local estimates only. `budget status` may omit AI usage (for example after `guardscan run --with-ai`, which records metrics but not budget usage records), so use your provider's bill for actual spending.
 
 ## Alternatives Considered
 
-**Vendor-Paid AI**
-- ✅ Seamless user experience
-- ❌ Unsustainable costs
-- ❌ Forces subscription model
-- ❌ $50k+/month at scale
+Rejected as history. None of these exist in GuardScan.
 
-**Subscription with Bundled AI**
-- ✅ Predictable revenue
-- ❌ Overhead pricing (need markup)
-- ❌ Users pay even if not using AI
-- ❌ Vendor lock-in
-
-**Credit System**
-- ✅ Pay-per-use
-- ❌ Complex to implement
-- ❌ Requires payment processing
-- ❌ Users must pre-purchase
-
-**Enterprise-Only AI**
-- ✅ Higher willingness to pay
-- ❌ Excludes individual developers
-- ❌ Limits adoption
-- ❌ Against open-source ethos
+- **Vendor-paid AI**: unsustainable for a free tool.
+- **Subscription with bundled AI**: adds a hosted backend and locks users in.
+- **Prepaid usage or credits**: needs payment processing and an account system.
+- **Enterprise-only AI**: excludes individual developers and conflicts with the open-source goal.
 
 ## User Education
 
 ### Documentation
 1. **Provider Setup Guides**: Step-by-step for each provider
-2. **Cost Comparison**: Help users choose cost-effective options
+2. **Provider comparison**: Help users choose between cloud and local options
 3. **Privacy Guide**: Explain data flow for each provider
 4. **Troubleshooting**: Common issues and solutions
 
@@ -333,15 +299,8 @@ Or run: guardscan config
 - [ADR 007: Retire GuardScan-Hosted Cloudflare Telemetry](./007-retire-hosted-cloudflare-telemetry.md) - Why GuardScan operates no hosted telemetry or AI proxy
 
 ## References
-- [OpenAI API Pricing](https://openai.com/pricing)
-- [Anthropic Pricing](https://www.anthropic.com/pricing)
 - [Ollama](https://ollama.ai/)
 - [LM Studio](https://lmstudio.ai/)
 
 ## Review
-This decision is strategic and should rarely change. Review if:
-- AI pricing drops significantly (making vendor-paid viable)
-- New business model emerges
-- User feedback strongly negative
-
-**Next review date**: 2025-05-19 (6 months)
+This decision is strategic and should rarely change. Revisit it only if GuardScan's distribution model changes materially. The original review date (2025-05-19) has passed with no change.
