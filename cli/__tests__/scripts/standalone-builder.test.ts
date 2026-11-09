@@ -23,7 +23,7 @@ const {
   bundleOptions: (entryPoint: string, outputFile: string) => Record<string, any>;
   bundledComponents: (metafile: Record<string, any>, lock: Record<string, any>) => Array<Record<string, string>>;
   externalPackages: (metafile: Record<string, any>) => string[];
-  hostPlatform: () => {os: string; arch: string};
+  hostPlatform: () => {os: string; arch: string; libc?: string};
   releaseToolchainVersions: () => {esbuild: string; postject: string};
   renameWithTransientRetry: (
     source: string,
@@ -251,9 +251,17 @@ describe('standalone executable builder contract', () => {
   });
 
   it('maps the current host to a supported immutable platform identity', () => {
+    const glibc = Boolean((process.report?.getReport?.() as any)?.header?.glibcVersionRuntime);
+    if (process.platform === 'linux' && !glibc) {
+      // musl hosts such as Alpine cannot build release targets, so the builder must refuse them.
+      expect(() => hostPlatform()).toThrow(/only glibc Linux/);
+      return;
+    }
     const platform = hostPlatform();
     expect(['darwin', 'linux', 'windows']).toContain(platform.os);
     expect(['arm64', 'x64']).toContain(platform.arch);
+    // Signing binds the matrix libc to the prototype, so Linux must record glibc and others must omit it.
+    expect(platform.libc).toBe(platform.os === 'linux' ? 'glibc' : undefined);
     expect(path.isAbsolute(process.execPath)).toBe(true);
   });
 
