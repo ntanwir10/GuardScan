@@ -251,6 +251,12 @@ describe('standalone executable builder contract', () => {
   });
 
   it('maps the current host to a supported immutable platform identity', () => {
+    const glibc = Boolean((process.report?.getReport?.() as any)?.header?.glibcVersionRuntime);
+    if (process.platform === 'linux' && !glibc) {
+      // musl hosts such as Alpine cannot build release targets, so the builder must refuse them.
+      expect(() => hostPlatform()).toThrow(/only glibc Linux/);
+      return;
+    }
     const platform = hostPlatform();
     expect(['darwin', 'linux', 'windows']).toContain(platform.os);
     expect(['arm64', 'x64']).toContain(platform.arch);
