@@ -222,7 +222,7 @@ and a new provider onboarding attestation.
 | `platform` (kept for later) | Sigstore + Apple code signing + notarization | Sigstore | Sigstore + Authenticode | Apple signing/notary, Azure Artifact Signing |
 
 Under both policies each native executable and `SHA256SUMS` get a Sigstore/cosign
-keyless signature; `SHA256SUMS` covers every release file. The npm tarball, each
+keyless signature; `SHA256SUMS` lists every other release file. The npm tarball, each
 executable, archive, and wheel, plus `release-manifest.json` and `SHA256SUMS`, carry
 a GitHub build attestation (`attest-build-provenance`). A free Windows
 Authenticode path through the SignPath Foundation OSS program is planned as a
@@ -344,7 +344,7 @@ The train:
 1. resolves the exact stable PR head;
 2. creates a candidate commit containing only RC identity changes;
 3. creates `v1.1.1-rc.1` with the release GitHub App;
-4. builds, signs, attests, and verifies every artifact;
+4. builds every artifact, cosign-signs the executables and `SHA256SUMS`, attests the release subjects, and verifies all of them;
 5. publishes npm under `next`, GitHub as a prerelease, TestPyPI then PyPI, and the shared catalog preview branch `channel-preview/v1.1.1-rc.1`;
 6. renders and validates WinGet/Chocolatey without publishing an RC;
 7. records `publishedAt` and hourly canary evidence;
