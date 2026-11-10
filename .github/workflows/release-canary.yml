@@ -127,6 +127,9 @@ jobs:
         shell: bash
         env:
           VERSION: ${{ matrix.train.version }}
+          # Keep the prepared Yarn instead of fetching the newest one behind a TTY-only prompt.
+          COREPACK_DEFAULT_TO_LATEST: "0"
+          COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
         run: |
           assert_version() {
             ACTUAL_VERSION="$("$@" | tr -d '\r')"
@@ -157,7 +160,8 @@ jobs:
             yarn-modern)
               corepack enable
               corepack prepare yarn@4.9.2 --activate
-              assert_version yarn dlx "guardscan@$VERSION" --version
+              # Yarn 4 prints its install log to stdout; -q leaves only the command's output.
+              assert_version yarn dlx -q "guardscan@$VERSION" --version
               ;;
             bun)
               bun add --global "guardscan@$VERSION"
@@ -578,6 +582,8 @@ jobs:
           fi
           if [ "$CHANNEL" = stable ]; then
             brew tap ntanwir10/tap
+            # Current Homebrew refuses to load formulae from third-party taps until they are trusted.
+            brew trust --formula ntanwir10/tap/guardscan
             brew audit --strict --online ntanwir10/tap/guardscan
             brew install ntanwir10/tap/guardscan
             brew test ntanwir10/tap/guardscan
@@ -588,6 +594,7 @@ jobs:
             git clone --branch "channel-preview/v$VERSION" \
               https://github.com/ntanwir10/homebrew-tap preview-tap
             brew tap --custom-remote ntanwir10/tap "$PWD/preview-tap"
+            brew trust --formula ntanwir10/tap/guardscan
             brew style ntanwir10/tap/guardscan
             brew audit --strict ntanwir10/tap/guardscan
             brew install ntanwir10/tap/guardscan
@@ -622,7 +629,8 @@ jobs:
           } else {
             git clone --branch "channel-preview/v$env:VERSION" https://github.com/ntanwir10/homebrew-tap preview-bucket
             if ($LASTEXITCODE -ne 0) { throw 'Unable to clone the GuardScan preview bucket' }
-            scoop bucket add guardscan-preview (Resolve-Path preview-bucket)
+            # Scoop accepts only Git URLs, so pass the local clone as a file:/// URL.
+            scoop bucket add guardscan-preview ('file:///' + ((Resolve-Path preview-bucket).Path -replace '\\', '/'))
             if ($LASTEXITCODE -ne 0) { throw 'Unable to add the GuardScan preview bucket' }
             $package = 'guardscan-preview/guardscan'
           }

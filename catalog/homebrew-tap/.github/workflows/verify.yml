@@ -214,6 +214,8 @@ jobs:
             brew untap guardscan-ci/catalog
           }
           trap cleanup EXIT
+          # Current Homebrew refuses to load formulae from third-party taps until they are trusted.
+          brew trust --formula guardscan-ci/catalog/guardscan
           brew audit --strict guardscan-ci/catalog/guardscan
           brew install guardscan-ci/catalog/guardscan
           guardscan --version
@@ -291,7 +293,8 @@ jobs:
         if: needs.integrity.outputs.published == 'true'
         shell: pwsh
         run: |
-          scoop bucket add guardscan-catalog $env:GITHUB_WORKSPACE
+          # Scoop accepts only Git URLs, so pass the local checkout as a file:/// URL.
+          scoop bucket add guardscan-catalog ('file:///' + ($env:GITHUB_WORKSPACE -replace '\\', '/'))
           if ($LASTEXITCODE -ne 0) { throw 'Unable to add the local GuardScan bucket' }
           scoop install guardscan-catalog/guardscan
           if ($LASTEXITCODE -ne 0) { throw 'Scoop installation failed' }

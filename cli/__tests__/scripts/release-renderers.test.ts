@@ -73,7 +73,7 @@ function makeStandalone(
   libc?: string,
   policy = 'community'
 ): Record<string, unknown> {
-  const filename = `guardscan-v1.2.3-${suffix}.${osName === 'linux' ? 'tar.gz' : 'zip'}`;
+  const filename = `guardscan-1.2.3-${suffix}.${osName === 'linux' ? 'tar.gz' : 'zip'}`;
   const signatureTypes = requiredSignatures(policy, osName) as string[];
   const entrypoint = osName === 'windows' ? 'guardscan.exe' : 'guardscan';
   return {
@@ -246,8 +246,16 @@ describe('release adapter rendering', () => {
 
     const formula = rendered.files['homebrew/Formula/guardscan.rb'];
     expect(formula).toContain('class Guardscan < Formula');
-    expect(formula).toContain('guardscan-v1.2.3-darwin-arm64.zip');
+    expect(formula).toContain('guardscan-1.2.3-darwin-arm64.zip');
     expect(formula).toContain('a'.repeat(64));
+    // `brew audit --strict` rejects a `version` that Homebrew can scan from the URL.
+    expect(formula).not.toMatch(/^\s*version /m);
+    const unversioned = makeManifest();
+    const darwin = unversioned.artifacts.find((artifact: any) => artifact.url.endsWith('darwin-arm64.zip'));
+    darwin.filename = darwin.filename.replace('guardscan-1.2.3-', 'guardscan-');
+    darwin.url = darwin.url.replace('guardscan-1.2.3-', 'guardscan-');
+    expect(() => renderAdapters(unversioned, 'homebrew'))
+      .toThrow('Homebrew artifact URL must embed the release version');
 
     const scoop = JSON.parse(rendered.files['scoop/bucket/guardscan.json']);
     expect(scoop).toMatchObject({
