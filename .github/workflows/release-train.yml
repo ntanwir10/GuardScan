@@ -1491,13 +1491,14 @@ jobs:
             )
           }
 
-          # The index CDN can serve a pre-upload page for minutes after publication, so retry
-          # until this release is visible (up to its 10-minute max-age).
-          attempt=1
-          until python -m pip install --index-url https://test.pypi.org/simple/ \
-            --no-deps "guardscan-cli==$PYPI_VERSION"; do
-            [ "$attempt" -lt 20 ] || exit 1
-            attempt=$((attempt + 1))
+          # The index CDN can serve a pre-upload page for up to its 10-minute max-age after
+          # publication, so retry every 30 s until an attempt started after that window fails.
+          window_end=$((SECONDS + 600))
+          while true; do
+            started=$SECONDS
+            python -m pip install --index-url https://test.pypi.org/simple/ \
+              --no-deps "guardscan-cli==$PYPI_VERSION" && break
+            [ "$started" -lt "$window_end" ] || exit 1
             sleep 30
           done
           exercise_guardscan guardscan pip
