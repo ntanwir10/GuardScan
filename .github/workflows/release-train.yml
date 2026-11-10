@@ -1497,8 +1497,9 @@ jobs:
           python -m pip uninstall -y guardscan-cli
 
           python -m pip install pipx
-          python -m pipx install --index-url https://test.pypi.org/simple/ \
-            --pip-args=--no-deps "guardscan-cli==$PYPI_VERSION"
+          # Scope TestPyPI to the package only; pipx must refresh its own shared pip from PyPI.
+          python -m pipx install \
+            --pip-args="--no-deps --index-url https://test.pypi.org/simple/" "guardscan-cli==$PYPI_VERSION"
           PIPX_BIN_DIR="$(python -m pipx environment --value PIPX_BIN_DIR)"
           GUARDSCAN="$PIPX_BIN_DIR/guardscan"
           if [ -f "$GUARDSCAN.exe" ]; then GUARDSCAN="$GUARDSCAN.exe"; fi
