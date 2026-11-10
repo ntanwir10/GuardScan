@@ -1497,7 +1497,10 @@ jobs:
           python -m pip uninstall -y guardscan-cli
 
           python -m pip install pipx
-          # Scope TestPyPI to the package only; pipx must refresh its own shared pip from PyPI.
+          # Create pipx's shared libraries from PyPI first; pipx would otherwise pass the TestPyPI
+          # --pip-args below to shared-library creation and fail on fresh runners.
+          python -m pipx upgrade-shared
+          # Scope TestPyPI to the package only.
           python -m pipx install \
             --pip-args="--no-deps --index-url https://test.pypi.org/simple/" "guardscan-cli==$PYPI_VERSION"
           PIPX_BIN_DIR="$(python -m pipx environment --value PIPX_BIN_DIR)"
