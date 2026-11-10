@@ -160,7 +160,8 @@ jobs:
             yarn-modern)
               corepack enable
               corepack prepare yarn@4.9.2 --activate
-              assert_version yarn dlx "guardscan@$VERSION" --version
+              # Yarn 4 prints its install log to stdout; -q leaves only the command's output.
+              assert_version yarn dlx -q "guardscan@$VERSION" --version
               ;;
             bun)
               bun add --global "guardscan@$VERSION"
