@@ -466,12 +466,22 @@ jobs:
             fs.writeFileSync("github.json", `${JSON.stringify(report)}\n`);
           '
       - name: Test public wheel through pip and pipx
+        # Hard deadline: the 600 s index window plus a normal run takes about 11 minutes.
+        timeout-minutes: 20
         shell: bash
         env:
           VERSION: ${{ matrix.train.version }}
         run: |
           PYPI_VERSION="${VERSION/-rc./rc}"
-          python -m pip install --no-deps "guardscan-cli==$PYPI_VERSION"
+          # The index CDN can serve a pre-upload page for up to its 10-minute max-age after
+          # publication, so retry every 30 s until an attempt started after that window fails.
+          window_end=$((SECONDS + 600))
+          while true; do
+            started=$SECONDS
+            python -m pip install --no-deps "guardscan-cli==$PYPI_VERSION" && break
+            [ "$started" -lt "$window_end" ] || exit 1
+            sleep 30
+          done
           PIP_REPORTED_VERSION="$(guardscan --version | tr -d '\r')"
           test "$PIP_REPORTED_VERSION" = "$VERSION"
           guardscan --help | grep -q scan
