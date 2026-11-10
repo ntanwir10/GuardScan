@@ -1456,6 +1456,8 @@ jobs:
         with:
           python-version: "3.13"
       - name: Test TestPyPI wheel through pip and pipx on ${{ matrix.target.id }}
+        # Hard deadline: the 600 s index window plus a normal run takes about 11 minutes.
+        timeout-minutes: 20
         shell: bash
         env:
           RELEASE_TAG: ${{ needs.prepare.outputs.tag }}

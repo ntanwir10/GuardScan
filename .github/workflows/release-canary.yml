@@ -466,6 +466,8 @@ jobs:
             fs.writeFileSync("github.json", `${JSON.stringify(report)}\n`);
           '
       - name: Test public wheel through pip and pipx
+        # Hard deadline: the 600 s index window plus a normal run takes about 11 minutes.
+        timeout-minutes: 20
         shell: bash
         env:
           VERSION: ${{ matrix.train.version }}
