@@ -122,6 +122,12 @@ function selectNativeArtifacts(manifest, channels) {
 }
 
 function renderHomebrew(manifest, artifacts) {
+  // Homebrew's strict audit rejects an explicit `version` it can scan from the URL, so the URLs must carry it.
+  for (const artifact of Object.values(artifacts)) {
+    if (!artifact.url.includes(`/guardscan-${manifest.version}-`)) {
+      throw new Error('Homebrew artifact URL must embed the release version');
+    }
+  }
   const block = (artifact, indent = '      ') => [
     `${indent}url "${artifact.url}"`,
     `${indent}sha256 "${artifact.sha256}"`,
@@ -142,7 +148,6 @@ function renderHomebrew(manifest, artifacts) {
     '  else',
     ...block(artifacts.linuxX64, '    '),
     '  end',
-    `  version "${manifest.version}"`,
     '  license "MIT"',
     '',
     '  def install',

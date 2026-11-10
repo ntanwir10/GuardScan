@@ -21,7 +21,10 @@ function validateStructuredOutput(manifest, outputDir, channels) {
   const results = {};
   if (channels.includes('homebrew')) {
     const formula = readOutput(outputDir, 'homebrew/Formula/guardscan.rb', 'Homebrew formula');
-    if (!formula.includes(`version "${manifest.version}"`) || !formula.includes('bin.install "guardscan"')) {
+    // Homebrew scans the version from each URL, so every URL must carry the release version.
+    const urls = [...formula.matchAll(/^\s*url "([^"]+)"$/gm)].map(match => match[1]);
+    if (urls.length === 0 || urls.some(url => !url.includes(`/guardscan-${manifest.version}-`))
+        || !formula.includes('bin.install "guardscan"')) {
       throw new Error('Homebrew formula does not preserve the release version and executable contract');
     }
     results.homebrew = {valid: true, files: 1};

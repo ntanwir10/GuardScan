@@ -367,6 +367,7 @@ yarn global add guardscan
 yarn dlx guardscan
 bun add -g guardscan
 bunx guardscan
+brew trust --formula ntanwir10/tap/guardscan
 brew install ntanwir10/tap/guardscan
 scoop bucket add guardscan https://github.com/ntanwir10/homebrew-tap
 scoop install guardscan
@@ -377,6 +378,8 @@ pipx install guardscan-cli
 ```
 
 The npm package requires Node 22 or newer even when invoked by Bun. The standalone and wheel channels include the runtime.
+
+`brew trust` is needed on current Homebrew, which refuses to load formulae from third-party taps until they are trusted. Older Homebrew without that command skips it.
 
 The one-part command `brew install guardscan` is **not selected or advertised by
 the current train**. It becomes available only after a separately reviewed

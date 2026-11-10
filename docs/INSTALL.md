@@ -80,12 +80,14 @@ npx guardscan@latest security --offline --no-cve
 
 | Channel | Install | Upgrade | Uninstall |
 |---|---|---|---|
-| Homebrew tap | `brew install ntanwir10/tap/guardscan` | `brew upgrade guardscan` | `brew uninstall guardscan` |
+| Homebrew tap | `brew trust --formula ntanwir10/tap/guardscan` then `brew install ntanwir10/tap/guardscan` | `brew upgrade guardscan` | `brew uninstall guardscan` |
 | Scoop | `scoop bucket add guardscan https://github.com/ntanwir10/homebrew-tap` then `scoop install guardscan` | `scoop update guardscan` | `scoop uninstall guardscan` |
 | PyPI | `pipx install guardscan-cli` | `pipx upgrade guardscan-cli` | `pipx uninstall guardscan-cli` |
 | WinGet | `winget install NaumanTanwir.GuardScan` | `winget upgrade NaumanTanwir.GuardScan` | `winget uninstall NaumanTanwir.GuardScan` |
 | Chocolatey | `choco install guardscan` | `choco upgrade guardscan` | `choco uninstall guardscan` |
 | Standalone binary | download from GitHub Releases, verify, put on `PATH` | download the new binary | delete the binary |
+
+Current Homebrew refuses to load formulae from third-party taps until you trust them, which is what `brew trust` does. If your Homebrew has no `brew trust` command, it predates that check: skip that step.
 
 Homebrew, Scoop, pipx, WinGet and Chocolatey are third-party package managers; install them from their own projects.
 
