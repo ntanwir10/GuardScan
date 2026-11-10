@@ -1,4 +1,11 @@
 {
   "schemaVersion": "guardscan.active-trains.v1",
-  "trains": []
+  "trains": [
+    {
+      "version": "1.1.1-rc.5",
+      "releasePr": 46,
+      "sourcePrHead": "ab85e455296a88e2161bd35708e9fb13d123dcc4",
+      "channel": "rc"
+    }
+  ]
 }
