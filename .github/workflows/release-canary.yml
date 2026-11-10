@@ -471,7 +471,14 @@ jobs:
           VERSION: ${{ matrix.train.version }}
         run: |
           PYPI_VERSION="${VERSION/-rc./rc}"
-          python -m pip install --no-deps "guardscan-cli==$PYPI_VERSION"
+          # The index CDN can serve a pre-upload page for minutes after publication, so retry
+          # until this release is visible (up to its 10-minute max-age).
+          attempt=1
+          until python -m pip install --no-deps "guardscan-cli==$PYPI_VERSION"; do
+            [ "$attempt" -lt 20 ] || exit 1
+            attempt=$((attempt + 1))
+            sleep 30
+          done
           PIP_REPORTED_VERSION="$(guardscan --version | tr -d '\r')"
           test "$PIP_REPORTED_VERSION" = "$VERSION"
           guardscan --help | grep -q scan
