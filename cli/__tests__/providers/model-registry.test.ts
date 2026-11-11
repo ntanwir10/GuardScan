@@ -8,10 +8,10 @@ import { modelRegistry, MODEL_REGISTRY } from '../../src/providers/model-registr
 describe('ModelRegistry', () => {
   describe('getModelInfo', () => {
     it('should return model info for valid model', () => {
-      const info = modelRegistry.getModelInfo('gpt-4o');
-      
+      const info = modelRegistry.getModelInfo('gpt-6.1-sol');
+
       expect(info).toBeDefined();
-      expect(info?.name).toBe('gpt-4o');
+      expect(info?.name).toBe('gpt-6.1-sol');
       expect(info?.provider).toBe('openai');
     });
 
@@ -129,8 +129,33 @@ describe('ModelRegistry', () => {
 
   describe('model validation', () => {
     it('should validate model exists', () => {
-      expect(modelRegistry.modelExists('gpt-4o')).toBe(true);
+      expect(modelRegistry.modelExists('gpt-6.1-sol')).toBe(true);
       expect(modelRegistry.modelExists('invalid')).toBe(false);
+    });
+  });
+
+  describe('registry data', () => {
+    it('points every deprecated model at an active replacement in the registry', () => {
+      for (const model of modelRegistry.getDeprecatedModels()) {
+        const replacement = model.replacedBy ? MODEL_REGISTRY[model.replacedBy] : undefined;
+        expect({ model: model.name, replacement: replacement?.name, deprecated: replacement?.deprecated })
+          .toEqual({ model: model.name, replacement: model.replacedBy, deprecated: undefined });
+      }
+    });
+
+    it('stores paid prices per 1M tokens, not per 1K', () => {
+      // A per-1K value such as 0.00015 would sit far below any real per-1M list price.
+      const paid = modelRegistry.getAllModels().filter((m) => m.inputPricing > 0);
+      for (const model of paid) {
+        expect({ model: model.name, inputPricing: model.inputPricing >= 0.01 })
+          .toEqual({ model: model.name, inputPricing: true });
+      }
+    });
+
+    it('keys every model by its own API id', () => {
+      for (const [key, model] of Object.entries(MODEL_REGISTRY)) {
+        expect(model.name).toBe(key);
+      }
     });
   });
 });
