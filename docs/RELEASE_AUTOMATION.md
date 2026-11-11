@@ -399,9 +399,12 @@ The chain fails closed:
   `true`, the chain stops after at most one more canary run, which records
   nothing. Cancel the sleeping "Continue the RC soak canary chain" job to stop
   it at once.
-- **Restart.** Both crons stay as a backstop. Any canary run, scheduled or
-  `gh workflow run release-canary.yml`, restarts a broken chain while the soak
-  can still pass.
+- **Restart.** A hop runs even when its own run's canaries failed, and its
+  ledger fetches and dispatches retry with backoff. A hop that still fails,
+  for example because the App token cannot be minted, ends the chain. Both
+  crons stay as a backstop: any canary run, scheduled or
+  `gh workflow run release-canary.yml`, restarts the chain while the soak can
+  still pass.
 
 ## Public installation contracts
 

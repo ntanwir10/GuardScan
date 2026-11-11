@@ -2106,11 +2106,14 @@ jobs:
           app-id: ${{ vars.RELEASE_APP_ID }}
           private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
           permission-actions: write
+          permission-contents: read
           permission-metadata: read
       - name: Dispatch the first soak canary right after publication
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
-        run: gh workflow run release-canary.yml --repo "$GITHUB_REPOSITORY"
+        run: |
+          retry() { for delay in 15 30 60; do "$@" && return; sleep "$delay"; done; "$@"; }
+          retry gh workflow run release-canary.yml --repo "$GITHUB_REPOSITORY"
 
   reconcile:
     name: Reconcile remote state and trigger eligible promotion

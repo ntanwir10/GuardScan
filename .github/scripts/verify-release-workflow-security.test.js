@@ -307,11 +307,13 @@ test('the soak chain dispatches with late, narrow tokens and cannot cancel canar
     assert.ok(tokens.length > 0);
     for (const step of tokens) {
       assert.deepEqual(Object.fromEntries(Object.entries(step.with).filter(([key]) => key.startsWith('permission-'))),
-        {'permission-actions': 'write', 'permission-metadata': 'read'});
+        {'permission-actions': 'write', 'permission-contents': 'read', 'permission-metadata': 'read'});
     }
     for (const step of job.steps.filter(value => /workflow"?,? "?run/.test(value.run || ''))) {
-      assert.match(step.run, /^gh workflow run release-canary\.yml --repo "\$GITHUB_REPOSITORY"$|"release-train\.yml"[\s\S]*"-f", "action=reconcile"/,
-        'the soak chain may dispatch only the canary workflow or a reconciliation');
+      for (const [, target] of step.run.matchAll(/workflow"?,? "?run"?,? "?([\w.-]+\.yml)/g)) {
+        assert.ok(target === 'release-canary.yml' || (target === 'release-train.yml' && step.run.includes('"-f", "action=reconcile"')),
+          `the soak chain may dispatch only the canary workflow or a reconciliation, not ${target}`);
+      }
     }
   }
 });

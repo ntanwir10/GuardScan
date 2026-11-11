@@ -945,10 +945,10 @@ jobs:
   continue-soak:
     name: Continue the RC soak canary chain
     # After record, so cancelling a superseded sleeper can never cancel or fail canary evidence.
+    # Not gated on their results: the planner reads the ledger itself, so one bad run does not end the chain.
     needs: [discover, record]
     if: >-
       !cancelled() && vars.RELEASE_AUTOMATION_ENABLED == 'true'
-      && needs.discover.result == 'success'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     concurrency:
@@ -971,7 +971,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          git -c credential.helper= -c 'credential.https://github.com.helper=!gh auth git-credential' fetch --no-tags --depth=1 origin release-ledger
+          retry() { for delay in 15 30 60; do "$@" && return; sleep "$delay"; done; "$@"; }
+          retry git -c credential.helper= -c 'credential.https://github.com.helper=!gh auth git-credential' fetch --no-tags --depth=1 origin release-ledger
           node cli/scripts/release/soak.js origin/release-ledger >> "$GITHUB_OUTPUT"
       - name: Create short-lived reconcile dispatch token
         id: reconcile-app
@@ -981,6 +982,7 @@ jobs:
           app-id: ${{ vars.RELEASE_APP_ID }}
           private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
           permission-actions: write
+          permission-contents: read
           permission-metadata: read
       - name: Dispatch reconciliation for soaks past eligibility
         if: steps.plan.outputs.reconcile != '[]'
@@ -990,15 +992,22 @@ jobs:
         run: |
           node -e '
             const cp = require("child_process");
+            // Retrying is safe: reconciliations for one version run one at a time.
+            const dispatch = args => {
+              for (const delay of ["15", "30", "60"]) {
+                try { return cp.execFileSync("gh", args, {stdio: "inherit"}); } catch { cp.execFileSync("sleep", [delay]); }
+              }
+              return cp.execFileSync("gh", args, {stdio: "inherit"});
+            };
             for (const train of JSON.parse(process.env.RECONCILE_TRAINS)) {
-              cp.execFileSync("gh", [
+              dispatch([
                 "workflow", "run", "release-train.yml",
                 "--repo", process.env.GITHUB_REPOSITORY,
                 "-f", "action=reconcile",
                 "-f", `version=${train.version}`,
                 "-f", `release_pr=${train.releasePr}`,
                 "-f", `expected_head=${train.sourcePrHead}`,
-              ], {stdio: "inherit"});
+              ]);
             }
           '
       - name: Wait for the next canary slot
@@ -1012,7 +1021,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          git -c credential.helper= -c 'credential.https://github.com.helper=!gh auth git-credential' fetch --no-tags --depth=1 origin release-ledger
+          retry() { for delay in 15 30 60; do "$@" && return; sleep "$delay"; done; "$@"; }
+          retry git -c credential.helper= -c 'credential.https://github.com.helper=!gh auth git-credential' fetch --no-tags --depth=1 origin release-ledger
           node cli/scripts/release/soak.js origin/release-ledger >> "$GITHUB_OUTPUT"
       - name: Create short-lived canary dispatch token
         id: canary-app
@@ -1022,9 +1032,13 @@ jobs:
           app-id: ${{ vars.RELEASE_APP_ID }}
           private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
           permission-actions: write
+          permission-contents: read
           permission-metadata: read
       - name: Dispatch the next soak canary
         if: steps.recheck.outputs.continue == 'true'
         env:
           GH_TOKEN: ${{ steps.canary-app.outputs.token }}
-        run: gh workflow run release-canary.yml --repo "$GITHUB_REPOSITORY"
+        # Retrying is safe: a duplicate canary run collapses into the same chain.
+        run: |
+          retry() { for delay in 15 30 60; do "$@" && return; sleep "$delay"; done; "$@"; }
+          retry gh workflow run release-canary.yml --repo "$GITHUB_REPOSITORY"

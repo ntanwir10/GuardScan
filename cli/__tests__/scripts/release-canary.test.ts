@@ -770,7 +770,7 @@ describe('release soak chain', () => {
       .toEqual([...[reconcile.index, wait.index, recheck.index, token.index, dispatch.index]].sort((a, b) => a - b));
     expect(token.if).toBe("steps.recheck.outputs.continue == 'true'");
     expect(dispatch.if).toBe("steps.recheck.outputs.continue == 'true'");
-    expect(dispatch.run).toBe('gh workflow run release-canary.yml --repo "$GITHUB_REPOSITORY"');
+    expect(dispatch.run).toContain('\nretry gh workflow run release-canary.yml --repo "$GITHUB_REPOSITORY"');
   });
 
   test('the train starts the chain right after RC publication only', () => {
@@ -778,6 +778,6 @@ describe('release soak chain', () => {
     expect(job.needs).toEqual(['prepare', 'record']);
     expect(job.if).toContain("vars.RELEASE_AUTOMATION_ENABLED == 'true'");
     expect(job.if).toContain("needs.prepare.outputs.channel == 'rc'");
-    expect(job.steps.at(-1).run).toBe('gh workflow run release-canary.yml --repo "$GITHUB_REPOSITORY"');
+    expect(job.steps.at(-1).run).toContain('\nretry gh workflow run release-canary.yml --repo "$GITHUB_REPOSITORY"');
   });
 });
