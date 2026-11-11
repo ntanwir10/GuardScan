@@ -27,7 +27,7 @@ export interface Config {
   apiEndpoint?: string;
   /** Explicit approval for non-loopback Ollama/LM Studio endpoints when online. */
   allowRemoteSelfHosted?: boolean;
-  model?: string; // AI model name (e.g., "gemini-2.5-flash", "gpt-4o", "claude-sonnet-4.5")
+  model?: string; // AI model id from `guardscan models list` (e.g., "gpt-6.1-sol", "claude-sonnet-5-5")
   embeddingFallback?: 'ollama' | 'lmstudio' | 'none';
   telemetryEnabled: boolean;
   offlineMode: boolean;

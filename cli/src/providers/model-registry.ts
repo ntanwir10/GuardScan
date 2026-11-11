@@ -337,6 +337,13 @@ export const MODEL_REGISTRY: Record<string, ModelInfo> = {
   },
 };
 
+// Default chat model per cloud provider: the config picker's default and each provider's fallback.
+export const DEFAULT_MODELS = {
+  openai: 'gpt-6.1-sol',
+  claude: 'claude-sonnet-5-5',
+  gemini: 'gemini-3.5-flash-lite', // Google routes gemini-2.5-flash here; same list price
+};
+
 /**
  * Model Registry class with helper methods
  */

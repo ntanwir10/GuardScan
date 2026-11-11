@@ -2,6 +2,7 @@ import chalk from "chalk";
 import inquirer from "inquirer";
 import { configManager, AIProvider, Config } from "../core/config";
 import { ProviderFactory } from "../providers/factory";
+import { DEFAULT_MODELS, modelRegistry } from "../providers/model-registry";
 import { createDebugLogger } from "../utils/debug-logger";
 import { createPerformanceTracker } from "../utils/performance-tracker";
 import { handleCommandError } from "../utils/error-handler";
@@ -21,6 +22,23 @@ const perfTracker = createPerformanceTracker("guardscan config");
 const VALID_AI_PROVIDERS = new Set<AIProvider>([
   "openai", "claude", "gemini", "ollama", "lmstudio", "openrouter", "none",
 ]);
+
+const MODEL_PICKER_LABELS = { openai: "OpenAI", claude: "Claude", gemini: "Gemini" };
+
+/** Config picker choices: the provider's current (non-deprecated) chat models from the registry. */
+export function modelPicker(provider: string, current?: string) {
+  if (!(provider in MODEL_PICKER_LABELS)) {
+    return undefined;
+  }
+  const key = provider as keyof typeof MODEL_PICKER_LABELS;
+  const models = modelRegistry.getChatModels(key).filter((model) => !model.deprecated);
+  return {
+    label: MODEL_PICKER_LABELS[key],
+    choices: models.map((model) => ({ name: model.displayName, value: model.name })),
+    // A saved model that is no longer listed (retired or a dotted Claude id) falls back to the default.
+    default: models.some((model) => model.name === current) ? current : DEFAULT_MODELS[key],
+  };
+}
 
 export async function configCommand(options: ConfigOptions): Promise<void> {
   logger.debug("Config command started", { options });
@@ -516,81 +534,15 @@ async function configureModeSettings(
 
     // Ask for model selection based on provider
     let modelAnswer: { model?: string } = {};
-    if (providerAnswers.provider === "gemini") {
+    const picker = modelPicker(providerAnswers.provider, config.model);
+    if (picker) {
       modelAnswer = await inquirer.prompt([
         {
           type: "list",
           name: "model",
-          message: "Select Gemini model:",
-          choices: [
-            {
-              name: "Gemini 2.5 Flash (Balanced: speed + 1M token context)",
-              value: "gemini-2.5-flash",
-            },
-            {
-              name: "Gemini 2.5 Flash-Lite (Fast and cost-efficient)",
-              value: "gemini-2.5-flash-lite",
-            },
-            {
-              name: "Gemini 2.5 Pro (Complex reasoning, 1M token context)",
-              value: "gemini-2.5-pro",
-            },
-            {
-              name: "Gemini 3 Pro (Most intelligent and capable)",
-              value: "gemini-3-pro",
-            },
-          ],
-          default: config.model || "gemini-2.5-flash",
-        },
-      ]);
-    } else if (providerAnswers.provider === "openai") {
-      modelAnswer = await inquirer.prompt([
-        {
-          type: "list",
-          name: "model",
-          message: "Select OpenAI model:",
-          choices: [
-            {
-              name: "GPT-5.1 (Newest: coding and agentic tasks with configurable reasoning)",
-              value: "gpt-5.1",
-            },
-            {
-              name: "GPT-4o (Multimodal: audio/vision, low-latency, real-time)",
-              value: "gpt-4o",
-            },
-            {
-              name: "GPT-4.1 mini (Fast and efficient, improvement over GPT-4o mini)",
-              value: "gpt-4.1-mini",
-            },
-            {
-              name: "GPT-3.5 Turbo (Faster, lighter, basic tasks)",
-              value: "gpt-3.5-turbo",
-            },
-          ],
-          default: config.model || "gpt-4o",
-        },
-      ]);
-    } else if (providerAnswers.provider === "claude") {
-      modelAnswer = await inquirer.prompt([
-        {
-          type: "list",
-          name: "model",
-          message: "Select Claude model:",
-          choices: [
-            {
-              name: "Claude Opus 4.5 (Most intelligent: complex tasks, professional coding)",
-              value: "claude-opus-4.5",
-            },
-            {
-              name: "Claude Sonnet 4.5 (Balanced: complex agents, coding, high intelligence)",
-              value: "claude-sonnet-4.5",
-            },
-            {
-              name: "Claude Haiku 4.5 (Fastest and cost-effective: real-time, high-volume)",
-              value: "claude-haiku-4.5",
-            },
-          ],
-          default: config.model || "claude-sonnet-4.5",
+          message: `Select ${picker.label} model:`,
+          choices: picker.choices,
+          default: picker.default,
         },
       ]);
     }

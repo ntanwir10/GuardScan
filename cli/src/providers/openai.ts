@@ -1,5 +1,6 @@
 import OpenAI from 'openai';
 import { tokenCounter } from './token-counter';
+import { DEFAULT_MODELS } from './model-registry';
 import {
   AIProvider,
   AIMessage,
@@ -28,7 +29,7 @@ export interface OpenAICompatibleProfile {
 
 const OPENAI_PROFILE: OpenAICompatibleProfile = {
   providerName: 'OpenAI',
-  defaultModel: 'gpt-4o',
+  defaultModel: DEFAULT_MODELS.openai,
   defaultEmbeddingModel: 'text-embedding-3-small',
   capabilities: {
     supportsChat: true,
@@ -59,15 +60,16 @@ const OPENAI_PROFILE: OpenAICompatibleProfile = {
 const GPT_6_MODEL = /^gpt-6/;
 
 function requestLimits(model: string, temperature?: number, maxTokens?: number) {
-  const limit = maxTokens || 4000;
-  return GPT_6_MODEL.test(model)
-    ? { max_completion_tokens: limit }
-    : { temperature: temperature || 0.7, max_tokens: limit };
+  if (GPT_6_MODEL.test(model)) {
+    // Reasoning tokens count toward max_completion_tokens, so the default leaves room for the answer.
+    return { max_completion_tokens: maxTokens || 16000 };
+  }
+  return { temperature: temperature ?? 0.7, max_tokens: maxTokens || 4000 };
 }
 
 export class OpenAIProvider extends AIProvider {
   private client: OpenAI;
-  private defaultModel = 'gpt-4o';
+  private defaultModel: string = DEFAULT_MODELS.openai;
   private defaultEmbeddingModel = 'text-embedding-3-small';
   private profile: OpenAICompatibleProfile;
 

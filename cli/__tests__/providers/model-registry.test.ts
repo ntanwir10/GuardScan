@@ -3,7 +3,7 @@
  */
 
 import { describe, expect, it } from '@jest/globals';
-import { modelRegistry, MODEL_REGISTRY } from '../../src/providers/model-registry';
+import { modelRegistry, MODEL_REGISTRY, DEFAULT_MODELS } from '../../src/providers/model-registry';
 
 describe('ModelRegistry', () => {
   describe('getModelInfo', () => {
@@ -149,6 +149,14 @@ describe('ModelRegistry', () => {
       for (const model of paid) {
         expect({ model: model.name, inputPricing: model.inputPricing >= 0.01 })
           .toEqual({ model: model.name, inputPricing: true });
+      }
+    });
+
+    it('defaults each cloud provider to one of its own active chat models', () => {
+      for (const [provider, id] of Object.entries(DEFAULT_MODELS)) {
+        const model = MODEL_REGISTRY[id];
+        expect({ id, provider: model?.provider, deprecated: model?.deprecated, embeddings: model?.supportsEmbeddings })
+          .toEqual({ id, provider, deprecated: undefined, embeddings: false });
       }
     });
 

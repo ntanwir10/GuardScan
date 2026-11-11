@@ -8,19 +8,27 @@ import {
   ProviderCapabilities,
   CostEstimate
 } from './base';
+import { DEFAULT_MODELS } from './model-registry';
 
-// Claude 5-generation models reject temperature/top_p/top_k and always think before answering
+// No temperature/top_p/top_k is sent to Claude: Claude 5 and Opus 4.7+ reject them with a 400.
+
+// Claude 5-generation models always think, and thinking counts toward max_tokens
 // (platform.claude.com migration guides).
 // shortcut: matches by generation, extend the pattern when a new generation ships.
 const CLAUDE_5_MODEL = /^claude-(fable|opus|sonnet|haiku|mythos)-5/;
 
-function samplingParams(model: string, temperature?: number): { temperature?: number } {
-  return CLAUDE_5_MODEL.test(model) ? {} : { temperature: temperature || 0.7 };
+function defaultMaxTokens(model: string): number {
+  return CLAUDE_5_MODEL.test(model) ? 16000 : 4000;
+}
+
+// Anthropic ids never contain dots; older configs saved ids like `claude-sonnet-4.5`.
+function claudeModelId(model: string): string {
+  return model.replace(/\./g, '-');
 }
 
 export class ClaudeProvider extends AIProvider {
   private client: Anthropic;
-  private defaultModel = 'claude-sonnet-4.5'; // Will be overridden by config if user selects different model
+  private defaultModel: string = DEFAULT_MODELS.claude; // Overridden by the configured model
 
   constructor(apiKey?: string, model?: string) {
     super(apiKey);
@@ -28,7 +36,7 @@ export class ClaudeProvider extends AIProvider {
       apiKey: apiKey || process.env.ANTHROPIC_API_KEY,
     });
     if (model) {
-      this.defaultModel = model;
+      this.defaultModel = claudeModelId(model);
     }
   }
 
@@ -37,11 +45,10 @@ export class ClaudeProvider extends AIProvider {
     const systemMessages = messages.filter(m => m.role === 'system');
     const conversationMessages = messages.filter(m => m.role !== 'system');
 
-    const model = options?.model || this.defaultModel;
+    const model = claudeModelId(options?.model || this.defaultModel);
     const response = (await (this.client as any).messages.create({
       model,
-      max_tokens: options?.maxTokens || 4000,
-      ...samplingParams(model, options?.temperature),
+      max_tokens: options?.maxTokens || defaultMaxTokens(model),
       system: systemMessages.map(m => m.content).join('\n'),
       messages: conversationMessages.map(msg => ({
         role: msg.role as 'user' | 'assistant',
@@ -78,11 +85,10 @@ export class ClaudeProvider extends AIProvider {
     const systemMessages = messages.filter(m => m.role === 'system');
     const conversationMessages = messages.filter(m => m.role !== 'system');
 
-    const model = options?.model || this.defaultModel;
+    const model = claudeModelId(options?.model || this.defaultModel);
     const stream = await (this.client as any).messages.create({
       model,
-      max_tokens: options?.maxTokens || 4000,
-      ...samplingParams(model, options?.temperature),
+      max_tokens: options?.maxTokens || defaultMaxTokens(model),
       system: systemMessages.map(m => m.content).join('\n'),
       messages: conversationMessages.map(msg => ({
         role: msg.role as 'user' | 'assistant',

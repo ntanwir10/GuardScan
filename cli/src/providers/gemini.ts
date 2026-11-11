@@ -9,12 +9,13 @@ import {
   CostEstimate,
 } from "./base";
 import { createDebugLogger } from "../utils/debug-logger";
+import { DEFAULT_MODELS } from "./model-registry";
 
 const logger = createDebugLogger("gemini");
 
 export class GeminiProvider extends AIProvider {
   private client: GoogleGenerativeAI;
-  private defaultModel = "gemini-2.5-flash";
+  private defaultModel: string = DEFAULT_MODELS.gemini;
 
   constructor(apiKey?: string, model?: string) {
     super(apiKey);

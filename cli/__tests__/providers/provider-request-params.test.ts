@@ -4,6 +4,7 @@
 
 import { ClaudeProvider } from '../../src/providers/claude';
 import { OpenAIProvider } from '../../src/providers/openai';
+import { DEFAULT_MODELS } from '../../src/providers/model-registry';
 
 const mockAnthropicCreate = jest.fn();
 const mockOpenAICreate = jest.fn();
@@ -48,10 +49,11 @@ describe('ClaudeProvider request parameters', () => {
     );
 
     expect(mockAnthropicCreate.mock.calls[0][0]).not.toHaveProperty('temperature');
+    expect(mockAnthropicCreate.mock.calls[0][0]).toMatchObject({ max_tokens: 16000 });
     expect(result.content).toBe('hello world');
   });
 
-  it('keeps the default temperature for older Claude models', async () => {
+  it('never sends temperature to older Claude models and keeps their 4000-token default', async () => {
     mockAnthropicCreate.mockResolvedValue({
       content: [{ type: 'text', text: 'ok' }],
       usage,
@@ -59,9 +61,28 @@ describe('ClaudeProvider request parameters', () => {
       stop_reason: 'end_turn',
     });
 
-    await new ClaudeProvider('key', 'claude-sonnet-4-5-20250929').chat([{ role: 'user', content: 'hi' }]);
+    await new ClaudeProvider('key', 'claude-sonnet-4-5-20250929').chat(
+      [{ role: 'user', content: 'hi' }],
+      { temperature: 0.2 }
+    );
 
-    expect(mockAnthropicCreate.mock.calls[0][0]).toMatchObject({ temperature: 0.7 });
+    expect(mockAnthropicCreate.mock.calls[0][0]).not.toHaveProperty('temperature');
+    expect(mockAnthropicCreate.mock.calls[0][0]).toMatchObject({ max_tokens: 4000 });
+  });
+
+  it('turns saved dotted ids into Anthropic ids and defaults to the registry model', async () => {
+    mockAnthropicCreate.mockResolvedValue({
+      content: [{ type: 'text', text: 'ok' }],
+      usage,
+      model: 'm',
+      stop_reason: 'end_turn',
+    });
+
+    await new ClaudeProvider('key', 'claude-sonnet-4.5').chat([{ role: 'user', content: 'hi' }]);
+    await new ClaudeProvider('key').chat([{ role: 'user', content: 'hi' }]);
+
+    expect(mockAnthropicCreate.mock.calls[0][0]).toMatchObject({ model: 'claude-sonnet-4-5' });
+    expect(mockAnthropicCreate.mock.calls[1][0]).toMatchObject({ model: DEFAULT_MODELS.claude });
   });
 
   it('reports the stop reason when a response has no text block', async () => {
@@ -117,7 +138,7 @@ describe('OpenAIProvider request parameters', () => {
     await new OpenAIProvider('key', 'gpt-6-luna').chat([{ role: 'user', content: 'hi' }], { temperature: 0.2 });
 
     const request = mockOpenAICreate.mock.calls[0][0];
-    expect(request).toMatchObject({ model: 'gpt-6-luna', max_completion_tokens: 4000 });
+    expect(request).toMatchObject({ model: 'gpt-6-luna', max_completion_tokens: 16000 });
     expect(request).not.toHaveProperty('temperature');
     expect(request).not.toHaveProperty('max_tokens');
   });
@@ -126,10 +147,20 @@ describe('OpenAIProvider request parameters', () => {
     mockOpenAICreate.mockResolvedValue(completion);
 
     await new OpenAIProvider('key', 'gpt-4o').chat([{ role: 'user', content: 'hi' }]);
+    await new OpenAIProvider('key', 'gpt-4o').chat([{ role: 'user', content: 'hi' }], { temperature: 0 });
 
     const request = mockOpenAICreate.mock.calls[0][0];
     expect(request).toMatchObject({ temperature: 0.7, max_tokens: 4000 });
     expect(request).not.toHaveProperty('max_completion_tokens');
+    expect(mockOpenAICreate.mock.calls[1][0]).toMatchObject({ temperature: 0 });
+  });
+
+  it('defaults to the registry model', async () => {
+    mockOpenAICreate.mockResolvedValue(completion);
+
+    await new OpenAIProvider('key').chat([{ role: 'user', content: 'hi' }]);
+
+    expect(mockOpenAICreate.mock.calls[0][0]).toMatchObject({ model: DEFAULT_MODELS.openai });
   });
 
   it('applies the GPT-6 parameters when streaming', async () => {
@@ -142,7 +173,7 @@ describe('OpenAIProvider request parameters', () => {
 
     const request = mockOpenAICreate.mock.calls[0][0];
     expect(request).not.toHaveProperty('temperature');
-    expect(request).toMatchObject({ max_completion_tokens: 4000 });
+    expect(request).toMatchObject({ max_completion_tokens: 16000 });
     expect(output).toEqual(['a']);
   });
 
