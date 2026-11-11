@@ -9,12 +9,13 @@ import {
   CostEstimate
 } from './base';
 
-// Claude 5-generation models reject temperature/top_p/top_k (platform.claude.com migration guides).
+// Claude 5-generation models reject temperature/top_p/top_k and always think before answering
+// (platform.claude.com migration guides).
 // shortcut: matches by generation, extend the pattern when a new generation ships.
-const OMITS_SAMPLING = /^claude-(fable|opus|sonnet|haiku|mythos)-5/;
+const CLAUDE_5_MODEL = /^claude-(fable|opus|sonnet|haiku|mythos)-5/;
 
 function samplingParams(model: string, temperature?: number): { temperature?: number } {
-  return OMITS_SAMPLING.test(model) ? {} : { temperature: temperature || 0.7 };
+  return CLAUDE_5_MODEL.test(model) ? {} : { temperature: temperature || 0.7 };
 }
 
 export class ClaudeProvider extends AIProvider {
@@ -37,7 +38,7 @@ export class ClaudeProvider extends AIProvider {
     const conversationMessages = messages.filter(m => m.role !== 'system');
 
     const model = options?.model || this.defaultModel;
-    const response = await (this.client as any).messages.create({
+    const response = (await (this.client as any).messages.create({
       model,
       max_tokens: options?.maxTokens || 4000,
       ...samplingParams(model, options?.temperature),
@@ -47,16 +48,16 @@ export class ClaudeProvider extends AIProvider {
         content: msg.content,
       })),
       stream: false,
-    });
+    })) as Anthropic.Message;
 
     // Models with adaptive thinking can put thinking blocks before the answer.
-    const textBlocks = response.content.filter((block: { type: string }) => block.type === 'text');
+    const textBlocks = response.content.filter((block): block is Anthropic.TextBlock => block.type === 'text');
     if (textBlocks.length === 0) {
       throw new Error(`Unexpected response type from Claude: no text block (stop_reason: ${response.stop_reason})`);
     }
 
     return {
-      content: textBlocks.map((block: { text: string }) => block.text).join(''),
+      content: textBlocks.map((block) => block.text).join(''),
       usage: {
         promptTokens: response.usage.input_tokens,
         completionTokens: response.usage.output_tokens,
@@ -107,7 +108,9 @@ export class ClaudeProvider extends AIProvider {
 
   async testConnection(): Promise<boolean> {
     try {
-      await this.chat([{ role: 'user', content: 'test' }], { maxTokens: 10 });
+      // Thinking counts toward max_tokens, so a 10-token probe can stop before any text.
+      const maxTokens = CLAUDE_5_MODEL.test(this.defaultModel) ? 1024 : 10;
+      await this.chat([{ role: 'user', content: 'test' }], { maxTokens });
       return true;
     } catch {
       return false;

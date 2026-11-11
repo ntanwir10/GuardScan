@@ -113,9 +113,7 @@ export function createModelsCommand(): Command {
       if (modelInfo.embeddingPricing) {
         console.log(`  Embeddings: $${modelInfo.embeddingPricing.toFixed(6)}/1M tokens`);
       }
-      console.log(chalk.gray(`  ${PRICING_NOTE}`));
-
-      console.log('\n' + chalk.bold('📊 Capabilities:'));
+      console.log(chalk.gray(`  ${PRICING_NOTE}`) + '\n\n' + chalk.bold('📊 Capabilities:'));
       console.log(`  Context Window: ${modelInfo.contextWindow.toLocaleString()} tokens`);
       console.log(`  Streaming: ${modelInfo.supportsStreaming ? '✅' : '❌'}`);
       console.log(`  Embeddings: ${modelInfo.supportsEmbeddings ? '✅' : '❌'}`);
@@ -218,8 +216,7 @@ export function createModelsCommand(): Command {
       console.log(`${chalk.bold('Model:')} ${recommended.displayName}`);
       console.log(`${chalk.bold('ID:')} ${recommended.name}`);
       console.log(`${chalk.bold('Priority:')} ${options.priority}`);
-      console.log(`${chalk.bold('Cost:')} ${formatPricing(recommended)}`);
-      console.log(chalk.gray(PRICING_NOTE));
+      console.log(`${chalk.bold('Cost:')} ${formatPricing(recommended)}\n${chalk.gray(PRICING_NOTE)}`);
       console.log(`${chalk.bold('Context:')} ${recommended.contextWindow.toLocaleString()} tokens`);
       console.log(`${chalk.bold('Tags:')} ${recommended.tags.join(', ')}`);
       // eslint-disable-next-line no-console

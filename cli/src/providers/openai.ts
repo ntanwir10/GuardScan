@@ -56,9 +56,11 @@ const OPENAI_PROFILE: OpenAICompatibleProfile = {
 
 // GPT-6 models reject temperature at their default reasoning effort and use max_completion_tokens
 // (developers.openai.com GPT-6 guide). Bare ids only: OpenRouter/LM Studio ids don't match.
+const GPT_6_MODEL = /^gpt-6/;
+
 function requestLimits(model: string, temperature?: number, maxTokens?: number) {
   const limit = maxTokens || 4000;
-  return /^gpt-6/.test(model)
+  return GPT_6_MODEL.test(model)
     ? { max_completion_tokens: limit }
     : { temperature: temperature || 0.7, max_tokens: limit };
 }
@@ -170,7 +172,9 @@ export class OpenAIProvider extends AIProvider {
 
   async testConnection(): Promise<boolean> {
     try {
-      await this.chat([{ role: 'user', content: 'test' }], { maxTokens: 10 });
+      // Reasoning tokens count toward max_completion_tokens, so a 10-token probe can end before any text.
+      const maxTokens = GPT_6_MODEL.test(this.defaultModel) ? 1024 : 10;
+      await this.chat([{ role: 'user', content: 'test' }], { maxTokens });
       return true;
     } catch {
       return false;

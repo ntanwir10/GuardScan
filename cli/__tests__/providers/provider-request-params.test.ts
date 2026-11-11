@@ -91,6 +91,21 @@ describe('ClaudeProvider request parameters', () => {
     expect(mockAnthropicCreate.mock.calls[0][0]).not.toHaveProperty('temperature');
     expect(output).toEqual(['streamed']);
   });
+
+  it('sizes the connection probe for Claude 5 thinking only', async () => {
+    mockAnthropicCreate.mockResolvedValue({
+      content: [{ type: 'text', text: 'ok' }],
+      usage,
+      model: 'm',
+      stop_reason: 'end_turn',
+    });
+
+    await expect(new ClaudeProvider('key', 'claude-haiku-5-5').testConnection()).resolves.toBe(true);
+    await expect(new ClaudeProvider('key', 'claude-sonnet-4-5-20250929').testConnection()).resolves.toBe(true);
+
+    expect(mockAnthropicCreate.mock.calls[0][0]).toMatchObject({ max_tokens: 1024 });
+    expect(mockAnthropicCreate.mock.calls[1][0]).toMatchObject({ max_tokens: 10 });
+  });
 });
 
 describe('OpenAIProvider request parameters', () => {
@@ -129,5 +144,15 @@ describe('OpenAIProvider request parameters', () => {
     expect(request).not.toHaveProperty('temperature');
     expect(request).toMatchObject({ max_completion_tokens: 4000 });
     expect(output).toEqual(['a']);
+  });
+
+  it('sizes the connection probe for GPT-6 reasoning only', async () => {
+    mockOpenAICreate.mockResolvedValue(completion);
+
+    await expect(new OpenAIProvider('key', 'gpt-6-luna').testConnection()).resolves.toBe(true);
+    await expect(new OpenAIProvider('key', 'gpt-4o').testConnection()).resolves.toBe(true);
+
+    expect(mockOpenAICreate.mock.calls[0][0]).toMatchObject({ max_completion_tokens: 1024 });
+    expect(mockOpenAICreate.mock.calls[1][0]).toMatchObject({ max_tokens: 10 });
   });
 });
