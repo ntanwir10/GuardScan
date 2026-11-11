@@ -243,10 +243,10 @@ function showConfig(): void {
   const vulnerabilityConfig = config.vulnerabilities;
   console.log(
     chalk.white(
-      `   CVE Scanning: ${
+      `   CVE scanning (--cve): ${
         vulnerabilityConfig?.enabled === false
-          ? chalk.yellow("Disabled")
-          : chalk.green("Enabled")
+          ? chalk.yellow("disabled in config")
+          : chalk.green("allowed")
       }`
     )
   );
