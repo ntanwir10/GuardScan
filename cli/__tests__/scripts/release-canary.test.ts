@@ -698,16 +698,31 @@ describe('release soak chain', () => {
   });
 
   test('one chain serves every active RC and the most overdue one sets the pace', () => {
-    const second = '1.2.3-rc.2';
+    const second = '1.2.4-rc.1';
     const result = planSoak(active(
       {version: VERSION},
-      {version: second},
+      {version: second, releasePr: 47},
       {version: '1.2.2', channel: 'stable', releasePr: 40},
     ), {
       [VERSION]: soakLedger([2, 50]),
       [second]: soakLedger([42], {version: second, publishedAt: at(40).toISOString()}),
     }, at(52));
     expect(result).toEqual({continue: true, sleepSeconds: 35 * 60, reconcile: [], stopped: []});
+  });
+
+  test('never chains an RC superseded by a newer rc.N, whatever its evidence says', () => {
+    // Live shape on 2026-11-11: rc.5 (failing Homebrew canary) and rc.6 both listed as active.
+    const failing = soakLedger([2, 47], {lastStatus: 'failed'});
+    const newer = '1.2.3-rc.10';
+    const result = planSoak(active({version: VERSION}, {version: '1.2.3-rc.2'}, {version: newer}), {
+      [newer]: soakLedger([42], {version: newer, publishedAt: at(40).toISOString()}),
+      // Superseded RCs need no ledger, and a failing one cannot stop the newest soak.
+      [VERSION]: failing,
+    }, at(52));
+    expect(result).toEqual({continue: true, sleepSeconds: 35 * 60, reconcile: [], stopped: [
+      {version: VERSION, reason: 'superseded'},
+      {version: '1.2.3-rc.2', reason: 'superseded'},
+    ]});
   });
 
   test('fails closed on malformed train metadata or a missing ledger', () => {

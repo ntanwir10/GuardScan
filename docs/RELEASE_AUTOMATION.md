@@ -366,9 +366,13 @@ GitHub, with no cron and no maintainer machine on the critical path:
    `start-soak` job dispatches `release-canary.yml`, so the first sample
    arrives minutes after `publishedAt`.
 2. Every canary run ends with `continue-soak`, which runs after `record` and
-   asks `cli/scripts/release/soak.js` which active RCs still soak. An RC
-   soaks only while all of these hold in the protected ledger:
+   asks `cli/scripts/release/soak.js` which active RCs still soak. It judges
+   each RC by its own ledger evidence, never by the run's conclusion, so a
+   failing train listed beside it cannot stop a passing soak. An RC soaks
+   only while all of these hold in the protected ledger:
    - it is still in `active-versions.json` and has no `promotion_decided` event;
+   - it is the newest `rc.N` of its stable version; older candidates are
+     superseded and never chained;
    - the time is before `publishedAt` + 24 hours + a 3-hour margin;
    - every required channel can still pass promotion: no failed sample, no
      gap over 90 minutes, and a latest sample at most 90 minutes old. This is

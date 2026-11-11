@@ -1,12 +1,14 @@
 'use strict';
 
 const {execFileSync} = require('child_process');
+const semver = require('semver');
 const {REQUIRED_RC_CHANNELS} = require('./lib');
 const {MAX_LEDGER_BYTES, materializeReleaseState, parseLedgerText} = require('./events');
 const {
   DEFAULT_MINIMUM_SAMPLES,
   MAX_CANARY_AGE_MILLISECONDS,
   SOAK_MILLISECONDS,
+  stableVersion,
   summarizeCanaries,
 } = require('./promotion');
 
@@ -46,10 +48,23 @@ function planSoak(active, ledgers, now) {
   }
   const soaking = [];
   const stopped = [];
-  for (const train of active.trains.filter(value => value?.channel === 'rc')) {
+  const candidates = active.trains.filter(value => value?.channel === 'rc');
+  for (const train of candidates) {
     if (!RC_VERSION.test(train.version || '') || !Number.isSafeInteger(train.releasePr)
         || train.releasePr < 1 || !/^[a-f0-9]{40}$/.test(train.sourcePrHead || '')) {
       throw new Error('active RC train metadata is invalid');
+    }
+  }
+  // Only the newest rc.N of a stable version can still be promoted; older candidates are superseded.
+  const newest = new Map();
+  for (const {version} of candidates) {
+    const stable = stableVersion(version);
+    if (!newest.has(stable) || semver.gt(version, newest.get(stable))) newest.set(stable, version);
+  }
+  for (const train of candidates) {
+    if (newest.get(stableVersion(train.version)) !== train.version) {
+      stopped.push({version: train.version, reason: 'superseded'});
+      continue;
     }
     const ledger = ledgers[train.version];
     if (ledger?.state?.version !== train.version) {
