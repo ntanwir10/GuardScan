@@ -24,7 +24,7 @@ GuardScan is **100% free and open source**! No credit system, no paywalls, no su
 ### What You Get (All FREE)
 
 - ✅ **Unlimited static analysis** - 9 security scanners + code quality tools
-- ✅ **AI-enhanced code review** - Bring your own API key (OpenAI, Claude, Gemini, Ollama)
+- ✅ **AI-enhanced code review** - Bring your own API key (OpenAI, Claude, Gemini, OpenRouter, or local Ollama/LM Studio)
 - ✅ **Offline-first static analysis** - Local scanners and SBOM inventory run without internet; CVEs can reuse a fresh matching snapshot
 - ✅ **Privacy-first** - GuardScan does not upload your source code to GuardScan servers
 - ✅ **No usage limits** - Scan unlimited LOC, unlimited repositories
@@ -110,7 +110,7 @@ GuardScan includes **comprehensive security scanners**:
 
 ### 🌍 Multi-Language Support
 
-**AST Parsers for 7+ Languages:**
+**AST Parsers for 8 Languages:**
 
 - TypeScript/JavaScript
 - Python
@@ -271,7 +271,7 @@ Runs **9 security scanners** locally:
 ```bash
 # Step 1: Configure your AI provider (one-time)
 guardscan config
-# Choose provider: OpenAI, Claude, Gemini, Ollama
+# Choose provider: openai, claude, gemini, openrouter, ollama, lmstudio
 # Enter your API key
 
 # Step 2: Run AI review
@@ -310,7 +310,7 @@ GuardScan follows a **privacy-first, client-side architecture** where all code a
 │  │  • 29 Commands (security, vuln, run, test...)       │   │
 │  │  • 30 Core Modules (scanners, parsers, metrics)     │   │
 │  │  • 9 AI Features (explain, review, test-gen, etc.)  │   │
-│  │  • 7 Language Parsers (Python, Java, Go, Rust...)   │   │
+│  │  • 8 Language Parsers (Python, Java, Go, Rust...)   │   │
 │  │  • 6 AI Provider Integrations                       │   │
 │  │                                                      │   │
 │  │  Config: ~/.guardscan/config.yml                   │   │
@@ -364,9 +364,9 @@ npm install -g guardscan
 guardscan --version
 ```
 
-GuardScan requires Node.js 22 or newer and installs its runtime dependencies (including `typescript`, needed for AST parsing) automatically. If you see "Cannot find module 'typescript'", reinstall GuardScan.
+The npm install requires Node.js 22 or newer and installs its runtime dependencies (including `typescript`, needed for AST parsing) automatically. If you see "Cannot find module 'typescript'", reinstall GuardScan.
 
-pnpm, Yarn and Bun are also supported. Homebrew, Scoop, PyPI (`pipx`), WinGet, Chocolatey and standalone binaries are planned for 1.1.1 and are **not yet available**. See the [install, upgrade and uninstall guide](https://github.com/ntanwir10/GuardScan/blob/main/docs/INSTALL.md) for every channel.
+pnpm, Yarn and Bun are also supported (Node.js 22 or newer). Homebrew, Scoop, pipx, WinGet, Chocolatey and standalone binaries (Node.js bundled) are also available. See the [install, upgrade and uninstall guide](https://github.com/ntanwir10/GuardScan/blob/main/docs/INSTALL.md) for every channel.
 
 ### From source
 
@@ -420,7 +420,7 @@ A: No! Just `npm install -g guardscan` and run `guardscan init`.
 A: Only if you want AI-enhanced review. Static analysis (9 security scanners) works without any API key.
 
 **Q: Which AI provider should I use?**
-A: Your choice! OpenAI (powerful), Claude (balanced), Gemini (affordable), Ollama (free, local).
+A: Your choice: OpenAI, Claude, Gemini, OpenRouter, or local Ollama/LM Studio. Static analysis needs no provider at all.
 
 **Q: Does GuardScan upload my code?**
 A: GuardScan does not upload source code to GuardScan servers. If you enable AI features, prompts are sent directly to your configured provider; local caches may store prompts/responses on your machine.

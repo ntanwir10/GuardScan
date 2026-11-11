@@ -47,7 +47,7 @@ GuardScan is **100% free and open source**:
 
 AI-powered features require **your own API keys**:
 
-- You provide your own API keys (OpenAI, Claude, Gemini, Ollama)
+- You provide your own API keys (OpenAI, Claude, Gemini, OpenRouter, or local Ollama/LM Studio)
 - You are responsible for API costs with your chosen provider
 - GuardScan does not provide or pay for AI API access
 - You must comply with your AI provider's terms of service
@@ -138,10 +138,11 @@ When using AI features:
 
 ## 📊 Telemetry
 
-Telemetry is **optional** and can be disabled:
+Telemetry is **optional** and off by default:
 
-- Default: Enabled (helps us improve GuardScan)
-- You can disable with `--no-telemetry` flag
+- Default: disabled (opt-in). Events stay in a local queue and leave your machine only when you run `guardscan telemetry sync` against a collector you name via `GUARDSCAN_TELEMETRY_URL`
+- Disable or keep it off with `guardscan config --telemetry false`, the `--no-telemetry` flag for a single command, or `GUARDSCAN_NO_TELEMETRY=true` in the environment
+- Delete queued events with `guardscan telemetry clear`
 - See [PRIVACY.md](PRIVACY.md) for details on what's collected
 - No personal information is collected
 - Your source code is never collected
@@ -161,8 +162,7 @@ Telemetry is **optional** and can be disabled:
 **GuardScan:**
 
 - Stores API keys locally in your config
-- Never transmits API keys to GuardScan servers
-- Never logs or stores API keys on our servers
+- GuardScan operates no servers, so your API keys never pass through any GuardScan service
 - Sends API keys directly to your chosen AI provider
 
 ---

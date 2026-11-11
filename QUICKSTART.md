@@ -10,7 +10,7 @@ guardscan init
 guardscan security --offline --no-cve
 ```
 
-Other channels (Homebrew, Scoop, PyPI, WinGet, Chocolatey, standalone binaries) are planned for 1.1.1 and not yet available.
+Homebrew, Scoop, pipx, WinGet, Chocolatey and standalone binaries (Node.js bundled) are also available; see [docs/INSTALL.md](docs/INSTALL.md).
 
 ## Optional: add AI review (bring your own key)
 

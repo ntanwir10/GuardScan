@@ -300,8 +300,8 @@ v1.1.0 is published and immutable, holding only `guardscan-1.1.0.tgz` and
 "first 1.1.0 bootstrap exception" no longer exists.
 
 `1.1.1` is the first release through the train, for every channel:
-`1.1.1-rc.1`, a 24-hour soak, then `1.1.1`. Only npm (and pnpm/Yarn/Bun) is live
-today, at `1.1.0`; every other channel is planned for `1.1.1`.
+`1.1.1-rc.1`, a 24-hour soak, then `1.1.1`. `1.1.1` has been released through
+the train; install-channel status is tracked in [docs/INSTALL.md](INSTALL.md).
 
 Bootstrap, in the order given under [Activation order](#activation-order-while-automation-is-off):
 

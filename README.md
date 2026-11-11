@@ -20,7 +20,7 @@ guardscan config                        # optional: configure an AI provider
 guardscan run                           # local review, with AI enrichment if configured
 ```
 
-Requires Node.js 22 or newer. Other install channels (Homebrew, Scoop, PyPI, WinGet, Chocolatey, standalone binaries) are planned for 1.1.1 and are not yet available; see [docs/INSTALL.md](docs/INSTALL.md).
+The npm install needs Node.js 22 or newer. Homebrew, Scoop, pipx, WinGet, Chocolatey and standalone binaries (Node.js bundled) are also available; see [docs/INSTALL.md](docs/INSTALL.md).
 
 ## Documentation
 

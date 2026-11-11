@@ -1,6 +1,6 @@
 # GuardScan functional acceptance
 
-This document is the launch evidence map for GuardScan `1.1.1`, the first release through the train (`1.1.0` was published to npm by hand and is not train evidence). It separates
+This document is the evidence map for GuardScan `1.1.1`, the first release through the train (`1.1.0` was published to npm by hand and is not train evidence). It separates
 implemented behavior from behavior proven in the exact artifact that users will
 install. A command appearing in help, compiling successfully, or passing a mock
 does not by itself make that command production-verified.
@@ -10,9 +10,9 @@ it names the source commit, tag, artifact digest, platform, runtime, test, and
 time. Every current-source change invalidates older exact-artifact evidence until
 the required jobs rerun against the new commit.
 
-The current launch posture is **closed**: `RELEASE_AUTOMATION_ENABLED` remains
-`false` until onboarding is complete. No `1.1.1-rc.1` soak or `1.1.1` public
-verification is implied by this matrix.
+GuardScan `1.1.1` was released through the release train. Per-channel
+verification for it is recorded in the `release-ledger` branch
+(`events/v1.1.1.jsonl`); this matrix does not itself record test results.
 
 ## Evidence classes
 
