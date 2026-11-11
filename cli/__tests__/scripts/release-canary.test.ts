@@ -18,6 +18,11 @@ const {reconcileRelease} = require('../../scripts/release/reconcile') as Record<
 const {createPromotionDecision} = require('../../scripts/release/promotion') as Record<string, any>;
 const {transitionState} = require('../../scripts/release/ledger') as Record<string, any>;
 const {main} = require('../../scripts/release/index') as Record<string, any>;
+const {
+  NEXT_CANARY_DELAY_MILLISECONDS,
+  SOAK_MARGIN_MILLISECONDS,
+  planSoak,
+} = require('../../scripts/release/soak') as Record<string, any>;
 
 const VERSION = '1.2.3-rc.1';
 const TAG = `v${VERSION}`;
@@ -593,5 +598,186 @@ describe('release canary public seams', () => {
       to: 'published',
       timestamp: EVALUATED_AT,
     })).toThrow(/v2|append-only|legacy/i);
+  });
+});
+
+describe('release soak chain', () => {
+  const PUBLISHED_AT = '2026-08-01T00:00:00.000Z';
+  const HEAD = 'e'.repeat(40);
+  const MINUTE = 60 * 1000;
+  const SOAK_CHANNELS = ['npm', 'pnpm', 'yarn', 'bun', 'github', 'homebrew', 'scoop', 'pypi'];
+  const workflowFile = (name: string) => yaml.load(fs.readFileSync(
+    path.resolve(__dirname, '../../../.github/workflows', name), 'utf8')) as any;
+  const at = (minutes: number) => new Date(Date.parse(PUBLISHED_AT) + minutes * MINUTE);
+  const active = (...trains: Array<Record<string, any>>) => ({
+    schemaVersion: 'guardscan.active-trains.v1',
+    trains: trains.map(train => ({releasePr: 46, sourcePrHead: HEAD, channel: 'rc', ...train})),
+  });
+  function soakLedger(sampleMinutes: number[], options: {
+    version?: string; publishedAt?: string | null; lastStatus?: string; promoted?: boolean;
+  } = {}) {
+    const publishedAt = options.publishedAt === undefined ? PUBLISHED_AT : options.publishedAt;
+    return {
+      events: [
+        {type: 'train_started'},
+        ...(publishedAt ? [{type: 'channel_published', channel: 'github', timestamp: publishedAt}] : []),
+        ...(options.promoted ? [{type: 'promotion_decided'}] : []),
+      ],
+      state: {
+        version: options.version || VERSION,
+        canaries: Object.fromEntries(SOAK_CHANNELS.map(channel => [channel, sampleMinutes.map((minutes, index) => ({
+          status: index === sampleMinutes.length - 1 && options.lastStatus ? options.lastStatus : 'passed',
+          checkedAt: at(minutes).toISOString(),
+        }))])),
+      },
+    };
+  }
+  const plan = (ledger: any, minutes: number) => planSoak(active({version: VERSION}), {[VERSION]: ledger}, at(minutes));
+
+  test('drives a whole soak to a permitted promotion, then stops by itself', () => {
+    // The train dispatches at publication; each run stamps every channel two minutes after dispatch.
+    const samples: number[] = [];
+    let dispatchedAt = 0;
+    let reconcileAt: number | undefined;
+    let last: any;
+    for (let hop = 0; hop < 100; hop++) {
+      samples.push(dispatchedAt + 2);
+      last = plan(soakLedger(samples), dispatchedAt + 3);
+      if (last.reconcile.length > 0 && reconcileAt === undefined) {
+        reconcileAt = dispatchedAt + 3;
+        expect(last.reconcile).toEqual([{version: VERSION, releasePr: 46, sourcePrHead: HEAD}]);
+        const decision = createPromotionDecision(promotionInput({
+          evaluatedAt: at(reconcileAt).toISOString(),
+          canaries: SOAK_CHANNELS.flatMap(channel => samples.map(minutes => ({
+            channel, status: 'passed', checkedAt: at(minutes).toISOString(),
+          }))),
+        }));
+        expect(decision.reasons).toEqual([]);
+        expect(decision.eligible).toBe(true);
+      }
+      if (!last.continue) break;
+      dispatchedAt += 3 + last.sleepSeconds / 60;
+    }
+    expect(reconcileAt).toBeGreaterThanOrEqual(24 * 60);
+    expect(last).toEqual({continue: false, sleepSeconds: 0, reconcile: [],
+      stopped: [{version: VERSION, reason: 'outside_soak_window'}]});
+    const gaps = samples.slice(1).map((minutes, index) => minutes - samples[index]);
+    expect(Math.max(...gaps)).toBeLessThanOrEqual(NEXT_CANARY_DELAY_MILLISECONDS / MINUTE + 2);
+    expect(samples.length).toBeLessThanOrEqual(
+      (24 * 60 + SOAK_MARGIN_MILLISECONDS / MINUTE) / (NEXT_CANARY_DELAY_MILLISECONDS / MINUTE) + 2);
+  });
+
+  test('stops for good once the soak can no longer pass promotion', () => {
+    const stoppedOn = (ledger: any, minutes: number) => plan(ledger, minutes).stopped[0]?.reason;
+    expect(stoppedOn(soakLedger([2, 94]), 95)).toBe('unrecoverable:npm');
+    expect(stoppedOn(soakLedger([2]), 93)).toBe('unrecoverable:npm');
+    expect(stoppedOn(soakLedger([2, 47], {lastStatus: 'failed'}), 48)).toBe('unrecoverable:npm');
+    expect(stoppedOn(soakLedger([-5, 40]), 41)).toBe('unrecoverable:npm');
+    expect(stoppedOn(soakLedger([]), 91)).toBe('unrecoverable:npm');
+    expect(plan(soakLedger([]), 30)).toEqual({continue: true, sleepSeconds: 15 * 60, reconcile: [], stopped: []});
+    expect(plan(soakLedger([2]), 50)).toEqual({continue: true, sleepSeconds: 0, reconcile: [], stopped: []});
+  });
+
+  test('stops after the window plus margin, after any promotion decision, and before publication', () => {
+    const windowEnd = 24 * 60 + SOAK_MARGIN_MILLISECONDS / MINUTE;
+    const dense = Array.from({length: windowEnd / 45}, (_, index) => 2 + index * 45);
+    expect(plan(soakLedger(dense), windowEnd - 1).continue).toBe(true);
+    expect(plan(soakLedger(dense), windowEnd).stopped).toEqual([{version: VERSION, reason: 'outside_soak_window'}]);
+    expect(plan(soakLedger([2], {promoted: true}), 3).stopped)
+      .toEqual([{version: VERSION, reason: 'promotion_decided'}]);
+    expect(plan(soakLedger([], {publishedAt: null}), 3).stopped).toEqual([{version: VERSION, reason: 'unpublished'}]);
+    expect(plan(soakLedger([], {publishedAt: at(10).toISOString()}), 3).stopped)
+      .toEqual([{version: VERSION, reason: 'outside_soak_window'}]);
+  });
+
+  test('dispatches reconciliation only once the 24-hour window is complete', () => {
+    const samples = (until: number) => Array.from({length: 40}, (_, index) => 2 + index * 45)
+      .filter(minutes => minutes < until);
+    expect(plan(soakLedger(samples(1439)), 1439).reconcile).toEqual([]);
+    expect(plan(soakLedger(samples(1441)), 1441).reconcile).toEqual([{version: VERSION, releasePr: 46, sourcePrHead: HEAD}]);
+  });
+
+  test('one chain serves every active RC and the most overdue one sets the pace', () => {
+    const second = '1.2.3-rc.2';
+    const result = planSoak(active(
+      {version: VERSION},
+      {version: second},
+      {version: '1.2.2', channel: 'stable', releasePr: 40},
+    ), {
+      [VERSION]: soakLedger([2, 50]),
+      [second]: soakLedger([42], {version: second, publishedAt: at(40).toISOString()}),
+    }, at(52));
+    expect(result).toEqual({continue: true, sleepSeconds: 35 * 60, reconcile: [], stopped: []});
+  });
+
+  test('fails closed on malformed train metadata or a missing ledger', () => {
+    const now = at(3);
+    expect(() => planSoak({trains: []}, {}, now)).toThrow('active train index is invalid');
+    expect(() => planSoak(active({version: VERSION, sourcePrHead: 'bad'}), {[VERSION]: soakLedger([2])}, now))
+      .toThrow('active RC train metadata is invalid');
+    expect(() => planSoak(active({version: '1.2.3'}), {}, now)).toThrow('active RC train metadata is invalid');
+    expect(() => planSoak(active({version: VERSION}), {}, now)).toThrow('has no matching release ledger');
+    expect(() => planSoak(active({version: VERSION}), {[VERSION]: soakLedger([2], {version: '1.2.3-rc.9'})}, now))
+      .toThrow('has no matching release ledger');
+  });
+
+  test('the planner CLI reads the ledger branch and writes step outputs', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'guardscan-soak-'));
+    try {
+      const git = (...args: string[]) => require('child_process').execFileSync('git', args, {cwd: root, encoding: 'utf8'});
+      git('init', '-q');
+      fs.writeFileSync(path.join(root, 'active-versions.json'),
+        JSON.stringify({schemaVersion: 'guardscan.active-trains.v1', trains: [{version: '1.2.2', channel: 'stable'}]}));
+      git('add', 'active-versions.json');
+      git('-c', 'user.name=t', '-c', 'user.email=t@example.test', 'commit', '-q', '-m', 'seed');
+      expect(require('child_process').execFileSync('node',
+        [path.resolve(__dirname, '../../scripts/release/soak.js'), 'HEAD'], {cwd: root, encoding: 'utf8'}))
+        .toBe('continue=false\nsleep_seconds=0\nreconcile=[]\n');
+    } finally {
+      fs.rmSync(root, {recursive: true, force: true});
+    }
+  });
+
+  test('the canary workflow continues the chain only after evidence is recorded, with one live hop', () => {
+    const workflow = workflowFile('release-canary.yml');
+    const job = workflow.jobs['continue-soak'];
+    expect(workflow.on.schedule).toEqual([{cron: '7 * * * *'}]);
+    expect(workflow.concurrency).toBeUndefined();
+    expect(job.needs).toEqual(['discover', 'record']);
+    expect(job.if).toContain('!cancelled()');
+    expect(job.if).toContain("vars.RELEASE_AUTOMATION_ENABLED == 'true'");
+    expect(job.concurrency).toEqual({group: 'release-canary-soak', 'cancel-in-progress': true});
+    expect(Object.values(workflow.jobs).some((other: any) => [other.needs].flat().includes('continue-soak'))).toBe(false);
+    expect(job['timeout-minutes'] * MINUTE).toBeGreaterThan(NEXT_CANARY_DELAY_MILLISECONDS + 10 * MINUTE);
+    const names = job.steps.map((step: any) => step.name);
+    const step = (name: string) => {
+      const index = names.indexOf(name);
+      if (index < 0) throw new Error(`missing soak step: ${name}`);
+      return {index, ...job.steps[index]};
+    };
+    const plan = step('Plan the soak from the protected ledger');
+    const reconcile = step('Dispatch reconciliation for soaks past eligibility');
+    const wait = step('Wait for the next canary slot');
+    const recheck = step('Re-check the soak after waiting');
+    const token = step('Create short-lived canary dispatch token');
+    const dispatch = step('Dispatch the next soak canary');
+    expect(plan.run).toContain('node cli/scripts/release/soak.js origin/release-ledger >> "$GITHUB_OUTPUT"');
+    expect(recheck.run).toBe(plan.run);
+    expect(reconcile.run).toContain('"-f", "action=reconcile"');
+    expect(reconcile.run).toContain('`expected_head=${train.sourcePrHead}`');
+    expect(wait.run).toBe('sleep "$SLEEP_SECONDS"');
+    expect([reconcile.index, wait.index, recheck.index, token.index, dispatch.index])
+      .toEqual([...[reconcile.index, wait.index, recheck.index, token.index, dispatch.index]].sort((a, b) => a - b));
+    expect(token.if).toBe("steps.recheck.outputs.continue == 'true'");
+    expect(dispatch.if).toBe("steps.recheck.outputs.continue == 'true'");
+    expect(dispatch.run).toBe('gh workflow run release-canary.yml --repo "$GITHUB_REPOSITORY"');
+  });
+
+  test('the train starts the chain right after RC publication only', () => {
+    const job = workflowFile('release-train.yml').jobs['start-soak'];
+    expect(job.needs).toEqual(['prepare', 'record']);
+    expect(job.if).toContain("vars.RELEASE_AUTOMATION_ENABLED == 'true'");
+    expect(job.if).toContain("needs.prepare.outputs.channel == 'rc'");
+    expect(job.steps.at(-1).run).toBe('gh workflow run release-canary.yml --repo "$GITHUB_REPOSITORY"');
   });
 });

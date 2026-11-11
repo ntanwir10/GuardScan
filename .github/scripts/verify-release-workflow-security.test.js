@@ -284,6 +284,38 @@ test('canary aggregation delegates fail-closed incident handling to record-canar
   assert.doesNotMatch(source, /appendEvent/);
 });
 
+test('the soak chain dispatches with late, narrow tokens and cannot cancel canary evidence', () => {
+  const canary = parseWorkflow('release-canary.yml');
+  const train = parseWorkflow('release-train.yml');
+  // A cancelled canary run uploads its fail-closed reports, and record turns them into blocking failures.
+  assert.equal(canary.concurrency, undefined, 'release-canary.yml must not cancel whole runs');
+  for (const [name, job] of jobs(canary)) {
+    assert.equal(job.concurrency?.['cancel-in-progress'] === true, name === 'continue-soak',
+      `${name} must not cancel in-progress canary work`);
+    assert.equal([job.needs].flat().includes('continue-soak'), false, `${name} must not wait on the soak hop`);
+  }
+  const hop = canary.jobs['continue-soak'];
+  assert.deepEqual(hop.needs, ['discover', 'record']);
+  assert.match(hop.if, /!cancelled\(\) && vars\.RELEASE_AUTOMATION_ENABLED == 'true'/);
+  const names = hop.steps.map(step => step.name);
+  assert.ok(names.indexOf('Create short-lived canary dispatch token') > names.indexOf('Wait for the next canary slot'),
+    'the canary dispatch token must be minted after the sleep, not left to expire during it');
+  const start = train.jobs['start-soak'];
+  assert.match(start.if, /needs\.prepare\.outputs\.channel == 'rc'/);
+  for (const job of [hop, start]) {
+    const tokens = job.steps.filter(step => step.uses?.startsWith('actions/create-github-app-token@'));
+    assert.ok(tokens.length > 0);
+    for (const step of tokens) {
+      assert.deepEqual(Object.fromEntries(Object.entries(step.with).filter(([key]) => key.startsWith('permission-'))),
+        {'permission-actions': 'write', 'permission-metadata': 'read'});
+    }
+    for (const step of job.steps.filter(value => /workflow"?,? "?run/.test(value.run || ''))) {
+      assert.match(step.run, /^gh workflow run release-canary\.yml --repo "\$GITHUB_REPOSITORY"$|"release-train\.yml"[\s\S]*"-f", "action=reconcile"/,
+        'the soak chain may dispatch only the canary workflow or a reconciliation');
+    }
+  }
+});
+
 test('release build separates source execution from privileged finalization', () => {
   const workflow = parseWorkflow('release-build.yml');
   for (const name of ['npm-build', 'native-build', 'provider-build']) {

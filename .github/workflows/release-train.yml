@@ -2091,6 +2091,27 @@ jobs:
             git -c credential.helper= -c 'credential.https://github.com.helper=!gh auth git-credential' push origin HEAD:release-ledger
           )
 
+  start-soak:
+    name: Start the RC soak canary chain
+    needs: [prepare, record]
+    if: >-
+      vars.RELEASE_AUTOMATION_ENABLED == 'true'
+      && needs.prepare.outputs.channel == 'rc'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Create short-lived canary dispatch token
+        id: app
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        with:
+          app-id: ${{ vars.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          permission-actions: write
+          permission-metadata: read
+      - name: Dispatch the first soak canary right after publication
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        run: gh workflow run release-canary.yml --repo "$GITHUB_REPOSITORY"
+
   reconcile:
     name: Reconcile remote state and trigger eligible promotion
     if: >-
