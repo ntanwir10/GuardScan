@@ -10,7 +10,7 @@ guardscan init
 guardscan security --offline --no-cve
 ```
 
-Homebrew, Scoop, pipx, WinGet, Chocolatey and standalone binaries (Node.js bundled) are also available; see [docs/INSTALL.md](docs/INSTALL.md).
+Homebrew, Scoop, pipx and standalone binaries (Node.js bundled) are also available, and WinGet and Chocolatey follow once their moderation accepts the package; see [docs/INSTALL.md](docs/INSTALL.md).
 
 ## Optional: add AI review (bring your own key)
 

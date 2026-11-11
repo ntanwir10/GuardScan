@@ -142,7 +142,7 @@ You can customize the chat experience using command-line options:
 Override the AI model for this chat session.
 
 ```bash
-guardscan chat --model gpt-4o   # any model id from `guardscan models list`
+guardscan chat --model <model-id>   # a model for your configured provider, from `guardscan models list`
 ```
 
 **Available models** depend on your configured AI provider. `guardscan models list` prints GuardScan's built-in static catalog, not a live availability list, and the override is passed to the provider unchanged, so confirm the exact model ID in your provider's documentation. Print the catalog with:
@@ -386,7 +386,7 @@ This ensures the AI has access to your latest code.
 
 **Solutions:**
 
-1. Use a faster AI model (pick a smaller one from `guardscan models list`)
+1. Use a faster AI model (a smaller one for your configured provider, from `guardscan models list`)
 2. Reduce codebase size (exclude large files in config)
 3. Use local AI (Ollama) for faster responses
 4. Rebuild index to optimize search

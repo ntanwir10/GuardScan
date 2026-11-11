@@ -142,7 +142,7 @@ Telemetry is **optional** and off by default:
 
 - Default: disabled (opt-in). Events stay in a local queue and leave your machine only when you run `guardscan telemetry sync` against a collector you name via `GUARDSCAN_TELEMETRY_URL`
 - Disable or keep it off with `guardscan config --telemetry false`, the `--no-telemetry` flag for a single command, or `GUARDSCAN_NO_TELEMETRY=true` in the environment
-- Delete queued events with `guardscan telemetry clear`
+- Delete queued events with `guardscan telemetry clear --force`
 - See [PRIVACY.md](PRIVACY.md) for details on what's collected
 - No personal information is collected
 - Your source code is never collected

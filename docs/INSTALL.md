@@ -97,11 +97,18 @@ Homebrew, Scoop, pipx, WinGet and Chocolatey are third-party package managers; i
 
 Run these against a file downloaded from GitHub Releases.
 
-1. Check the checksum against `SHA256SUMS` from the same release:
+1. Check the checksum against `SHA256SUMS` from the same release, and confirm the output has an `OK` line for the exact file you downloaded:
 
    ```bash
    shasum -a 256 -c SHA256SUMS --ignore-missing   # macOS
    sha256sum -c SHA256SUMS --ignore-missing       # Linux
+   ```
+
+   On Windows (PowerShell), compare the file's hash with its line in `SHA256SUMS`:
+
+   ```powershell
+   (Get-FileHash .\guardscan-<version>-windows-x64.zip -Algorithm SHA256).Hash.ToLower()
+   Select-String -Path .\SHA256SUMS -Pattern 'windows-x64.zip'
    ```
 
 2. Verify the GitHub build attestation:
@@ -111,7 +118,16 @@ Run these against a file downloaded from GitHub Releases.
      --signer-workflow ntanwir10/GuardScan/.github/workflows/release-build.yml
    ```
 
-3. For the npm package, check the registry signatures and SLSA provenance: `npm audit signatures` (provenance is also shown on npmjs.com).
+3. For the npm package, `npm audit signatures` checks the registry signatures and SLSA provenance of a project's installed dependencies, not global installs. Run it in a temporary project:
+
+   ```bash
+   mkdir guardscan-verify && cd guardscan-verify
+   npm init -y
+   npm install guardscan@<version>
+   npm audit signatures
+   ```
+
+   Provenance is also shown on npmjs.com.
 
 **macOS.** Binaries are ad-hoc signed and not notarized, so Gatekeeper quarantines a zip downloaded in a browser. After verifying, clear the flag with `xattr -d com.apple.quarantine <path>`. Homebrew, pipx and npm installs are unaffected.
 

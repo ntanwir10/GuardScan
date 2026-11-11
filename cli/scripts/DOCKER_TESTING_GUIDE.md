@@ -73,7 +73,7 @@ EOF
 
 ```bash
 # Set variables (adjust paths as needed)
-PACKAGE_FILE="/path/to/GuardScan/cli/guardscan-<version>.tgz"
+PACKAGE_FILE="/path/to/GuardScan/cli/guardscan-<version>.tgz"  # replace <version>: use the file npm pack created in Step 1
 TEST_PROJECT="$TMP_DIR"
 
 # Test installation and version check
@@ -99,7 +99,7 @@ docker run --rm \
 
 ```
 GuardScan ASCII art logo
-1.1.1
+<the version in cli/package.json>
 ```
 
 ### 3.2: Test Init Command
@@ -186,7 +186,7 @@ docker run --rm \
 
 ```
 GuardScan ASCII art logo
-1.1.1
+<the version in cli/package.json>
 ```
 
 ### 4.2: Test Init Command
@@ -255,7 +255,7 @@ set -euo pipefail
 
 # Configuration
 CLI_DIR="/path/to/GuardScan/cli"  # Update this path
-PACKAGE_FILE="$CLI_DIR/guardscan-<version>.tgz"  # Update version if needed
+PACKAGE_FILE="$CLI_DIR/guardscan-$(node -p "require('$CLI_DIR/package.json').version").tgz"  # the file npm pack created
 
 # Create test project
 TMP_DIR=$(mktemp -d)
