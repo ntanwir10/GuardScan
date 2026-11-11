@@ -1,6 +1,6 @@
 import OpenAI from 'openai';
 import { tokenCounter } from './token-counter';
-import { DEFAULT_MODELS } from './model-registry';
+import { DEFAULT_MODELS, chatPricing, modelRegistry } from './model-registry';
 import {
   AIProvider,
   AIMessage,
@@ -15,6 +15,7 @@ export interface OpenAICompatibleProfile {
   defaultModel?: string;
   defaultEmbeddingModel?: string;
   capabilities: ProviderCapabilities;
+  // USD per 1M tokens. A profile that sets the `pricing` key (even to undefined) skips the model registry.
   pricing?: {
     chat: {
       input: number;
@@ -38,29 +39,15 @@ const OPENAI_PROFILE: OpenAICompatibleProfile = {
     maxContextTokens: 128000,
     embeddingDimensions: 1536,
   },
-  pricing: {
-    chat: {
-      input: 0.0025,
-      output: 0.01,
-    },
-    embeddings: {
-      input: 0.00002,
-    },
-  },
-  modelPricing: {
-    'gpt-5.1': { input: 0.005, output: 0.02 },
-    'gpt-4o': { input: 0.0025, output: 0.01 },
-    'gpt-4.1-mini': { input: 0.00015, output: 0.0006 },
-    'gpt-3.5-turbo': { input: 0.0005, output: 0.0015 },
-  },
 };
 
-// GPT-6 models reject temperature at their default reasoning effort and use max_completion_tokens
-// (developers.openai.com GPT-6 guide). Bare ids only: OpenRouter/LM Studio ids don't match.
-const GPT_6_MODEL = /^gpt-6/;
+// GPT-5 and GPT-6 ids get max_completion_tokens (max_tokens is deprecated, and reasoning tokens count toward the
+// new limit) and no temperature (GPT-6 rejects it at its default effort). Sources: developers.openai.com chat API
+// reference and GPT-6 guide. Bare ids only: OpenRouter/LM Studio ids such as `openai/gpt-6` don't match.
+const GPT_5_OR_6_MODEL = /^gpt-[56]/;
 
 function requestLimits(model: string, temperature?: number, maxTokens?: number) {
-  if (GPT_6_MODEL.test(model)) {
+  if (GPT_5_OR_6_MODEL.test(model)) {
     // Reasoning tokens count toward max_completion_tokens, so the default leaves room for the answer.
     return { max_completion_tokens: maxTokens || 16000 };
   }
@@ -72,6 +59,7 @@ export class OpenAIProvider extends AIProvider {
   private defaultModel: string = DEFAULT_MODELS.openai;
   private defaultEmbeddingModel = 'text-embedding-3-small';
   private profile: OpenAICompatibleProfile;
+  private registryPricing: boolean;
 
   constructor(
     apiKey?: string,
@@ -81,7 +69,7 @@ export class OpenAIProvider extends AIProvider {
     profile?: Partial<OpenAICompatibleProfile>
   ) {
     super(apiKey, apiEndpoint);
-    const hasCustomPricing = Object.prototype.hasOwnProperty.call(
+    this.registryPricing = !Object.prototype.hasOwnProperty.call(
       profile || {},
       'pricing'
     );
@@ -93,8 +81,6 @@ export class OpenAIProvider extends AIProvider {
         ...OPENAI_PROFILE.capabilities,
         ...profile?.capabilities,
       },
-      pricing: hasCustomPricing ? profile?.pricing : OPENAI_PROFILE.pricing,
-      modelPricing: profile?.modelPricing || OPENAI_PROFILE.modelPricing,
     };
     this.defaultModel = this.profile.defaultModel || this.defaultModel;
     this.defaultEmbeddingModel =
@@ -175,7 +161,7 @@ export class OpenAIProvider extends AIProvider {
   async testConnection(): Promise<boolean> {
     try {
       // Reasoning tokens count toward max_completion_tokens, so a 10-token probe can end before any text.
-      const maxTokens = GPT_6_MODEL.test(this.defaultModel) ? 1024 : 10;
+      const maxTokens = GPT_5_OR_6_MODEL.test(this.defaultModel) ? 1024 : 10;
       await this.chat([{ role: 'user', content: 'test' }], { maxTokens });
       return true;
     } catch {
@@ -241,8 +227,8 @@ export class OpenAIProvider extends AIProvider {
     const promptTokens = this.countMessagesTokens(messages);
     const completionTokens = options?.maxTokens || 1000; // Estimate
 
-    const promptCost = (promptTokens / 1000) * pricing.input;
-    const completionCost = (completionTokens / 1000) * pricing.output;
+    const promptCost = (promptTokens / 1000000) * pricing.input;
+    const completionCost = (completionTokens / 1000000) * pricing.output;
 
     return {
       promptCost,
@@ -260,7 +246,7 @@ export class OpenAIProvider extends AIProvider {
     const tokensPerText = this.countTokens('a'.repeat(avgLength));
     const totalTokens = textCount * tokensPerText;
 
-    const cost = (totalTokens / 1000) * (pricing.embeddings?.input || 0);
+    const cost = (totalTokens / 1000000) * (pricing.embeddings?.input || 0);
 
     return {
       promptCost: cost,
@@ -274,6 +260,12 @@ export class OpenAIProvider extends AIProvider {
    * Get pricing for current default models
    */
   getPricing() {
+    if (this.registryPricing) {
+      return {
+        chat: chatPricing('openai', this.defaultModel),
+        embeddings: { input: modelRegistry.getModelInfo(this.defaultEmbeddingModel)?.embeddingPricing ?? 0 },
+      };
+    }
     return this.profile.pricing || {
       chat: {
         input: 0,
@@ -286,6 +278,7 @@ export class OpenAIProvider extends AIProvider {
    * Get pricing for specific model
    */
   private getModelPricing(model: string): { input: number; output: number } {
-    return this.profile.modelPricing?.[model] || this.getPricing().chat;
+    return this.profile.modelPricing?.[model]
+      || (this.registryPricing ? chatPricing('openai', model) : this.getPricing().chat);
   }
 }

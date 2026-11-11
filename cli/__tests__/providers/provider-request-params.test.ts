@@ -132,13 +132,14 @@ describe('ClaudeProvider request parameters', () => {
 describe('OpenAIProvider request parameters', () => {
   const completion = { choices: [{ message: { content: 'ok' } }], model: 'm' };
 
-  it('sends max_completion_tokens and no temperature for GPT-6 models', async () => {
+  // gpt-5.1 was the 1.1.0 picker's recommended model, so saved configs still send it.
+  it.each(['gpt-6-luna', 'gpt-5.1'])('sends max_completion_tokens and no temperature for %s', async (model) => {
     mockOpenAICreate.mockResolvedValue(completion);
 
-    await new OpenAIProvider('key', 'gpt-6-luna').chat([{ role: 'user', content: 'hi' }], { temperature: 0.2 });
+    await new OpenAIProvider('key', model).chat([{ role: 'user', content: 'hi' }], { temperature: 0.2 });
 
     const request = mockOpenAICreate.mock.calls[0][0];
-    expect(request).toMatchObject({ model: 'gpt-6-luna', max_completion_tokens: 16000 });
+    expect(request).toMatchObject({ model, max_completion_tokens: 16000 });
     expect(request).not.toHaveProperty('temperature');
     expect(request).not.toHaveProperty('max_tokens');
   });

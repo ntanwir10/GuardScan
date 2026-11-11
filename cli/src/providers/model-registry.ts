@@ -344,6 +344,13 @@ export const DEFAULT_MODELS = {
   gemini: 'gemini-3.5-flash-lite', // Google routes gemini-2.5-flash here; same list price
 };
 
+// Chat price in USD per 1M tokens. An id the registry doesn't list for this provider is priced as its default model.
+export function chatPricing(provider: keyof typeof DEFAULT_MODELS, model: string): { input: number; output: number } {
+  const listed = MODEL_REGISTRY[model];
+  const info = listed?.provider === provider ? listed : MODEL_REGISTRY[DEFAULT_MODELS[provider]];
+  return { input: info.inputPricing, output: info.outputPricing };
+}
+
 /**
  * Model Registry class with helper methods
  */

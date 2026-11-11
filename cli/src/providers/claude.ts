@@ -8,7 +8,7 @@ import {
   ProviderCapabilities,
   CostEstimate
 } from './base';
-import { DEFAULT_MODELS } from './model-registry';
+import { DEFAULT_MODELS, chatPricing } from './model-registry';
 
 // No temperature/top_p/top_k is sent to Claude: Claude 5 and Opus 4.7+ reject them with a 400.
 
@@ -165,29 +165,13 @@ export class ClaudeProvider extends AIProvider {
    * Get pricing for current default model
    */
   getPricing() {
-    return {
-      chat: {
-        input: 3.0,   // $3 per 1M tokens for Claude Sonnet 4.5 input
-        output: 15.0, // $15 per 1M tokens for Claude Sonnet 4.5 output
-      },
-    };
+    return { chat: this.getModelPricing(this.defaultModel) };
   }
 
   /**
    * Get pricing for specific model
    */
   private getModelPricing(model: string): { input: number; output: number } {
-    // Claude API uses format: claude-{tier}-{version} or claude-{tier}-{version}-{date}
-    const pricing: Record<string, { input: number; output: number }> = {
-      'claude-opus-4.5': { input: 15.0, output: 75.0 }, // Most intelligent and capable
-      'claude-sonnet-4.5': { input: 3.0, output: 15.0 }, // Balanced performance and practicality
-      'claude-haiku-4.5': { input: 0.25, output: 1.25 }, // Fastest and most cost-effective
-      // Fallback to API format if needed
-      'claude-4-opus': { input: 15.0, output: 75.0 },
-      'claude-4-sonnet': { input: 3.0, output: 15.0 },
-      'claude-4-haiku': { input: 0.25, output: 1.25 },
-    };
-
-    return pricing[model] || pricing['claude-sonnet-4.5'];
+    return chatPricing('claude', claudeModelId(model));
   }
 }

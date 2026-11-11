@@ -5,6 +5,8 @@
 import { describe, expect, it, jest, beforeEach, afterEach } from '@jest/globals';
 import { ObservableProvider } from '../../../src/providers/decorators/observable-provider';
 import { AIProvider, AIMessage, AIResponse } from '../../../src/providers/base';
+import { OpenAIProvider } from '../../../src/providers/openai';
+import { DEFAULT_MODELS, MODEL_REGISTRY } from '../../../src/providers/model-registry';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -166,6 +168,22 @@ describe('ObservableProvider', () => {
       const span = spans[0];
 
       expect(span.cacheHit).toBe(true);
+    });
+
+    it('prices OpenAI usage per 1M tokens from the registry', async () => {
+      const openai = new OpenAIProvider('key');
+      jest.spyOn(openai, 'chat').mockResolvedValue({
+        content: 'ok',
+        model: DEFAULT_MODELS.openai,
+        usage: { promptTokens: 1_000_000, completionTokens: 1_000_000, totalTokens: 2_000_000 },
+      });
+      const metrics = new MetricsCollectorClass(repoId());
+
+      await new ObservableProvider(openai, metrics).chat([{ role: 'user', content: 'test' }]);
+
+      // The old per-1K table priced this at $0.0125, 1000x too low.
+      const { inputPricing, outputPricing } = MODEL_REGISTRY[DEFAULT_MODELS.openai];
+      expect(metrics.getSpans()[0].cost).toBeCloseTo(inputPricing + outputPricing);
     });
 
     it('returns a successful provider response when local metrics persistence fails', async () => {
