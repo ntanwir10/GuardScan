@@ -91,8 +91,10 @@ if (require.main === module) {
   const show = file => execFileSync('git', ['show', `${ref}:${file}`], {encoding: 'utf8', maxBuffer: MAX_LEDGER_BYTES});
   const active = JSON.parse(show('active-versions.json'));
   const ledgers = {};
-  for (const train of active.trains || []) {
-    if (train?.channel !== 'rc' || !RC_VERSION.test(train.version || '')) continue;
+  const candidates = (active.trains || []).filter(train => train?.channel === 'rc' && RC_VERSION.test(train.version || ''));
+  // Superseded RCs need no evidence, so a missing or broken older ledger cannot stall the newest soak.
+  const superseded = supersededVersions(candidates);
+  for (const train of candidates.filter(value => !superseded.has(value.version))) {
     const events = parseLedgerText(show(`events/v${train.version}.jsonl`));
     ledgers[train.version] = {events, state: materializeReleaseState(events)};
   }

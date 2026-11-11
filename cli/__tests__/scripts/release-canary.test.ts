@@ -787,19 +787,26 @@ describe('release soak chain', () => {
       .toThrow('has no matching release ledger');
   });
 
-  test('the planner CLI reads the ledger branch and writes step outputs', () => {
+  test('the planner CLI reads the ledger branch, skips superseded ledgers, and writes step outputs', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'guardscan-soak-'));
     try {
       const git = (...args: string[]) => require('child_process').execFileSync('git', args, {cwd: root, encoding: 'utf8'});
       git('init', '-q');
-      fs.writeFileSync(path.join(root, 'active-versions.json'),
-        JSON.stringify({schemaVersion: 'guardscan.active-trains.v1', trains: [{version: '1.2.2', channel: 'stable'}]}));
-      git('add', 'active-versions.json');
+      fs.mkdirSync(path.join(root, 'events'));
+      // The newest RC has a real hash-chained ledger; the superseded rc.0 has none at all.
+      withLedger(ledger => fs.copyFileSync(ledger, path.join(root, 'events', `v${VERSION}.jsonl`)));
+      fs.writeFileSync(path.join(root, 'active-versions.json'), JSON.stringify(active(
+        {version: '1.2.3-rc.0'}, {version: VERSION}, {version: '1.2.2', channel: 'stable', releasePr: 40},
+      )));
+      git('add', '.');
       git('-c', 'user.name=t', '-c', 'user.email=t@example.test', '-c', 'commit.gpgsign=false',
         'commit', '-q', '-m', 'seed');
-      expect(require('child_process').execFileSync('node',
-        [path.resolve(__dirname, '../../scripts/release/soak.js'), 'HEAD'], {cwd: root, encoding: 'utf8'}))
-        .toBe('continue=false\nsleep_seconds=0\nreconcile=[]\n');
+      const result = require('child_process').spawnSync('node',
+        [path.resolve(__dirname, '../../scripts/release/soak.js'), 'HEAD'], {cwd: root, encoding: 'utf8'});
+      expect(result.status).toBe(0);
+      expect(result.stdout).toBe('continue=false\nsleep_seconds=0\nreconcile=[]\n');
+      expect(result.stderr).toBe('1.2.3-rc.0: soak chain stopped (superseded)\n'
+        + `${VERSION}: soak chain stopped (unpublished)\n`);
     } finally {
       fs.rmSync(root, {recursive: true, force: true});
     }

@@ -999,26 +999,26 @@ jobs:
           GH_TOKEN: ${{ steps.reconcile-app.outputs.token }}
           RECONCILE_TRAINS: ${{ steps.plan.outputs.reconcile }}
         run: |
-          node -e '
-            const cp = require("child_process");
-            // Retrying is safe: reconciliations for one version run one at a time.
-            const dispatch = args => {
-              for (const delay of ["15", "30", "60"]) {
-                try { return cp.execFileSync("gh", args, {stdio: "inherit"}); } catch { cp.execFileSync("sleep", [delay]); }
-              }
-              return cp.execFileSync("gh", args, {stdio: "inherit"});
-            };
-            for (const train of JSON.parse(process.env.RECONCILE_TRAINS)) {
-              dispatch([
-                "workflow", "run", "release-train.yml",
-                "--repo", process.env.GITHUB_REPOSITORY,
-                "-f", "action=reconcile",
-                "-f", `version=${train.version}`,
-                "-f", `release_pr=${train.releasePr}`,
-                "-f", `expected_head=${train.sourcePrHead}`,
-              ]);
+          node - <<'NODE'
+          const cp = require("child_process");
+          // Retrying is safe: reconciliations for one version run one at a time.
+          const dispatch = args => {
+            for (const delay of ["15", "30", "60"]) {
+              try { return cp.execFileSync("gh", args, {stdio: "inherit"}); } catch { cp.execFileSync("sleep", [delay]); }
             }
-          '
+            return cp.execFileSync("gh", args, {stdio: "inherit"});
+          };
+          for (const train of JSON.parse(process.env.RECONCILE_TRAINS)) {
+            dispatch([
+              "workflow", "run", "release-train.yml",
+              "--repo", process.env.GITHUB_REPOSITORY,
+              "-f", "action=reconcile",
+              "-f", `version=${train.version}`,
+              "-f", `release_pr=${train.releasePr}`,
+              "-f", `expected_head=${train.sourcePrHead}`,
+            ]);
+          }
+          NODE
       - name: Wait for the next canary slot
         if: steps.plan.outputs.continue == 'true'
         env:
