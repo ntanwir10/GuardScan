@@ -45,6 +45,12 @@ jobs:
           private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
           permission-contents: read
           permission-metadata: read
+      - name: Check out the trusted superseded-RC rule
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+          sparse-checkout: cli/scripts/release
       - name: Load protected active-train index
         id: matrix
         env:
@@ -76,7 +82,10 @@ jobs:
             || train.channel !== (train.version.includes('-rc.') ? 'rc' : 'stable')
             || !Number.isSafeInteger(train.releasePr) || train.releasePr < 0
           )) throw new Error('Invalid canary release version or active train metadata');
-          console.log(`trains=${JSON.stringify(trains)}`);
+          // A superseded RC can never be promoted; testing it only adds red runs and incidents.
+          const {supersededVersions} = require('./cli/scripts/release/active-trains');
+          const superseded = process.env.REQUESTED_VERSION ? new Set() : supersededVersions(trains);
+          console.log(`trains=${JSON.stringify(trains.filter(train => !superseded.has(train.version)))}`);
           NODE
 
   package-managers:

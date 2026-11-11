@@ -372,7 +372,9 @@ GitHub, with no cron and no maintainer machine on the critical path:
    only while all of these hold in the protected ledger:
    - it is still in `active-versions.json` and has no `promotion_decided` event;
    - it is the newest `rc.N` of its stable version; older candidates are
-     superseded and never chained;
+     superseded and never chained. Canary `discover` applies the same rule
+     (`cli/scripts/release/active-trains.js`), so superseded RCs are not
+     tested at all unless a version is requested explicitly;
    - the time is before `publishedAt` + 24 hours + a 3-hour margin;
    - every required channel can still pass promotion: no failed sample, no
      gap over 90 minutes, and a latest sample at most 90 minutes old. This is
@@ -381,8 +383,11 @@ GitHub, with no cron and no maintainer machine on the critical path:
 3. Once an RC is past its 24 hours, the hop dispatches a `release-train.yml`
    reconciliation for it, so promotion is evaluated right after a fresh
    sample instead of whenever cron fires.
-4. The hop sleeps until 45 minutes after the oldest latest sample of any
-   soaking channel (about 47-minute gaps with today's two-minute runs). If
+4. The hop sleeps until 30 minutes after the oldest latest sample of any
+   soaking channel. A gap is that delay plus the next run's time to each
+   channel's result: about 2 minutes normally, 11 minutes for rc.6's first
+   run, and more when macOS runners queue. That leaves about 49 minutes of the
+   90-minute limit spare. If
    that moment has already passed, for example because the last run's samples
    did not persist, it still pauses 5 minutes, unless the next sample would
    then arrive too late. It then re-reads the ledger, mints a short-lived App

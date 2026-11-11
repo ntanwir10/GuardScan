@@ -674,7 +674,7 @@ describe('release soak chain', () => {
     expect(stoppedOn(soakLedger([2, 47], {lastStatus: 'failed'}), 48)).toBe('unrecoverable:npm');
     expect(stoppedOn(soakLedger([-5, 40]), 41)).toBe('unrecoverable:npm');
     expect(stoppedOn(soakLedger([]), 91)).toBe('unrecoverable:npm');
-    expect(plan(soakLedger([]), 30)).toEqual({continue: true, sleepSeconds: 15 * 60, reconcile: [], stopped: []});
+    expect(plan(soakLedger([]), 20)).toEqual({continue: true, sleepSeconds: 10 * 60, reconcile: [], stopped: []});
     // Overdue: pause five minutes, unless waiting would push the next sample past the 90-minute limit.
     expect(plan(soakLedger([2]), 50)).toEqual({continue: true, sleepSeconds: 5 * 60, reconcile: [], stopped: []});
     expect(plan(soakLedger([2]), 80)).toEqual({continue: true, sleepSeconds: 0, reconcile: [], stopped: []});
@@ -688,7 +688,7 @@ describe('release soak chain', () => {
       dispatches++;
       now += result.sleepSeconds / 60 + 3;
     }
-    expect(dispatches).toBeLessThanOrEqual(10);
+    expect(dispatches).toBeLessThanOrEqual(12);
     expect(now).toBeLessThanOrEqual(2 + 90 + 3);
   });
 
@@ -721,7 +721,7 @@ describe('release soak chain', () => {
       [VERSION]: soakLedger([2, 50]),
       [second]: soakLedger([42], {version: second, publishedAt: at(40).toISOString()}),
     }, at(52));
-    expect(result).toEqual({continue: true, sleepSeconds: 35 * 60, reconcile: [], stopped: []});
+    expect(result).toEqual({continue: true, sleepSeconds: 20 * 60, reconcile: [], stopped: []});
   });
 
   test('never chains an RC superseded by a newer rc.N, whatever its evidence says', () => {
@@ -733,10 +733,47 @@ describe('release soak chain', () => {
       // Superseded RCs need no ledger, and a failing one cannot stop the newest soak.
       [VERSION]: failing,
     }, at(52));
-    expect(result).toEqual({continue: true, sleepSeconds: 35 * 60, reconcile: [], stopped: [
+    expect(result).toEqual({continue: true, sleepSeconds: 20 * 60, reconcile: [], stopped: [
       {version: VERSION, reason: 'superseded'},
       {version: '1.2.3-rc.2', reason: 'superseded'},
     ]});
+  });
+
+  test('canary discovery skips superseded RCs with the same shared rule', () => {
+    const {supersededVersions} = require('../../scripts/release/active-trains');
+    expect([...supersededVersions([
+      {version: '1.1.1-rc.5'}, {version: '1.1.1-rc.10'}, {version: '1.1.1-rc.6'},
+      {version: '1.2.0-rc.1'}, {version: '1.1.0'},
+    ])].sort()).toEqual(['1.1.1-rc.5', '1.1.1-rc.6']);
+
+    const steps = workflowFile('release-canary.yml').jobs.discover.steps;
+    const names = steps.map((step: any) => step.name);
+    const checkoutIndex = names.indexOf('Check out the trusted superseded-RC rule');
+    const loadIndex = names.indexOf('Load protected active-train index');
+    expect(steps[checkoutIndex].with).toEqual({
+      ref: '${{ github.workflow_sha }}', 'persist-credentials': false, 'sparse-checkout': 'cli/scripts/release',
+    });
+    expect(checkoutIndex).toBeLessThan(loadIndex);
+    const script = [...steps[loadIndex].run.matchAll(/node - <<'NODE'(?: >> "\$GITHUB_OUTPUT")?\n([\s\S]*?)\nNODE/g)]
+      .at(-1)[1];
+    const discover = (requested: string) => {
+      const lines: string[] = [];
+      require('vm').runInNewContext(script, {
+        process: {env: {REQUESTED_VERSION: requested}},
+        console: {log: (line: string) => lines.push(line)},
+        require: (name: string) => name === './active.json'
+          ? {trains: [
+            {version: '1.1.1-rc.5', releasePr: 46, channel: 'rc'},
+            {version: '1.1.1-rc.6', releasePr: 46, channel: 'rc'},
+            {version: '1.1.0', releasePr: 40, channel: 'stable'},
+          ]}
+          : require(path.resolve(__dirname, '../../..', name)),
+      });
+      return JSON.parse(lines[0].replace(/^trains=/, '')).map((train: any) => train.version);
+    };
+    expect(discover('')).toEqual(['1.1.1-rc.6', '1.1.0']);
+    // An explicit manual request is honoured, even for a superseded RC.
+    expect(discover('1.1.1-rc.5')).toEqual(['1.1.1-rc.5', '1.1.1-rc.6', '1.1.0']);
   });
 
   test('fails closed on malformed train metadata or a missing ledger', () => {

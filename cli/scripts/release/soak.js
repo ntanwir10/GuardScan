@@ -1,25 +1,24 @@
 'use strict';
 
 const {execFileSync} = require('child_process');
-const semver = require('semver');
+const {RC_VERSION, supersededVersions} = require('./active-trains');
 const {REQUIRED_RC_CHANNELS} = require('./lib');
 const {MAX_LEDGER_BYTES, materializeReleaseState, parseLedgerText} = require('./events');
 const {
   DEFAULT_MINIMUM_SAMPLES,
   MAX_CANARY_AGE_MILLISECONDS,
   SOAK_MILLISECONDS,
-  stableVersion,
   summarizeCanaries,
 } = require('./promotion');
 
 // Keep sampling this long past eligibility so reconcile can promote on a fresh sample.
 const SOAK_MARGIN_MILLISECONDS = 3 * 60 * 60 * 1000;
-// Canary runs take about 2 minutes, so this gives ~47-minute gaps against the 90-minute limit.
-const NEXT_CANARY_DELAY_MILLISECONDS = 45 * 60 * 1000;
+// A gap is this delay plus the next run's time to each channel's checkedAt: rc.6's first run took
+// 11 minutes, and macOS queueing adds more, so 30 minutes keeps ~49 minutes of the 90-minute limit spare.
+const NEXT_CANARY_DELAY_MILLISECONDS = 30 * 60 * 1000;
 // When overdue (samples not persisting), pause between dispatches unless that would make the next sample late.
 const MIN_PAUSE_MILLISECONDS = 5 * 60 * 1000;
 const RUN_BUDGET_MILLISECONDS = 15 * 60 * 1000;
-const RC_VERSION = /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-rc\.(0|[1-9][0-9]*)$/;
 
 function soakStatus({events, state}, now) {
   const published = events.find(event => event.type === 'channel_published' && event.channel === 'github');
@@ -58,14 +57,9 @@ function planSoak(active, ledgers, now) {
       throw new Error('active RC train metadata is invalid');
     }
   }
-  // Only the newest rc.N of a stable version can still be promoted; older candidates are superseded.
-  const newest = new Map();
-  for (const {version} of candidates) {
-    const stable = stableVersion(version);
-    if (!newest.has(stable) || semver.gt(version, newest.get(stable))) newest.set(stable, version);
-  }
+  const superseded = supersededVersions(candidates);
   for (const train of candidates) {
-    if (newest.get(stableVersion(train.version)) !== train.version) {
+    if (superseded.has(train.version)) {
       stopped.push({version: train.version, reason: 'superseded'});
       continue;
     }
