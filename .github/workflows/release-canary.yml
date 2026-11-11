@@ -45,6 +45,12 @@ jobs:
           private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
           permission-contents: read
           permission-metadata: read
+      - name: Check out the trusted superseded-RC rule
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+          sparse-checkout: cli/scripts/release
       - name: Load protected active-train index
         id: matrix
         env:
@@ -76,7 +82,10 @@ jobs:
             || train.channel !== (train.version.includes('-rc.') ? 'rc' : 'stable')
             || !Number.isSafeInteger(train.releasePr) || train.releasePr < 0
           )) throw new Error('Invalid canary release version or active train metadata');
-          console.log(`trains=${JSON.stringify(trains)}`);
+          // A superseded RC can never be promoted; testing it only adds red runs and incidents.
+          const {supersededVersions} = require('./cli/scripts/release/active-trains');
+          const superseded = process.env.REQUESTED_VERSION ? new Set() : supersededVersions(trains);
+          console.log(`trains=${JSON.stringify(trains.filter(train => !superseded.has(train.version)))}`);
           NODE
 
   package-managers:
@@ -941,3 +950,104 @@ jobs:
             echo 'One or more canary target sets were incomplete; incident evidence was persisted.' >&2
             exit "$CANARY_RECORD_STATUS"
           fi
+
+  continue-soak:
+    name: Continue the RC soak canary chain
+    # After record, so cancelling a superseded sleeper can never cancel or fail canary evidence.
+    # Not gated on their results: the planner reads the ledger itself, so one bad run does not end the chain.
+    needs: [discover, record]
+    if: >-
+      !cancelled() && vars.RELEASE_AUTOMATION_ENABLED == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    concurrency:
+      # Newest hop wins: overlapping cron, train, and manual runs collapse into one chain.
+      group: release-canary-soak
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+          sparse-checkout: cli
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.RELEASE_NODE_VERSION }}
+      - working-directory: cli
+        run: npm ci --ignore-scripts
+      - name: Plan the soak from the protected ledger
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          retry() { for delay in 15 30 60; do "$@" && return; sleep "$delay"; done; "$@"; }
+          retry git -c credential.helper= -c 'credential.https://github.com.helper=!gh auth git-credential' fetch --no-tags --depth=1 origin release-ledger
+          node cli/scripts/release/soak.js origin/release-ledger >> "$GITHUB_OUTPUT"
+      - name: Create short-lived reconcile dispatch token
+        id: reconcile-app
+        if: steps.plan.outputs.reconcile != '[]'
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        with:
+          app-id: ${{ vars.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          permission-actions: write
+          permission-contents: read
+          permission-metadata: read
+      - name: Dispatch reconciliation for soaks past eligibility
+        if: steps.plan.outputs.reconcile != '[]'
+        env:
+          GH_TOKEN: ${{ steps.reconcile-app.outputs.token }}
+          RECONCILE_TRAINS: ${{ steps.plan.outputs.reconcile }}
+        run: |
+          node - <<'NODE'
+          const cp = require("child_process");
+          // Retrying is safe: reconciliations for one version run one at a time.
+          const dispatch = args => {
+            for (const delay of ["15", "30", "60"]) {
+              try { return cp.execFileSync("gh", args, {stdio: "inherit"}); } catch { cp.execFileSync("sleep", [delay]); }
+            }
+            return cp.execFileSync("gh", args, {stdio: "inherit"});
+          };
+          for (const train of JSON.parse(process.env.RECONCILE_TRAINS)) {
+            dispatch([
+              "workflow", "run", "release-train.yml",
+              "--repo", process.env.GITHUB_REPOSITORY,
+              "-f", "action=reconcile",
+              "-f", `version=${train.version}`,
+              "-f", `release_pr=${train.releasePr}`,
+              "-f", `expected_head=${train.sourcePrHead}`,
+            ]);
+          }
+          NODE
+      - name: Wait for the next canary slot
+        if: steps.plan.outputs.continue == 'true'
+        env:
+          SLEEP_SECONDS: ${{ steps.plan.outputs.sleep_seconds }}
+        run: sleep "$SLEEP_SECONDS"
+      - name: Re-check the soak after waiting
+        id: recheck
+        if: steps.plan.outputs.continue == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          retry() { for delay in 15 30 60; do "$@" && return; sleep "$delay"; done; "$@"; }
+          retry git -c credential.helper= -c 'credential.https://github.com.helper=!gh auth git-credential' fetch --no-tags --depth=1 origin release-ledger
+          node cli/scripts/release/soak.js origin/release-ledger >> "$GITHUB_OUTPUT"
+      - name: Create short-lived canary dispatch token
+        id: canary-app
+        if: steps.recheck.outputs.continue == 'true'
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        with:
+          app-id: ${{ vars.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          permission-actions: write
+          permission-contents: read
+          permission-metadata: read
+      - name: Dispatch the next soak canary
+        if: steps.recheck.outputs.continue == 'true'
+        env:
+          GH_TOKEN: ${{ steps.canary-app.outputs.token }}
+        # Retrying is safe: a duplicate canary run collapses into the same chain.
+        run: |
+          retry() { for delay in 15 30 60; do "$@" && return; sleep "$delay"; done; "$@"; }
+          retry gh workflow run release-canary.yml --repo "$GITHUB_REPOSITORY"

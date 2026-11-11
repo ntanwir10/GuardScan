@@ -163,4 +163,5 @@ module.exports = {
   SOAK_MILLISECONDS,
   createPromotionDecision,
   stableVersion,
+  summarizeCanaries,
 };

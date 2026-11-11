@@ -52,12 +52,12 @@ Core requires a separate reviewed enablement and remains nonblocking.
 | --- | --- |
 | `.github/workflows/ci.yml` | Required source, test, coverage, package, package-manager, audit, and five-host SEA gates. It cannot publish. |
 | `.github/workflows/release-please.yml` | Maintains the stable release PR only (branch `release-please--branches--main`), using a short-lived GitHub App token. |
-| `.github/workflows/release-train.yml` | Derives RC commits, creates protected tags, dispatches builds/publication, reconciles every 30 minutes, promotes, rolls back, and persists release events. |
+| `.github/workflows/release-train.yml` | Derives RC commits, creates protected tags, dispatches builds/publication, starts the RC soak chain, reconciles every 30 minutes, promotes, rolls back, and persists release events. |
 | `.github/workflows/release-first-withdrawal.yml` | Withdraws the first stable train only when the protected ledger proves no verified predecessor exists; it never invents forward-fix source. |
 | `.github/workflows/release-build.yml` | Builds the exact npm tarball and five SEA targets, signs per the signing policy, generates SPDX/CycloneDX, creates wheels, attests, archives deterministically, and aggregates the manifest/checksums. |
 | `.github/workflows/release-provider-rehearsal.yml` | Platform policy only: runs exact-head Apple and Azure signing rehearsals while publication automation is disabled; it emits non-production evidence only. |
 | `.github/workflows/release-publish.yml` | Expands a persisted checkpoint, publishes tested registry handoffs through OIDC, and opens the generated shared-catalog update PR. |
-| `.github/workflows/release-canary.yml` | Runs hourly public install/invoke/uninstall canaries and polls moderated registries. |
+| `.github/workflows/release-canary.yml` | Runs public install/invoke/uninstall canaries, both as the self-dispatching RC soak chain and on an hourly cron backstop, and polls moderated registries. |
 
 Release workflows deliberately do not use dependency caches. Release-critical actions are pinned to immutable commits.
 
@@ -348,12 +348,75 @@ The train:
 4. builds every artifact, cosign-signs the executables and `SHA256SUMS`, attests the release subjects, and verifies all of them;
 5. publishes npm under `next`, GitHub as a prerelease, TestPyPI then PyPI, and the shared catalog preview branch `channel-preview/v1.1.1-rc.1`;
 6. renders and validates WinGet/Chocolatey without publishing an RC;
-7. records `publishedAt` and hourly canary evidence;
-8. reconciles every 30 minutes.
+7. records `publishedAt`, dispatches the first canary, and keeps canary evidence flowing through the [soak driver](#soak-driver);
+8. reconciles every 30 minutes, and after every soak canary once the 24-hour window is complete.
 
 Promotion produces `promotion-decision.json`. A permitted decision requires at least 24 distinct green check timestamps per required channel across all eight RC channels, a complete 24-hour wall-clock window, the same source PR head and base, and no open incident. The first sample must arrive within 90 minutes of publication, every consecutive sample gap must be at most 90 minutes, and the latest sample must reach the end of the 24-hour soak and be no more than 90 minutes old. Only passed samples at or after publication and at or before evaluation count toward the floor; duplicate timestamps do not add samples. Every recorded failure remains blocking, including evidence outside that counting window. A missed gap cannot recover by waiting for a later rolling window; correction requires a new `rc.N`. The release App then auto-merges that unchanged PR, tags its exact merge commit, rebuilds stable artifacts, and publishes `latest`.
 
 Release PR authorization uses the latest non-comment review per reviewer, ordered by submission timestamp and then review ID. It requires a non-author approval on the exact head from an `OWNER`, `MEMBER`, or `COLLABORATOR` association and rejects outstanding changes requests from those associations. Comments do not clear a changes request or revive a dismissed approval. Missing or malformed review metadata fails closed. These associations are the minimum trust filter; they do not establish current repository write permission or replace protected-branch review requirements.
+
+### Soak driver
+
+GitHub schedules are not a clock. On this repository the hourly canary cron
+and the 30-minute reconcile cron have fired only every 4–11 hours, and one
+missed 90-minute gap loses the soak. The soak therefore drives itself from
+GitHub, with no cron and no maintainer machine on the critical path:
+
+1. After an RC's publication evidence lands on `release-ledger`, the train's
+   `start-soak` job dispatches `release-canary.yml`, so the first sample
+   arrives minutes after `publishedAt`.
+2. Every canary run ends with `continue-soak`, which runs after `record` and
+   asks `cli/scripts/release/soak.js` which active RCs still soak. It judges
+   each RC by its own ledger evidence, never by the run's conclusion, so a
+   failing train listed beside it cannot stop a passing soak. An RC soaks
+   only while all of these hold in the protected ledger:
+   - it is still in `active-versions.json` and has no `promotion_decided` event;
+   - it is the newest `rc.N` of its stable version; older candidates are
+     superseded and never chained. Canary `discover` applies the same rule
+     (`cli/scripts/release/active-trains.js`), so superseded RCs are not
+     tested at all unless a version is requested explicitly;
+   - the time is before `publishedAt` + 24 hours + a 3-hour margin;
+   - every required channel can still pass promotion: no failed sample, no
+     gap over 90 minutes, and a latest sample at most 90 minutes old. This is
+     the same `summarizeCanaries` check the promotion decision uses, so an RC
+     that can no longer be promoted stops sampling at once.
+3. Once an RC is past its 24 hours, the hop dispatches a `release-train.yml`
+   reconciliation for it, so promotion is evaluated right after a fresh
+   sample instead of whenever cron fires.
+4. The hop sleeps until 30 minutes after the oldest latest sample of any
+   soaking channel. A gap is that delay plus the next run's time to each
+   channel's result: about 2 minutes normally, 11 minutes for rc.6's first
+   run, and more when macOS runners queue. That leaves about 49 minutes of the
+   90-minute limit spare. If
+   that moment has already passed, for example because the last run's samples
+   did not persist, it still pauses 5 minutes, unless the next sample would
+   then arrive too late. It then re-reads the ledger, mints a short-lived App
+   token (`actions: write`, `contents: read`, `metadata: read`, the same set
+   as the train's `scheduler` job), and dispatches the next canary.
+
+The chain fails closed:
+
+- **One chain.** `continue-soak` is the only job in the canary workflow that
+  cancels anything: its concurrency group `release-canary-soak` uses
+  `cancel-in-progress: true`, so a newer hop from cron, the train, or a manual
+  dispatch replaces an older sleeping one. The hop runs after `record`, so a
+  cancelled hop never cancels canary evidence (a cancelled canary job would
+  upload fail-closed reports and record them as failures). A superseded run
+  shows as cancelled; that is expected.
+- **Bounded.** Every hop re-derives its window from the immutable ledger, so
+  the chain ends at promotion, when the soak can no longer pass, or at most
+  27 hours after the newest RC's publication. Malformed ledger or index data
+  fails the hop, which ends the chain.
+- **Kill switch.** With `RELEASE_AUTOMATION_ENABLED` set to anything but
+  `true`, the chain stops after at most one more canary run, which records
+  nothing. Cancel the sleeping "Continue the RC soak canary chain" job to stop
+  it at once.
+- **Restart.** A hop runs even when its own run's canaries failed, and its
+  ledger fetches and dispatches retry with backoff. A hop that still fails,
+  for example because the App token cannot be minted, ends the chain. Both
+  crons stay as a backstop: any canary run, scheduled or
+  `gh workflow run release-canary.yml`, restarts the chain while the soak can
+  still pass.
 
 ## Public installation contracts
 
