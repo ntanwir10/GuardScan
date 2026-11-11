@@ -675,7 +675,21 @@ describe('release soak chain', () => {
     expect(stoppedOn(soakLedger([-5, 40]), 41)).toBe('unrecoverable:npm');
     expect(stoppedOn(soakLedger([]), 91)).toBe('unrecoverable:npm');
     expect(plan(soakLedger([]), 30)).toEqual({continue: true, sleepSeconds: 15 * 60, reconcile: [], stopped: []});
-    expect(plan(soakLedger([2]), 50)).toEqual({continue: true, sleepSeconds: 0, reconcile: [], stopped: []});
+    // Overdue: pause five minutes, unless waiting would push the next sample past the 90-minute limit.
+    expect(plan(soakLedger([2]), 50)).toEqual({continue: true, sleepSeconds: 5 * 60, reconcile: [], stopped: []});
+    expect(plan(soakLedger([2]), 80)).toEqual({continue: true, sleepSeconds: 0, reconcile: [], stopped: []});
+  });
+
+  test('a record that keeps failing cannot turn the chain into back-to-back runs', () => {
+    // Every hop runs, but no sample after the first one persists.
+    let now = 3;
+    let dispatches = 0;
+    for (let result = plan(soakLedger([2]), now); result.continue; result = plan(soakLedger([2]), now)) {
+      dispatches++;
+      now += result.sleepSeconds / 60 + 3;
+    }
+    expect(dispatches).toBeLessThanOrEqual(10);
+    expect(now).toBeLessThanOrEqual(2 + 90 + 3);
   });
 
   test('stops after the window plus margin, after any promotion decision, and before publication', () => {
@@ -744,7 +758,8 @@ describe('release soak chain', () => {
       fs.writeFileSync(path.join(root, 'active-versions.json'),
         JSON.stringify({schemaVersion: 'guardscan.active-trains.v1', trains: [{version: '1.2.2', channel: 'stable'}]}));
       git('add', 'active-versions.json');
-      git('-c', 'user.name=t', '-c', 'user.email=t@example.test', 'commit', '-q', '-m', 'seed');
+      git('-c', 'user.name=t', '-c', 'user.email=t@example.test', '-c', 'commit.gpgsign=false',
+        'commit', '-q', '-m', 'seed');
       expect(require('child_process').execFileSync('node',
         [path.resolve(__dirname, '../../scripts/release/soak.js'), 'HEAD'], {cwd: root, encoding: 'utf8'}))
         .toBe('continue=false\nsleep_seconds=0\nreconcile=[]\n');

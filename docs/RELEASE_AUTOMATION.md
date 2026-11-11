@@ -382,9 +382,12 @@ GitHub, with no cron and no maintainer machine on the critical path:
    reconciliation for it, so promotion is evaluated right after a fresh
    sample instead of whenever cron fires.
 4. The hop sleeps until 45 minutes after the oldest latest sample of any
-   soaking channel (about 47-minute gaps with today's two-minute runs),
-   re-reads the ledger, mints a short-lived App token with only
-   `actions: write`, and dispatches the next canary.
+   soaking channel (about 47-minute gaps with today's two-minute runs). If
+   that moment has already passed, for example because the last run's samples
+   did not persist, it still pauses 5 minutes, unless the next sample would
+   then arrive too late. It then re-reads the ledger, mints a short-lived App
+   token (`actions: write`, `contents: read`, `metadata: read`, the same set
+   as the train's `scheduler` job), and dispatches the next canary.
 
 The chain fails closed:
 

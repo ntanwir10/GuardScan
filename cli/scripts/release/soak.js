@@ -16,6 +16,9 @@ const {
 const SOAK_MARGIN_MILLISECONDS = 3 * 60 * 60 * 1000;
 // Canary runs take about 2 minutes, so this gives ~47-minute gaps against the 90-minute limit.
 const NEXT_CANARY_DELAY_MILLISECONDS = 45 * 60 * 1000;
+// When overdue (samples not persisting), pause between dispatches unless that would make the next sample late.
+const MIN_PAUSE_MILLISECONDS = 5 * 60 * 1000;
+const RUN_BUDGET_MILLISECONDS = 15 * 60 * 1000;
 const RC_VERSION = /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-rc\.(0|[1-9][0-9]*)$/;
 
 function soakStatus({events, state}, now) {
@@ -74,10 +77,13 @@ function planSoak(active, ledgers, now) {
     if (status.stop) stopped.push({version: train.version, reason: status.stop});
     else soaking.push({train, ...status});
   }
-  const nextCanaryAt = Math.min(...soaking.map(value => value.oldestLatest)) + NEXT_CANARY_DELAY_MILLISECONDS;
+  const oldestLatest = Math.min(...soaking.map(value => value.oldestLatest));
+  const lastSafeDispatch = oldestLatest + MAX_CANARY_AGE_MILLISECONDS - RUN_BUDGET_MILLISECONDS;
+  const wait = Math.max(oldestLatest + NEXT_CANARY_DELAY_MILLISECONDS - now.getTime(),
+    Math.min(MIN_PAUSE_MILLISECONDS, lastSafeDispatch - now.getTime()));
   return {
     continue: soaking.length > 0,
-    sleepSeconds: soaking.length === 0 ? 0 : Math.ceil(Math.max(0, nextCanaryAt - now.getTime()) / 1000),
+    sleepSeconds: soaking.length === 0 ? 0 : Math.ceil(Math.max(0, wait) / 1000),
     reconcile: soaking.filter(value => value.reconcile).map(({train}) => ({
       version: train.version, releasePr: train.releasePr, sourcePrHead: train.sourcePrHead,
     })),
