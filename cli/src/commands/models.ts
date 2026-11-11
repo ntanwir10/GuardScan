@@ -15,6 +15,10 @@ function formatPricing(model: ModelInfo): string {
   return `$${model.inputPricing.toFixed(2)} in / $${model.outputPricing.toFixed(2)} out per 1M`;
 }
 
+// Registry prices are the base prompt-size tier; several providers charge more for long prompts.
+const PRICING_NOTE =
+  'Prices: USD per 1M tokens at the base prompt-size tier. Long prompts can cost more; check the provider\'s pricing page.';
+
 export function createModelsCommand(): Command {
   const command = new Command('models');
   command.description('Manage AI models');
@@ -74,7 +78,7 @@ export function createModelsCommand(): Command {
         );
       }
 
-      console.log('\n');
+      console.log('\n' + chalk.gray(PRICING_NOTE) + '\n');
     });
 
   // Model info
@@ -109,6 +113,7 @@ export function createModelsCommand(): Command {
       if (modelInfo.embeddingPricing) {
         console.log(`  Embeddings: $${modelInfo.embeddingPricing.toFixed(6)}/1M tokens`);
       }
+      console.log(chalk.gray(`  ${PRICING_NOTE}`));
 
       console.log('\n' + chalk.bold('📊 Capabilities:'));
       console.log(`  Context Window: ${modelInfo.contextWindow.toLocaleString()} tokens`);
@@ -173,7 +178,7 @@ export function createModelsCommand(): Command {
         );
       }
 
-      console.log('\n');
+      console.log('\n' + chalk.gray(PRICING_NOTE) + '\n');
     });
 
   // Compare models

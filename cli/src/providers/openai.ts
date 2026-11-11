@@ -54,6 +54,15 @@ const OPENAI_PROFILE: OpenAICompatibleProfile = {
   },
 };
 
+// GPT-6 models reject temperature at their default reasoning effort and use max_completion_tokens
+// (developers.openai.com GPT-6 guide). Bare ids only: OpenRouter/LM Studio ids don't match.
+function requestLimits(model: string, temperature?: number, maxTokens?: number) {
+  const limit = maxTokens || 4000;
+  return /^gpt-6/.test(model)
+    ? { max_completion_tokens: limit }
+    : { temperature: temperature || 0.7, max_tokens: limit };
+}
+
 export class OpenAIProvider extends AIProvider {
   private client: OpenAI;
   private defaultModel = 'gpt-4o';
@@ -97,14 +106,14 @@ export class OpenAIProvider extends AIProvider {
   }
 
   async chat(messages: AIMessage[], options?: ChatOptions): Promise<AIResponse> {
+    const model = options?.model || this.defaultModel;
     const response = await this.client.chat.completions.create({
-      model: options?.model || this.defaultModel,
+      model,
       messages: messages.map(msg => ({
         role: msg.role,
         content: msg.content,
       })),
-      temperature: options?.temperature || 0.7,
-      max_tokens: options?.maxTokens || 4000,
+      ...requestLimits(model, options?.temperature, options?.maxTokens),
       stream: false,
     });
 
@@ -132,14 +141,14 @@ export class OpenAIProvider extends AIProvider {
     messages: AIMessage[],
     options?: ChatOptions
   ): AsyncGenerator<string, void, unknown> {
+    const model = options?.model || this.defaultModel;
     const stream = await this.client.chat.completions.create({
-      model: options?.model || this.defaultModel,
+      model,
       messages: messages.map(msg => ({
         role: msg.role,
         content: msg.content,
       })),
-      temperature: options?.temperature || 0.7,
-      max_tokens: options?.maxTokens || 4000,
+      ...requestLimits(model, options?.temperature, options?.maxTokens),
       stream: true,
     });
 

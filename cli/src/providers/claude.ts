@@ -9,6 +9,14 @@ import {
   CostEstimate
 } from './base';
 
+// Claude 5-generation models reject temperature/top_p/top_k (platform.claude.com migration guides).
+// shortcut: matches by generation, extend the pattern when a new generation ships.
+const OMITS_SAMPLING = /^claude-(fable|opus|sonnet|haiku|mythos)-5/;
+
+function samplingParams(model: string, temperature?: number): { temperature?: number } {
+  return OMITS_SAMPLING.test(model) ? {} : { temperature: temperature || 0.7 };
+}
+
 export class ClaudeProvider extends AIProvider {
   private client: Anthropic;
   private defaultModel = 'claude-sonnet-4.5'; // Will be overridden by config if user selects different model
@@ -28,10 +36,11 @@ export class ClaudeProvider extends AIProvider {
     const systemMessages = messages.filter(m => m.role === 'system');
     const conversationMessages = messages.filter(m => m.role !== 'system');
 
+    const model = options?.model || this.defaultModel;
     const response = await (this.client as any).messages.create({
-      model: options?.model || this.defaultModel,
+      model,
       max_tokens: options?.maxTokens || 4000,
-      temperature: options?.temperature || 0.7,
+      ...samplingParams(model, options?.temperature),
       system: systemMessages.map(m => m.content).join('\n'),
       messages: conversationMessages.map(msg => ({
         role: msg.role as 'user' | 'assistant',
@@ -40,13 +49,14 @@ export class ClaudeProvider extends AIProvider {
       stream: false,
     });
 
-    const content = response.content[0];
-    if (content.type !== 'text') {
-      throw new Error('Unexpected response type from Claude');
+    // Models with adaptive thinking can put thinking blocks before the answer.
+    const textBlocks = response.content.filter((block: { type: string }) => block.type === 'text');
+    if (textBlocks.length === 0) {
+      throw new Error(`Unexpected response type from Claude: no text block (stop_reason: ${response.stop_reason})`);
     }
 
     return {
-      content: content.text,
+      content: textBlocks.map((block: { text: string }) => block.text).join(''),
       usage: {
         promptTokens: response.usage.input_tokens,
         completionTokens: response.usage.output_tokens,
@@ -67,10 +77,11 @@ export class ClaudeProvider extends AIProvider {
     const systemMessages = messages.filter(m => m.role === 'system');
     const conversationMessages = messages.filter(m => m.role !== 'system');
 
+    const model = options?.model || this.defaultModel;
     const stream = await (this.client as any).messages.create({
-      model: options?.model || this.defaultModel,
+      model,
       max_tokens: options?.maxTokens || 4000,
-      temperature: options?.temperature || 0.7,
+      ...samplingParams(model, options?.temperature),
       system: systemMessages.map(m => m.content).join('\n'),
       messages: conversationMessages.map(msg => ({
         role: msg.role as 'user' | 'assistant',
