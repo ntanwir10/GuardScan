@@ -219,6 +219,7 @@ export function createModelsCommand(): Command {
       console.log(`${chalk.bold('ID:')} ${recommended.name}`);
       console.log(`${chalk.bold('Priority:')} ${options.priority}`);
       console.log(`${chalk.bold('Cost:')} ${formatPricing(recommended)}`);
+      console.log(chalk.gray(PRICING_NOTE));
       console.log(`${chalk.bold('Context:')} ${recommended.contextWindow.toLocaleString()} tokens`);
       console.log(`${chalk.bold('Tags:')} ${recommended.tags.join(', ')}`);
       // eslint-disable-next-line no-console
