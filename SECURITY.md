@@ -62,7 +62,7 @@ We follow responsible disclosure practices:
 
 2. **Verify Installation**
    - Install only from an official channel: npm, pnpm, Yarn, Bun, Homebrew tap, Scoop, pipx, WinGet, Chocolatey, or standalone binaries from GitHub Releases
-   - Verify package integrity: for the npm package, run `npm audit signatures` in a temporary project that installs GuardScan (it checks a project's dependencies, not global installs); for downloaded binaries check `SHA256SUMS` and the GitHub build attestation
+   - Verify package integrity: for the npm package, run `npm audit signatures` in a temporary project that installs the same GuardScan version you installed globally (it checks a project's dependencies, and verifies the published package, not the files in your global install); for downloaded binaries check `SHA256SUMS` and the GitHub build attestation
    - Full steps, including the macOS and Windows signing policy, are in [Verify a download](docs/INSTALL.md#verify-a-download)
 
 3. **API Key Security**

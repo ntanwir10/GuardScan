@@ -127,7 +127,7 @@ Run these against a file downloaded from GitHub Releases.
    npm audit signatures
    ```
 
-   Provenance is also shown on npmjs.com.
+   Set `<version>` to the version you installed (`guardscan --version`). This verifies that version as published on the registry; it does not check the files in your global install. Provenance is also shown on npmjs.com.
 
 **macOS.** Binaries are ad-hoc signed and not notarized, so Gatekeeper quarantines a zip downloaded in a browser. After verifying, clear the flag with `xattr -d com.apple.quarantine <path>`. Homebrew, pipx and npm installs are unaffected.
 
