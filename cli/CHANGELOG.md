@@ -1,5 +1,10 @@
 # Changelog
 
+
+## [1.1.1-rc.8] - 2026-11-12
+
+Release candidate derived from stable release PR #46 at 6f19b7f321445acb90e4eb5a89a95a4d594798e5.
+
 All notable changes to GuardScan will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),

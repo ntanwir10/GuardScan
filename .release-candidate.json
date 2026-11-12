@@ -1,0 +1,10 @@
+{
+  "schemaVersion": "guardscan.release-candidate.v1",
+  "stableVersion": "1.1.1",
+  "candidateVersion": "1.1.1-rc.8",
+  "sourcePr": 46,
+  "sourcePrHead": "6f19b7f321445acb90e4eb5a89a95a4d594798e5",
+  "sourcePrBase": "60969103eb0cae236ba4ff79c05358175d1fae43",
+  "sourcePrTree": "cdc4f86833d56df7274b194c38220ddf04d84918",
+  "createdAt": "2026-11-12T03:37:32.000Z"
+}
