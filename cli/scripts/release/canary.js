@@ -213,9 +213,15 @@ function recordCanary(input, reports, expectedTargets, evaluatedAt) {
   const incidents = [];
   let changed = false;
   if (failures.length > 0) {
+    // A failed report is failure evidence even in a rejected set, so that incident never auto-resolves.
+    const failedReports = reportList.filter(report => report?.status === 'failed')
+      .map(report => `${report.channel}:${report.target}`).sort(compareUtf8);
+    const prefix = failedReports.length > 0
+      ? `Canary report set rejected with failed reports (${failedReports.join(', ')}): `
+      : REPORT_SET_REJECTED;
     const incident = appendIncident(options.ledgerFile, initialState, evaluated,
-      {type: 'invalid-report-set', failures},
-      `${REPORT_SET_REJECTED}${failures.map(failure => failure.reason).join(' | ')}`.slice(0, 2000));
+      {type: 'invalid-report-set', failures, ...(failedReports.length > 0 ? {failedReports} : {})},
+      `${prefix}${failures.map(failure => failure.reason).join(' | ')}`.slice(0, 2000));
     changed ||= incident.changed;
     incidents.push(incident.event);
     return {changed, recorded: [], failures, incidents};

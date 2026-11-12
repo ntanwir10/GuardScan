@@ -894,7 +894,8 @@ jobs:
             validateCanaryReports(reports.map(({report}) => report), version,
               `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`);
           } catch {
-            recordCanary({ledgerFile: ledger, reports: [{version, invalidCanaryReport: true}],
+            // Keep the reports so a failed one blocks for good; the placeholder keeps the set rejected.
+            recordCanary({ledgerFile: ledger, reports: [...selectedReports, {version, invalidCanaryReport: true}],
               expectedTargets, evaluatedAt});
             fs.writeFileSync('.canary-record-status', '1\n');
             process.exit(0); // Persist incident evidence before failing the job below.

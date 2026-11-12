@@ -171,7 +171,7 @@ describe('release canary public seams', () => {
     for (const verify of [sigstore, adHoc]) expect(verify.index).toBeGreaterThan(extract.index);
   });
 
-  test('malformed workflow report persists an incident before the job reports failure', () => {
+  test.each([false, true])('malformed workflow report persists an incident before the job reports failure (failed report alongside: %s)', withFailed => {
     const yaml = require('js-yaml');
     const vm = require('vm');
     const workflow = yaml.load(fs.readFileSync(path.resolve(__dirname, '../../../.github/workflows/release-canary.yml'), 'utf8'));
@@ -182,6 +182,12 @@ describe('release canary public seams', () => {
       const reportDirectory = path.join(root, 'reports', `canary-${VERSION}-native-linux-x64-glibc`);
       fs.mkdirSync(reportDirectory, {recursive: true});
       fs.writeFileSync(path.join(reportDirectory, 'report.json'), '{bad');
+      if (withFailed) {
+        const npmDirectory = path.join(root, 'reports', `canary-${VERSION}-npm`);
+        fs.mkdirSync(npmDirectory, {recursive: true});
+        fs.writeFileSync(path.join(npmDirectory, 'report.json'), JSON.stringify({...reports('failed')[0],
+          evidenceUrl: 'https://github.com/ntanwir10/GuardScan/actions/runs/42'}));
+      }
       const initial = fs.readFileSync(seed, 'utf8');
       const localFs = {...fs,
         readdirSync: (file: string, options: any) => fs.readdirSync(path.resolve(root, file), options),
@@ -205,7 +211,11 @@ describe('release canary public seams', () => {
         exit: () => {throw exit;},
       }})).toThrow(exit);
       const result = path.join(root, 'ledgers', `${TAG}.jsonl`);
-      expect(readEvents(result).some((event: any) => event.type === 'incident_opened')).toBe(true);
+      const opened = readEvents(result).filter((event: any) => event.type === 'incident_opened');
+      expect(opened).toHaveLength(1);
+      // A failed report in the rejected set must reach the recorder, so its incident never auto-resolves.
+      expect(opened[0].payload.summary.startsWith('Canary report set rejected: ')).toBe(!withFailed);
+      if (withFailed) expect(opened[0].payload.summary).toMatch(/^Canary report set rejected with failed reports \(npm:npm\): /);
       expect(fs.readFileSync(path.join(root, '.canary-record-status'), 'utf8')).toBe('1\n');
     });
   });
@@ -511,6 +521,24 @@ describe('release canary public seams', () => {
       expect(open).toHaveLength(reports().length + 1);
       expect(open.every((incident: any) => incident.kind === 'integrity'
         || incident.summary.startsWith('Canary failed for '))).toBe(true);
+    });
+  });
+
+  test('a failed report inside an incomplete set keeps its incident open after later passing sets', () => {
+    withLedger(ledger => {
+      const incomplete = reports().filter(report => report.channel !== 'npm')
+        .map(report => report.channel === 'pnpm' ? {...report, status: 'failed'} : report);
+      const rejected = recordCanary({ledgerFile: ledger, reports: incomplete, evaluatedAt: EVALUATED_AT});
+      const incidentId = rejected.incidents[0].payload.incidentId;
+      expect(rejected.incidents[0].payload.summary)
+        .toMatch(/^Canary report set rejected with failed reports \(pnpm:pnpm\): /);
+      const later = '2026-08-19T13:30:00.000Z';
+      const passed = recordCanary({ledgerFile: ledger,
+        reports: reports().map(report => ({...report, checkedAt: later})), evaluatedAt: later});
+      expect(passed.resolvedIncidents).toEqual([]);
+      const state = materializeReleaseState(readEvents(ledger));
+      expect(state.incidents[incidentId].status).toBe('open');
+      expect(reconcileRelease(state).blocking).toContain(`open incidents: ${incidentId}`);
     });
   });
 

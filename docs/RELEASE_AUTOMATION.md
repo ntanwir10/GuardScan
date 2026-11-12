@@ -309,11 +309,11 @@ events; no backward state mutation is needed. Integrity, security,
 availability, and recovery incidents use `incident_opened` and
 `incident_resolved`. The canary recorder resolves only one kind by itself: the
 availability incident opened when a report set is missing or malformed (for
-example, after an artifact upload error). It resolves once a later complete
-report set, checked after the incident opened, passes on every target. Failed
-canaries and every other incident stay open and deny promotion. An
-`action_required` event records a provider-owned task; it does not claim that a
-package has been withdrawn.
+example, after an artifact upload error) and contains no failed report. It
+resolves once a later complete report set, checked after the incident opened,
+passes on every target. Failed canaries and every other incident stay open and
+deny promotion. An `action_required` event records a provider-owned task; it
+does not claim that a package has been withdrawn.
 
 The repository also contains:
 
