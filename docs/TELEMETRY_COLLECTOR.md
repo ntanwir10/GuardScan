@@ -32,7 +32,7 @@ This is a relative self-hosted protocol path, not a GuardScan-operated URL.
   "schemaVersion": "guardscan.telemetry.v1",
   "batchId": "00000000-0000-4000-8000-000000000001",
   "sentAt": 1705320001000,
-  "cliVersion": "1.1.0",
+  "cliVersion": "1.1.1",
   "events": [
     {
       "eventId": "00000000-0000-4000-8000-000000000002",

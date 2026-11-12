@@ -4,6 +4,12 @@
 
 Accepted
 
+> **Amendment (1.1.1):** the 1.1.1 community signing policy (ad-hoc macOS
+> signature, Sigstore signature and GitHub build attestation; no Apple
+> notarization or Windows Authenticode yet) supersedes the notarization and
+> Authenticode requirements below. See [Update (2026-11): community signing
+> policy](#update-2026-11-community-signing-policy).
+
 Acceptance records the architecture and its host-native feasibility evidence. It
 does not authorize publication by itself: production artifacts remain gated by
 exact-source builds, platform signing/notarization, provenance, and release

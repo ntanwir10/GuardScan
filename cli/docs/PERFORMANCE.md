@@ -141,10 +141,10 @@ guardscan scan --files src/
 
 ```bash
 # Skip tests
-guardscan scan --skipTests
+guardscan scan --skip-tests
 
 # Skip performance testing
-guardscan scan --skipPerf
+guardscan scan --skip-perf
 ```
 
 ### 5. Use Offline Mode

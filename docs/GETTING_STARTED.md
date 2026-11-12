@@ -13,7 +13,7 @@ GuardScan is a privacy-first CLI tool that uses AI to automatically review your 
 ## Key Features
 
 - **Privacy-First**: Built-in scanners stay local; cloud AI receives context only when you configure and invoke it
-- **Multi-Provider**: Supports OpenAI, Claude, Gemini, Ollama, and more
+- **Multi-Provider**: Supports OpenAI, Claude, Gemini, OpenRouter, and local Ollama/LM Studio
 - **Offline-Capable**: Works without internet using local AI models
 - **Universal**: Works with any git-based repository
 - **Free Security Scans**: Built-in SAST-like security scanning
@@ -27,7 +27,7 @@ npm install -g guardscan
 guardscan --version
 ```
 
-Requires Node.js 22 or newer. pnpm, Yarn and Bun work too; other channels (Homebrew, Scoop, PyPI, WinGet, Chocolatey, standalone binaries) are planned for 1.1.1 and not yet available. See [Install, upgrade and uninstall](INSTALL.md) for every channel and its status.
+The npm install needs Node.js 22 or newer (as do pnpm, Yarn and Bun). Homebrew, Scoop, pipx and standalone binaries (Node.js bundled) are also available from 1.1.1, and WinGet and Chocolatey follow once their moderation accepts the package. See [Install, upgrade and uninstall](INSTALL.md) for every channel.
 
 ### From Source
 
@@ -59,7 +59,7 @@ guardscan config
 
 Choose your AI provider and enter API key:
 
-- **OpenAI** (GPT-4): Get key from [platform.openai.com](https://platform.openai.com)
+- **OpenAI**: Get key from [platform.openai.com](https://platform.openai.com)
 - **Claude**: Get key from [console.anthropic.com](https://console.anthropic.com)
 - **Gemini**: Get key from [makersuite.google.com](https://makersuite.google.com)
 - **Ollama** (Local): Install from [ollama.ai](https://ollama.ai)
@@ -100,7 +100,7 @@ ollama pull codellama
 ```bash
 guardscan config
 # Select "ollama" as provider
-# Default endpoint: http://localhost:11434
+# Default endpoint: http://127.0.0.1:11434 (override with OLLAMA_ENDPOINT)
 ```
 
 4. Run offline:

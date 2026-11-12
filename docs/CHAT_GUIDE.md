@@ -142,8 +142,7 @@ You can customize the chat experience using command-line options:
 Override the AI model for this chat session.
 
 ```bash
-guardscan chat --model gpt-4o
-guardscan chat --model gemini-2.5-flash
+guardscan chat --model <model-id>   # a model for your configured provider, from `guardscan models list`
 ```
 
 **Available models** depend on your configured AI provider. `guardscan models list` prints GuardScan's built-in static catalog, not a live availability list, and the override is passed to the provider unchanged, so confirm the exact model ID in your provider's documentation. Print the catalog with:
@@ -152,7 +151,7 @@ guardscan chat --model gemini-2.5-flash
 guardscan models list
 ```
 
-Examples from the built-in registry at the time of writing: `gpt-5.1`, `gpt-4o`, `gpt-4.1-mini` (OpenAI); `gemini-3-pro`, `gemini-2.5-pro`, `gemini-2.5-flash` (Gemini); `codellama`, `mistral` (Ollama). The registry is defined in [`cli/src/providers/model-registry.ts`](https://github.com/ntanwir10/GuardScan/blob/main/cli/src/providers/model-registry.ts).
+Run `guardscan models list` to see the models this version knows about. The registry is defined in [`cli/src/providers/model-registry.ts`](https://github.com/ntanwir10/GuardScan/blob/main/cli/src/providers/model-registry.ts).
 
 ### `--temperature <value>`
 
@@ -387,7 +386,7 @@ This ensures the AI has access to your latest code.
 
 **Solutions:**
 
-1. Use a faster AI model (e.g., `gpt-4.1-mini` instead of `gpt-4o`)
+1. Use a faster AI model (a smaller one for your configured provider, from `guardscan models list`)
 2. Reduce codebase size (exclude large files in config)
 3. Use local AI (Ollama) for faster responses
 4. Rebuild index to optimize search

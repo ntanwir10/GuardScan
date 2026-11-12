@@ -1,6 +1,6 @@
 # Privacy Policy
 
-**Last updated: August 2, 2026**
+**Last updated: November 11, 2026**
 
 GuardScan is a local-first security scanner and BYOK AI client. This document
 describes the CLI's network boundaries and the data it stores. It distinguishes

@@ -1,12 +1,13 @@
 # GuardScan release automation
 
-> **Status (2026-11-08).** Live: npm, pnpm, Yarn, and Bun at `1.1.0`. That
-> release was published to npm by hand from `main` 0ef97f4, outside the train: no
-> provenance, no ledger record. GitHub Release v1.1.0 is immutable and holds only
-> `guardscan-1.1.0.tgz` and `SHA256SUMS`. **Planned for `1.1.1`** (the first train
-> release: `1.1.1-rc.1`, a 24-hour soak, then `1.1.1`): npm with provenance, the
-> five standalone binaries, Homebrew tap, Scoop bucket, PyPI `guardscan-cli`, and,
-> at stable only, WinGet and Chocolatey. Signing policy: `community`.
+> **Status.** `1.1.1` is the first release through the train. Its release
+> candidate soaks for 24 hours; promotion then publishes npm with provenance,
+> the five standalone binaries, Homebrew tap, Scoop bucket and PyPI
+> `guardscan-cli`. WinGet and Chocolatey are submitted at stable and become
+> available once their moderation accepts them. `1.1.0` was
+> published to npm by hand from `main` 0ef97f4, outside the train: no provenance,
+> no ledger record; GitHub Release v1.1.0 is immutable and holds only
+> `guardscan-1.1.0.tgz` and `SHA256SUMS`. Signing policy: `community`.
 
 GuardScan uses one RC-first, append-only release train for npm, standalone GitHub assets, Homebrew, Scoop, WinGet, Chocolatey, and PyPI. pnpm, both Yarn generations, and Bun consume the npm package and are verified as separate install channels.
 
@@ -435,6 +436,7 @@ yarn global add guardscan
 yarn dlx guardscan
 bun add -g guardscan
 bunx guardscan
+brew tap ntanwir10/tap
 brew trust --formula ntanwir10/tap/guardscan
 brew install ntanwir10/tap/guardscan
 scoop bucket add guardscan https://github.com/ntanwir10/homebrew-tap
