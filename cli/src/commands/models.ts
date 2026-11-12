@@ -6,9 +6,18 @@
 
 import { Command } from 'commander';
 import chalk from 'chalk';
-import { modelRegistry } from '../providers/model-registry';
+import { modelRegistry, ModelInfo } from '../providers/model-registry';
 import { ModelValidator } from '../providers/model-validator';
 import { configManager } from '../core/config';
+
+// Input and output are billed separately; a summed "$X/1M" reads like a single price.
+function formatPricing(model: ModelInfo): string {
+  return `$${model.inputPricing.toFixed(2)} in / $${model.outputPricing.toFixed(2)} out per 1M`;
+}
+
+// Registry prices are the base prompt-size tier; several providers charge more for long prompts.
+const PRICING_NOTE =
+  'Prices: USD per 1M tokens at the base prompt-size tier. Long prompts can cost more; check the provider\'s pricing page.';
 
 export function createModelsCommand(): Command {
   const command = new Command('models');
@@ -63,13 +72,13 @@ export function createModelsCommand(): Command {
         console.log(
           `  ${chalk.bold(model.displayName.padEnd(25))} ` +
           `${model.name.padEnd(25)} ` +
-          `$${(model.inputPricing + model.outputPricing).toFixed(4).padStart(8)}/1M ` +
+          `${formatPricing(model).padStart(30)} ` +
           `${model.contextWindow.toLocaleString().padStart(8)} ctx ` +
           `${deprecated}${latest}`
         );
       }
 
-      console.log('\n');
+      console.log('\n' + chalk.gray(PRICING_NOTE) + '\n');
     });
 
   // Model info
@@ -104,8 +113,7 @@ export function createModelsCommand(): Command {
       if (modelInfo.embeddingPricing) {
         console.log(`  Embeddings: $${modelInfo.embeddingPricing.toFixed(6)}/1M tokens`);
       }
-
-      console.log('\n' + chalk.bold('📊 Capabilities:'));
+      console.log(chalk.gray(`  ${PRICING_NOTE}`) + '\n\n' + chalk.bold('📊 Capabilities:'));
       console.log(`  Context Window: ${modelInfo.contextWindow.toLocaleString()} tokens`);
       console.log(`  Streaming: ${modelInfo.supportsStreaming ? '✅' : '❌'}`);
       console.log(`  Embeddings: ${modelInfo.supportsEmbeddings ? '✅' : '❌'}`);
@@ -164,11 +172,11 @@ export function createModelsCommand(): Command {
         console.log(
           `${chalk.bold(model.displayName)} ` +
           `(${model.name}) - ` +
-          `$${(model.inputPricing + model.outputPricing).toFixed(4)}/1M tokens`
+          formatPricing(model)
         );
       }
 
-      console.log('\n');
+      console.log('\n' + chalk.gray(PRICING_NOTE) + '\n');
     });
 
   // Compare models
@@ -208,7 +216,7 @@ export function createModelsCommand(): Command {
       console.log(`${chalk.bold('Model:')} ${recommended.displayName}`);
       console.log(`${chalk.bold('ID:')} ${recommended.name}`);
       console.log(`${chalk.bold('Priority:')} ${options.priority}`);
-      console.log(`${chalk.bold('Cost:')} $${(recommended.inputPricing + recommended.outputPricing).toFixed(4)}/1M tokens`);
+      console.log(`${chalk.bold('Cost:')} ${formatPricing(recommended)}\n${chalk.gray(PRICING_NOTE)}`);
       console.log(`${chalk.bold('Context:')} ${recommended.contextWindow.toLocaleString()} tokens`);
       console.log(`${chalk.bold('Tags:')} ${recommended.tags.join(', ')}`);
       // eslint-disable-next-line no-console
