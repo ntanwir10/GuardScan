@@ -17,6 +17,8 @@ const REQUIRED_CANARY_FIELDS = Object.freeze([
   'channel', 'checkedAt', 'evidenceUrl', 'status', 'target', 'version',
 ]);
 const CANARY_STATUSES = new Set(['passed', 'failed', 'pending']);
+// Summary prefix of the availability incident opened when a report set is missing or malformed.
+const REPORT_SET_REJECTED = 'Canary report set rejected: ';
 const SUPPORTED_CHANNELS = new Set(CHANNELS.map(channel => channel.id));
 
 // These are the immutable RC verification targets. Callers may add supported
@@ -213,7 +215,7 @@ function recordCanary(input, reports, expectedTargets, evaluatedAt) {
   if (failures.length > 0) {
     const incident = appendIncident(options.ledgerFile, initialState, evaluated,
       {type: 'invalid-report-set', failures},
-      `Canary report set rejected: ${failures.map(failure => failure.reason).join(' | ')}`.slice(0, 2000));
+      `${REPORT_SET_REJECTED}${failures.map(failure => failure.reason).join(' | ')}`.slice(0, 2000));
     changed ||= incident.changed;
     incidents.push(incident.event);
     return {changed, recorded: [], failures, incidents};
@@ -282,7 +284,31 @@ function recordCanary(input, reports, expectedTargets, evaluatedAt) {
     changed ||= result.changed;
     currentEvents = readEvents(options.ledgerFile);
   }
-  return {changed, recorded, failures: observedFailures, incidents};
+
+  // A complete set checked after a rejected one, passing on every target, shows that the earlier
+  // gap was transient (such as an artifact upload error). Failed canaries and other incidents stay open.
+  const resolvedIncidents = [];
+  if (reportList.every(report => report.status === 'passed')) {
+    const earliestCheck = reportList.map(report => report.checkedAt).sort(compareUtf8)[0];
+    const state = materializeReleaseState(currentEvents);
+    for (const [incidentId, incident] of Object.entries(state.incidents).sort(([a], [b]) => compareUtf8(a, b))) {
+      if (incident.status !== 'open' || incident.kind !== 'availability'
+          || !incident.summary.startsWith(REPORT_SET_REJECTED)
+          || compareUtf8(earliestCheck, incident.openedAt) <= 0) continue;
+      const result = appendEvent(options.ledgerFile, {
+        version: state.version,
+        tag: state.tag,
+        commit: state.commit,
+        timestamp: monotonicTimestamp(options.ledgerFile, evaluated.toISOString()),
+        type: 'incident_resolved',
+        idempotencyKey: `canary-incident-resolved:${incidentId}`,
+        payload: {incidentId},
+      });
+      changed ||= result.changed;
+      resolvedIncidents.push(result.event);
+    }
+  }
+  return {changed, recorded, failures: observedFailures, incidents, resolvedIncidents};
 }
 
 module.exports = {

@@ -465,6 +465,55 @@ describe('release canary public seams', () => {
     });
   });
 
+  test('a later complete passing set resolves a rejected-set incident, once', () => {
+    withLedger(ledger => {
+      const rejected = recordCanary({ledgerFile: ledger, reports: [], evaluatedAt: EVALUATED_AT});
+      const incidentId = rejected.incidents[0].payload.incidentId;
+      expect(reconcileRelease(materializeReleaseState(readEvents(ledger))).blocking)
+        .toContain(`open incidents: ${incidentId}`);
+      const later = '2026-08-19T13:30:00.000Z';
+      const passed = recordCanary({ledgerFile: ledger,
+        reports: reports().map(report => ({...report, checkedAt: later})), evaluatedAt: later});
+      expect(passed.resolvedIncidents.map((event: any) => event.payload)).toEqual([{incidentId}]);
+      const state = materializeReleaseState(readEvents(ledger));
+      expect(state.incidents[incidentId].status).toBe('resolved');
+      expect(reconcileRelease(state).blocking).toEqual([]);
+      const again = recordCanary({ledgerFile: ledger,
+        reports: reports().map(report => ({...report, checkedAt: later})), evaluatedAt: later});
+      expect(again.resolvedIncidents).toEqual([]);
+      expect(readEvents(ledger).filter((event: any) => event.type === 'incident_resolved')).toHaveLength(1);
+    });
+  });
+
+  test('keeps incidents open for sets that are earlier, partial, or failing, and for other incident kinds', () => {
+    withLedger(ledger => {
+      recordCanary({ledgerFile: ledger, reports: [], evaluatedAt: EVALUATED_AT});
+      appendEvent(ledger, {type: 'incident_opened', version: VERSION, tag: TAG, commit: COMMIT,
+        timestamp: EVALUATED_AT, idempotencyKey: 'integrity',
+        payload: {incidentId: 'integrity', kind: 'integrity', summary: 'Canary report set rejected: forged'}});
+      // Checked no later than the incident opened.
+      recordCanary({ledgerFile: ledger, reports: reports(), evaluatedAt: EVALUATED_AT});
+      const later = '2026-08-19T13:30:00.000Z';
+      recordCanary({ledgerFile: ledger,
+        reports: reports().slice(1).map(report => ({...report, checkedAt: later})), evaluatedAt: later});
+      recordCanary({ledgerFile: ledger,
+        reports: reports('failed').map(report => ({...report, checkedAt: later})), evaluatedAt: later});
+      const latest = '2026-08-19T14:00:00.000Z';
+      const passed = recordCanary({ledgerFile: ledger,
+        reports: reports().map(report => ({...report, checkedAt: latest})), evaluatedAt: latest});
+      const incidents = materializeReleaseState(readEvents(ledger)).incidents;
+      const resolved = passed.resolvedIncidents.map((event: any) => event.payload.incidentId);
+      // Only the two rejected-set incidents (missing and partial) resolve; failed canaries and integrity stay open.
+      expect(resolved).toHaveLength(2);
+      expect(resolved.every((id: string) => incidents[id].summary.startsWith('Canary report set rejected: ')
+        && incidents[id].kind === 'availability')).toBe(true);
+      const open = Object.values(incidents).filter((incident: any) => incident.status === 'open');
+      expect(open).toHaveLength(reports().length + 1);
+      expect(open.every((incident: any) => incident.kind === 'integrity'
+        || incident.summary.startsWith('Canary failed for '))).toBe(true);
+    });
+  });
+
   test('a structurally valid failed report records both channel failure and incident evidence', () => {
     withLedger(ledger => {
       const result = recordCanary({
