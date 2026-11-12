@@ -18,6 +18,12 @@
       "releasePr": 46,
       "sourcePrHead": "616ec062ca15d410bb4ae7bcc57a35390638ce7b",
       "channel": "rc"
+    },
+    {
+      "version": "1.1.1-rc.8",
+      "releasePr": 46,
+      "sourcePrHead": "6f19b7f321445acb90e4eb5a89a95a4d594798e5",
+      "channel": "rc"
     }
   ]
 }
