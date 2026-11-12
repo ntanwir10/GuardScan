@@ -303,3 +303,30 @@ describe("config command", () => {
     consoleLogSpy.mockRestore();
   });
 });
+
+describe("config model picker", () => {
+  const { modelPicker } = require("../../src/commands/config") as typeof import("../../src/commands/config");
+  const { MODEL_REGISTRY, DEFAULT_MODELS } =
+    require("../../src/providers/model-registry") as typeof import("../../src/providers/model-registry");
+
+  it.each(["openai", "claude", "gemini"] as const)("offers only current %s chat models from the registry", (provider) => {
+    const picker = modelPicker(provider);
+    expect(picker?.choices.length).toBeGreaterThan(0);
+    for (const choice of picker?.choices ?? []) {
+      const model = MODEL_REGISTRY[choice.value];
+      expect({ value: choice.value, provider: model.provider, deprecated: model.deprecated, embeddings: model.supportsEmbeddings })
+        .toEqual({ value: choice.value, provider, deprecated: undefined, embeddings: false });
+    }
+    expect(picker?.default).toBe(DEFAULT_MODELS[provider]);
+  });
+
+  it("keeps a listed saved model and replaces a retired or dotted one", () => {
+    expect(modelPicker("openai", "gpt-6-luna")?.default).toBe("gpt-6-luna");
+    expect(modelPicker("claude", "claude-sonnet-4.5")?.default).toBe(DEFAULT_MODELS.claude);
+    expect(modelPicker("gemini", "gemini-2.5-flash")?.default).toBe(DEFAULT_MODELS.gemini);
+  });
+
+  it("has no picker for local providers", () => {
+    expect(modelPicker("ollama")).toBeUndefined();
+  });
+});

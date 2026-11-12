@@ -9,12 +9,13 @@ import {
   CostEstimate,
 } from "./base";
 import { createDebugLogger } from "../utils/debug-logger";
+import { DEFAULT_MODELS, chatPricing } from "./model-registry";
 
 const logger = createDebugLogger("gemini");
 
 export class GeminiProvider extends AIProvider {
   private client: GoogleGenerativeAI;
-  private defaultModel = "gemini-2.5-flash";
+  private defaultModel: string = DEFAULT_MODELS.gemini;
 
   constructor(apiKey?: string, model?: string) {
     super(apiKey);
@@ -235,25 +236,13 @@ export class GeminiProvider extends AIProvider {
    * Get pricing for current default model
    */
   getPricing() {
-    return {
-      chat: {
-        input: 0.075, // $0.075 per 1M tokens for Gemini 2.5 Flash input
-        output: 0.3, // $0.30 per 1M tokens for Gemini 2.5 Flash output
-      },
-    };
+    return { chat: this.getModelPricing(this.defaultModel) };
   }
 
   /**
    * Get pricing for specific model
    */
   private getModelPricing(model: string): { input: number; output: number } {
-    const pricing: Record<string, { input: number; output: number }> = {
-      "gemini-3-pro": { input: 1.25, output: 5.0 }, // Most capable (estimated)
-      "gemini-2.5-pro": { input: 1.25, output: 5.0 }, // Complex reasoning, 1M context
-      "gemini-2.5-flash": { input: 0.075, output: 0.3 }, // Balanced, 1M context
-      "gemini-2.5-flash-lite": { input: 0.0375, output: 0.15 }, // Fast and cost-efficient
-    };
-
-    return pricing[model] || pricing["gemini-2.5-flash"];
+    return chatPricing("gemini", model);
   }
 }

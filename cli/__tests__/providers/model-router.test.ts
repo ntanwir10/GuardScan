@@ -5,6 +5,7 @@
 import { describe, expect, it } from '@jest/globals';
 import { ModelRouter, TaskType } from '../../src/providers/model-router';
 import { Config } from '../../src/core/config';
+import { modelRegistry } from '../../src/providers/model-registry';
 
 describe('ModelRouter', () => {
   describe('automatic model selection', () => {
@@ -61,8 +62,14 @@ describe('ModelRouter', () => {
         maxCostPerRequest: 0.000005, // Extremely low limit to force cheapest model
       });
 
-      // Should select cheapest model
-      expect(selection.estimatedCost).toBeLessThanOrEqual(0.001);
+      // Should select the cheapest active OpenAI chat model
+      const cheapestInput = Math.min(
+        ...modelRegistry
+          .listProviderModels('openai')
+          .filter((m) => !m.deprecated && !m.supportsEmbeddings)
+          .map((m) => m.inputPricing)
+      );
+      expect(selection.estimatedCost).toBe(cheapestInput);
     });
   });
 
@@ -80,7 +87,7 @@ describe('ModelRouter', () => {
           strategy: 'balanced',
           taskOverrides: {
             'code-review': {
-              model: 'gpt-4o',
+              model: 'gpt-6.1-sol',
             },
           },
         },
@@ -89,7 +96,7 @@ describe('ModelRouter', () => {
       const router = new ModelRouter(config);
       const selection = router.selectOptimalModel('code-review');
 
-      expect(selection.modelId).toBe('gpt-4o');
+      expect(selection.modelId).toBe('gpt-6.1-sol');
       expect(selection.isOverride).toBe(true);
       expect(selection.rationale).toContain('User override');
     });
@@ -190,7 +197,7 @@ describe('ModelRouter', () => {
 
       const router = new ModelRouter(config);
       const validation = router.validateRouting('code-review', {
-        model: 'gpt-4o',
+        model: 'gpt-6.1-sol',
         priority: 'quality',
       });
 
@@ -229,7 +236,7 @@ describe('ModelRouter', () => {
 
       const router = new ModelRouter(config);
       const validation = router.validateRouting('chat', {
-        model: 'gemini-2.5-flash', // Gemini model for OpenAI provider
+        model: 'gemini-3.8-flash', // Gemini model for OpenAI provider
       });
 
       expect(validation.valid).toBe(false);
