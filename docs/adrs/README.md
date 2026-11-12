@@ -34,7 +34,7 @@ recoverable architecture decision.
   - **Summary**: Users provide their own AI API keys for AI features; requests go straight to the provider
 
 - [ADR 006: Node.js SEA for standalone distribution](./006-node-sea-standalone-distribution.md)
-  - **Status**: Accepted; production launch evidence remains gated
+  - **Status**: Accepted; the 1.1.1 community signing policy (ad-hoc macOS signature, Sigstore, GitHub attestation; no notarization or Authenticode yet) supersedes its notarization and Authenticode requirements
   - **Summary**: Bundle GuardScan into host-native Node.js single executables for native package managers and optional pipx wheels
 
 - [ADR 007: Retire GuardScan-Hosted Cloudflare Telemetry](./007-retire-hosted-cloudflare-telemetry.md)

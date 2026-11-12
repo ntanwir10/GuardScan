@@ -88,7 +88,7 @@ jobs:
           sarif_file: guardscan.sarif
 ```
 
-`actions/*` and `github/codeql-action` are third-party GitHub actions; pin them to commit SHAs if your policy requires it. Pin the GuardScan version too (`npm i -g guardscan@1.1.0`) for reproducible runs.
+`actions/*` and `github/codeql-action` are third-party GitHub actions; pin them to commit SHAs if your policy requires it. Pin the GuardScan version too (`npm i -g guardscan@1.1.1`) for reproducible runs.
 
 `guardscan init` in CI persists offline mode, and `security` only scans dependencies with `--cve`. For online CVE coverage, run `guardscan config --offline=false` after `init` and add `--cve` (and drop `--offline --no-cve`). To reuse a snapshot restored from your own cache, keep `--offline` and add `--cve`. SARIF upload also requires code scanning to be enabled for the repository.
 

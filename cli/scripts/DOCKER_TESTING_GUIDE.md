@@ -5,7 +5,7 @@ This guide walks you through manually testing GuardScan CLI in both Alpine and D
 ## Prerequisites
 
 1. **Docker Desktop** or Docker daemon running
-2. **Node.js 18+** and **npm** installed locally
+2. **Node.js 22+** and **npm** installed locally
 3. **GuardScan CLI** source code (this repository)
 
 ## Step 1: Build the GuardScan Package
@@ -26,14 +26,14 @@ npm run build
 npm pack
 ```
 
-This creates a file like `guardscan-1.0.4.tgz` in the `cli` directory.
+This creates a file like `guardscan-<version>.tgz` in the `cli` directory.
 
 **Note the full path to this file** - you'll need it for Docker volume mounting.
 
 Example:
 
 ```bash
-~/Developer/GuardScan/cli/guardscan-1.0.4.tgz
+~/Developer/GuardScan/cli/guardscan-<version>.tgz
 ```
 
 ## Step 2: Create a Test Project
@@ -73,7 +73,7 @@ EOF
 
 ```bash
 # Set variables (adjust paths as needed)
-PACKAGE_FILE="/path/to/GuardScan/cli/guardscan-1.0.4.tgz"
+PACKAGE_FILE="/path/to/GuardScan/cli/guardscan-<version>.tgz"  # replace <version>: use the file npm pack created in Step 1
 TEST_PROJECT="$TMP_DIR"
 
 # Test installation and version check
@@ -99,7 +99,7 @@ docker run --rm \
 
 ```
 GuardScan ASCII art logo
-1.0.4
+<the version in cli/package.json>
 ```
 
 ### 3.2: Test Init Command
@@ -186,7 +186,7 @@ docker run --rm \
 
 ```
 GuardScan ASCII art logo
-1.0.4
+<the version in cli/package.json>
 ```
 
 ### 4.2: Test Init Command
@@ -255,7 +255,7 @@ set -euo pipefail
 
 # Configuration
 CLI_DIR="/path/to/GuardScan/cli"  # Update this path
-PACKAGE_FILE="$CLI_DIR/guardscan-1.0.4.tgz"  # Update version if needed
+PACKAGE_FILE="$CLI_DIR/guardscan-$(node -p "require('$CLI_DIR/package.json').version").tgz"  # the file npm pack created
 
 # Create test project
 TMP_DIR=$(mktemp -d)
@@ -398,7 +398,7 @@ npx guardscan --version
 ## Next Steps
 
 - Test all 21 CLI commands in both environments
-- Test with different Node.js versions (`node:18-alpine`, `node:20-alpine`, etc.)
+- Test with different Node.js versions (`node:22-alpine`, `node:24-alpine`, etc.)
 - Test with different flag combinations
 - Integrate into CI/CD pipeline
 

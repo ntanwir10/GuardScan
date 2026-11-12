@@ -108,7 +108,7 @@ docker build -t my-guardscan .
 docker run --rm -v "$PWD":/workspace my-guardscan security --offline --no-cve
 ```
 
-Pin a GuardScan version (`npm install -g guardscan@1.1.0`) when you need reproducible builds. Run `guardscan init` once (for example in the image build or as a first step) if the container has no configuration yet.
+Pin a GuardScan version (`npm install -g guardscan@1.1.1`) when you need reproducible builds. Run `guardscan init` once (for example in the image build or as a first step) if the container has no configuration yet.
 
 ## CI
 

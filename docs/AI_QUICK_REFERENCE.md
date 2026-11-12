@@ -37,7 +37,7 @@ guardscan cache stats
 guardscan cache clear --repo --force
 ```
 
-`guardscan models list` prints GuardScan's built-in, static model catalog, not a live availability list. Provider API model IDs can differ from catalog names (for example Anthropic uses hyphenated IDs), so verify the ID with your provider before using it. Examples of catalog entries: `gpt-5.1`, `gpt-4o`, `claude-sonnet-4.5`, `gemini-2.5-flash`, `codellama`. Source: [`model-registry.ts`](https://github.com/ntanwir10/GuardScan/blob/main/cli/src/providers/model-registry.ts).
+`guardscan models list` prints GuardScan's built-in, static model catalog, not a live availability list. Provider API model IDs can differ from catalog names (for example Anthropic uses hyphenated IDs), so verify the ID with your provider before using it. Run `guardscan models list` to see the models this version knows about. Source: [`model-registry.ts`](https://github.com/ntanwir10/GuardScan/blob/main/cli/src/providers/model-registry.ts).
 
 ## Advanced Settings
 
