@@ -366,7 +366,7 @@ guardscan --version
 
 The npm install requires Node.js 22 or newer and installs its runtime dependencies (including `typescript`, needed for AST parsing) automatically. If you see "Cannot find module 'typescript'", reinstall GuardScan.
 
-pnpm, Yarn and Bun are also supported (Node.js 22 or newer). Homebrew, Scoop, pipx and standalone binaries (Node.js bundled) are also available, and WinGet and Chocolatey follow once their moderation accepts the package. See the [install, upgrade and uninstall guide](https://github.com/ntanwir10/GuardScan/blob/main/docs/INSTALL.md) for every channel.
+pnpm, Yarn and Bun are also supported (Node.js 22 or newer). Homebrew, Scoop, pipx and standalone binaries (Node.js bundled) are also available from 1.1.1, and WinGet and Chocolatey follow once their moderation accepts the package. See the [install, upgrade and uninstall guide](https://github.com/ntanwir10/GuardScan/blob/main/docs/INSTALL.md) for every channel.
 
 ### From source
 

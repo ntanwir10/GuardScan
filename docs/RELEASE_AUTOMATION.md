@@ -1,10 +1,10 @@
 # GuardScan release automation
 
-> **Status.** `1.1.1` is released through the train (`1.1.1-rc.7` passed a
-> 24-hour soak and was promoted to `1.1.1`; earlier candidates were
-> superseded): npm with provenance, the five standalone binaries, Homebrew
-> tap, Scoop bucket and PyPI `guardscan-cli`. WinGet and Chocolatey were submitted
-> at stable and become available once their moderation accepts them. `1.1.0` was
+> **Status.** `1.1.1` is the first release through the train. Its release
+> candidate soaks for 24 hours; promotion then publishes npm with provenance,
+> the five standalone binaries, Homebrew tap, Scoop bucket and PyPI
+> `guardscan-cli`. WinGet and Chocolatey are submitted at stable and become
+> available once their moderation accepts them. `1.1.0` was
 > published to npm by hand from `main` 0ef97f4, outside the train: no provenance,
 > no ledger record; GitHub Release v1.1.0 is immutable and holds only
 > `guardscan-1.1.0.tgz` and `SHA256SUMS`. Signing policy: `community`.

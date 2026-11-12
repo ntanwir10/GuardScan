@@ -27,7 +27,7 @@ npm install -g guardscan
 guardscan --version
 ```
 
-The npm install needs Node.js 22 or newer (as do pnpm, Yarn and Bun). Homebrew, Scoop, pipx and standalone binaries (Node.js bundled) are also available, and WinGet and Chocolatey follow once their moderation accepts the package. See [Install, upgrade and uninstall](INSTALL.md) for every channel.
+The npm install needs Node.js 22 or newer (as do pnpm, Yarn and Bun). Homebrew, Scoop, pipx and standalone binaries (Node.js bundled) are also available from 1.1.1, and WinGet and Chocolatey follow once their moderation accepts the package. See [Install, upgrade and uninstall](INSTALL.md) for every channel.
 
 ### From Source
 

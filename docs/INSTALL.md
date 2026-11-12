@@ -1,19 +1,19 @@
 # Install, upgrade and uninstall
 
-GuardScan 1.1.1 is available through the channels below. This table is the single source of truth for install-channel status.
+From 1.1.1, GuardScan is distributed through the channels below. This table is the single source of truth for install-channel status.
 
 | Channel | Status | Platforms |
 |---|---|---|
-| npm | Released with 1.1.1 (with npm provenance) | Any platform with Node.js 22+ |
-| pnpm | Released with 1.1.1 | Any platform with Node.js 22+ |
-| Yarn | Released with 1.1.1 | Any platform with Node.js 22+ |
-| Bun | Released with 1.1.1 | Any platform with Node.js 22+ |
-| Homebrew tap | Released with 1.1.1 | macOS arm64/x64, Linux arm64/x64 (glibc) |
-| Scoop | Released with 1.1.1 | Windows x64 |
-| PyPI (`pipx`) | Released with 1.1.1 | macOS arm64/x64, Linux x86_64/aarch64 (manylinux_2_28), Windows x64 |
-| WinGet | Submitted with 1.1.1; available once Microsoft's moderation accepts it | Windows x64 |
-| Chocolatey | Submitted with 1.1.1; available once Chocolatey's moderation accepts it | Windows x64 |
-| Standalone binaries (GitHub Releases) | Released with 1.1.1 | macOS arm64/x64, Linux arm64/x64 (glibc), Windows x64 |
+| npm | Available (with npm provenance from 1.1.1) | Any platform with Node.js 22+ |
+| pnpm | Available | Any platform with Node.js 22+ |
+| Yarn | Available | Any platform with Node.js 22+ |
+| Bun | Available | Any platform with Node.js 22+ |
+| Homebrew tap | From 1.1.1 | macOS arm64/x64, Linux arm64/x64 (glibc) |
+| Scoop | From 1.1.1 | Windows x64 |
+| PyPI (`pipx`) | From 1.1.1 | macOS arm64/x64, Linux x86_64/aarch64 (manylinux_2_28), Windows x64 |
+| WinGet | From 1.1.1, available once Microsoft's moderation accepts it | Windows x64 |
+| Chocolatey | From 1.1.1, available once Chocolatey's moderation accepts it | Windows x64 |
+| Standalone binaries (GitHub Releases) | From 1.1.1 | macOS arm64/x64, Linux arm64/x64 (glibc), Windows x64 |
 
 ## Requirements
 
