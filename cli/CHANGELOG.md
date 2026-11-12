@@ -5,6 +5,23 @@ All notable changes to GuardScan will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.1](https://github.com/ntanwir10/GuardScan/compare/v1.1.0...v1.1.1) (2026-11-12)
+
+
+### Features
+
+* **release:** drive the 24-hour RC soak from a self-dispatching canary chain ([#48](https://github.com/ntanwir10/GuardScan/issues/48)) ([17a71db](https://github.com/ntanwir10/GuardScan/commit/17a71db522209eaebc910eb39cd9581726a15156))
+
+
+### Bug Fixes
+
+* **models:** current registry and prices, provider params for new models, CVE label ([#50](https://github.com/ntanwir10/GuardScan/issues/50)) ([9b6423b](https://github.com/ntanwir10/GuardScan/commit/9b6423bd41f16c1fea2a459756ee4387afd50bc4))
+* **release:** add a community signing policy for unsigned native channels ([#38](https://github.com/ntanwir10/GuardScan/issues/38)) ([4b9d458](https://github.com/ntanwir10/GuardScan/commit/4b9d458a791538526eb8d4192463015a1dac98f1))
+* **release:** make the Homebrew, Scoop and Yarn canaries pass on current tooling ([#47](https://github.com/ntanwir10/GuardScan/issues/47)) ([788b01f](https://github.com/ntanwir10/GuardScan/commit/788b01fcdc938172288d5832d53febac787fd14c))
+* **release:** record glibc in Linux standalone prototype metadata ([#43](https://github.com/ntanwir10/GuardScan/issues/43)) ([da805da](https://github.com/ntanwir10/GuardScan/commit/da805da69d291e8f403a9474b235afb686bd3702))
+* **release:** resolve canary incidents left by a transient report gap ([#51](https://github.com/ntanwir10/GuardScan/issues/51)) ([6096910](https://github.com/ntanwir10/GuardScan/commit/60969103eb0cae236ba4ff79c05358175d1fae43))
+* **release:** stop flaky Windows smoke timeouts and a permanently red health monitor ([#42](https://github.com/ntanwir10/GuardScan/issues/42)) ([9620dae](https://github.com/ntanwir10/GuardScan/commit/9620dae1a11e034bce0912de9975cdb9dd86ce36))
+
 ## [1.1.0] - 2026-11-08
 
 ### Added
