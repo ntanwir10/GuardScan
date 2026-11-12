@@ -175,11 +175,11 @@ export abstract class AIProvider {
    */
   getPricing(): {
     chat: {
-      input: number;    // Cost per 1K tokens
-      output: number;   // Cost per 1K tokens
+      input: number;    // USD per 1M tokens
+      output: number;   // USD per 1M tokens
     };
     embeddings?: {
-      input: number;    // Cost per 1K tokens
+      input: number;    // USD per 1M tokens
     };
   } {
     return {
