@@ -457,6 +457,27 @@ describe('zero-touch release workflow contracts', () => {
     }
   });
 
+  it('exposes a release merge SHA only for a merged PR, not an open PR test merge', () => {
+    const expression = workflowSource('release-train.yml')
+      .match(/echo "merge_sha=\$\(node -p '([^']+)'\)"/)?.[1];
+    expect(expression).toBeDefined();
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'guardscan-merge-sha-'));
+    try {
+      const mergeSha = (pr: object): string => {
+        fs.writeFileSync(path.join(directory, 'release-pr.json'), JSON.stringify(pr));
+        const result = spawnSync(process.execPath, ['-p', expression as string], {cwd: directory, encoding: 'utf8'});
+        expect(result.status).toBe(0);
+        return result.stdout.trim();
+      };
+      // REST shape: an open, mergeable PR still carries a test-merge merge_commit_sha.
+      expect(mergeSha({state: 'open', merged: false, merge_commit_sha: 'a'.repeat(40)})).toBe('');
+      expect(mergeSha({state: 'closed', merged: true, merge_commit_sha: 'b'.repeat(40)})).toBe('b'.repeat(40));
+      expect(mergeSha({state: 'closed', merged: true, merge_commit_sha: null})).toBe('');
+    } finally {
+      fs.rmSync(directory, {recursive: true, force: true});
+    }
+  });
+
   it('runs one concurrency-safe RC soak and machine-only promotion train', () => {
     const train = workflowSource('release-train.yml');
     const canary = workflowSource('release-canary.yml');
