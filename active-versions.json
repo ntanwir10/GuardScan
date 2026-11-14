@@ -24,6 +24,12 @@
       "releasePr": 46,
       "sourcePrHead": "6f19b7f321445acb90e4eb5a89a95a4d594798e5",
       "channel": "rc"
+    },
+    {
+      "version": "1.1.1-rc.9",
+      "releasePr": 46,
+      "sourcePrHead": "29ea949df0c31f17994771e268f29c6fb2ae9032",
+      "channel": "rc"
     }
   ]
 }
