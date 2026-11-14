@@ -394,7 +394,8 @@ jobs:
           echo "tree_sha=$TREE_SHA" >> "$GITHUB_OUTPUT"
           echo "is_draft=$(node -p 'String(require("./release-pr.json").draft)')" >> "$GITHUB_OUTPUT"
           echo "pr_state=$(node -p 'require("./release-pr.json").merged ? "MERGED" : "OPEN"')" >> "$GITHUB_OUTPUT"
-          echo "merge_sha=$(node -p 'require("./release-pr.json").merge_commit_sha || ""')" >> "$GITHUB_OUTPUT"
+          # An open PR's REST merge_commit_sha is GitHub's test merge, never a release merge.
+          echo "merge_sha=$(node -p 'const pr = require("./release-pr.json"); pr.merged === true && pr.merge_commit_sha || ""')" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ steps.source.outputs.head_sha }}
