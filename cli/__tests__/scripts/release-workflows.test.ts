@@ -472,6 +472,14 @@ describe('zero-touch release workflow contracts', () => {
     // wingetcreate must receive the PAT that onboarding documents and credential health checks.
     expect(workflowSource('release-publish.yml'))
       .toContain('WINGET_GITHUB_TOKEN: ${{ secrets.WINGET_GITHUB_TOKEN || secrets.WINGET_CREATE_GITHUB_TOKEN }}');
+    // The finder must search for the title wingetcreate is given, or a retry submits a duplicate PR.
+    expect(workflowSource('release-publish.yml'))
+      .toContain('$pullTitle = "GuardScan $version [$($manifestDigest.Substring(0, 12))]"');
+    const finder = fs.readFileSync(path.join(repositoryRoot, 'cli/scripts/release/winget-submission.js'), 'utf8');
+    const terms = [...(finder.match(/is:pr ((?:"[^"]+" )+)in:title/)?.[1] ?? '').matchAll(/"([^"]+)"/g)]
+      .map(match => match[1].replace('${version}', '1.1.1'));
+    expect(terms.length).toBeGreaterThan(0);
+    for (const term of terms) expect('GuardScan 1.1.1 [83a52d649b56]').toContain(term);
     for (const name of ['release-publish.yml', 'release-train.yml']) {
       const lines = workflowSource(name).split('\n');
       const tapMerges = lines.flatMap((line, index) => (
@@ -496,6 +504,23 @@ describe('zero-touch release workflow contracts', () => {
     );
     expect(priorNuspec).not.toMatch(/<license[\s>]/);
     expect(priorNuspec).toContain('<licenseUrl>');
+  });
+
+  it('runs every job after publish when a resumed promote skipped its build', () => {
+    // A skipped ancestor makes implicit success() false, so v1.1.1's resumed promote silently skipped
+    // TestPyPI, PyPI and the ledger evidence. Every job downstream of publish must check its direct needs.
+    const jobs = (yaml.load(workflowSource('release-train.yml')) as {jobs: Record<string, {needs?: string | string[]; if?: string}>}).jobs;
+    const needs = (id: string): string[] => [jobs[id].needs ?? []].flat();
+    const below = (id: string, seen = new Set<string>()): boolean => needs(id).some(need => (
+      need === 'publish' || (!seen.has(need) && (seen.add(need), below(need, seen)))
+    ));
+    const downstream = Object.keys(jobs).filter(id => below(id));
+    expect(downstream).toEqual(expect.arrayContaining(['pypi-test', 'pypi-test-lifecycle', 'pypi', 'record', 'start-soak']));
+    for (const id of downstream) {
+      const condition = String(jobs[id].if ?? '').replace(/\s+/g, ' ');
+      expect(condition).toContain('always() && !cancelled()');
+      for (const need of needs(id)) expect(condition).toContain(`needs.${need}.result == 'success'`);
+    }
   });
 
   it('exposes a release merge SHA only for a merged PR, not an open PR test merge', () => {
