@@ -5,6 +5,20 @@ All notable changes to GuardScan will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.2](https://github.com/ntanwir10/GuardScan/compare/v1.1.1...v1.1.2) (2026-11-15)
+
+
+### Bug Fixes
+
+* **release:** find the WinGet PR by the title the workflow gives it ([#56](https://github.com/ntanwir10/GuardScan/issues/56)) ([91f4206](https://github.com/ntanwir10/GuardScan/commit/91f4206b7ff9bee04138304ef771d3c8652287d7))
+* **release:** finish stable-only channel publication ([#53](https://github.com/ntanwir10/GuardScan/issues/53)) ([06cb366](https://github.com/ntanwir10/GuardScan/commit/06cb366c659de969754ba53cedfe585327d65e46))
+* **release:** give wingetcreate the documented WinGet token ([#55](https://github.com/ntanwir10/GuardScan/issues/55)) ([d63fc85](https://github.com/ntanwir10/GuardScan/commit/d63fc85e4117549d1c78a306b07a04ada9b211a5))
+* **release:** run PyPI and ledger jobs on a resumed promote ([#58](https://github.com/ntanwir10/GuardScan/issues/58)) ([12fc696](https://github.com/ntanwir10/GuardScan/commit/12fc696a769e53e6186c6ccd39521c27dd53058c))
+* **release:** stop WinGet and Chocolatey moderation from blocking the next release ([#61](https://github.com/ntanwir10/GuardScan/issues/61)) ([20d51b5](https://github.com/ntanwir10/GuardScan/commit/20d51b594177f99a27b1a37108e6d51fd6aedce7))
+* **release:** uninstall the local WinGet manifest by manifest ([#54](https://github.com/ntanwir10/GuardScan/issues/54)) ([1f9edf3](https://github.com/ntanwir10/GuardScan/commit/1f9edf386b3779bcdcf4d49ff0a5efa2223c9cde))
+* **scanners:** stop flagging lockfile checksums and license metadata ([#57](https://github.com/ntanwir10/GuardScan/issues/57)) ([712d972](https://github.com/ntanwir10/GuardScan/commit/712d972792ae05b67b845afe16ac3de5bc61e592))
+* **scanner:** stop scanning GuardScan's own earlier reports ([#59](https://github.com/ntanwir10/GuardScan/issues/59)) ([6de3113](https://github.com/ntanwir10/GuardScan/commit/6de3113741614be2dbec8f7b1cc571a194875f18))
+
 ## [1.1.1](https://github.com/ntanwir10/GuardScan/compare/v1.1.0...v1.1.1) (2026-11-14)
 
 
