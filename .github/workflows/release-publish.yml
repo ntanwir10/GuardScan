@@ -939,7 +939,8 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.WINGET_CREATE_GITHUB_TOKEN }}
           RELEASE_TAG: ${{ inputs.tag }}
-          WINGET_GITHUB_TOKEN: ${{ secrets.WINGET_GITHUB_TOKEN }}
+          # Onboarding stores one PAT as WINGET_CREATE_GITHUB_TOKEN; a dedicated WINGET_GITHUB_TOKEN wins when set.
+          WINGET_GITHUB_TOKEN: ${{ secrets.WINGET_GITHUB_TOKEN || secrets.WINGET_CREATE_GITHUB_TOKEN }}
           RELEASE_VERSION: ${{ inputs.tag }}
         run: |
           $ErrorActionPreference = 'Stop'
