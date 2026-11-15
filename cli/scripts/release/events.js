@@ -827,6 +827,7 @@ function materializeReleaseState(events) {
 
 module.exports = {
   EVENT_SCHEMA,
+  MODERATED_CHANNELS,
   EVENT_TYPES,
   MAX_EVENT_BYTES,
   MAX_LEDGER_BYTES,
