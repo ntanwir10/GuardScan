@@ -932,7 +932,7 @@ jobs:
           if ($LASTEXITCODE -ne 0 -or $installedVersion -ne ($env:RELEASE_INPUT_TAG).TrimStart('v')) {
             throw 'WinGet local manifest invocation or version check failed'
           }
-          winget uninstall --exact --id NaumanTanwir.GuardScan --accept-source-agreements
+          winget uninstall --manifest $manifestDirectory --accept-source-agreements
           if ($LASTEXITCODE -ne 0) { throw 'WinGet local manifest uninstall failed' }
       - name: Preflight and submit WinGet manifests with exact evidence
         shell: pwsh
