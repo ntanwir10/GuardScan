@@ -55,6 +55,8 @@ describe('GuardScan report outputs in the scanned repository', () => {
     writeScanResult(baseline, 'sarif', path.join(repository, 'guardscan-security.sarif'), repository);
     fs.mkdirSync(path.join(repository, 'nested'));
     writeScanResult(baseline, 'json', path.join(repository, 'nested', 'guardscan-scan.json'), repository);
+    fs.mkdirSync(path.join(repository, '.guardscan'));
+    writeScanResult(baseline, 'json', path.join(repository, '.guardscan', 'rules-results.json'), repository);
     jest.spyOn(process, 'cwd').mockReturnValue(repository);
     const markdown = await reporter.saveReport(markdownReview(baseline), 'markdown', undefined, 'security');
     jest.restoreAllMocks();

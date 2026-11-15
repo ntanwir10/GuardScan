@@ -4,6 +4,8 @@ import * as path from 'path';
 export const SCAN_IGNORED_DIRECTORY_NAMES: ReadonlySet<string> = new Set([
   'node_modules',
   '.git',
+  // GuardScan's own repo-local output (rules/mutation/perf results, --fix output).
+  '.guardscan',
   'vendor',
   'dist',
   'build',
