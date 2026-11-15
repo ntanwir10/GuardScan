@@ -78,6 +78,23 @@ describe('GuardScan report outputs in the scanned repository', () => {
     expect((await scan({reportOutputPath: customOutput})).findings).toEqual(baseline.findings);
   });
 
+  it('keeps an earlier --output with a source extension out of pattern and secret inputs', async () => {
+    const baseline = await scan();
+    const jsOutput = path.join(repository, 'out', 'report.js');
+    fs.mkdirSync(path.dirname(jsOutput));
+    // A real report rarely trips these rules; this content does, so the negative control can fail.
+    fs.writeFileSync(jsOutput, 'const awsKey = "AKIA1234567890123456";\n');
+    // loadFiles (and LOC/--files) return code files, so this path bypasses the walkers' exclusion.
+    const fileInputFindings = (result: ScanEngineResult) => result.scannerResults
+      .filter(scanner => scanner.scanner === 'patterns' || scanner.scanner === 'secrets')
+      .map(scanner => scanner.findings);
+
+    expect(fileInputFindings(await scan())).not.toEqual(fileInputFindings(baseline));
+    expect(fileInputFindings(await scan({reportOutputPath: jsOutput}))).toEqual(fileInputFindings(baseline));
+    expect(fileInputFindings(await scan({files: [{path: jsOutput}], reportOutputPath: jsOutput})))
+      .toEqual([[], []]);
+  });
+
   it.each([
     ['guardscan-security.json', true],
     ['guardscan-scan.sarif', true],

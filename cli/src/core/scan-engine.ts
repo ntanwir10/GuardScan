@@ -13,6 +13,7 @@ import { iacScanner } from './iac-scanner';
 import { licenseScanner, LicenseReport } from './license-scanner';
 import { owaspScanner } from './owasp-scanner';
 import { PackageInventory } from './package-inventory';
+import { isGuardScanReport } from './scan-ignored-directories';
 import { secretsDetector } from './secrets-detector';
 
 export type ScanSeverity = Finding['severity'];
@@ -265,10 +266,12 @@ export class ScanEngine {
   private createBuiltInTasks(
     options: ScanEngineOptions,
     repoPath: string,
-    files: ScanFile[],
+    inputFiles: ScanFile[],
     offline: boolean
   ): ScannerTask[] {
     const reportOutputPath = canonicalReportOutputPath(options.reportOutputPath);
+    // LOC discovery or --files can hand back an earlier report with a source extension (`--output report.js`).
+    const files = inputFiles.filter(file => !isGuardScanReport(path.resolve(repoPath, file.path), reportOutputPath));
     const tasks: ScannerTask[] = [
       {
         scanner: 'patterns',
