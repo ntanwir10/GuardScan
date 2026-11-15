@@ -1,0 +1,141 @@
+{
+  "schemaVersion": "guardscan.promotion-decision.v1",
+  "rc": {
+    "version": "1.1.1-rc.9",
+    "tag": "v1.1.1-rc.9",
+    "commit": "7b9793fabb79eb384d9307dd422c80950905ebf3",
+    "manifestSha256": "bbb83c7a9195554e62a8a2b48c5c85d28e4da6732cca168be9c30a3bb0aca1a1",
+    "publishedAt": "2026-11-14T04:27:02.007Z",
+    "eligibleAt": "2026-11-15T04:27:02.007Z",
+    "sourcePr": 46,
+    "sourcePrHead": "29ea949df0c31f17994771e268f29c6fb2ae9032",
+    "sourcePrBase": "6475e1db47d14a69e46c8696fe8ad04bb4ca272d",
+    "sourcePrTree": "389b87559a2054971474eec26a6aeb6c392dc012"
+  },
+  "stable": {
+    "version": "1.1.1",
+    "tag": "v1.1.1",
+    "sourcePr": 46,
+    "sourcePrHead": "29ea949df0c31f17994771e268f29c6fb2ae9032",
+    "sourcePrBase": "6475e1db47d14a69e46c8696fe8ad04bb4ca272d",
+    "sourcePrTree": "389b87559a2054971474eec26a6aeb6c392dc012"
+  },
+  "evaluatedAt": "2026-11-15T04:52:07.767Z",
+  "policy": {
+    "soakHours": 24,
+    "minimumSamplesPerChannel": 24,
+    "maximumCanaryAgeMinutes": 90,
+    "requiredChannels": [
+      "bun",
+      "github",
+      "homebrew",
+      "npm",
+      "pnpm",
+      "pypi",
+      "scoop",
+      "yarn"
+    ]
+  },
+  "canaries": {
+    "bun": {
+      "sampleCount": 51,
+      "passed": true,
+      "firstCheckedAt": "2026-11-14T04:27:46.438Z",
+      "lastCheckedAt": "2026-11-15T04:48:08.536Z",
+      "failures": 0,
+      "coversPublication": true,
+      "startsNearPublication": true,
+      "coversSoakWindow": true,
+      "coversSoak": true,
+      "fresh": true
+    },
+    "github": {
+      "sampleCount": 255,
+      "passed": true,
+      "firstCheckedAt": "2026-11-14T04:27:49.820Z",
+      "lastCheckedAt": "2026-11-15T04:48:35.844Z",
+      "failures": 0,
+      "coversPublication": true,
+      "startsNearPublication": true,
+      "coversSoakWindow": true,
+      "coversSoak": true,
+      "fresh": true
+    },
+    "homebrew": {
+      "sampleCount": 102,
+      "passed": true,
+      "firstCheckedAt": "2026-11-14T04:28:19.922Z",
+      "lastCheckedAt": "2026-11-15T04:48:39.417Z",
+      "failures": 0,
+      "coversPublication": true,
+      "startsNearPublication": true,
+      "coversSoakWindow": true,
+      "coversSoak": true,
+      "fresh": true
+    },
+    "npm": {
+      "sampleCount": 51,
+      "passed": true,
+      "firstCheckedAt": "2026-11-14T04:27:50.929Z",
+      "lastCheckedAt": "2026-11-15T04:48:08.508Z",
+      "failures": 0,
+      "coversPublication": true,
+      "startsNearPublication": true,
+      "coversSoakWindow": true,
+      "coversSoak": true,
+      "fresh": true
+    },
+    "pnpm": {
+      "sampleCount": 51,
+      "passed": true,
+      "firstCheckedAt": "2026-11-14T04:27:52.705Z",
+      "lastCheckedAt": "2026-11-15T04:48:10.630Z",
+      "failures": 0,
+      "coversPublication": true,
+      "startsNearPublication": true,
+      "coversSoakWindow": true,
+      "coversSoak": true,
+      "fresh": true
+    },
+    "pypi": {
+      "sampleCount": 255,
+      "passed": true,
+      "firstCheckedAt": "2026-11-14T04:28:01.884Z",
+      "lastCheckedAt": "2026-11-15T04:48:54.698Z",
+      "failures": 0,
+      "coversPublication": true,
+      "startsNearPublication": true,
+      "coversSoakWindow": true,
+      "coversSoak": true,
+      "fresh": true
+    },
+    "scoop": {
+      "sampleCount": 51,
+      "passed": true,
+      "firstCheckedAt": "2026-11-14T04:28:04.257Z",
+      "lastCheckedAt": "2026-11-15T04:48:38.772Z",
+      "failures": 0,
+      "coversPublication": true,
+      "startsNearPublication": true,
+      "coversSoakWindow": true,
+      "coversSoak": true,
+      "fresh": true
+    },
+    "yarn": {
+      "sampleCount": 102,
+      "passed": true,
+      "firstCheckedAt": "2026-11-14T04:27:49.395Z",
+      "lastCheckedAt": "2026-11-15T04:48:10.687Z",
+      "failures": 0,
+      "coversPublication": true,
+      "startsNearPublication": true,
+      "coversSoakWindow": true,
+      "coversSoak": true,
+      "fresh": true
+    }
+  },
+  "activeIncidents": [],
+  "result": "permitted",
+  "eligible": true,
+  "reasons": []
+}
