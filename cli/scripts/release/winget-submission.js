@@ -65,7 +65,8 @@ function findSubmission(directory, tag, {api = githubApi, pullRequest} = {}) {
     return [name, document(fs.readFileSync(file), version)];
   }));
   const digest = crypto.createHash('sha256').update(JSON.stringify(local)).digest('hex');
-  const q = encodeURIComponent(`repo:${REPOSITORY} is:pr "${PACKAGE}" "${version}" in:title`);
+  // Match the title the publish workflow gives wingetcreate ("GuardScan <version> [<digest>]"); file checks below bind identity.
+  const q = encodeURIComponent(`repo:${REPOSITORY} is:pr "GuardScan" "${version}" in:title`);
   if (pullRequest !== undefined && (!Number.isSafeInteger(pullRequest) || pullRequest < 1)) {
     throw new Error('Invalid recorded WinGet PR identity');
   }

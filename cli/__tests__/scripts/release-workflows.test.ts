@@ -472,6 +472,14 @@ describe('zero-touch release workflow contracts', () => {
     // wingetcreate must receive the PAT that onboarding documents and credential health checks.
     expect(workflowSource('release-publish.yml'))
       .toContain('WINGET_GITHUB_TOKEN: ${{ secrets.WINGET_GITHUB_TOKEN || secrets.WINGET_CREATE_GITHUB_TOKEN }}');
+    // The finder must search for the title wingetcreate is given, or a retry submits a duplicate PR.
+    expect(workflowSource('release-publish.yml'))
+      .toContain('$pullTitle = "GuardScan $version [$($manifestDigest.Substring(0, 12))]"');
+    const finder = fs.readFileSync(path.join(repositoryRoot, 'cli/scripts/release/winget-submission.js'), 'utf8');
+    const terms = [...(finder.match(/is:pr ((?:"[^"]+" )+)in:title/)?.[1] ?? '').matchAll(/"([^"]+)"/g)]
+      .map(match => match[1].replace('${version}', '1.1.1'));
+    expect(terms.length).toBeGreaterThan(0);
+    for (const term of terms) expect('GuardScan 1.1.1 [83a52d649b56]').toContain(term);
     for (const name of ['release-publish.yml', 'release-train.yml']) {
       const lines = workflowSource(name).split('\n');
       const tapMerges = lines.flatMap((line, index) => (
