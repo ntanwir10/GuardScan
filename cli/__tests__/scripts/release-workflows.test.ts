@@ -465,6 +465,9 @@ describe('zero-touch release workflow contracts', () => {
       expect(uninstalls.length).toBeGreaterThan(0);
       for (const line of uninstalls) expect(line).toContain('--accept-source-agreements');
     }
+    for (const line of workflowSource('release-canary.yml').split('\n').filter(text => /\bwinget show /.test(text))) {
+      expect(line).toContain('--accept-source-agreements --disable-interactivity');
+    }
     // A local-manifest install registers as ARP\User\X64\NaumanTanwir.GuardScan__DefaultSource, which --id cannot match.
     expect(workflowSource('release-publish.yml'))
       .toContain('winget uninstall --manifest $manifestDirectory --accept-source-agreements');

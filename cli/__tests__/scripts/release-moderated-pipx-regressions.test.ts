@@ -20,7 +20,7 @@ describe('moderated Chocolatey and pipx release canaries', () => {
       'Poll, install, invoke, and uninstall public moderated channels').run as string;
     // PowerShell requires this binary operator to continue the preceding line.
     expect(run).not.toMatch(/^\s+-or\s/m);
-    const choco = run.slice(run.indexOf('$availability = choco info'), run.indexOf("if ($notPublic) {", run.indexOf('$availability = choco info')));
+    const choco = run.slice(run.indexOf('$availability = choco search'), run.indexOf("if ($notPublic) {", run.indexOf('$availability = choco search')));
 
     expect(choco).toContain("$noResult = $availabilityText -match '(?im)^\\s*(Unable to find package .guardscan.|0 packages found\\.)\\s*$'");
     const banneredZeroResults = 'Chocolatey v2.5.0\n0 packages found.\n';
@@ -32,6 +32,13 @@ describe('moderated Chocolatey and pipx release canaries', () => {
     expect(choco).toContain('Unable to find package .guardscan.|0 packages found\\.');
     expect(choco).toContain('$exactVersion');
     expect(choco).toContain('Unexpected moderated registry error:');
+    // Chocolatey lists a package under moderation without [Approved] (probe output, Chocolatey v2.7.5).
+    const approvedSource = choco.match(/\$approved = \$availabilityText -match "([^"]+)"/)?.[1];
+    expect(approvedSource).toBeTruthy();
+    const approved = new RegExp(approvedSource!.replace(/^\(\?im\)/, '').replace('$escapedVersion', '1\\.1\\.1'), 'im');
+    expect('Chocolatey v2.7.5\nguardscan 1.1.1 [Approved]\n1 packages found.\n').toMatch(approved);
+    expect('Chocolatey v2.7.5\nguardscan 1.1.1\n1 packages found.\n').not.toMatch(approved);
+    expect(choco).toContain('} elseif (-not $approved) {');
   });
 
   it('invokes the isolated pipx-installed app and checks the exact public version before passing', () => {

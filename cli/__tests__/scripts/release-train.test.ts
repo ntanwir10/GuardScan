@@ -1319,11 +1319,12 @@ describe('append-only release train', () => {
       remoteDigest: resubmitted.payload.remoteDigest,
       submission: resubmittedEvidence,
     });
+    // Moderation is still reported, but waiting on Microsoft no longer blocks completion.
     expect(reconcileRelease(state)).toMatchObject({
-      complete: false,
+      complete: true,
       actions: [{
         channel: 'winget',
-        required: true,
+        required: false,
         currentStatus: 'resubmitted',
         action: 'poll-resubmission',
       }],

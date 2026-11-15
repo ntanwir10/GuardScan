@@ -40,7 +40,11 @@ evidence until it is bound to the selected commit and exact artifact.
 The current RC train selects npm, its pnpm/Yarn/Bun consumer canaries, GitHub
 native assets, Homebrew tap preview, Scoop preview, and PyPI. The stable train
 selects those channels plus WinGet and Chocolatey. Every selected channel must
-reach `verified` before the stable release is complete.
+reach `verified` before the stable release is complete, except that WinGet and
+Chocolatey stop blocking completion once the train has submitted them: waiting on
+Microsoft's or Chocolatey's moderators, or their verdict, never holds the next
+release. A WinGet or Chocolatey submission that was never made, or failed, still
+blocks.
 
 Homebrew Core is not selected. The renderer and validator are dormant building
 blocks only: the orchestrator calls `releaseTrainChannels` without the explicit
@@ -515,6 +519,10 @@ gh workflow run release-train.yml \
 
 A release is complete only when every selected blocking channel materializes
 as `verified`. Optional Homebrew Core submission/acceptance is tracked
-separately and never blocks the release train.
+separately and never blocks the release train. WinGet and Chocolatey block only
+until the train has submitted them; their moderation states (`submitted`,
+`accepted`, `rejected`, `corrected`, `resubmitted`) are reported but do not block.
+Once a stable train is complete it leaves `active-versions.json`, so check later
+moderation outcomes on the provider directly.
 
 A partial checkpoint upload can resume only from one retained original canonical checkpoint Actions artifact (90-day retention), after authentication and byte comparison of the existing asset. Missing, expired, legacy, or ambiguous artifacts fail closed. After an interrupted upload, rerun the full workflow or dispatch a new run so the resolver can resume the checkpoint; retrying only failed jobs can collide with the immutable artifact name.

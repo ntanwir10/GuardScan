@@ -270,6 +270,24 @@ describe('release planning and state summaries', () => {
     });
   });
 
+  it('does not hold release completion on WinGet or Chocolatey moderation', () => {
+    const verified = {npm: {status: 'verified'}, github: {status: 'verified'}, pypi: {status: 'verified'}};
+    for (const status of ['submitted', 'accepted', 'rejected', 'corrected', 'resubmitted']) {
+      const result = reconcileRelease({incidents: {}, channels: {...verified, winget: {status}, chocolatey: {status: 'submitted'}}});
+      expect(result).toMatchObject({complete: true, blocked: false, blocking: []});
+      expect(result.actions.find((action: {channel: string}) => action.channel === 'winget'))
+        .toMatchObject({required: false, currentStatus: status});
+    }
+    // The train's own submission must still happen and succeed.
+    expect(reconcileRelease({incidents: {}, channels: {...verified, winget: {status: 'planned'}}}).complete).toBe(false);
+    expect(reconcileRelease({incidents: {}, channels: {...verified, chocolatey: {status: 'failed'}}}))
+      .toMatchObject({complete: false, blocking: ['chocolatey failed']});
+    // Other channels and open incidents keep blocking.
+    expect(reconcileRelease({incidents: {}, channels: {...verified, npm: {status: 'published'}}}).complete).toBe(false);
+    expect(reconcileRelease({incidents: {i1: {status: 'open'}}, channels: {...verified, winget: {status: 'submitted'}}}).complete)
+      .toBe(false);
+  });
+
   it('selects Homebrew Core only when optional stable submission is enabled', () => {
     expect(releaseTrainChannels('rc')).toEqual([
       'npm', 'pnpm', 'yarn', 'bun', 'github', 'homebrew', 'scoop', 'pypi',
