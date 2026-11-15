@@ -455,6 +455,12 @@ export class SecretsDetector {
     // MD5 hash
     if (/^[a-f0-9]{32}$/i.test(str)) {return true;}
 
+    // Subresource Integrity digest, as npm and pnpm lockfiles record package checksums
+    if (/^sha(?:1|256|384|512)-[A-Za-z0-9+/]{20,}={0,2}$/.test(str)) {return true;}
+
+    // npm lockfile package locations such as node_modules/jsonwebtoken/node_modules/ms
+    if (/^node_modules\/[A-Za-z0-9@_/-]+$/.test(str)) {return true;}
+
     // Common safe strings
     const safeKeywords = ['localhost', 'example', 'test', 'demo', 'sample', 'placeholder'];
     if (safeKeywords.some(keyword => str.toLowerCase().includes(keyword))) {return true;}

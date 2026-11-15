@@ -251,6 +251,32 @@ describe('SecretsDetector', () => {
 
       expect(findings).toEqual([]);
     });
+
+    it('does not flag lockfile Subresource Integrity digests in files or git history', async () => {
+      // Real npm and pnpm lockfile lines: SRI digests are public package checksums, not secrets.
+      const npmLine = '      "integrity": "sha512-PYAthTa2m2VKxuvSD3DPC/Gy+U+sOA1LAuT8mkmRuvw+NACSaeXEQ+NHcVF7rONl6qcaxV3Uuemwawk+7+SJLw==",';
+      const legacyLine = '      "integrity": "sha1-HMv4Dm2t1LwJ6l2yhlK9kd0JmG8=",';
+      const pnpmLine = '    resolution: {integrity: sha512-PYAthTa2m2VKxuvSD3DPC/Gy+U+sOA1LAuT8mkmRuvw+NACSaeXEQ+NHcVF7rONl6qcaxV3Uuemwawk+7+SJLw==}';
+      const lockfile = path.join(testDir, 'package-lock.json');
+      const pnpmLock = path.join(testDir, 'pnpm-lock.yaml');
+      const pathKey = '    "node_modules/jsonwebtoken/node_modules/buffer-equal-constant-time": {';
+      fs.writeFileSync(lockfile, `${pathKey}\n${npmLine}\n${legacyLine}\n`);
+      fs.writeFileSync(pnpmLock, `${pnpmLine}\n`);
+
+      await expect(detector.detectInFiles([lockfile, pnpmLock])).resolves.toEqual([]);
+
+      mockedExecFileSync.mockImplementation(((_command: string, args: readonly string[]) => {
+        if (args[0] === 'rev-parse') {return 'true\n';}
+        if (args[0] === 'log') {return `${'a'.repeat(40)}\n`;}
+        if (args[0] === 'show') {return `diff --git a/package-lock.json b/package-lock.json\n+${pathKey}\n+${npmLine}\n+${legacyLine}\n`;}
+        throw new Error(`unexpected git invocation: ${args.join(' ')}`);
+      }) as typeof execFileSync);
+      await expect(detector.scanGitHistory(testDir)).resolves.toEqual([]);
+
+      // A random token beside them is still reported.
+      fs.writeFileSync(lockfile, `${npmLine}\n  "token": "aB3xK9mN2pQ7rT5wZ8yC1dF4gH6jL0v",\n`);
+      expect((await detector.detectInFiles([lockfile])).map(finding => finding.type)).toContain('High Entropy String');
+    });
   });
 
   describe('checkPatterns', () => {
@@ -313,6 +339,12 @@ GOOGLE_API_KEY=AIzaSyD1234567890abcdefghijklmnopqrstuvw
     it('should not flag normal strings as safe', () => {
       const result = (detector as any).isSafePattern('sk_live_realkey123');
       expect(result).toBe(false);
+    });
+
+    it('treats only well-formed Subresource Integrity digests as safe', () => {
+      expect((detector as any).isSafePattern('sha384-oqVuAfXRKap7fdgcCY5uykM6+R9GqQ8K/uxy9rx7HNQlGYl1kPzQho1wx4JwY8wC')).toBe(true);
+      expect((detector as any).isSafePattern('sha512_aB3xK9mN2pQ7rT5wZ8yC1dF4gH6jL0v')).toBe(false);
+      expect((detector as any).isSafePattern('sha256-short')).toBe(false);
     });
   });
 

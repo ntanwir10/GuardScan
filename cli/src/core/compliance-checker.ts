@@ -160,7 +160,8 @@ export class ComplianceChecker {
         { pattern: /(phone|tel|mobile).*[:=]\s*\d{10,}/i, type: 'Phone Number' },
         { pattern: /(address|street|zip|postal).*[:=]/i, type: 'Physical Address' },
         { pattern: /(dob|birth.?date|birthday).*[:=]/i, type: 'Date of Birth' },
-        { pattern: /(passport|license|id.?number).*[:=]/i, type: 'Identification Number' },
+        // A bare "license" key is software licensing (SPDX) in every package manifest, not personal data.
+        { pattern: /(passport|driv(?:er|ing)'?s?[\s_.-]*licen[cs]e|licen[cs]e[\s_.-]*(?:no|num(?:ber)?)\b|id.?number).*[:=]/i, type: 'Identification Number' },
       ];
 
       for (const { pattern, type } of piiPatterns) {
