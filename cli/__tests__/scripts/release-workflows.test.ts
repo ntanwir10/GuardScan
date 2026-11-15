@@ -466,14 +466,21 @@ describe('zero-touch release workflow contracts', () => {
       for (const line of uninstalls) expect(line).toContain('--accept-source-agreements');
     }
     for (const name of ['release-publish.yml', 'release-train.yml']) {
-      const tapMerges = [
-        ...workflowSource(name).matchAll(/^.*gh pr merge --repo (?:"\$CATALOG_REPOSITORY"|ntanwir10\/homebrew-tap) .*$/gm),
-      ].map(match => match[0]);
+      const lines = workflowSource(name).split('\n');
+      const tapMerges = lines.flatMap((line, index) => (
+        /gh pr merge --repo (?:"\$CATALOG_REPOSITORY"|ntanwir10\/homebrew-tap) /.test(line) ? [index] : []
+      ));
       expect(tapMerges.length).toBeGreaterThan(0);
-      for (const line of tapMerges) {
+      for (const index of tapMerges) {
+        const line = lines[index];
         // Never arm auto-merge: a timed-out job must not leave a merge that lands after it failed.
         expect(line).not.toContain('--auto');
         expect(line).toMatch(/ --squash --match-head-commit "\$[A-Z_]+" \|\| true$/);
+        // The merge is retried inside its wait loop, never attempted once before it.
+        const indent = line.search(/\S/);
+        const enclosing = lines.slice(0, index).reverse()
+          .find(previous => previous.trim() !== '' && previous.search(/\S/) < indent);
+        expect(enclosing?.trim()).toBe('for ATTEMPT in $(seq 1 60); do');
       }
     }
     const priorNuspec = fs.readFileSync(
