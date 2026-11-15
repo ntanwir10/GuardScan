@@ -1335,7 +1335,13 @@ jobs:
 
   pypi-test:
     name: TestPyPI trusted publication
-    if: vars.RELEASE_AUTOMATION_ENABLED == 'true'
+    # A resumed stable promote skips the build; implicit success() would skip every job after publish.
+    if: >-
+      always()
+      && !cancelled()
+      && vars.RELEASE_AUTOMATION_ENABLED == 'true'
+      && needs.prepare.result == 'success'
+      && needs.publish.result == 'success'
     runs-on: ubuntu-24.04
     needs: [prepare, publish]
     environment: testpypi
@@ -1435,7 +1441,12 @@ jobs:
 
   pypi-test-lifecycle:
     name: TestPyPI lifecycle on ${{ matrix.target.id }}
-    if: vars.RELEASE_AUTOMATION_ENABLED == 'true'
+    if: >-
+      always()
+      && !cancelled()
+      && vars.RELEASE_AUTOMATION_ENABLED == 'true'
+      && needs.prepare.result == 'success'
+      && needs.pypi-test.result == 'success'
     needs: [prepare, pypi-test]
     runs-on: ${{ matrix.target.runner }}
     strategy:
@@ -1523,7 +1534,12 @@ jobs:
 
   pypi:
     name: PyPI trusted publication
-    if: vars.RELEASE_AUTOMATION_ENABLED == 'true'
+    if: >-
+      always()
+      && !cancelled()
+      && vars.RELEASE_AUTOMATION_ENABLED == 'true'
+      && needs.prepare.result == 'success'
+      && needs.pypi-test-lifecycle.result == 'success'
     runs-on: ubuntu-24.04
     needs: [prepare, pypi-test-lifecycle]
     environment: pypi
@@ -1680,7 +1696,12 @@ jobs:
   record:
     name: Append publication evidence to protected ledger
     if: >-
-      vars.RELEASE_AUTOMATION_ENABLED == 'true'
+      always()
+      && !cancelled()
+      && vars.RELEASE_AUTOMATION_ENABLED == 'true'
+      && needs.prepare.result == 'success'
+      && needs.publish.result == 'success'
+      && needs.pypi.result == 'success'
       && needs.prepare.outputs.build == 'true'
     needs: [prepare, publish, pypi]
     runs-on: ubuntu-24.04
@@ -2096,7 +2117,11 @@ jobs:
     name: Start the RC soak canary chain
     needs: [prepare, record]
     if: >-
-      vars.RELEASE_AUTOMATION_ENABLED == 'true'
+      always()
+      && !cancelled()
+      && vars.RELEASE_AUTOMATION_ENABLED == 'true'
+      && needs.prepare.result == 'success'
+      && needs.record.result == 'success'
       && needs.prepare.outputs.channel == 'rc'
     runs-on: ubuntu-24.04
     steps:
