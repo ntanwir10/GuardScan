@@ -469,6 +469,9 @@ describe('zero-touch release workflow contracts', () => {
     expect(workflowSource('release-publish.yml'))
       .toContain('winget uninstall --manifest $manifestDirectory --accept-source-agreements');
     expect(workflowSource('release-publish.yml')).not.toContain('winget uninstall --exact --id');
+    // wingetcreate must receive the PAT that onboarding documents and credential health checks.
+    expect(workflowSource('release-publish.yml'))
+      .toContain('WINGET_GITHUB_TOKEN: ${{ secrets.WINGET_GITHUB_TOKEN || secrets.WINGET_CREATE_GITHUB_TOKEN }}');
     for (const name of ['release-publish.yml', 'release-train.yml']) {
       const lines = workflowSource(name).split('\n');
       const tapMerges = lines.flatMap((line, index) => (
