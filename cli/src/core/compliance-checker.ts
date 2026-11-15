@@ -1,6 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { isPythonVirtualEnvironment, SCAN_IGNORED_DIRECTORY_NAMES } from './scan-ignored-directories';
+import { isGuardScanReport, isPythonVirtualEnvironment, SCAN_IGNORED_DIRECTORY_NAMES } from './scan-ignored-directories';
 
 export interface ComplianceViolation {
   standard: 'GDPR' | 'HIPAA' | 'PCI-DSS' | 'SOC2' | 'General';
@@ -27,10 +27,14 @@ export class ComplianceChecker {
   /**
    * Run compliance checks
    */
-  async check(repoPath: string = process.cwd(), onSkippedInput: () => void = () => {}): Promise<ComplianceReport[]> {
+  async check(
+    repoPath: string = process.cwd(),
+    onSkippedInput: () => void = () => {},
+    reportOutputPath?: string
+  ): Promise<ComplianceReport[]> {
     const reports: ComplianceReport[] = [];
 
-    const files = this.findCodeFiles(repoPath, onSkippedInput);
+    const files = this.findCodeFiles(repoPath, onSkippedInput, reportOutputPath);
     const violations: ComplianceViolation[] = [];
 
     for (const file of files) {
@@ -76,7 +80,7 @@ export class ComplianceChecker {
   /**
    * Find code files
    */
-  private findCodeFiles(dir: string, onSkippedInput: () => void): string[] {
+  private findCodeFiles(dir: string, onSkippedInput: () => void, reportOutputPath?: string): string[] {
     const files: string[] = [];
 
     const search = (currentDir: string, depth: number) => {
@@ -96,7 +100,7 @@ export class ComplianceChecker {
           if (stat.isDirectory()) {
             if (isPythonVirtualEnvironment(fullPath)) {continue;}
             search(fullPath, depth + 1);
-          } else if (this.isCodeFile(item)) {
+          } else if (this.isCodeFile(item) && !isGuardScanReport(fullPath, reportOutputPath)) {
             files.push(fullPath);
           }
         }

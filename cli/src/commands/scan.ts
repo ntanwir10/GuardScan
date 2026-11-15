@@ -145,6 +145,7 @@ export async function scanCommand(options: ScanOptions): Promise<void> {
       allowPartial,
       cache: useCache,
       concurrency,
+      reportOutputPath: options.output,
       vulnerabilityScope,
       vulnerabilityEndpoint: config.vulnerabilities?.endpoint,
       vulnerabilitySnapshotMaxAgeDays: config.vulnerabilities?.snapshotMaxAgeDays,

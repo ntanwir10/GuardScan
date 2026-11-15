@@ -13,6 +13,7 @@ import { iacScanner } from './iac-scanner';
 import { licenseScanner, LicenseReport } from './license-scanner';
 import { owaspScanner } from './owasp-scanner';
 import { PackageInventory } from './package-inventory';
+import { isGuardScanReport } from './scan-ignored-directories';
 import { secretsDetector } from './secrets-detector';
 
 export type ScanSeverity = Finding['severity'];
@@ -100,6 +101,8 @@ export interface ScanEngineOptions {
   /** Caller-owned report (or in-flight report) shared with SBOM generation. */
   licenseReport?: LicenseReport | Promise<LicenseReport>;
   concurrency?: number;
+  /** This run's `--output`; a copy left by an earlier run is GuardScan output, not source. */
+  reportOutputPath?: string;
   onProgress?: (scanner: ScannerRunResult) => void;
   /** Test and extension seam. Supplying tasks replaces the built-in registry. */
   scannerTasks?: readonly ScannerTask[];
@@ -263,9 +266,12 @@ export class ScanEngine {
   private createBuiltInTasks(
     options: ScanEngineOptions,
     repoPath: string,
-    files: ScanFile[],
+    inputFiles: ScanFile[],
     offline: boolean
   ): ScannerTask[] {
+    const reportOutputPath = canonicalReportOutputPath(options.reportOutputPath);
+    // LOC discovery or --files can hand back an earlier report with a source extension (`--output report.js`).
+    const files = inputFiles.filter(file => !isGuardScanReport(path.resolve(repoPath, file.path), reportOutputPath));
     const tasks: ScannerTask[] = [
       {
         scanner: 'patterns',
@@ -383,7 +389,7 @@ export class ScanEngine {
           const onSkippedInput = (): void => {skippedInputs += 1;};
           const discoveredFiles = options.fileSelection === 'explicit'
             ? []
-            : await secretsDetector.discoverFiles(repoPath, onSkippedInput);
+            : await secretsDetector.discoverFiles(repoPath, onSkippedInput, reportOutputPath);
           const filePaths = [...new Set([
             ...files.map(file => path.isAbsolute(file.path) ? file.path : path.resolve(repoPath, file.path)),
             ...discoveredFiles,
@@ -468,7 +474,11 @@ export class ScanEngine {
         required: true,
         run: async () => {
           let skippedInputs = 0;
-          const complianceReports = await complianceChecker.check(repoPath, () => {skippedInputs += 1;});
+          const complianceReports = await complianceChecker.check(
+            repoPath,
+            () => {skippedInputs += 1;},
+            reportOutputPath
+          );
           const complianceFindings: Finding[] = [];
           for (const report of complianceReports) {
             for (const violation of report.violations) {
@@ -1142,6 +1152,16 @@ function resolveRepositoryRoot(repoPath: string): string {
     throw new Error('Scan repository path must be a directory.');
   }
   return resolved;
+}
+
+/** Walkers report canonical paths. A report that does not exist yet cannot be discovered. */
+function canonicalReportOutputPath(output: string | undefined): string | undefined {
+  if (!output) {return undefined;}
+  try {
+    return fs.realpathSync(path.resolve(output));
+  } catch {
+    return path.resolve(output);
+  }
 }
 
 function resolveScanFiles(files: readonly ScanFile[], repoRoot: string): ScanFile[] {
