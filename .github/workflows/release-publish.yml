@@ -797,8 +797,9 @@ jobs:
               node -e 'require("../cli/scripts/release/adapter-projection").verifyCatalogProjection(process.cwd(), "../catalog-output", "../catalog/homebrew-tap/.github/workflows/verify.yml", ...process.argv.slice(1))' \
                 "$EXPECTED_HEAD" "$PROJECTION_BASE"
               if [ "$RELEASE_CHANNEL" = stable ] && [ "$PR_STATE" != MERGED ]; then
-                gh pr merge --repo "$CATALOG_REPOSITORY" "$PR_NUMBER" --squash --match-head-commit "$EXPECTED_HEAD"
                 for ATTEMPT in $(seq 1 60); do
+                  # The tap's required checks start only after the PR opens; retry the exact-head merge until they pass.
+                  gh pr merge --repo "$CATALOG_REPOSITORY" "$PR_NUMBER" --squash --match-head-commit "$EXPECTED_HEAD" || true
                   PR_DETAILS="$(gh pr view --repo "$CATALOG_REPOSITORY" "$PR_NUMBER" \
                     --json state,headRefOid,baseRefName,headRepository,mergeCommit)"
                   validate_pr_details
@@ -931,7 +932,7 @@ jobs:
           if ($LASTEXITCODE -ne 0 -or $installedVersion -ne ($env:RELEASE_INPUT_TAG).TrimStart('v')) {
             throw 'WinGet local manifest invocation or version check failed'
           }
-          winget uninstall --exact --id NaumanTanwir.GuardScan
+          winget uninstall --exact --id NaumanTanwir.GuardScan --accept-source-agreements
           if ($LASTEXITCODE -ne 0) { throw 'WinGet local manifest uninstall failed' }
       - name: Preflight and submit WinGet manifests with exact evidence
         shell: pwsh

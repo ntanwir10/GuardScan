@@ -733,7 +733,7 @@ jobs:
                 $reportedVersion = (& guardscan --version | Out-String).Trim()
                 if ($LASTEXITCODE -ne 0) { throw 'WinGet invocation failed' }
                 if ($reportedVersion -cne '${{ matrix.train.version }}') { throw 'WinGet installed executable version mismatch' }
-                winget uninstall --exact --id NaumanTanwir.GuardScan
+                winget uninstall --exact --id NaumanTanwir.GuardScan --accept-source-agreements
                 if ($LASTEXITCODE -ne 0) { throw 'WinGet uninstall failed' }
               } else {
                 $availability = choco info guardscan --exact --version "${{ matrix.train.version }}" --source https://community.chocolatey.org/api/v2/ 2>&1

@@ -6,7 +6,7 @@
     <title>GuardScan upgrade rehearsal fixture</title>
     <authors>GuardScan</authors>
     <projectUrl>https://github.com/ntanwir10/GuardScan</projectUrl>
-    <license type="expression">MIT</license>
+    <licenseUrl>https://github.com/ntanwir10/GuardScan/blob/main/LICENSE</licenseUrl>
     <requireLicenseAcceptance>false</requireLicenseAcceptance>
     <description>Local-only fixture used to verify Chocolatey upgrades to a release candidate package.</description>
     <tags>guardscan fixture</tags>
