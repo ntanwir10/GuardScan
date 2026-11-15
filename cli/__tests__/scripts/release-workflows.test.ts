@@ -457,6 +457,40 @@ describe('zero-touch release workflow contracts', () => {
     }
   });
 
+  it('keeps stable-only channel steps non-interactive and retries tap merges until required checks pass', () => {
+    // Stable 1.1.1 hit all three: a WinGet source-agreement prompt, a tap merge attempted before its
+    // required checks finished, and a prior-version nuspec that Chocolatey 2.x rejects.
+    for (const name of ['release-publish.yml', 'release-canary.yml']) {
+      const uninstalls = [...workflowSource(name).matchAll(/^\s*winget uninstall .*$/gm)].map(match => match[0]);
+      expect(uninstalls.length).toBeGreaterThan(0);
+      for (const line of uninstalls) expect(line).toContain('--accept-source-agreements');
+    }
+    for (const name of ['release-publish.yml', 'release-train.yml']) {
+      const lines = workflowSource(name).split('\n');
+      const tapMerges = lines.flatMap((line, index) => (
+        /gh pr merge --repo (?:"\$CATALOG_REPOSITORY"|ntanwir10\/homebrew-tap) /.test(line) ? [index] : []
+      ));
+      expect(tapMerges.length).toBeGreaterThan(0);
+      for (const index of tapMerges) {
+        const line = lines[index];
+        // Never arm auto-merge: a timed-out job must not leave a merge that lands after it failed.
+        expect(line).not.toContain('--auto');
+        expect(line).toMatch(/ --squash --match-head-commit "\$[A-Z_]+" \|\| true$/);
+        // The merge is retried inside its wait loop, never attempted once before it.
+        const indent = line.search(/\S/);
+        const enclosing = lines.slice(0, index).reverse()
+          .find(previous => previous.trim() !== '' && previous.search(/\S/) < indent);
+        expect(enclosing?.trim()).toBe('for ATTEMPT in $(seq 1 60); do');
+      }
+    }
+    const priorNuspec = fs.readFileSync(
+      path.join(repositoryRoot, 'cli/__tests__/fixtures/chocolatey-prior/guardscan.nuspec'),
+      'utf8'
+    );
+    expect(priorNuspec).not.toMatch(/<license[\s>]/);
+    expect(priorNuspec).toContain('<licenseUrl>');
+  });
+
   it('exposes a release merge SHA only for a merged PR, not an open PR test merge', () => {
     const expression = workflowSource('release-train.yml')
       .match(/echo "merge_sha=\$\(node -p '([^']+)'\)"/)?.[1];

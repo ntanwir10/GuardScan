@@ -2390,13 +2390,12 @@ jobs:
               catalog-checkout catalog-verification/rendered catalog/homebrew-tap/.github/workflows/verify.yml \
               "$EXPECTED_HEAD" "$PROJECTION_BASE"
             if [ "$ACTIVE_CHANNEL" = stable ]; then
-              if [ "$PR_STATE" != MERGED ]; then
-                GH_TOKEN="$CATALOG_APP_TOKEN" gh pr merge --repo ntanwir10/homebrew-tap "$PR_NUMBER" --squash --match-head-commit "$EXPECTED_HEAD"
-              fi
               for ATTEMPT in $(seq 1 60); do
                 REQUIRE_MERGED=false
                 validate_catalog_pr
                 if [ "$PR_STATE" = MERGED ]; then break; fi
+                # The tap's required checks start only after the PR opens; retry the exact-head merge until they pass.
+                GH_TOKEN="$CATALOG_APP_TOKEN" gh pr merge --repo ntanwir10/homebrew-tap "$PR_NUMBER" --squash --match-head-commit "$EXPECTED_HEAD" || true
                 sleep 10
               done
               REQUIRE_MERGED=true
@@ -3192,8 +3191,9 @@ jobs:
             catalog-rollback catalog-rollback-trusted catalog-rollback-trusted/.github/workflows/verify.yml \
             "$CATALOG_HEAD" "$PROJECTION_BASE"
           if [ "$CATALOG_PR_STATE" = OPEN ]; then
-            GH_TOKEN="$CATALOG_APP_TOKEN" gh pr merge --repo ntanwir10/homebrew-tap "$CATALOG_PR" --squash --match-head-commit "$CATALOG_HEAD"
             for ATTEMPT in $(seq 1 60); do
+              # The tap's required checks start only after the PR opens; retry the exact-head merge until they pass.
+              GH_TOKEN="$CATALOG_APP_TOKEN" gh pr merge --repo ntanwir10/homebrew-tap "$CATALOG_PR" --squash --match-head-commit "$CATALOG_HEAD" || true
               CATALOG_PR_STATE="$(gh pr view --repo ntanwir10/homebrew-tap "$CATALOG_PR" --json state --jq .state)"
               if [ "$CATALOG_PR_STATE" = MERGED ]; then break; fi
               sleep 10
