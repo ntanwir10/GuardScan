@@ -4,7 +4,7 @@ import * as path from 'path';
 import { execFileSync } from 'child_process';
 import { StringDecoder } from 'string_decoder';
 import { SECURITY_CONSTANTS } from '../constants/security-constants';
-import { isPythonVirtualEnvironment } from './scan-ignored-directories';
+import { isGuardScanReport, isPythonVirtualEnvironment } from './scan-ignored-directories';
 
 const MAX_SECRET_FILE_BYTES = 2 * 1024 * 1024;
 const MAX_SECRET_LINE_FRAGMENT_CHARS = 256 * 1024;
@@ -32,7 +32,8 @@ export class SecretsDetector {
   /** Discover bounded working-tree inputs independently from language/LOC discovery. */
   async discoverFiles(
     repoPath: string = process.cwd(),
-    onSkippedInput: () => void = () => {}
+    onSkippedInput: () => void = () => {},
+    reportOutputPath?: string
   ): Promise<string[]> {
     let root: string;
     try {
@@ -58,7 +59,7 @@ export class SecretsDetector {
             if (!isWithinRoot(root, real)) {onSkippedInput(); continue;}
             if (stat.isDirectory()) {
               if (!isPythonVirtualEnvironment(real)) {pending.push(real);}
-            } else if (stat.isFile()) {files.push(real);}
+            } else if (stat.isFile() && !isGuardScanReport(real, reportOutputPath)) {files.push(real);}
           } catch {onSkippedInput();}
         }
       } catch {onSkippedInput();}

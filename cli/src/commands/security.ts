@@ -91,6 +91,7 @@ export async function securityCommand(options: SecurityOptions): Promise<void> {
       allowPartial,
       cache: useCache,
       concurrency,
+      reportOutputPath: options.output,
       vulnerabilityScope,
       vulnerabilityEndpoint: config.vulnerabilities?.endpoint,
       vulnerabilitySnapshotMaxAgeDays: config.vulnerabilities?.snapshotMaxAgeDays,
