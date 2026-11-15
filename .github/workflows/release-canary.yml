@@ -709,7 +709,7 @@ jobs:
             $notPublic = $false
             try {
               if ($channel -eq 'winget') {
-                $availability = winget show --exact --id NaumanTanwir.GuardScan --version "${{ matrix.train.version }}" 2>&1
+                $availability = winget show --exact --id NaumanTanwir.GuardScan --version "${{ matrix.train.version }}" --accept-source-agreements --disable-interactivity 2>&1
                 $availabilityStatus = $LASTEXITCODE
                 $availabilityText = $availability | Out-String
                 if ($availabilityStatus -ne 0) {
@@ -736,17 +736,21 @@ jobs:
                 winget uninstall --exact --id NaumanTanwir.GuardScan --accept-source-agreements
                 if ($LASTEXITCODE -ne 0) { throw 'WinGet uninstall failed' }
               } else {
-                $availability = choco info guardscan --exact --version "${{ matrix.train.version }}" --source https://community.chocolatey.org/api/v2/ 2>&1
+                $availability = choco search guardscan --exact --version "${{ matrix.train.version }}" --source https://community.chocolatey.org/api/v2/ 2>&1
                 $availabilityStatus = $LASTEXITCODE
                 $availabilityText = $availability | Out-String
                 $escapedVersion = [regex]::Escape('${{ matrix.train.version }}')
                 $exactVersion = $availabilityText -match "(?im)^\s*guardscan\s+$escapedVersion(?:\s|$)"
+                # Chocolatey lists a package under moderation without [Approved]; it is not public until approved.
+                $approved = $availabilityText -match "(?im)^\s*guardscan\s+$escapedVersion\s+\[Approved\]"
                 $noResult = $availabilityText -match '(?im)^\s*(Unable to find package .guardscan.|0 packages found\.)\s*$'
                 if ($availabilityStatus -eq 0) {
                   if ($noResult) {
                     $notPublic = $true
                   } elseif (-not $exactVersion) {
                     throw 'Unexpected moderated registry error: Chocolatey did not confirm the exact package version'
+                  } elseif (-not $approved) {
+                    $notPublic = $true
                   }
                 } elseif ($availabilityStatus -eq 2 -and $noResult) {
                   $notPublic = $true

@@ -626,6 +626,49 @@ describe('release canary public seams', () => {
     }, channels);
   });
 
+  test('clears a rejected set of failed moderated registry queries once moderation is healthy and pending', () => {
+    // v1.1.1's first stable canary: both moderated queries errored and carried an extra error field.
+    const channels = [...Object.keys(DEFAULT_RC_CANARY_TARGETS), 'winget', 'chocolatey'];
+    const expectedTargets = {...DEFAULT_RC_CANARY_TARGETS, winget: ['windows-x64'], chocolatey: ['windows-x64']};
+    const moderated = (status: string, checkedAt: string, extra: Record<string, string> = {}) =>
+      ['winget', 'chocolatey'].map(channel => ({version: VERSION, channel, target: 'windows-x64', status, checkedAt,
+        evidenceUrl: 'https://github.com/ntanwir10/GuardScan/actions/runs/42', ...extra}));
+    withLedger(ledger => {
+      const rejected = recordCanary({ledgerFile: ledger, expectedTargets, evaluatedAt: EVALUATED_AT,
+        reports: [...reports(), ...moderated('failed', EVALUATED_AT, {error: 'Unexpected moderated registry error'})]});
+      const incidentId = rejected.incidents[0].payload.incidentId;
+      expect(rejected.incidents[0].payload.summary)
+        .toMatch(/^Canary report set rejected with failed reports \(chocolatey:windows-x64, winget:windows-x64\): /);
+      const later = '2026-08-19T13:30:00.000Z';
+      const healthy = recordCanary({ledgerFile: ledger, expectedTargets, evaluatedAt: later,
+        reports: [...reports().map(report => ({...report, checkedAt: later})), ...moderated('pending', later)]});
+      expect(healthy.failures).toEqual([]);
+      expect(healthy.resolvedIncidents.map((event: any) => event.payload)).toEqual([{incidentId}]);
+      const state = materializeReleaseState(readEvents(ledger));
+      expect(state.incidents[incidentId].status).toBe('resolved');
+      expect(reconcileRelease(state).blocking).toEqual([]);
+    }, channels);
+  });
+
+  test('keeps a rejected set with a failed non-moderated report open even when moderation is pending', () => {
+    const channels = [...Object.keys(DEFAULT_RC_CANARY_TARGETS), 'winget', 'chocolatey'];
+    const expectedTargets = {...DEFAULT_RC_CANARY_TARGETS, winget: ['windows-x64'], chocolatey: ['windows-x64']};
+    const pending = (checkedAt: string) => ['winget', 'chocolatey'].map(channel => ({version: VERSION, channel,
+      target: 'windows-x64', status: 'pending', checkedAt, evidenceUrl: 'https://github.com/ntanwir10/GuardScan/actions/runs/42'}));
+    withLedger(ledger => {
+      const incomplete = reports().filter(report => report.channel !== 'npm')
+        .map(report => report.channel === 'pnpm' ? {...report, status: 'failed'} : report);
+      const rejected = recordCanary({ledgerFile: ledger, expectedTargets, evaluatedAt: EVALUATED_AT,
+        reports: [...incomplete, ...pending(EVALUATED_AT)]});
+      const later = '2026-08-19T13:30:00.000Z';
+      const healthy = recordCanary({ledgerFile: ledger, expectedTargets, evaluatedAt: later,
+        reports: [...reports().map(report => ({...report, checkedAt: later})), ...pending(later)]});
+      expect(healthy.resolvedIncidents).toEqual([]);
+      expect(materializeReleaseState(readEvents(ledger)).incidents[rejected.incidents[0].payload.incidentId].status)
+        .toBe('open');
+    }, channels);
+  });
+
   test.each(['withdrawn', 'superseded'])('does not treat %s as reconciliation success', status => {
     const channels = Object.fromEntries(
       ['npm', 'pnpm', 'yarn', 'bun', 'github', 'homebrew', 'scoop', 'pypi']

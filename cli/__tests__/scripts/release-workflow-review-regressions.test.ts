@@ -462,7 +462,7 @@ describe('release workflow review regressions', () => {
     expect(moderated.run).toContain('Unexpected moderated registry error:');
     expect(moderated.run).toContain("} catch {\n    $report.status = 'failed'\n    $report.error = $_.ToString()\n    $unexpectedFailure = $_.ToString()");
     expect(moderated.run).toContain('throw "Unexpected moderated registry error: $unexpectedFailure"');
-    expect(moderated.run).toContain('choco info guardscan --exact --version');
+    expect(moderated.run).toContain('choco search guardscan --exact --version');
     expect(moderated.run).toContain('$exactVersion');
     expect(moderated.run).toContain('$LASTEXITCODE');
   });
