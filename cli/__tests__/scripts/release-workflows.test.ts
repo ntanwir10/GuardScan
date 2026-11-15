@@ -506,6 +506,23 @@ describe('zero-touch release workflow contracts', () => {
     expect(priorNuspec).toContain('<licenseUrl>');
   });
 
+  it('runs every job after publish when a resumed promote skipped its build', () => {
+    // A skipped ancestor makes implicit success() false, so v1.1.1's resumed promote silently skipped
+    // TestPyPI, PyPI and the ledger evidence. Every job downstream of publish must check its direct needs.
+    const jobs = (yaml.load(workflowSource('release-train.yml')) as {jobs: Record<string, {needs?: string | string[]; if?: string}>}).jobs;
+    const needs = (id: string): string[] => [jobs[id].needs ?? []].flat();
+    const below = (id: string, seen = new Set<string>()): boolean => needs(id).some(need => (
+      need === 'publish' || (!seen.has(need) && (seen.add(need), below(need, seen)))
+    ));
+    const downstream = Object.keys(jobs).filter(id => below(id));
+    expect(downstream).toEqual(expect.arrayContaining(['pypi-test', 'pypi-test-lifecycle', 'pypi', 'record', 'start-soak']));
+    for (const id of downstream) {
+      const condition = String(jobs[id].if ?? '').replace(/\s+/g, ' ');
+      expect(condition).toContain('always() && !cancelled()');
+      for (const need of needs(id)) expect(condition).toContain(`needs.${need}.result == 'success'`);
+    }
+  });
+
   it('exposes a release merge SHA only for a merged PR, not an open PR test merge', () => {
     const expression = workflowSource('release-train.yml')
       .match(/echo "merge_sha=\$\(node -p '([^']+)'\)"/)?.[1];
