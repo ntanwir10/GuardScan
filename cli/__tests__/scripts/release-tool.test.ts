@@ -221,6 +221,14 @@ describe('release planning and state summaries', () => {
     });
   });
 
+  it('never plans the retired WinGet and Chocolatey channels, even for the full profile', () => {
+    const source = validateSource({packageRoot, repositoryRoot: root, commit: COMMIT});
+    const ids = (createPlan(source, 'full').channels as Array<{id: string}>).map(channel => channel.id);
+    expect(ids).toEqual(expect.arrayContaining(['npm', 'homebrew', 'scoop', 'pypi', 'homebrew-core']));
+    expect(ids).not.toContain('winget');
+    expect(ids).not.toContain('chocolatey');
+  });
+
   it('reports failed and remaining channels without treating them as complete', () => {
     expect(summarizeState({
       schemaVersion: 'guardscan.release-state.v1',

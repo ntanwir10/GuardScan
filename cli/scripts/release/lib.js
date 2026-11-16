@@ -27,9 +27,9 @@ const CHANNELS = Object.freeze([
     required: false,
   },
   {id: 'scoop', phase: 'full', operation: 'update-adapter', artifacts: ['standalone']},
-  // Retired after 1.1.1: kept only so historical ledgers still parse. No train selects them.
-  {id: 'winget', phase: 'full', operation: 'submit', artifacts: ['standalone'], required: false},
-  {id: 'chocolatey', phase: 'full', operation: 'publish', artifacts: ['standalone'], required: false},
+  // Retired after 1.1.1: kept only so historical ledgers still parse. No plan or train selects them.
+  {id: 'winget', phase: 'full', operation: 'submit', artifacts: ['standalone'], required: false, retired: true},
+  {id: 'chocolatey', phase: 'full', operation: 'publish', artifacts: ['standalone'], required: false, retired: true},
   {id: 'pypi', phase: 'full', operation: 'publish', artifacts: ['python-wheel', 'standalone']},
 ]);
 
@@ -180,7 +180,7 @@ function validateSource(options = {}) {
 
 function createPlan(source, profile = 'node') {
   if (!(profile in PROFILE_ORDER)) throw new Error(`Unknown release profile: ${profile}`);
-  const channels = CHANNELS.map(channel => ({
+  const channels = CHANNELS.filter(channel => !channel.retired).map(channel => ({
     id: channel.id,
     phase: channel.phase,
     operation: channel.operation,
