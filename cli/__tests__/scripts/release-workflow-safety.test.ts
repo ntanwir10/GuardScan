@@ -41,17 +41,6 @@ describe('release workflow safety', () => {
     expect(steps[checkout].with).toMatchObject({ref: '${{ github.workflow_sha }}', 'persist-credentials': false});
   });
 
-  it('requires a recorded WinGet correction before a rejected submission can be resubmitted', () => {
-    const run = namedStep(load('release-publish.yml').jobs.winget,
-      'Preflight and submit WinGet manifests with exact evidence').run;
-    const rejection = run.indexOf("if ($existing.type -eq 'channel_rejected') {");
-    const resubmission = run.indexOf("$state = if ($existing.type -eq 'channel_corrected')");
-    expect(rejection).toBeGreaterThan(0);
-    expect(run.slice(rejection, rejection + 200))
-      .toContain("throw 'WinGet submission was rejected; record a correction before resubmission'");
-    expect(resubmission).toBeGreaterThan(rejection);
-  });
-
   it('installs Scoop once from the pinned source and uses only its runner-temporary root', () => {
     const canary = load('release-canary.yml');
     const adapters = canary.jobs.adapters;

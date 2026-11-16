@@ -5,7 +5,6 @@ const {CHANNELS} = require('./lib');
 const {compareUtf8} = require('./deterministic');
 const {canaryChannelEventType} = require('./distribution-guards');
 const {
-  MODERATED_CHANNELS,
   appendEvent,
   canonicalJson,
   materializeReleaseState,
@@ -20,17 +19,6 @@ const REQUIRED_CANARY_FIELDS = Object.freeze([
 const CANARY_STATUSES = new Set(['passed', 'failed', 'pending']);
 // Summary prefix of the availability incident opened when a report set is missing or malformed.
 const REPORT_SET_REJECTED = 'Canary report set rejected: ';
-const MODERATED_FAILED_REPORTS = /^Canary report set rejected with failed reports \(([^)]*)\): /;
-
-/**
- * A rejected set clears once a later set is healthy, unless it carried failure evidence. A failed WinGet or
- * Chocolatey report is the canary's own registry query (only their moderators publish), so it may clear too.
- */
-function resolvesOnHealthySet(summary) {
-  if (summary.startsWith(REPORT_SET_REJECTED)) return true;
-  const failed = summary.match(MODERATED_FAILED_REPORTS)?.[1];
-  return Boolean(failed) && failed.split(', ').every(entry => MODERATED_CHANNELS.has(entry.split(':')[0]));
-}
 const SUPPORTED_CHANNELS = new Set(CHANNELS.map(channel => channel.id));
 
 // These are the immutable RC verification targets. Callers may add supported
@@ -306,15 +294,12 @@ function recordCanary(input, reports, expectedTargets, evaluatedAt) {
   // A complete set checked after a rejected one, passing on every target, shows that the earlier
   // gap was transient (such as an artifact upload error). Failed canaries and other incidents stay open.
   const resolvedIncidents = [];
-  // Pending WinGet or Chocolatey moderation is healthy: only Microsoft or Chocolatey can make it public.
-  const healthy = report => report.status === 'passed'
-    || (report.status === 'pending' && MODERATED_CHANNELS.has(report.channel));
-  if (reportList.every(healthy)) {
+  if (reportList.every(report => report.status === 'passed')) {
     const earliestCheck = reportList.map(report => report.checkedAt).sort(compareUtf8)[0];
     const state = materializeReleaseState(currentEvents);
     for (const [incidentId, incident] of Object.entries(state.incidents).sort(([a], [b]) => compareUtf8(a, b))) {
       if (incident.status !== 'open' || incident.kind !== 'availability'
-          || !resolvesOnHealthySet(incident.summary)
+          || !incident.summary.startsWith(REPORT_SET_REJECTED)
           || compareUtf8(earliestCheck, incident.openedAt) <= 0) continue;
       const result = appendEvent(options.ledgerFile, {
         version: state.version,

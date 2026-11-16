@@ -7,13 +7,13 @@ const timestamp = '2026-10-01T00:00:00.000Z';
 const evidenceUrl = 'https://github.com/ntanwir10/GuardScan/actions/runs/123';
 
 describe('complete release canary coverage', () => {
-  it('requires every declared manager, native, adapter, and moderated report exactly once', () => {
+  it('requires every declared manager, native, and adapter report exactly once', () => {
     const {EXPECTED_CANARY_TARGETS, validateCanaryReports} = require('../../scripts/release/canary-reports');
     const reports = EXPECTED_CANARY_TARGETS.map(([channel, target]: string[]) => ({
-      channel, target, version: '1.2.3-rc.1', status: ['winget', 'chocolatey'].includes(channel) ? 'pending' : 'passed',
+      channel, target, version: '1.2.3-rc.1', status: 'passed',
       checkedAt: timestamp, evidenceUrl,
     }));
-    expect(reports).toHaveLength(20);
+    expect(reports).toHaveLength(18);
     expect(() => validateCanaryReports(reports, '1.2.3-rc.1', evidenceUrl)).not.toThrow();
     for (let index = 0; index < reports.length; index += 1) {
       expect(() => validateCanaryReports(reports.filter((_item: any, i: number) => i !== index), '1.2.3-rc.1', evidenceUrl))
@@ -34,7 +34,6 @@ describe('complete release canary coverage', () => {
       ...workflow.jobs['package-managers'].strategy.matrix.manager.map((manager: string) => [manager.split('-')[0], manager]),
       ...workflow.jobs['native-and-pypi'].strategy.matrix.target.flatMap((target: any) => ['github', 'pypi'].map(channel => [channel, channel === 'pypi' ? target.id.replace(/-glibc$/, '') : target.id])),
       ...workflow.jobs.adapters.strategy.matrix.adapter.map((adapter: string) => [adapter.startsWith('homebrew-') ? 'homebrew' : 'scoop', adapter === 'homebrew-macos' ? 'macOS' : adapter === 'homebrew-linux' ? 'Linux' : 'Windows']),
-      ...['winget', 'chocolatey'].map(channel => [channel, 'windows-x64']),
     ];
     expect([...EXPECTED_CANARY_TARGETS].map((item: string[]) => item.join(':')).sort())
       .toEqual(expected.map(item => item.join(':')).sort());

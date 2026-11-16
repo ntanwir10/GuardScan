@@ -45,8 +45,6 @@ describe('release credential and provider health workflow', () => {
     expect(workflow.permissions).toEqual({contents: 'read'});
     expect(workflow.jobs.apple.environment).toBe('apple-notarization');
     expect(workflow.jobs.azure.environment).toBe('windows-signing');
-    expect(workflow.jobs.winget.environment).toBe('winget');
-    expect(workflow.jobs.chocolatey.environment).toBe('chocolatey');
     expect(workflow.jobs.azure.permissions).toMatchObject({
       contents: 'read',
       'id-token': 'write',
@@ -71,8 +69,6 @@ describe('release credential and provider health workflow', () => {
       'trusted-publishers',
       'apple',
       'azure',
-      'winget',
-      'chocolatey',
       'report',
     ]));
     expect(source).toContain('guardscan.credential-health.v1');
@@ -87,13 +83,8 @@ describe('release credential and provider health workflow', () => {
     expect(source).toContain('APPLE_CERTIFICATE_P12');
     expect(source).toContain('azure/login@');
     expect(source).toContain('AZURE_SIGNING_PROFILE');
-    expect(source).toContain('github-authentication-token-expiration');
-    expect(source).toContain('WINGET_CREATE_GITHUB_TOKEN');
-    expect(source).toContain('CHOCO_API_KEY');
-    expect(source).toContain("claStatus: {status: 'unknown'");
     expect(source).toContain("expiry: {status: 'unknown'");
     expect(source).toContain("signingProfile = {status: 'unknown'");
-    expect(source).toContain("apiKeyAuthentication: {status: 'unknown'");
   });
 
   it('separates honest monitoring status from explicit release eligibility', () => {
@@ -103,9 +94,7 @@ describe('release credential and provider health workflow', () => {
     expect(source).toContain('RELEASE_PROVIDER_ONBOARDING_ATTESTATION');
     expect(source).toContain('validateProviderOnboardingAttestation');
     expect(source).toContain("'azure-artifact-signing'");
-    expect(source).toContain("'chocolatey-publisher'");
     expect(source).toContain("'trusted-publishers'");
-    expect(source).toContain("'winget-submitter'");
     expect(source).toContain("status: releaseEligible ? 'eligible' : 'blocked'");
     expect(source).toContain("report.releaseEligibility.status !== 'eligible'");
     expect(source).toContain("report.monitoring.status !== 'ok'");
@@ -232,10 +221,8 @@ describe('release credential and provider health workflow', () => {
       }
     };
     const unsigned = {
-      'chocolatey-publisher': 'unknown',
       'github-app-catalog': 'healthy',
       'trusted-publishers': 'unknown',
-      'winget-submitter': 'unknown',
     };
 
     const community = runReport('community', unsigned);
@@ -245,8 +232,8 @@ describe('release credential and provider health workflow', () => {
     expect(community.output).toContain('status=unknown');
     // Allowlisted unobservable providers must not keep the daily monitor permanently red.
     expect(community.report.monitoring).toEqual({status: 'ok', alerts: []});
-    const expiring = runReport('community', {...unsigned, 'winget-submitter': 'warning'});
-    expect(expiring.report.monitoring).toEqual({status: 'alert', alerts: ['winget-submitter:warning']});
+    const expiring = runReport('community', {...unsigned, 'trusted-publishers': 'warning'});
+    expect(expiring.report.monitoring).toEqual({status: 'alert', alerts: ['trusted-publishers:warning']});
     expect(expiring.output).toContain('release_eligible=false');
     expect(community.report.providers).toEqual(expect.arrayContaining([
       {provider: 'apple-signing-notary', status: 'not-required'},
@@ -278,8 +265,6 @@ describe('release credential and provider health workflow', () => {
       'twine upload',
       'gh release create',
       'git push',
-      'wingetcreate submit',
-      'choco push',
       'repository_dispatch',
       'set -x',
     ]) {
@@ -301,6 +286,6 @@ describe('release credential and provider health workflow', () => {
         }
       }
     }
-    expect(generators).toBeGreaterThanOrEqual(7);
+    expect(generators).toBeGreaterThanOrEqual(6);
   });
 });

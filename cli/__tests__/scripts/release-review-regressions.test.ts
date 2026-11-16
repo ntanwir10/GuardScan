@@ -259,20 +259,14 @@ describe('release reviewer regressions', () => {
     }
   });
 
-  it('uses a quoted literal Scoop manifest path and the versioned WinGet directory', () => {
+  it('uses a quoted literal Scoop manifest path', () => {
     const output = path.join(os.tmpdir(), "GuardScan release's output");
-    const plan = nativeValidationPlan(output, ['scoop', 'winget'], 'win32', os.tmpdir(), '1.2.3');
+    const plan = nativeValidationPlan(output, ['scoop'], 'win32', os.tmpdir(), '1.2.3');
     const scoop = plan.find((step: any) => step.channel === 'scoop');
     const command = scoop.args[scoop.args.indexOf('-Command') + 1];
     expect(command).toContain("GuardScan release''s output");
     expect(command).not.toContain('$args[0]');
     expect(scoop.args).toHaveLength(4);
-    expect(plan.find((step: any) => step.channel === 'winget').args.at(-1))
-      .toBe(path.join(output, 'winget', 'manifests', 'n', 'NaumanTanwir', 'GuardScan', '1.2.3'));
-    expect(() => nativeValidationPlan(output, ['winget'], 'win32'))
-      .toThrow(/requires a valid release version/);
-    expect(() => nativeValidationPlan(output, ['winget'], 'win32', os.tmpdir(), '../1.2.3'))
-      .toThrow(/requires a valid release version/);
   });
 
   it('uses Core Metadata 2.4 for the wheel License-Expression field', () => {

@@ -27,8 +27,9 @@ const CHANNELS = Object.freeze([
     required: false,
   },
   {id: 'scoop', phase: 'full', operation: 'update-adapter', artifacts: ['standalone']},
-  {id: 'winget', phase: 'full', operation: 'submit', artifacts: ['standalone']},
-  {id: 'chocolatey', phase: 'full', operation: 'publish', artifacts: ['standalone']},
+  // Retired after 1.1.1: kept only so historical ledgers still parse. No plan or train selects them.
+  {id: 'winget', phase: 'full', operation: 'submit', artifacts: ['standalone'], required: false, retired: true},
+  {id: 'chocolatey', phase: 'full', operation: 'publish', artifacts: ['standalone'], required: false, retired: true},
   {id: 'pypi', phase: 'full', operation: 'publish', artifacts: ['python-wheel', 'standalone']},
 ]);
 
@@ -41,10 +42,7 @@ function releaseTrainChannels(channel, options = {}) {
     throw new Error(`unsupported release train channel: ${channel}`);
   }
   const channels = [...REQUIRED_RC_CHANNELS];
-  if (channel === 'stable') {
-    if (options.homebrewCoreEnabled === true) channels.push('homebrew-core');
-    channels.push('winget', 'chocolatey');
-  }
+  if (channel === 'stable' && options.homebrewCoreEnabled === true) channels.push('homebrew-core');
   return channels;
 }
 
@@ -182,7 +180,7 @@ function validateSource(options = {}) {
 
 function createPlan(source, profile = 'node') {
   if (!(profile in PROFILE_ORDER)) throw new Error(`Unknown release profile: ${profile}`);
-  const channels = CHANNELS.map(channel => ({
+  const channels = CHANNELS.filter(channel => !channel.retired).map(channel => ({
     id: channel.id,
     phase: channel.phase,
     operation: channel.operation,

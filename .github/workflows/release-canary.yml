@@ -668,134 +668,9 @@ jobs:
           path: report.json
           if-no-files-found: error
 
-  moderated:
-    name: Moderated registry polling for ${{ matrix.train.version }}
-    needs: [discover]
-    if: needs.discover.outputs.trains != '[]'
-    runs-on: windows-2025
-    strategy:
-      fail-fast: false
-      matrix:
-        train: ${{ fromJSON(needs.discover.outputs.trains) }}
-    steps:
-      - name: Initialize pending reports
-        shell: pwsh
-        run: |
-          foreach ($channel in @('winget', 'chocolatey')) {
-            @{
-              version = '${{ matrix.train.version }}'
-              channel = $channel
-              status = 'pending'
-              checkedAt = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.fffZ')
-              target = 'windows-x64'
-              evidenceUrl = "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-            } | ConvertTo-Json -Compress | Out-File "$channel.json"
-          }
-      - name: Poll, install, invoke, and uninstall public moderated channels
-        if: matrix.train.channel == 'stable'
-        shell: pwsh
-        run: |
-          $reports = @()
-          $unexpectedFailure = $null
-          foreach ($channel in @('winget', 'chocolatey')) {
-            $report = @{
-              version = '${{ matrix.train.version }}'
-              channel = $channel
-              status = 'pending'
-              checkedAt = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.fffZ')
-              target = 'windows-x64'
-              evidenceUrl = "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-            }
-            $notPublic = $false
-            try {
-              if ($channel -eq 'winget') {
-                $availability = winget show --exact --id NaumanTanwir.GuardScan --version "${{ matrix.train.version }}" --accept-source-agreements --disable-interactivity 2>&1
-                $availabilityStatus = $LASTEXITCODE
-                $availabilityText = $availability | Out-String
-                if ($availabilityStatus -ne 0) {
-                  if ($availabilityText -match '(?im)^\s*No package found matching input criteria\.?\s*$') {
-                    $notPublic = $true
-                  } else {
-                    throw "Unexpected moderated registry error: WinGet availability query exited ${availabilityStatus}: $availabilityText"
-                  }
-                } elseif ($availabilityText -notmatch '(?im)^\s*Id\s*:\s*NaumanTanwir\.GuardScan\s*$' -or
-                    $availabilityText -notmatch '(?im)^\s*Version\s*:\s*${{ matrix.train.version }}\s*$') {
-                  throw 'Unexpected moderated registry error: WinGet did not confirm the exact package and version'
-                }
-                if ($notPublic) {
-                  $report.status = 'pending'
-                  $reports += $report
-                  continue
-                }
-                winget install --exact --id NaumanTanwir.GuardScan --version "${{ matrix.train.version }}" --accept-package-agreements --accept-source-agreements
-                if ($LASTEXITCODE -ne 0) { throw 'WinGet installation failed' }
-                $env:PATH = @([Environment]::GetEnvironmentVariable('Path', 'Machine'), [Environment]::GetEnvironmentVariable('Path', 'User'), $env:PATH) -join ';'
-                $reportedVersion = (& guardscan --version | Out-String).Trim()
-                if ($LASTEXITCODE -ne 0) { throw 'WinGet invocation failed' }
-                if ($reportedVersion -cne '${{ matrix.train.version }}') { throw 'WinGet installed executable version mismatch' }
-                winget uninstall --exact --id NaumanTanwir.GuardScan --accept-source-agreements
-                if ($LASTEXITCODE -ne 0) { throw 'WinGet uninstall failed' }
-              } else {
-                $availability = choco search guardscan --exact --version "${{ matrix.train.version }}" --source https://community.chocolatey.org/api/v2/ 2>&1
-                $availabilityStatus = $LASTEXITCODE
-                $availabilityText = $availability | Out-String
-                $escapedVersion = [regex]::Escape('${{ matrix.train.version }}')
-                $exactVersion = $availabilityText -match "(?im)^\s*guardscan\s+$escapedVersion(?:\s|$)"
-                # Chocolatey lists a package under moderation without [Approved]; it is not public until approved.
-                $approved = $availabilityText -match "(?im)^\s*guardscan\s+$escapedVersion\s+\[Approved\]"
-                $noResult = $availabilityText -match '(?im)^\s*(Unable to find package .guardscan.|0 packages found\.)\s*$'
-                if ($availabilityStatus -eq 0) {
-                  if ($noResult) {
-                    $notPublic = $true
-                  } elseif (-not $exactVersion) {
-                    throw 'Unexpected moderated registry error: Chocolatey did not confirm the exact package version'
-                  } elseif (-not $approved) {
-                    $notPublic = $true
-                  }
-                } elseif ($availabilityStatus -eq 2 -and $noResult) {
-                  $notPublic = $true
-                } else {
-                  throw "Unexpected moderated registry error: Chocolatey availability query exited ${availabilityStatus}: $availabilityText"
-                }
-                if ($notPublic) {
-                  $report.status = 'pending'
-                  $reports += $report
-                  continue
-                }
-                choco install guardscan --version "${{ matrix.train.version }}" --yes
-                if ($LASTEXITCODE -ne 0) { throw 'Chocolatey installation failed' }
-                $reportedVersion = (& guardscan --version | Out-String).Trim()
-                if ($LASTEXITCODE -ne 0) { throw 'Chocolatey invocation failed' }
-                if ($reportedVersion -cne '${{ matrix.train.version }}') { throw 'Chocolatey installed executable version mismatch' }
-                choco uninstall guardscan --yes
-                if ($LASTEXITCODE -ne 0) { throw 'Chocolatey uninstall failed' }
-              }
-              $report.status = 'passed'
-            } catch {
-              $report.status = 'failed'
-              $report.error = $_.ToString()
-              $unexpectedFailure = $_.ToString()
-            }
-            $reports += $report
-          }
-          foreach ($report in $reports) {
-            $report | ConvertTo-Json -Compress | Out-File "$($report.channel).json"
-          }
-          if ($unexpectedFailure) {
-            throw "Unexpected moderated registry error: $unexpectedFailure"
-          }
-      - if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: canary-${{ matrix.train.version }}-moderated
-          path: |
-            winget.json
-            chocolatey.json
-          if-no-files-found: error
-
   record:
     name: Append canary evidence for ${{ matrix.train.version }}
-    needs: [discover, package-managers, native-and-pypi, adapters, moderated]
+    needs: [discover, package-managers, native-and-pypi, adapters]
     if: always() && vars.RELEASE_AUTOMATION_ENABLED == 'true' && needs.discover.result == 'success' && needs.discover.outputs.trains != '[]'
     runs-on: ubuntu-24.04
     strategy:
@@ -845,7 +720,6 @@ jobs:
           const path = require('path');
           const cp = require('child_process');
           const {materializeReleaseState, readEvents} = require('./cli/scripts/release/events');
-          const {acceptModeratedChannel} = require('./cli/scripts/release/moderated-acceptance');
           const {validateCanaryReports} = require('./cli/scripts/release/canary-reports');
           const {recordCanary, DEFAULT_RC_CANARY_TARGETS} = require('./cli/scripts/release/canary');
           const {compareUtf8} = require('./cli/scripts/release/deterministic');
@@ -888,9 +762,6 @@ jobs:
           if (commit !== checkoutCommit) throw new Error(`release ledger commit does not match checked-out tag ${tag}`);
           const state = materializeReleaseState(existing);
           const expectedTargets = {...DEFAULT_RC_CANARY_TARGETS};
-          for (const channel of ['winget', 'chocolatey']) {
-            if (state.channels[channel]) expectedTargets[channel] = ['windows-x64'];
-          }
           const selectedReports = reports.map(({report}) => report)
             .filter(report => state.channels[report.channel] || report.invalidCanaryReport);
           const evaluatedAt = new Date().toISOString();
@@ -906,17 +777,6 @@ jobs:
           }
           const result = recordCanary({ledgerFile: ledger, reports: selectedReports,
             expectedTargets, evaluatedAt});
-          if (result.failures.every(failure => failure.reason === 'canary report status is failed')) {
-            for (const channel of ['winget', 'chocolatey']) {
-              const channelReports = selectedReports.filter(report => report.channel === channel);
-              acceptModeratedChannel(ledger, channel, {
-                passed: channelReports.every(report => report.status === 'passed'),
-                complete: channelReports.length === 1,
-              });
-            }
-            // Public acceptance must precede verification of moderated channels.
-            recordCanary({ledgerFile: ledger, reports: selectedReports, expectedTargets, evaluatedAt});
-          }
           fs.writeFileSync('.canary-record-status', result.failures.length ? '1\n' : '0\n');
           NODE
           git worktree add ledger-branch origin/release-ledger

@@ -140,24 +140,6 @@ describe('hosted release review regressions', () => {
     expect(check('128').status).toBe(128);
   });
 
-  it('refreshes WinGet PATH and downloads a hash-pinned supported manifest creator', () => {
-    const winget = workflow('release-publish.yml').jobs.winget;
-    const install = step(winget, 'Validate and install WinGet local manifest').run as string;
-    expect(install).toContain("[Environment]::GetEnvironmentVariable('Path', 'Machine')");
-    expect(install).toContain("[Environment]::GetEnvironmentVariable('Path', 'User')");
-    expect(install.indexOf('GetEnvironmentVariable')).toBeLessThan(install.indexOf('guardscan --version'));
-    const publish = workflow('release-publish.yml');
-    const submit = step(winget, 'Preflight and submit WinGet manifests with exact evidence').run as string;
-    expect(submit).not.toContain('dotnet tool install');
-    expect(submit).toContain('microsoft/winget-create/releases/download/v$env:RELEASE_WINGETCREATE_VERSION/wingetcreate.exe');
-    expect(publish.env.RELEASE_WINGETCREATE_VERSION).toMatch(/^\d+\.\d+\.\d+\.\d+$/);
-    expect(submit).toContain('Get-FileHash');
-    expect(publish.env.RELEASE_WINGETCREATE_SHA256).toMatch(/^[a-f0-9]{64}$/);
-    expect(submit.indexOf('$wingetCreateDigest -ne $env:RELEASE_WINGETCREATE_SHA256'))
-      .toBeLessThan(submit.indexOf('& .\\wingetcreate.exe submit'));
-    expect(submit).toContain('Submitted WinGet pull request identity did not become queryable');
-  });
-
   it('checks Scoop lifecycle exit codes before recording success', () => {
     const run = step(workflow('release-canary.yml').jobs.adapters,
       'Scoop install, update check, invocation, and uninstall').run as string;

@@ -18,7 +18,7 @@ Use this order for the first train (`1.1.1`; see [First train: 1.1.1](#first-tra
    `RELEASE_PROVIDER_REHEARSAL_ENABLED=false` and
    `RELEASE_PROVIDER_ONBOARDING_ATTESTATION=false`.
 2. Complete the GitHub App, protections, environments, catalog, OIDC publishers,
-   moderated-registry accounts, and monitoring below. Skip Apple, Azure, and the
+   registry accounts, and monitoring below. Skip Apple, Azure, and the
    provider rehearsal: they apply to the `platform` policy only. Keep the
    automation variable false throughout.
 3. Squash-merge the policy PR to `main` as `fix(release): ...` with a
@@ -115,8 +115,10 @@ Create these environments. Only `pypi` has a required reviewer (the owner; see
 - `pypi`
 - `apple-notarization` (platform policy only)
 - `windows-signing` (platform policy only)
-- `winget`
-- `chocolatey`
+
+The `winget` and `chocolatey` environments and their secrets
+(`WINGET_CREATE_GITHUB_TOKEN`, `CHOCO_API_KEY`) are no longer used. If you
+created them, you can delete them.
 
 Allow protected branch `main` in these environments because the authorized
 `workflow_dispatch` caller runs from `main`; add protected candidate/stable tags
@@ -250,27 +252,6 @@ policy and the repository's protected workflows constrain the caller
 separately. The job must verify Authenticode status and timestamp before the
 executable is archived. Do not add an Azure client secret fallback.
 
-## WinGet and Chocolatey
-
-Both publish at stable only, never for an RC.
-
-- Accept the Microsoft CLA for the submitting identity.
-- Store an expiry-bounded classic PAT named `WINGET_CREATE_GITHUB_TOKEN` in
-  `winget`, with only the `public_repo` scope required by `winget-create`.
-  Fine-grained tokens are not supported by the tool. Accept and monitor the
-  residual access to public repositories explicitly; the identity must have no
-  GuardScan administration or release authority. The workflow supplies this
-  token only through the documented environment variable, never a command-line
-  argument.
-- Create/validate the Chocolatey publisher account.
-- Store `CHOCO_API_KEY` in `chocolatey`.
-
-Rehearse WinGet local-manifest install (package `NaumanTanwir.GuardScan`) before
-submission and Chocolatey `guardscan` install/upgrade/invoke/uninstall from a
-local feed before `choco push`. A successful submission is not deployment.
-
-WinGet review and Chocolatey validation, verification, VirusTotal, and moderation are external states. The ledger keeps them `submitted` until public installation passes.
-
 ## Optional Homebrew Core
 
 Homebrew Core is **not selected** for the current release train. Do not submit a
@@ -321,7 +302,7 @@ forward-fix branch. A separately reviewed `1.1.2` is required after such a
 withdrawal. Later releases must supply a verified ledger-backed `known_good`.
 Repository withdrawal is not provider withdrawal: the protected state remains
 `provider-actions-pending`, with the recovery incident open, until the recorded
-npm, PyPI, WinGet, Chocolatey, or optional Core authorities complete their
+npm, PyPI, or optional Core authorities complete their
 actions. Retrying re-verifies the empty catalog and closes the exact stale
 catalog publication PR; it does not turn pending provider work into success.
 
@@ -336,9 +317,6 @@ With one owner and no independent code owner:
 - `v*` tag ruleset: the App has the bypass.
 - npm trusted publisher: `release-train.yml`, environment `npm-publish`.
 - TestPyPI and PyPI pending publishers for `guardscan-cli`.
-- WinGet: Microsoft CLA plus a classic `public_repo` PAT as
-  `WINGET_CREATE_GITHUB_TOKEN` in the `winget` environment.
-- Chocolatey: `CHOCO_API_KEY` in the `chocolatey` environment.
 - Provider onboarding attestation: see activation step 5. Re-issue it at least
   every 30 days and whenever an attested path or binding changes.
 - Relabel the merged release PR `autorelease: tagged` after promotion.
@@ -356,8 +334,6 @@ status/expiry metadata, never secret values.
 | TestPyPI/PyPI trusted publishers | Project, repository, caller workflow, and the distinct `testpypi`/`pypi` environments match | Check both services before every candidate and monthly; rehearse TestPyPI before production. |
 | Apple certificate/notary identity (platform policy only; `not-required` under `community`) | Certificate subject/team, expiry, and notary authentication are valid | Check daily; alert at 60, 30, 14, and 7 days. Renewal/identity revalidation requires the publisher. |
 | Azure federation/signing profile (platform policy only; `not-required` under `community`) | Federated subject, signer role, account/profile state, and timestamp service are healthy | Check weekly and before every candidate with a non-secret signing preflight. Alert immediately on role or federation drift. |
-| WinGet submitter | Token expiry/scope and Microsoft CLA state are valid | Check weekly; alert at 30, 14, and 7 days. CLA or account challenges remain external authority boundaries. |
-| Chocolatey publisher | Account/package ownership and API-key authentication remain valid | Check weekly with a non-publishing endpoint; alert at 30, 14, and 7 days when expiry metadata is available. |
 | Shared catalog connection | App installation, required check, dispatch permission, and scheduled reconciliation are healthy | Check daily. A missed dispatch is recovered by reconciliation; an invalid lock/digest is an integrity incident. |
 
 If the provider does not expose expiry metadata, use a bounded authentication
@@ -368,8 +344,8 @@ The credential workflow keeps those unobservable fields `unknown`. For a
 release preflight only, it separately requires
 `RELEASE_PROVIDER_ONBOARDING_ATTESTATION` to match the SHA-256 subject computed
 from the exact trusted control plane and rejects every machine-observed
-`warning` or `unhealthy` provider status. Only the documented Azure,
-Chocolatey, trusted-publisher, and WinGet visibility boundaries may remain
+`warning` or `unhealthy` provider status. Only the documented Azure
+and trusted-publisher visibility boundaries may remain
 `unknown`. Keep the attestation false until all provider configuration steps above (and
 the rehearsal, under the platform policy) have passed; set it false again whenever a binding,
 account, environment, publisher identity, or attested control-plane file
@@ -381,6 +357,6 @@ workflow rejects future-dated, expired, or longer-lived attestations.
 After every onboarding item, functional acceptance prerequisite, and monitoring
 rehearsal passes, set `RELEASE_AUTOMATION_ENABLED=true` and immediately dispatch
 the first candidate. No later release requires a human promotion click. Only
-provider-mandated identity, MFA, legal, certificate-renewal, account
-verification, or moderator requests remain human boundaries; automation must
+provider-mandated identity, MFA, legal, certificate-renewal, or account
+verification requests remain human boundaries; automation must
 report those states rather than claiming completion.

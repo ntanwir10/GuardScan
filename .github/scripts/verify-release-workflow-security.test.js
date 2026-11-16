@@ -229,13 +229,6 @@ test('release signer verification binds the reusable workflow and SHA', () => {
   }
 });
 
-test('Chocolatey publication selects the exact expected package', () => {
-  const source = readWorkflow('release-publish.yml');
-  assert.doesNotMatch(source, /local-feed\\\\\*\.nupkg\s*\|\s*Select-Object\s+-First/);
-  assert.match(source, /Get-Item -LiteralPath "local-feed\/guardscan\.\$version\.nupkg"/);
-  assert.match(source, /\$version = \$env:RELEASE_TAG.TrimStart\('v'\)/);
-});
-
 test('rollback pins trusted control-plane code and fetches the defective tag as data', () => {
   assert.match(readWorkflow('release-train.yml'), /rollback:[\s\S]*?ref: \$\{\{ github\.workflow_sha \}\}/);
   assert.match(readWorkflow('release-first-withdrawal.yml'), /ref: \$\{\{ job\.workflow_sha \}\}/);

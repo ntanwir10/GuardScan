@@ -457,32 +457,8 @@ describe('zero-touch release workflow contracts', () => {
     }
   });
 
-  it('keeps stable-only channel steps non-interactive and retries tap merges until required checks pass', () => {
-    // Stable 1.1.1 hit all three: a WinGet source-agreement prompt, a tap merge attempted before its
-    // required checks finished, and a prior-version nuspec that Chocolatey 2.x rejects.
-    for (const name of ['release-publish.yml', 'release-canary.yml']) {
-      const uninstalls = [...workflowSource(name).matchAll(/^\s*winget uninstall .*$/gm)].map(match => match[0]);
-      expect(uninstalls.length).toBeGreaterThan(0);
-      for (const line of uninstalls) expect(line).toContain('--accept-source-agreements');
-    }
-    for (const line of workflowSource('release-canary.yml').split('\n').filter(text => /\bwinget show /.test(text))) {
-      expect(line).toContain('--accept-source-agreements --disable-interactivity');
-    }
-    // A local-manifest install registers as ARP\User\X64\NaumanTanwir.GuardScan__DefaultSource, which --id cannot match.
-    expect(workflowSource('release-publish.yml'))
-      .toContain('winget uninstall --manifest $manifestDirectory --accept-source-agreements');
-    expect(workflowSource('release-publish.yml')).not.toContain('winget uninstall --exact --id');
-    // wingetcreate must receive the PAT that onboarding documents and credential health checks.
-    expect(workflowSource('release-publish.yml'))
-      .toContain('WINGET_GITHUB_TOKEN: ${{ secrets.WINGET_GITHUB_TOKEN || secrets.WINGET_CREATE_GITHUB_TOKEN }}');
-    // The finder must search for the title wingetcreate is given, or a retry submits a duplicate PR.
-    expect(workflowSource('release-publish.yml'))
-      .toContain('$pullTitle = "GuardScan $version [$($manifestDigest.Substring(0, 12))]"');
-    const finder = fs.readFileSync(path.join(repositoryRoot, 'cli/scripts/release/winget-submission.js'), 'utf8');
-    const terms = [...(finder.match(/is:pr ((?:"[^"]+" )+)in:title/)?.[1] ?? '').matchAll(/"([^"]+)"/g)]
-      .map(match => match[1].replace('${version}', '1.1.1'));
-    expect(terms.length).toBeGreaterThan(0);
-    for (const term of terms) expect('GuardScan 1.1.1 [83a52d649b56]').toContain(term);
+  it('retries tap merges until required checks pass', () => {
+    // Stable 1.1.1 attempted a tap merge before its required checks finished.
     for (const name of ['release-publish.yml', 'release-train.yml']) {
       const lines = workflowSource(name).split('\n');
       const tapMerges = lines.flatMap((line, index) => (
@@ -501,12 +477,6 @@ describe('zero-touch release workflow contracts', () => {
         expect(enclosing?.trim()).toBe('for ATTEMPT in $(seq 1 60); do');
       }
     }
-    const priorNuspec = fs.readFileSync(
-      path.join(repositoryRoot, 'cli/__tests__/fixtures/chocolatey-prior/guardscan.nuspec'),
-      'utf8'
-    );
-    expect(priorNuspec).not.toMatch(/<license[\s>]/);
-    expect(priorNuspec).toContain('<licenseUrl>');
   });
 
   it('runs every job after publish when a resumed promote skipped its build', () => {
@@ -578,7 +548,6 @@ describe('zero-touch release workflow contracts', () => {
     expect(train).toContain("type: 'channel_published'");
     expect(train).toContain("type: 'channel_submitted'");
     expect(train).toContain("releaseTrainChannels(process.env.RELEASE_CHANNEL)");
-    expect(train).not.toContain("? ['homebrew-core', 'winget', 'chocolatey']");
     expect(train).toContain('cannot start or promote while a stable train remains incomplete');
     expect(train).toContain('sourcePrHead: process.env.SOURCE_PR_HEAD');
     expect(train).toContain('`expected_head=${train.sourcePrHead}`');
@@ -606,7 +575,7 @@ describe('zero-touch release workflow contracts', () => {
     ]) {
       expect(train.jobs[job].if).toContain("vars.RELEASE_AUTOMATION_ENABLED == 'true'");
     }
-    for (const job of ['github', 'npm', 'catalog', 'winget', 'chocolatey']) {
+    for (const job of ['github', 'npm', 'catalog']) {
       expect(publish.jobs[job].if).toContain("vars.RELEASE_AUTOMATION_ENABLED == 'true'");
     }
     const canary = yaml.load(workflowSource('release-canary.yml')) as {
@@ -694,11 +663,6 @@ describe('zero-touch release workflow contracts', () => {
     expect(train).toContain('const canonicalEntries = entries => entries.sort(([left], [right])');
     expect(train).toContain('npm: Object.fromEntries(canonicalEntries(');
     expect(train).toContain('pypi: Object.fromEntries(canonicalEntries(');
-    expect(publish).toMatch(
-      /channel_accepted', 'channel_rejected', 'channel_corrected', 'channel_resubmitted'/
-    );
-    expect(publish.match(/channel_accepted', 'channel_rejected', 'channel_corrected', 'channel_resubmitted'/g))
-      .toHaveLength(2);
     expect(train).not.toContain('NPM_TOKEN');
     expect(train).not.toContain('PYPI_TOKEN');
   });
@@ -756,7 +720,6 @@ describe('zero-touch release workflow contracts', () => {
     expect(stepCommands(record)).toContain('refs/tags/v$TRAIN_VERSION:refs/tags/v$TRAIN_VERSION');
     expect(stepCommands(record)).toContain('origin/release-ledger:events/${tag}.jsonl');
     expect(canary).toContain('VERSION: ${{ matrix.train.version }}');
-    expect(canary).toContain('version = \'${{ matrix.train.version }}\'');
     expect(canary).toContain('assert_version guardscan --version');
     expect(canary).toContain('test "$ACTUAL_VERSION" = "$VERSION"');
     expect(canary).toContain('test "$(guardscan --version | tr -d \'\\r\')" = "$VERSION"');
@@ -782,20 +745,6 @@ describe('zero-touch release workflow contracts', () => {
     expect(canary).not.toContain('{remoteIdentity: `${channel}:${version}`}');
     expect(canary).toContain("if: inputs.version == '' || vars.RELEASE_AUTOMATION_ENABLED == 'true'");
     expect(record.if).toContain("always() && vars.RELEASE_AUTOMATION_ENABLED == 'true'");
-  });
-
-  it('keeps undiscovered moderated packages pending and fails discovered lifecycle errors', () => {
-    const canary = workflowSource('release-canary.yml');
-    expect(canary).toContain('$notPublic = $false');
-    expect(canary).toContain('$notPublic = $true');
-    expect(canary.match(/if \(\$notPublic\) \{\s+\$report.status = 'pending'/g)).toHaveLength(2);
-    expect(canary).not.toContain('$report.reason');
-    expect(canary).toContain("$report.status = 'failed'");
-    expect(canary).toContain('throw "Unexpected moderated registry error: $unexpectedFailure"');
-    expect(canary).toContain("$availabilityStatus -eq 2 -and $noResult");
-    expect(canary).not.toContain("throw 'WinGet package is not public yet'");
-    expect(canary).not.toContain("throw 'Chocolatey package is not public yet'");
-    expect(canary).not.toContain("-notmatch 'not found|No package found|Unable to find'");
   });
 
   it('tests every TestPyPI wheel natively before production PyPI publication', () => {
@@ -925,8 +874,6 @@ describe('zero-touch release workflow contracts', () => {
       'pypi',
       'apple-notarization',
       'windows-signing',
-      'winget',
-      'chocolatey',
     ]) {
       expect(combined).toContain(environment);
     }
@@ -955,15 +902,11 @@ describe('zero-touch release workflow contracts', () => {
     expect(publish).toContain('RELEASE_NPM_VERSION: 11.21.0');
     expect(publish).toContain('npm install --global "npm@${RELEASE_NPM_VERSION}"');
     expect(combined).toContain('pypa/gh-action-pypi-publish@');
-    expect(publish).toContain('& .\\wingetcreate.exe submit');
-    expect(publish.indexOf("throw 'Pinned wingetcreate executable failed SHA-256 verification'"))
-      .toBeLessThan(publish.indexOf('& .\\wingetcreate.exe submit'));
     expect(combined).toContain('cp payload/*.whl dist/');
     expect(combined).toContain('Verify complete TestPyPI file set');
     expect(combined).toContain('Verify complete PyPI file set');
     expect(combined).toContain('remote == local');
     expect(publish).not.toContain('try:\n          try:');
-    expect(publish).toContain('choco push');
     const producer = (yaml.load(publish) as any).jobs.github.steps.find((step: any) => (
       step.name === 'Authenticate release-build producer and verify payload'
     )).run;
@@ -974,8 +917,6 @@ describe('zero-touch release workflow contracts', () => {
     expect(producer).toContain('--certificate-github-workflow-sha "$BUILD_WORKFLOW_SHA"');
     expect(producer).toContain('.producer.runId == $run_id and (.producer.runAttempt | tostring) == $attempt');
     expect(producer).toContain('.commit == $tag_sha');
-    expect(publish).toContain('choco install guardscan --source "$feed" --version 1.0.5');
-    expect(publish).toContain('choco upgrade guardscan --source "$feed" --version "$candidateVersion"');
     expect(combined).toContain('/.github/workflows/release-build.yml@refs/heads/main');
     expect(combined).not.toContain('/.github/workflows/release-train.yml@');
   });
@@ -986,56 +927,6 @@ describe('zero-touch release workflow contracts', () => {
     expect(canary).toContain('artifact.startsWith(`canary-${candidate}-`)');
     expect(canary).toContain('recordCanary({ledgerFile: ledger');
     expect(canary).not.toContain('localeCompare');
-  });
-
-  it('binds moderated submissions to exact provider evidence and fail-closed preflights', () => {
-    const publish = workflowSource('release-publish.yml');
-    const train = workflowSource('release-train.yml');
-    expect(publish).toContain("schemaVersion = 'guardscan.moderated-submission.v1'");
-    expect(publish).toContain('release-winget-evidence-${{ inputs.tag }}');
-    expect(publish).toContain('release-chocolatey-evidence-${{ inputs.tag }}');
-    expect(publish).toContain('RELEASE_WINGETCREATE_VERSION: 1.12.13.0');
-    expect(publish).toContain(
-      'RELEASE_WINGETCREATE_SHA256: 24042bd37915805615e6cf969ac57c6439124c3fe85823327f5f3fb24bd9ffea'
-    );
-    expect(publish).not.toContain('dotnet tool install --global wingetcreate');
-    expect(publish).toContain('Pinned wingetcreate executable failed SHA-256 verification');
-    expect(publish).toContain("'cli/scripts/release/winget-submission.js', $manifestDirectory, $env:RELEASE_TAG");
-    expect(publish).toContain("Get-WinGetState '--public'");
-    const wingetHelper = fs.readFileSync(path.resolve(__dirname, '../../scripts/release/winget-submission.js'), 'utf8');
-    expect(wingetHelper).toContain('contents/${prefix.slice(0, -1)}?ref=${commit}');
-    expect(wingetHelper).toContain('api(`${endpoint}/files?per_page=100`)');
-    expect(wingetHelper).toContain('api(`repos/${REPOSITORY}/git/blobs/${file.sha}`)');
-    expect(wingetHelper).toContain("throw new Error('WinGet manifest blob digest mismatch')");
-    expect(publish).toContain('https://community.chocolatey.org/api/v2/package/guardscan/$version');
-    expect(publish).toContain("throw 'WinGet public manifest integrity conflict or verification unavailable'");
-    expect(publish).toContain('python cli/scripts/release/chocolatey-preflight.py --package $package.FullName --version $version');
-    expect(publish).toContain("throw 'Chocolatey public package integrity conflict or verification unavailable'");
-    expect(publish).toContain('protected release ledger prevents a blind duplicate');
-    expect(publish.match(/throw 'Unable to fetch protected release ledger'/g)).toHaveLength(2);
-    expect(train).toContain('release-winget-evidence-${{ needs.prepare.outputs.tag }}');
-    expect(train).toContain('release-chocolatey-evidence-${{ needs.prepare.outputs.tag }}');
-    expect(train).toContain('readModeratedEvidence');
-    expect(train).toContain("evidence.schemaVersion !== 'guardscan.moderated-submission.v1'");
-    expect(train).toContain('evidence.remoteIdentity');
-    expect(train).toContain('evidence.remoteDigest');
-    expect(train).toContain('expectedRemoteIdentity');
-    expect(train).toContain('submission: evidence');
-    expect(train).toContain('releaseTrainChannels(process.env.RELEASE_CHANNEL)');
-    expect(train).not.toMatch(
-      /for \(const channel of \['winget', 'chocolatey'\]\)[\s\S]*?remoteIdentity: `\$\{channel\}:\$\{tag\}`/
-    );
-  });
-
-  it('requires exact public moderated CLI versions after discovery', () => {
-    const canary = workflowSource('release-canary.yml');
-    const publish = workflowSource('release-publish.yml');
-    expect(canary).toContain('$installedVersion = (& guardscan --version | Out-String).Trim()');
-    expect(canary.match(/\$reportedVersion -cne '\$\{\{ matrix.train.version \}\}'/g)).toHaveLength(2);
-    expect(publish.match(/\$installedVersion -ne \(\$env:RELEASE_INPUT_TAG\)\.TrimStart\('v'\)/g))
-      .toHaveLength(2);
-    expect(publish).toContain('WinGet is unavailable on the selected Windows runner');
-    expect(publish).toContain('Chocolatey is unavailable on the selected Windows runner');
   });
 
   it('uses one cryptographically bound shared Homebrew and Scoop catalog', () => {

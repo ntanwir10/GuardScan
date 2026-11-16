@@ -19,9 +19,11 @@ verification.
 
 2026-07-25
 
+2026-11-16: WinGet and Chocolatey were dropped as channels; see docs/RELEASE_AUTOMATION.md.
+
 ## Context
 
-GuardScan's npm package requires Node.js. Homebrew, Scoop, WinGet, Chocolatey, and an optional `pipx` channel need an immutable executable that runs when Node and npm are absent from `PATH`. Those channels must install the same GuardScan implementation and may not bootstrap through npm, `npx`, or an unversioned download.
+GuardScan's npm package requires Node.js. Homebrew, Scoop, and an optional `pipx` channel need an immutable executable that runs when Node and npm are absent from `PATH`. Those channels must install the same GuardScan implementation and may not bootstrap through npm, `npx`, or an unversioned download.
 
 The CLI currently has characteristics that constrain the builder:
 

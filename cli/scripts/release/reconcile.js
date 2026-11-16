@@ -3,11 +3,6 @@
 const semver = require('semver');
 const {CHANNELS} = require('./lib');
 const {compareUtf8} = require('./deterministic');
-const {MODERATED_CHANNELS} = require('./events');
-
-// Once the train has submitted to WinGet or Chocolatey, their moderators set the pace and the verdict;
-// neither may hold the next release. A submission that never happened or failed still blocks.
-const MODERATION_STATES = new Set(['submitted', 'accepted', 'rejected', 'corrected', 'resubmitted']);
 
 function channelOperation(channel) {
   const definition = CHANNELS.find(candidate => candidate.id === channel);
@@ -26,8 +21,7 @@ function reconcileRelease(state) {
   for (const [channel, channelState] of Object.entries(state.channels || {})) {
     const definition = CHANNELS.find(candidate => candidate.id === channel);
     const operation = channelOperation(channel);
-    const required = definition.required !== false
-      && !(MODERATED_CHANNELS.has(channel) && MODERATION_STATES.has(channelState.status));
+    const required = definition.required !== false;
     if (channelState.status === 'verified') continue;
     if (['withdrawn', 'superseded'].includes(channelState.status)) {
       (required ? blocking : optionalBlocking).push(`${channel} ${channelState.status}`);
