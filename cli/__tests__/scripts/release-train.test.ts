@@ -668,7 +668,7 @@ describe('append-only release train', () => {
     const ledger = path.join(root, 'v1.2.0-rc.1.jsonl');
     try {
       appendEvent(ledger, eventInput('train_started', 0, {
-        payload: {channels: ['npm', 'github', 'winget']},
+        payload: {channels: ['npm', 'github', 'pypi']},
       }));
       const published = eventInput('channel_published', 1, {
         channel: 'npm',
@@ -748,7 +748,7 @@ describe('append-only release train', () => {
         complete: false,
         actions: expect.arrayContaining([
           {channel: 'github', currentStatus: 'planned', action: 'publish', required: true},
-          {channel: 'winget', currentStatus: 'planned', action: 'submit', required: true},
+          {channel: 'pypi', currentStatus: 'planned', action: 'publish', required: true},
         ]),
       });
       const rollbackInput = {

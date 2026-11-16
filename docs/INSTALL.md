@@ -8,12 +8,11 @@ From 1.1.1, GuardScan is distributed through the channels below. This table is t
 | pnpm | Available | Any platform with Node.js 22+ |
 | Yarn | Available | Any platform with Node.js 22+ |
 | Bun | Available | Any platform with Node.js 22+ |
-| Homebrew tap | From 1.1.1 | macOS arm64/x64, Linux arm64/x64 (glibc) |
-| Scoop | From 1.1.1 | Windows x64 |
-| PyPI (`pipx`) | From 1.1.1 | macOS arm64/x64, Linux x86_64/aarch64 (manylinux_2_28), Windows x64 |
-| WinGet | From 1.1.1, available once Microsoft's moderation accepts it | Windows x64 |
-| Chocolatey | From 1.1.1, available once Chocolatey's moderation accepts it | Windows x64 |
-| Standalone binaries (GitHub Releases) | From 1.1.1 | macOS arm64/x64, Linux arm64/x64 (glibc), Windows x64 |
+| npx | Run without installing; see [Run without installing](#run-without-installing) | Any platform with Node.js 22+ |
+| Homebrew tap | Available from 1.1.1 | macOS arm64/x64, Linux arm64/x64 (glibc) |
+| Scoop | Available from 1.1.1 | Windows x64 |
+| PyPI (`pipx`) | Available from 1.1.1 | macOS arm64/x64, Linux x86_64/aarch64 (manylinux_2_28), Windows x64 |
+| Standalone binaries (GitHub Releases) | Available from 1.1.1 | macOS arm64/x64, Linux arm64/x64 (glibc), Windows x64 |
 
 ## Requirements
 
@@ -83,15 +82,13 @@ Every artifact carries a SHA256 entry in `SHA256SUMS`, a Sigstore signature and 
 | Homebrew tap | `brew tap ntanwir10/tap`, then `brew trust --formula ntanwir10/tap/guardscan`, then `brew install ntanwir10/tap/guardscan` | `brew upgrade guardscan` | `brew uninstall guardscan` |
 | Scoop | `scoop bucket add guardscan https://github.com/ntanwir10/homebrew-tap` then `scoop install guardscan` | `scoop update guardscan` | `scoop uninstall guardscan` |
 | PyPI | `pipx install guardscan-cli` | `pipx upgrade guardscan-cli` | `pipx uninstall guardscan-cli` |
-| WinGet | `winget install NaumanTanwir.GuardScan` | `winget upgrade NaumanTanwir.GuardScan` | `winget uninstall NaumanTanwir.GuardScan` |
-| Chocolatey | `choco install guardscan` | `choco upgrade guardscan` | `choco uninstall guardscan` |
 | Standalone binary | download from [GitHub Releases](https://github.com/ntanwir10/GuardScan/releases), [verify](#verify-a-download), put on `PATH` | download the new binary | delete the binary |
 
 Standalone release files are named `guardscan-<version>-darwin-arm64.zip`, `guardscan-<version>-darwin-x64.zip`, `guardscan-<version>-linux-x64-glibc.tar.gz`, `guardscan-<version>-linux-arm64-glibc.tar.gz` and `guardscan-<version>-windows-x64.zip`, alongside `SHA256SUMS`, Sigstore bundles and SBOMs (CycloneDX and SPDX).
 
 Current Homebrew refuses to load formulae from third-party taps until you trust them, which is what `brew trust` does. Tap first, then trust. If your Homebrew has no `brew trust` command, it predates that check: skip that step.
 
-Homebrew, Scoop, pipx, WinGet and Chocolatey are third-party package managers; install them from their own projects.
+Homebrew, Scoop and pipx are third-party package managers; install them from their own projects. WinGet and Chocolatey are not supported; Windows users should use Scoop, pipx, npm or npx.
 
 ## Verify a download
 

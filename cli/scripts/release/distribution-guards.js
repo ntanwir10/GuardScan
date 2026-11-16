@@ -2,7 +2,6 @@
 
 const TERMINAL_CHANNEL_STATUSES = new Set(['verified', 'failed', 'withdrawn', 'superseded']);
 const CATALOG_CHANNELS = ['homebrew', 'scoop'];
-const MODERATED_CHANNELS = new Set(['winget', 'chocolatey']);
 
 function canaryChannelEventType(state, channel, passed, complete) {
   const status = state.channels?.[channel]?.status;
@@ -13,7 +12,6 @@ function canaryChannelEventType(state, channel, passed, complete) {
       : null;
   }
   if (!complete) return null;
-  if (MODERATED_CHANNELS.has(channel)) return status === 'accepted' ? 'channel_verified' : null;
   return ['planned', 'published', 'accepted'].includes(status) ? 'channel_verified' : null;
 }
 

@@ -45,25 +45,6 @@ describe('final release evidence boundaries', () => {
     }
   });
 
-  it('checks the actual executable version before accepting moderated canaries', () => {
-    const job = workflow('release-canary.yml').jobs.moderated;
-    const step = job.steps.find((s: any) => s.name === 'Poll, install, invoke, and uninstall public moderated channels');
-    expect(step.run.match(/\$reportedVersion = \(& guardscan --version \| Out-String\)\.Trim\(\)/g)).toHaveLength(2);
-    expect(step.run.match(/\$reportedVersion -cne '\$\{\{ matrix.train.version \}\}'/g)).toHaveLength(2);
-    expect(step.run.indexOf('reportedVersion -cne')).toBeLessThan(step.run.indexOf("$report.status = 'passed'"));
-  });
-
-  it('refreshes installed WinGet paths without discarding process-only tools before invocation', () => {
-    const step = workflow('release-canary.yml').jobs.moderated.steps.find((s: any) => (
-      s.name === 'Poll, install, invoke, and uninstall public moderated channels'
-    ));
-    const winget = step.run.slice(step.run.indexOf('winget install --exact'), step.run.indexOf('winget uninstall --exact'));
-    const refresh = "$env:PATH = @([Environment]::GetEnvironmentVariable('Path', 'Machine'), [Environment]::GetEnvironmentVariable('Path', 'User'), $env:PATH) -join ';'";
-    expect(winget).toContain(refresh);
-    expect(winget.indexOf(refresh)).toBeGreaterThan(winget.indexOf("throw 'WinGet installation failed'"));
-    expect(winget.indexOf(refresh)).toBeLessThan(winget.indexOf('& guardscan --version'));
-  });
-
   it('verifies the complete immutable adapter projection, not only matching target bytes', () => {
     const {verifyAdapterProjection} = require('../../scripts/release/adapter-projection');
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'adapter-projection-'));

@@ -84,8 +84,6 @@ not proved today.
 | Native GitHub release | Exact executable with Sigstore signature and build attestation (`community` policy: macOS ad-hoc signed, Windows unsigned) and immutable redownload | Five-host SEA build/smoke, deterministic archive, manifest, checksum, SBOM, signature, and attestation contracts exist. | cosign verification of each native executable and of `SHA256SUMS`, a digest match for every file listed in `SHA256SUMS` (every asset except `SHA256SUMS` and its Sigstore bundle), and `gh attestation` verification of each executable, archive, wheel, and the npm tarball must succeed; every draft asset must redownload identically, and the release must become immutable. |
 | PyPI/pip/pipx | Wheel containing the exact signed SEA executable | Wheel construction, platform tags, launcher integrity, and release-manifest binding have contract tests. | TestPyPI then PyPI OIDC publication and pip/pipx install/invoke/uninstall must pass on all supported hosts. |
 | Shared Homebrew/Scoop catalog | Generated projection bound to the immutable release manifest | Empty bootstrap and atomic formula/manifest/lock generation and validation are implemented. | The first stable catalog PR must pass native install/upgrade/invoke/uninstall and GuardScan must verify the merged lock callback or reconciliation result. |
-| WinGet | Generated portable manifest plus upstream state | Rendering, validation commands, and append-only submitted/accepted/verified states are implemented. | Local manifest install must pass, then upstream PR acceptance and public-catalog install must be observed. |
-| Chocolatey | Deterministic `.nupkg` plus moderated public state | Renderer, local validation command, and append-only moderation states are implemented. | Local-feed lifecycle must pass, then validation, verification, VirusTotal, moderation, and public install must complete. |
 | RC soak and promotion | Public canaries, unchanged PR head, no incident, 24-hour decision | Promotion policy and reconciliation contracts are tested. | At least 24 hourly green samples per required channel and a complete 24-hour wall-clock window are mandatory. |
 | Rollback/forward fix | Append-only recovery evidence | Known-good restoration and first-release withdrawal model supersession, exact catalog correction/removal, provider-owned yanking/deprecation, and recovery incidents without overwriting immutable artifacts. | Rehearse both a partial-publication failure and the no-predecessor first-release path before stable; require a separately reviewed patch when no verified baseline exists. |
 | Homebrew Core | Separately authorized submission and public-Core canary | A renderer/validator exists, but Core is not selected by the current release train. | A reviewed enablement change, Core submission/acceptance, and `brew install guardscan` public canary are required. It never blocks `1.1.1`. |
@@ -102,7 +100,7 @@ not proved today.
 | SEA archives | Embedded pinned Node runtime | Linux glibc x64/arm64, macOS x64/arm64, Windows x64 | Current-SHA Sigstore signature and attestation (no notarization or Authenticode under `community`), immutable release, and public redownload. |
 | PyPI wheels | Exact Sigstore-signed SEA plus standard-library launcher | `manylinux_2_28_x86_64`, `manylinux_2_28_aarch64`, `macosx_11_0_x86_64`, `macosx_11_0_arm64`, `win_amd64` | TestPyPI/PyPI OIDC and pip/pipx native lifecycles. |
 | First-party Homebrew tap | Sigstore-signed SEA selected by host CPU/OS | Four macOS/Linux targets from the shared catalog | Stable catalog merge and public tap lifecycle. |
-| Scoop, WinGet, Chocolatey | Sigstore-signed Windows x64 SEA (no Authenticode) | One manifest/package per catalog, all bound to the same release digest | Public catalog acceptance and clean Windows lifecycle. |
+| Scoop | Sigstore-signed Windows x64 SEA (no Authenticode) | One manifest bound to the release digest | Public catalog acceptance and clean Windows lifecycle. |
 | Homebrew Core | Source build with Homebrew `node` dependency | Not selected | Separate reviewed enablement and public-Core verification. |
 
 ## Release decision rule
@@ -113,7 +111,6 @@ command-specific partial result does not block unrelated development, but it
 does block any public claim that the command is verified on that variant.
 
 Stable release completion additionally requires every selected distribution
-channel to materialize as `verified` in the append-only ledger. Moderated
-channels may remain `submitted`, but the release is then still incomplete.
+channel to materialize as `verified` in the append-only ledger.
 Homebrew Core is not selected and therefore is neither a current install promise
 nor a `1.1.1` completion gate.

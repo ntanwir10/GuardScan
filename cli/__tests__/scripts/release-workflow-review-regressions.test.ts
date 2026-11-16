@@ -414,25 +414,6 @@ describe('release workflow review regressions', () => {
     }
   });
 
-  it('prepares WinGet local-manifest installation and submits only the version leaf', () => {
-    const publish = workflow('release-publish.yml');
-    const winget = publish.jobs.winget;
-    const local = step(winget, 'Validate and install WinGet local manifest');
-    expect(local.run).toContain('winget settings --enable LocalManifestFiles');
-    expect(local.run.indexOf('winget settings --enable LocalManifestFiles'))
-      .toBeLessThan(local.run.indexOf('winget install --manifest'));
-    expect(local.run).toContain("if ($LASTEXITCODE -ne 0) { throw 'WinGet local manifest setting failed' }");
-    const submit = step(winget, 'Preflight and submit WinGet manifests with exact evidence');
-    expect(submit.run).toContain('$manifestDirectory = $installer.Directory.FullName');
-    expect(submit.run).toContain('Get-ChildItem $manifestDirectory -File');
-    expect(submit.run).toContain('cli/scripts/release/winget-submission.js');
-    expect(submit.run).toContain('& .\\wingetcreate.exe submit --prtitle');
-    expect(submit.run).toContain('--token $env:WINGET_GITHUB_TOKEN $manifestDirectory');
-    expect(submit.run.indexOf("throw 'Pinned wingetcreate executable failed SHA-256 verification'"))
-      .toBeLessThan(submit.run.indexOf('& .\\wingetcreate.exe submit'));
-    expect(submit.run).not.toContain('wingetcreate submit adapters\\winget ');
-  });
-
   it('initializes Linux Homebrew and exercises preview formulas through the tap identifier', () => {
     const canary = workflow('release-canary.yml');
     const brew = step(canary.jobs.adapters, 'Homebrew install, test, upgrade check, and uninstall');
@@ -451,20 +432,6 @@ describe('release workflow review regressions', () => {
     expect(scoop.run).toContain('scoop config installRunAsAdmin true');
     expect(scoop.run).toContain("Join-Path $scoopRoot 'shims'");
     expect(scoop.run.indexOf("Join-Path $scoopRoot 'shims'")).toBeLessThan(scoop.run.indexOf('scoop bucket add'));
-  });
-
-  it('normalizes only explicit moderated-channel not-public responses and requires exact Chocolatey version evidence', () => {
-    const canary = workflow('release-canary.yml');
-    const moderated = step(canary.jobs.moderated, 'Poll, install, invoke, and uninstall public moderated channels');
-    expect(moderated.run).toContain('$notPublic');
-    expect(moderated.run).toContain("$report.status = 'pending'");
-    expect(moderated.run).not.toContain('$report.reason');
-    expect(moderated.run).toContain('Unexpected moderated registry error:');
-    expect(moderated.run).toContain("} catch {\n    $report.status = 'failed'\n    $report.error = $_.ToString()\n    $unexpectedFailure = $_.ToString()");
-    expect(moderated.run).toContain('throw "Unexpected moderated registry error: $unexpectedFailure"');
-    expect(moderated.run).toContain('choco search guardscan --exact --version');
-    expect(moderated.run).toContain('$exactVersion');
-    expect(moderated.run).toContain('$LASTEXITCODE');
   });
 });
 
@@ -492,7 +459,7 @@ describe('release review recovery contracts', () => {
   it('declares and forwards exactly the publication secrets its consumers need', () => {
     const publish = workflow('release-publish.yml');
     const caller = workflow('release-train.yml').jobs.publish;
-    const inventory = ['RELEASE_APP_PRIVATE_KEY', 'WINGET_CREATE_GITHUB_TOKEN', 'WINGET_GITHUB_TOKEN', 'CHOCO_API_KEY'];
+    const inventory = ['RELEASE_APP_PRIVATE_KEY'];
     expect(Object.keys(publish.on.workflow_call.secrets).sort()).toEqual(inventory.sort());
     expect(Object.keys(caller.secrets).sort()).toEqual(inventory.sort());
     expect(publish.on.workflow_call.secrets.RELEASE_APP_PRIVATE_KEY.required).toBe(true);

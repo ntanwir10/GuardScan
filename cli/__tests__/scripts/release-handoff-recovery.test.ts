@@ -137,17 +137,6 @@ describe('release handoff recovery regressions', () => {
     expect(result.stdout).toBe('verified-native');
   }));
 
-  it.each([['winget', 'Render WinGet adapter with trusted tooling'], ['chocolatey', 'Render Chocolatey adapter with trusted tooling']])('uses an explicitly compatible renderer shell on Windows: %s', (job, name) => temporary(root => {
-    const render = step(publish.jobs[job], name);
-    expect(render.shell).toBe('bash');
-    const script = "node() { printf '%s\\n' \"$@\"; };\n" + render.run;
-    const workspace = path.join(root, 'workspace with spaces');
-    const result = shell(script, root, {GITHUB_WORKSPACE: workspace});
-    expect(result.status).toBe(0);
-    expect(result.stdout).toContain(workspace + '/source/cli');
-    expect(result.stdout).toContain(workspace + '/cli');
-  }));
-
   it('loads successful rehearsal notarization JSON as a file rather than a package', () => temporary(root => {
     fs.mkdirSync(path.join(root, 'rehearsal-standalone'));
     fs.writeFileSync(path.join(root, 'rehearsal-standalone/notary-submission.json'), JSON.stringify({status: 'Accepted'}));

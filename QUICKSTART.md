@@ -10,7 +10,7 @@ guardscan init
 guardscan security --offline --no-cve
 ```
 
-Homebrew, Scoop, pipx and standalone binaries (Node.js bundled) are also available from 1.1.1, and WinGet and Chocolatey follow once their moderation accepts the package; see [docs/INSTALL.md](docs/INSTALL.md).
+Homebrew, Scoop, pipx and standalone binaries (Node.js bundled) are also available from 1.1.1. Windows users should use Scoop, pipx, npm or npx. To try it without installing, run `npx guardscan@latest <command>` (Node.js 22 or newer); see [docs/INSTALL.md](docs/INSTALL.md).
 
 ## Optional: add AI review (bring your own key)
 

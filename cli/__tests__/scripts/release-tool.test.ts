@@ -270,19 +270,13 @@ describe('release planning and state summaries', () => {
     });
   });
 
-  it('does not hold release completion on WinGet or Chocolatey moderation', () => {
+  it('never blocks completion on the retired WinGet and Chocolatey channels of historical ledgers', () => {
     const verified = {npm: {status: 'verified'}, github: {status: 'verified'}, pypi: {status: 'verified'}};
-    for (const status of ['submitted', 'accepted', 'rejected', 'corrected', 'resubmitted']) {
-      const result = reconcileRelease({incidents: {}, channels: {...verified, winget: {status}, chocolatey: {status: 'submitted'}}});
+    for (const status of ['planned', 'submitted', 'accepted', 'rejected', 'resubmitted', 'failed']) {
+      const result = reconcileRelease({incidents: {}, channels: {...verified, winget: {status}, chocolatey: {status}}});
       expect(result).toMatchObject({complete: true, blocked: false, blocking: []});
-      expect(result.actions.find((action: {channel: string}) => action.channel === 'winget'))
-        .toMatchObject({required: false, currentStatus: status});
     }
-    // The train's own submission must still happen and succeed.
-    expect(reconcileRelease({incidents: {}, channels: {...verified, winget: {status: 'planned'}}}).complete).toBe(false);
-    expect(reconcileRelease({incidents: {}, channels: {...verified, chocolatey: {status: 'failed'}}}))
-      .toMatchObject({complete: false, blocking: ['chocolatey failed']});
-    // Other channels and open incidents keep blocking.
+    // Every other channel and open incidents keep blocking.
     expect(reconcileRelease({incidents: {}, channels: {...verified, npm: {status: 'published'}}}).complete).toBe(false);
     expect(reconcileRelease({incidents: {i1: {status: 'open'}}, channels: {...verified, winget: {status: 'submitted'}}}).complete)
       .toBe(false);
@@ -294,11 +288,10 @@ describe('release planning and state summaries', () => {
     ]);
     expect(releaseTrainChannels('stable')).toEqual([
       'npm', 'pnpm', 'yarn', 'bun', 'github', 'homebrew', 'scoop', 'pypi',
-      'winget', 'chocolatey',
     ]);
     expect(releaseTrainChannels('stable', {homebrewCoreEnabled: true})).toEqual([
       'npm', 'pnpm', 'yarn', 'bun', 'github', 'homebrew', 'scoop', 'pypi',
-      'homebrew-core', 'winget', 'chocolatey',
+      'homebrew-core',
     ]);
   });
 

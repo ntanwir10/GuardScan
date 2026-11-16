@@ -236,8 +236,6 @@ jobs:
       APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
       APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
       APPLE_NOTARY_PRIVATE_KEY: ${{ secrets.APPLE_NOTARY_PRIVATE_KEY }}
-      WINGET_CREATE_GITHUB_TOKEN: ${{ secrets.WINGET_CREATE_GITHUB_TOKEN }}
-      CHOCO_API_KEY: ${{ secrets.CHOCO_API_KEY }}
 
   prepare:
     permissions:
@@ -1689,9 +1687,6 @@ jobs:
       channel: ${{ needs.prepare.outputs.channel }}
     secrets:
       RELEASE_APP_PRIVATE_KEY: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
-      WINGET_GITHUB_TOKEN: ${{ secrets.WINGET_GITHUB_TOKEN }}
-      WINGET_CREATE_GITHUB_TOKEN: ${{ secrets.WINGET_CREATE_GITHUB_TOKEN }}
-      CHOCO_API_KEY: ${{ secrets.CHOCO_API_KEY }}
 
   record:
     name: Append publication evidence to protected ledger
@@ -1757,16 +1752,6 @@ jobs:
         with:
           name: release-catalog-${{ needs.prepare.outputs.tag }}
           path: catalog-evidence
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        if: needs.prepare.outputs.channel == 'stable'
-        with:
-          name: release-winget-evidence-${{ needs.prepare.outputs.tag }}
-          path: moderated-evidence/winget
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        if: needs.prepare.outputs.channel == 'stable'
-        with:
-          name: release-chocolatey-evidence-${{ needs.prepare.outputs.tag }}
-          path: moderated-evidence/chocolatey
       - name: Fetch ledger, append chained events, and push
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
@@ -1927,69 +1912,6 @@ jobs:
             }
             return [channel, evidence];
           }));
-          const readModeratedEvidence = channel => {
-            const file = `moderated-evidence/${channel}/${channel}-evidence.json`;
-            const evidence = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, ''));
-            if (evidence.schemaVersion !== 'guardscan.moderated-submission.v1'
-                || evidence.channel !== channel
-                || evidence.version !== version
-                || evidence.tag !== tag
-                || typeof evidence.packageIdentity !== 'string'
-                || evidence.packageIdentity.length === 0
-                || typeof evidence.remoteIdentity !== 'string'
-                || evidence.remoteIdentity.length === 0
-                || !/^[a-f0-9]{64}$/.test(evidence.remoteDigest || '')
-                || ![
-                  'submitted', 'pending', 'pending-ledger', 'accepted', 'public-exact',
-                  'rejected', 'corrected', 'resubmitted',
-                ].includes(evidence.state)
-                || typeof evidence.provider?.pendingStateQuery !== 'string') {
-              throw new Error(`${channel} submission evidence is invalid or belongs to another release`);
-            }
-            if (channel === 'winget') {
-              const expectedNames = [
-                'NaumanTanwir.GuardScan.installer.yaml',
-                'NaumanTanwir.GuardScan.locale.en-US.yaml',
-                'NaumanTanwir.GuardScan.yaml',
-              ];
-              const names = Object.keys(evidence.files || {}).sort();
-              if (JSON.stringify(names) !== JSON.stringify(expectedNames)
-                  || names.some(name => !/^[a-f0-9]{64}$/.test(evidence.files[name]))) {
-                throw new Error('WinGet submission evidence has an invalid rendered manifest set');
-              }
-              const digestInput = names.map(name => `${name}\0${evidence.files[name]}\n`).join('');
-              const aggregate = crypto.createHash('sha256').update(digestInput).digest('hex');
-              const expectedRemoteIdentity = evidence.state === 'public-exact'
-                ? `github:microsoft/winget-pkgs@${evidence.provider.commit}#${evidence.provider.path}`
-                : `github:microsoft/winget-pkgs/pull/${evidence.provider.pullRequest}@${evidence.provider.commit}#${evidence.provider.path}`;
-              if (aggregate !== evidence.remoteDigest
-                  || evidence.packageIdentity !== `NaumanTanwir.GuardScan@${version}`
-                  || evidence.provider.repository !== 'microsoft/winget-pkgs'
-                  || evidence.provider.path !== `manifests/n/NaumanTanwir/GuardScan/${version}`
-                  || !/^[a-f0-9]{40}$/.test(evidence.provider.commit || '')
-                  || evidence.remoteIdentity !== expectedRemoteIdentity
-                  || evidence.provider.publicBytesVerified !== (evidence.state === 'public-exact')
-                  || (evidence.state !== 'public-exact'
-                    && (!Number.isInteger(evidence.provider.pullRequest)
-                      || evidence.provider.pullRequest <= 0))) {
-                throw new Error('WinGet submission evidence does not match the rendered release identity');
-              }
-            } else {
-              const expectedRemoteIdentity = evidence.state === 'public-exact'
-                ? evidence.provider.url
-                : `chocolatey:${evidence.packageIdentity}`;
-              if (evidence.packageIdentity !== `guardscan@${version}`
-                  || evidence.packageFilename !== `guardscan.${version}.nupkg`
-                  || evidence.provider.url !== `https://community.chocolatey.org/api/v2/package/guardscan/${version}`
-                  || evidence.remoteIdentity !== expectedRemoteIdentity
-                  || evidence.provider.publicBytesVerified !== (evidence.state === 'public-exact')) {
-                throw new Error('Chocolatey submission evidence does not match the rendered package identity');
-              }
-            }
-            const normalized = {...evidence};
-            delete normalized.checkedAt;
-            return normalized;
-          };
           for (const channel of ['github', 'npm', 'pypi']) {
             const evidence = providerEvidence[channel];
             const idempotencyKey = `published:${channel}:${tag}`;
@@ -2030,48 +1952,6 @@ jobs:
                 },
               },
             });
-          }
-          if (process.env.RELEASE_CHANNEL === 'stable') {
-            for (const channel of ['winget', 'chocolatey']) {
-              const evidence = readModeratedEvidence(channel);
-              const eventType = {
-                accepted: 'channel_accepted',
-                'public-exact': 'channel_accepted',
-                rejected: 'channel_rejected',
-                corrected: 'channel_corrected',
-                resubmitted: 'channel_resubmitted',
-              }[evidence.state] || 'channel_submitted';
-              const current = materializeReleaseState(readEvents(ledger)).channels[channel];
-              const status = current?.status;
-              if (['accepted', 'verified', 'failed', 'withdrawn', 'superseded'].includes(status)) continue;
-              if (eventType === 'channel_submitted' && ['submitted', 'resubmitted'].includes(status)) {
-                if (current.remoteIdentity !== evidence.remoteIdentity
-                    || current.remoteDigest !== evidence.remoteDigest
-                    || current.submission?.packageIdentity !== evidence.packageIdentity
-                    || JSON.stringify(current.artifactIds) !== JSON.stringify([...artifactIds.scoop].sort())) {
-                  throw new Error(`${channel} pending provider evidence conflicts with the recorded submission`);
-                }
-                continue;
-              }
-              const identityKey = crypto.createHash('sha256')
-                .update(evidence.remoteIdentity)
-                .digest('hex')
-                .slice(0, 16);
-              const idempotencyKey = `${eventType}:${channel}:${tag}:${evidence.remoteDigest}:${identityKey}`;
-              appendEvent(ledger, {
-                ...base, timestamp: timestampFor(idempotencyKey), type: eventType, channel,
-                idempotencyKey,
-                payload: {
-                  artifactIds: artifactIds.scoop,
-                  remoteIdentity: evidence.remoteIdentity,
-                  remoteDigest: evidence.remoteDigest,
-                  submission: evidence,
-                  ...(eventType === 'channel_rejected'
-                    ? {reason: evidence.reason || 'provider rejected the moderated submission'}
-                    : {}),
-                },
-              });
-            }
           }
           NODE
           git worktree add ledger-branch origin/release-ledger

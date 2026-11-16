@@ -5,7 +5,6 @@ const EXPECTED_CANARY_TARGETS = Object.freeze([
   ...['linux-x64-glibc', 'linux-arm64-glibc', 'darwin-arm64', 'darwin-x64', 'windows-x64']
     .flatMap(target => [['github', target], ['pypi', target.replace(/-glibc$/, '')]]),
   ['homebrew', 'macOS'], ['homebrew', 'Linux'], ['scoop', 'Windows'],
-  ['winget', 'windows-x64'], ['chocolatey', 'windows-x64'],
 ].map(target => Object.freeze(target)));
 
 function validateCanaryReports(reports, version, evidenceUrl) {
@@ -16,8 +15,7 @@ function validateCanaryReports(reports, version, evidenceUrl) {
   for (const report of reports) {
     const key = `${report.channel}:${report.target}`;
     if (!expected.delete(key) || report.version !== version
-        || !['passed', 'failed', 'pending'].includes(report.status)
-        || (report.status === 'pending' && !['winget', 'chocolatey'].includes(report.channel))
+        || !['passed', 'failed'].includes(report.status)
         || typeof report.checkedAt !== 'string'
         || !Number.isFinite(Date.parse(report.checkedAt))
         || new Date(report.checkedAt).toISOString() !== report.checkedAt

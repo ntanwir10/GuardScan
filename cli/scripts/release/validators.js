@@ -4,8 +4,6 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const {spawnSync} = require('child_process');
-const semver = require('semver');
-const yaml = require('js-yaml');
 const {readBounded} = require('./lib');
 const {
   parseChannels,
@@ -50,40 +48,6 @@ function validateStructuredOutput(manifest, outputDir, channels) {
       throw new Error('Scoop manifest does not preserve the release identity and checksum contract');
     }
     results.scoop = {valid: true, files: 1};
-  }
-  if (channels.includes('winget')) {
-    const root = `winget/manifests/n/NaumanTanwir/GuardScan/${manifest.version}`;
-    const names = [
-      'NaumanTanwir.GuardScan.yaml',
-      'NaumanTanwir.GuardScan.locale.en-US.yaml',
-      'NaumanTanwir.GuardScan.installer.yaml',
-    ];
-    const documents = names.map(name => yaml.load(readOutput(outputDir, `${root}/${name}`, `WinGet ${name}`)));
-    for (const document of documents) {
-      if (document.PackageIdentifier !== 'NaumanTanwir.GuardScan'
-          || document.PackageVersion !== manifest.version) {
-        throw new Error('WinGet manifests do not share one package identity and version');
-      }
-    }
-    const installer = documents[2];
-    if (!/^[A-F0-9]{64}$/.test(installer.Installers?.[0]?.InstallerSha256 || '')) {
-      throw new Error('WinGet installer manifest has an invalid SHA-256');
-    }
-    results.winget = {valid: true, files: 3};
-  }
-  if (channels.includes('chocolatey')) {
-    const nuspec = readOutput(outputDir, 'chocolatey/guardscan.nuspec', 'Chocolatey nuspec');
-    const install = readOutput(
-      outputDir,
-      'chocolatey/tools/chocolateyInstall.ps1',
-      'Chocolatey install script'
-    );
-    if (!nuspec.includes(`<version>${manifest.version}</version>`)
-        || !/checksum64 = '[a-f0-9]{64}'/.test(install)
-        || !install.includes("checksumType64 = 'sha256'")) {
-      throw new Error('Chocolatey package does not preserve the release version and checksum contract');
-    }
-    results.chocolatey = {valid: true, files: 2};
   }
   if (channels.includes('pypi')) {
     const publication = JSON.parse(readOutput(outputDir, 'pypi/publication.json', 'PyPI publication plan'));
@@ -147,41 +111,6 @@ function nativeValidationPlan(
       });
     } else {
       skip('scoop', 'Scoop validation requires Windows PowerShell');
-    }
-  }
-  if (channels.includes('winget')) {
-    if (platform === 'win32') {
-      if (typeof version !== 'string' || semver.valid(version) !== version) {
-        throw new Error('WinGet native validation requires a valid release version');
-      }
-      plan.push({
-        channel: 'winget',
-        command: 'winget',
-        args: [
-          'validate',
-          '--manifest',
-          path.join(outputDir, 'winget', 'manifests', 'n', 'NaumanTanwir', 'GuardScan', version),
-        ],
-      });
-    } else {
-      skip('winget', 'WinGet validation requires Windows');
-    }
-  }
-  if (channels.includes('chocolatey')) {
-    if (platform === 'win32') {
-      plan.push({
-        channel: 'chocolatey',
-        command: 'choco',
-        args: [
-          'pack',
-          path.join(outputDir, 'chocolatey', 'guardscan.nuspec'),
-          '--outputdirectory',
-          tempDir,
-          '--no-progress',
-        ],
-      });
-    } else {
-      skip('chocolatey', 'Chocolatey validation requires Windows');
     }
   }
   if (channels.includes('pypi')) {

@@ -214,22 +214,6 @@ describe('catalog reconciliation source context', () => {
 });
 
 describe('release adapter rendering', () => {
-  it('passes the exact rendered Chocolatey package file names through retry preflight', () => {
-    const {files} = renderAdapters(makeManifest(), 'chocolatey');
-    const run = spawnSync(process.platform === 'win32' ? 'python' : 'python3', ['-c', [
-      'import importlib.util, io, json, sys, zipfile',
-      'spec = importlib.util.spec_from_file_location("preflight", sys.argv[1])',
-      'module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)',
-      'data = io.BytesIO()',
-      'with zipfile.ZipFile(data, "w") as archive:',
-      '    for name, content in json.load(sys.stdin).items(): archive.writestr(name.removeprefix("chocolatey/"), content)',
-      'module.package_inventory(data.getvalue(), "1.2.3")',
-    ].join('\n'), path.resolve(__dirname, '../../scripts/release/chocolatey-preflight.py')], {
-      input: JSON.stringify(files), encoding: 'utf8', timeout: 10000,
-    });
-    if (run.status !== 0) throw new Error(run.stderr || String(run.error));
-    expect(run.status).toBe(0);
-  });
   const catalogOptions = {
     manifestUrl: 'https://github.com/ntanwir10/GuardScan/releases/download/v1.2.3/release-manifest.json',
     manifestSha256: '9'.repeat(64),
@@ -239,10 +223,10 @@ describe('release adapter rendering', () => {
 
   it('renders deterministic native adapters and a fail-closed PyPI publication descriptor', () => {
     const manifest = makeManifest();
-    const rendered = renderAdapters(manifest, 'pypi,chocolatey,winget,scoop,homebrew');
+    const rendered = renderAdapters(manifest, 'pypi,scoop,homebrew');
 
-    expect(rendered.channels).toEqual(['homebrew', 'scoop', 'winget', 'chocolatey', 'pypi']);
-    expect(Object.keys(rendered.files)).toHaveLength(8);
+    expect(rendered.channels).toEqual(['homebrew', 'scoop', 'pypi']);
+    expect(Object.keys(rendered.files)).toHaveLength(3);
 
     const formula = rendered.files['homebrew/Formula/guardscan.rb'];
     expect(formula).toContain('class Guardscan < Formula');
@@ -264,18 +248,6 @@ describe('release adapter rendering', () => {
       bin: 'guardscan.exe',
     });
 
-    const wingetPath = 'winget/manifests/n/NaumanTanwir/GuardScan/1.2.3/NaumanTanwir.GuardScan.installer.yaml';
-    const winget = yaml.load(rendered.files[wingetPath]) as Record<string, any>;
-    expect(winget).toMatchObject({
-      PackageIdentifier: 'NaumanTanwir.GuardScan',
-      PackageVersion: '1.2.3',
-      InstallerType: 'zip',
-      NestedInstallerType: 'portable',
-    });
-    expect(winget.Installers[0].InstallerSha256).toBe('E'.repeat(64));
-
-    expect(rendered.files['chocolatey/tools/chocolateyInstall.ps1'])
-      .toContain(`checksum64 = '${'e'.repeat(64)}'`);
     expect(JSON.parse(rendered.files['pypi/publication.json'])).toMatchObject({
       schemaVersion: 'guardscan.pypi-publication.v1',
       project: 'guardscan-cli',
@@ -329,7 +301,7 @@ describe('release adapter rendering', () => {
     const osIndex: Record<string, number> = {darwin: 0, linux: 2, windows: 4};
     for (const policy of ['community', 'platform']) {
       it(`${policy} manifests render every channel`, () => {
-        const rendered = renderAdapters(makeManifest(policy), 'homebrew,scoop,winget,chocolatey,pypi');
+        const rendered = renderAdapters(makeManifest(policy), 'homebrew,scoop,pypi');
         expect(Object.keys(rendered.files ?? rendered).length).toBeGreaterThan(0);
         expect(() => renderChannelCatalog(makeManifest(policy), catalogOptions)).not.toThrow();
       });
@@ -561,37 +533,27 @@ describe('release adapter rendering', () => {
     try {
       const output = path.join(root, 'adapters');
       const manifest = makeManifest();
-      const channels = 'homebrew,scoop,winget,chocolatey,pypi';
+      const channels = 'homebrew,scoop,pypi';
       writeRenderedOutput(manifest, renderAdapters(manifest, channels), output);
       expect(validateAdapters(manifest, output, channels)).toMatchObject({
         valid: true,
-        channels: ['homebrew', 'scoop', 'winget', 'chocolatey', 'pypi'],
+        channels: ['homebrew', 'scoop', 'pypi'],
         structural: {
           homebrew: {valid: true},
           scoop: {valid: true},
-          winget: {valid: true},
-          chocolatey: {valid: true},
           pypi: {valid: true},
         },
       });
 
       const windowsPlan = nativeValidationPlan(
         output,
-        ['homebrew', 'scoop', 'winget', 'chocolatey', 'pypi'],
+        ['homebrew', 'scoop', 'pypi'],
         'win32',
         path.join(root, 'native-output'),
         manifest.version
       );
       expect(windowsPlan.find(step => step.channel === 'homebrew')).toMatchObject({skipped: true});
       expect(windowsPlan.find(step => step.channel === 'scoop')).toMatchObject({command: 'pwsh'});
-      expect(windowsPlan.find(step => step.channel === 'winget')).toMatchObject({
-        command: 'winget',
-        args: expect.arrayContaining(['validate']),
-      });
-      expect(windowsPlan.find(step => step.channel === 'chocolatey')).toMatchObject({
-        command: 'choco',
-        args: expect.arrayContaining(['pack']),
-      });
       expect(windowsPlan.find(step => step.channel === 'pypi')).toMatchObject({command: 'python.exe'});
     } finally {
       fs.rmSync(root, {recursive: true, force: true});

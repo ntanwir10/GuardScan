@@ -3,13 +3,12 @@
 > **Status.** `1.1.1` is the first release through the train. Its release
 > candidate soaks for 24 hours; promotion then publishes npm with provenance,
 > the five standalone binaries, Homebrew tap, Scoop bucket and PyPI
-> `guardscan-cli`. WinGet and Chocolatey are submitted at stable and become
-> available once their moderation accepts them. `1.1.0` was
+> `guardscan-cli`. `1.1.0` was
 > published to npm by hand from `main` 0ef97f4, outside the train: no provenance,
 > no ledger record; GitHub Release v1.1.0 is immutable and holds only
 > `guardscan-1.1.0.tgz` and `SHA256SUMS`. Signing policy: `community`.
 
-GuardScan uses one RC-first, append-only release train for npm, standalone GitHub assets, Homebrew, Scoop, WinGet, Chocolatey, and PyPI. pnpm, both Yarn generations, and Bun consume the npm package and are verified as separate install channels.
+GuardScan uses one RC-first, append-only release train for npm, standalone GitHub assets, Homebrew, Scoop, and PyPI. pnpm, both Yarn generations, and Bun consume the npm package and are verified as separate install channels. WinGet and Chocolatey are not release channels. The ledger grammar still accepts historical `winget`/`chocolatey` events from the 1.1.1 train so old ledgers keep parsing, but no train selects them.
 
 The automation is fail-closed. A tag is an identity created by the release train, never publication authority. General CI has no tag trigger, publication permission, registry command, or GitHub release job.
 
@@ -32,19 +31,14 @@ evidence until it is bound to the selected commit and exact artifact.
   identity.
 - Missing remote versions are published. Identical remote digests are accepted as retries. Different remote digests open an integrity incident and stop the train.
 - Stable promotion is a machine decision after a full 24-hour window. It requires an unchanged release-PR head, fresh green canaries for every RC channel, and no open release incident.
-- WinGet and Chocolatey remain `submitted` until their public catalogs accept them and a clean public installation passes.
 - Recovery never mutates history or overwrites a release. Normal rollback restores a verified known-good source through a forward-fix patch; the first stable train instead fails closed into withdrawal when no verified baseline exists.
 
 ## Selected channels
 
 The current RC train selects npm, its pnpm/Yarn/Bun consumer canaries, GitHub
 native assets, Homebrew tap preview, Scoop preview, and PyPI. The stable train
-selects those channels plus WinGet and Chocolatey. Every selected channel must
-reach `verified` before the stable release is complete, except that WinGet and
-Chocolatey stop blocking completion once the train has submitted them: waiting on
-Microsoft's or Chocolatey's moderators, or their verdict, never holds the next
-release. A WinGet or Chocolatey submission that was never made, or failed, still
-blocks.
+selects the same channels. Every selected channel must reach `verified` before
+the stable release is complete.
 
 Homebrew Core is not selected. The renderer and validator are dormant building
 blocks only: the orchestrator calls `releaseTrainChannels` without the explicit
@@ -62,7 +56,7 @@ Core requires a separate reviewed enablement and remains nonblocking.
 | `.github/workflows/release-build.yml` | Builds the exact npm tarball and five SEA targets, signs per the signing policy, generates SPDX/CycloneDX, creates wheels, attests, archives deterministically, and aggregates the manifest/checksums. |
 | `.github/workflows/release-provider-rehearsal.yml` | Platform policy only: runs exact-head Apple and Azure signing rehearsals while publication automation is disabled; it emits non-production evidence only. |
 | `.github/workflows/release-publish.yml` | Expands a persisted checkpoint, publishes tested registry handoffs through OIDC, and opens the generated shared-catalog update PR. |
-| `.github/workflows/release-canary.yml` | Runs public install/invoke/uninstall canaries, both as the self-dispatching RC soak chain and on an hourly cron backstop, and polls moderated registries. |
+| `.github/workflows/release-canary.yml` | Runs public install/invoke/uninstall canaries, both as the self-dispatching RC soak chain and on an hourly cron backstop. |
 
 Release workflows deliberately do not use dependency caches. Release-critical actions are pinned to immutable commits.
 
@@ -248,8 +242,7 @@ The identity string matches the one `release-canary.yml` checks.
 
 User experience under `community`:
 
-- brew, pip/pipx, npm, Scoop, WinGet, and Chocolatey installs are unaffected by
-  quarantine.
+- brew, pip/pipx, npm and Scoop installs are unaffected by quarantine.
 - A macOS browser download of the zip is quarantined and Gatekeeper blocks it.
   After verifying, run `xattr -d com.apple.quarantine ./guardscan`.
 - A Windows direct download shows SmartScreen ("unknown publisher").
@@ -357,9 +350,8 @@ The train:
 3. creates `v1.1.1-rc.1` with the release GitHub App;
 4. builds every artifact, cosign-signs the executables and `SHA256SUMS`, attests the release subjects, and verifies all of them;
 5. publishes npm under `next`, GitHub as a prerelease, TestPyPI then PyPI, and the shared catalog preview branch `channel-preview/v1.1.1-rc.1`;
-6. renders and validates WinGet/Chocolatey without publishing an RC;
-7. records `publishedAt`, dispatches the first canary, and keeps canary evidence flowing through the [soak driver](#soak-driver);
-8. reconciles every 30 minutes, and after every soak canary once the 24-hour window is complete.
+6. records `publishedAt`, dispatches the first canary, and keeps canary evidence flowing through the [soak driver](#soak-driver);
+7. reconciles every 30 minutes, and after every soak canary once the 24-hour window is complete.
 
 Promotion produces `promotion-decision.json`. A permitted decision requires at least 24 distinct green check timestamps per required channel across all eight RC channels, a complete 24-hour wall-clock window, the same source PR head and base, and no open incident. The first sample must arrive within 90 minutes of publication, every consecutive sample gap must be at most 90 minutes, and the latest sample must reach the end of the 24-hour soak and be no more than 90 minutes old. Only passed samples at or after publication and at or before evaluation count toward the floor; duplicate timestamps do not add samples. Every recorded failure remains blocking, including evidence outside that counting window. A missed gap cannot recover by waiting for a later rolling window; correction requires a new `rc.N`. The release App then auto-merges that unchanged PR, tags its exact merge commit, rebuilds stable artifacts, and publishes `latest`.
 
@@ -445,8 +437,6 @@ brew trust --formula ntanwir10/tap/guardscan
 brew install ntanwir10/tap/guardscan
 scoop bucket add guardscan https://github.com/ntanwir10/homebrew-tap
 scoop install guardscan
-winget install --exact --id NaumanTanwir.GuardScan
-choco install guardscan
 pip install guardscan-cli
 pipx install guardscan-cli
 ```
@@ -477,8 +467,6 @@ After stable publication:
 - Homebrew/Scoop move together through a generated shared-catalog PR to a known-good native release, or remove the new listing;
 - PyPI is yanked where authorized;
 - npm is deprecated and moved forward through a patch;
-- Chocolatey is unlisted/superseded;
-- WinGet receives a corrective manifest;
 - a higher patch version is prepared from selected known-good source.
 
 The first ledger-backed stable release is the only exception to the
@@ -492,7 +480,7 @@ train and that no earlier stable ledger ever reached completion. The workflow:
   `bucket/guardscan.json`, and `channel-lock.json`, or records that the catalog
   was already in the valid empty bootstrap state; it also closes the exact
   still-open publication PR so that a delayed merge cannot restore the listing;
-- appends provider-owned npm, PyPI, WinGet, Chocolatey, and optional Core
+- appends provider-owned npm, PyPI, and optional Core
   actions without claiming they have completed;
 - records `provider-actions-pending` while any of those external actions remain,
   keeps a recovery incident open, deactivates the train only after repository
@@ -519,10 +507,6 @@ gh workflow run release-train.yml \
 
 A release is complete only when every selected blocking channel materializes
 as `verified`. Optional Homebrew Core submission/acceptance is tracked
-separately and never blocks the release train. WinGet and Chocolatey block only
-until the train has submitted them; their moderation states (`submitted`,
-`accepted`, `rejected`, `corrected`, `resubmitted`) are reported but do not block.
-Once a stable train is complete it leaves `active-versions.json`, so check later
-moderation outcomes on the provider directly.
+separately and never blocks the release train.
 
 A partial checkpoint upload can resume only from one retained original canonical checkpoint Actions artifact (90-day retention), after authentication and byte comparison of the existing asset. Missing, expired, legacy, or ambiguous artifacts fail closed. After an interrupted upload, rerun the full workflow or dispatch a new run so the resolver can resume the checkpoint; retrying only failed jobs can collide with the immutable artifact name.
