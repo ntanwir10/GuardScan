@@ -51,7 +51,7 @@ Core requires a separate reviewed enablement and remains nonblocking.
 | --- | --- |
 | `.github/workflows/ci.yml` | Required source, test, coverage, package, package-manager, audit, and five-host SEA gates. It cannot publish. |
 | `.github/workflows/release-please.yml` | Maintains the stable release PR only (branch `release-please--branches--main`), using a short-lived GitHub App token. |
-| `.github/workflows/release-train.yml` | Derives RC commits, creates protected tags, dispatches builds/publication, starts the RC soak chain, reconciles every 30 minutes, promotes, rolls back, and persists release events. |
+| `.github/workflows/release-train.yml` | Derives RC commits, creates protected tags, dispatches builds/publication, starts the RC soak chain or stable verification, reconciles every 30 minutes, promotes, rolls back, and persists release events. |
 | `.github/workflows/release-first-withdrawal.yml` | Withdraws the first stable train only when the protected ledger proves no verified predecessor exists; it never invents forward-fix source. |
 | `.github/workflows/release-build.yml` | Builds the exact npm tarball and five SEA targets, signs per the signing policy, generates SPDX/CycloneDX, creates wheels, attests, archives deterministically, and aggregates the manifest/checksums. |
 | `.github/workflows/release-provider-rehearsal.yml` | Platform policy only: runs exact-head Apple and Azure signing rehearsals while publication automation is disabled; it emits non-production evidence only. |
@@ -119,6 +119,15 @@ hint: GuardScan refetches the catalog at that commit and validates the lock,
 manifest, and generated file digests before appending evidence to the release
 ledger. Scheduled reconciliation repeats this check every 30 minutes, so a
 missed dispatch cannot create permanent drift.
+
+A stable release cannot rely on the hint. The tap merges its PR during
+publication, before `record` adds the stable train to `active-versions.json`,
+so `catalog-hint` drops the dispatch as inactive. The train's
+`start-stable-verification` job therefore dispatches a reconciliation right
+after `record`. Once that reconciliation has recorded Homebrew and Scoop as
+published, it dispatches `release-canary.yml` for the version, so all eight
+channels are verified without waiting for cron. Reconciliation never
+dispatches install checks for a complete or blocked train.
 
 Reconciliation is idempotent and fail-closed:
 

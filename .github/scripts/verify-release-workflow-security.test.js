@@ -295,7 +295,9 @@ test('the soak chain dispatches with late, narrow tokens and cannot cancel canar
     'the canary dispatch token must be minted after the sleep, not left to expire during it');
   const start = train.jobs['start-soak'];
   assert.match(start.if, /needs\.prepare\.outputs\.channel == 'rc'/);
-  for (const job of [hop, start]) {
+  const stableStart = train.jobs['start-stable-verification'];
+  assert.match(stableStart.if, /needs\.prepare\.outputs\.channel == 'stable'/);
+  for (const job of [hop, start, stableStart]) {
     const tokens = job.steps.filter(step => step.uses?.startsWith('actions/create-github-app-token@'));
     assert.ok(tokens.length > 0);
     for (const step of tokens) {

@@ -2021,6 +2021,55 @@ jobs:
           retry() { for delay in 15 30 60; do "$@" && return; sleep "$delay"; done; "$@"; }
           retry gh workflow run release-canary.yml --repo "$GITHUB_REPOSITORY"
 
+  start-stable-verification:
+    name: Start stable verification right after publication
+    needs: [prepare, record]
+    if: >-
+      always()
+      && !cancelled()
+      && vars.RELEASE_AUTOMATION_ENABLED == 'true'
+      && needs.prepare.result == 'success'
+      && needs.record.result == 'success'
+      && needs.prepare.outputs.channel == 'stable'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Create short-lived reconciliation dispatch token
+        id: app
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        with:
+          app-id: ${{ vars.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          permission-actions: write
+          permission-contents: read
+          permission-metadata: read
+      - name: Dispatch catalog reconciliation right after stable publication
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+          RELEASE_PR: ${{ needs.prepare.outputs.release_pr }}
+          SOURCE_PR_HEAD: ${{ needs.prepare.outputs.source_pr_head }}
+        run: |
+          # The tap's catalog_updated hint lands before record activates this train, so it is dropped,
+          # and GitHub runs the 30-minute cron only sporadically. Reconcile now to record the merged catalog.
+          node - <<'NODE'
+          const cp = require("child_process");
+          const args = [
+            "workflow", "run", "release-train.yml",
+            "--repo", process.env.GITHUB_REPOSITORY,
+            "-f", "action=reconcile",
+            "-f", `version=${process.env.RELEASE_TAG.replace(/^v/, "")}`,
+            "-f", `release_pr=${process.env.RELEASE_PR}`,
+            "-f", `expected_head=${process.env.SOURCE_PR_HEAD}`,
+          ];
+          // Retrying is safe: reconciliations for one version run one at a time and are idempotent.
+          let dispatched = false;
+          for (const delay of ["15", "30", "60"]) {
+            if (dispatched) break;
+            try { cp.execFileSync("gh", args, {stdio: "inherit"}); dispatched = true; } catch { cp.execFileSync("sleep", [delay]); }
+          }
+          if (!dispatched) cp.execFileSync("gh", args, {stdio: "inherit"});
+          NODE
+
   reconcile:
     name: Reconcile remote state and trigger eligible promotion
     if: >-
@@ -2449,6 +2498,37 @@ jobs:
             fi
             git -c credential.helper= -c 'credential.https://github.com.helper=!gh auth git-credential' push origin HEAD:release-ledger
           )
+      - name: Dispatch install checks for an unverified stable release
+        if: vars.RELEASE_AUTOMATION_ENABLED == 'true' && !contains(inputs.version, '-rc.')
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        run: |
+          # Install checks verify only published channels, so start them once the catalog is published.
+          # A blocked train never dispatches, so scheduled reconciles cannot repeat failing checks.
+          node - <<'NODE'
+          const cp = require("child_process");
+          const {materializeReleaseState, readEvents} = require("./cli/scripts/release/events");
+          const {reconcileRelease} = require("./cli/scripts/release/reconcile");
+          const state = materializeReleaseState(readEvents("release-events.jsonl"));
+          const result = reconcileRelease(state);
+          const catalogPublished = ["homebrew", "scoop"]
+            .every(channel => ["published", "verified"].includes(state.channels?.[channel]?.status));
+          if (result.complete || result.blocked || !catalogPublished) {
+            console.log(`No install checks dispatched: complete=${result.complete} blocked=${result.blocked} catalogPublished=${catalogPublished}`);
+          } else {
+            const args = [
+              "workflow", "run", "release-canary.yml",
+              "--repo", process.env.GITHUB_REPOSITORY,
+              "-f", `version=${process.env.RELEASE_VERSION}`,
+            ];
+            let dispatched = false;
+            for (const delay of ["15", "30", "60"]) {
+              if (dispatched) break;
+              try { cp.execFileSync("gh", args, {stdio: "inherit"}); dispatched = true; } catch { cp.execFileSync("sleep", [delay]); }
+            }
+            if (!dispatched) cp.execFileSync("gh", args, {stdio: "inherit"});
+          }
+          NODE
       - name: Trigger promotion when the machine policy is eligible
         if: >-
           vars.RELEASE_AUTOMATION_ENABLED == 'true'
