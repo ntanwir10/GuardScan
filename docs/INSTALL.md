@@ -130,6 +130,8 @@ Run these against a file downloaded from GitHub Releases.
 
 **Windows.** Binaries are not Authenticode-signed yet, so SmartScreen may warn on a direct download.
 
+**Code signing policy.** Windows code signing for GuardScan is being set up with free code signing provided by [SignPath.io](https://about.signpath.io/), certificate by [SignPath Foundation](https://signpath.org/). Until signed releases ship, verify Windows downloads with the checksum and attestation steps above.
+
 ## Remove local data
 
 Uninstalling the package leaves GuardScan's configuration and caches in `~/.guardscan` (or `GUARDSCAN_HOME`). Remove them first if you want a clean slate:

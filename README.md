@@ -73,6 +73,10 @@ npm test
 
 Report vulnerabilities privately as described in [SECURITY.md](SECURITY.md).
 
+## Code signing
+
+Windows code signing is being set up with free code signing provided by [SignPath.io](https://about.signpath.io/), certificate by [SignPath Foundation](https://signpath.org/). See [docs/INSTALL.md](docs/INSTALL.md#verify-a-download) for how to verify downloads today.
+
 ## License
 
 MIT, see [LICENSE](LICENSE).
