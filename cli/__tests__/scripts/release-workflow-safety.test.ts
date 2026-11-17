@@ -196,6 +196,10 @@ describe('release workflow safety', () => {
   it('requires visible matching npm bytes and tag, allowing bounded propagation retries', () => {
     const verification = namedStep(load('release-publish.yml').jobs.npm, 'Verify public registry integrity');
     const script = verification.run;
+    // npm's registry CDN has taken more than 5 minutes to show a fresh publish; keep at least 15.
+    const attempts = Number(script.match(/seq 1 (\d+)/)?.[1]);
+    const pause = Number(script.match(/sleep (\d+)/)?.[1]);
+    expect(attempts * pause).toBeGreaterThanOrEqual(15 * 60);
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'guardscan-npm-post-publish-'));
     const bin = path.join(root, 'bin');
     fs.mkdirSync(bin);

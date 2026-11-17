@@ -502,7 +502,8 @@ jobs:
         run: |
           DIST_TAG=latest
           if [ "$RELEASE_INPUT_CHANNEL" = rc ]; then DIST_TAG=next; fi
-          for ATTEMPT in $(seq 1 30); do
+          # About 16 minutes: the 1.1.2 publish stayed invisible to this check for over 5.
+          for ATTEMPT in $(seq 1 90); do
             : > "$RUNNER_TEMP/npm-preflight-output"
             npm run release:npm-preflight -- \
               --package-root "$GITHUB_WORKSPACE/source/cli" \
