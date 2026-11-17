@@ -387,8 +387,8 @@ describe('zero-touch release workflow contracts', () => {
     }
 
     const publish = workflowSource('release-publish.yml');
-    expect(publish).toContain('uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02');
-    expect(publish).not.toContain('uses: actions/upload-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093');
+    expect(publish).toContain('uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f');
+    expect(publish).not.toContain('uses: actions/upload-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131');
   });
 
   it('passes an explicit package manager to the reusable release quality gate', () => {

@@ -116,9 +116,10 @@ Create these environments. Only `pypi` has a required reviewer (the owner; see
 - `apple-notarization` (platform policy only)
 - `windows-signing` (platform policy only)
 
-The `winget` and `chocolatey` environments and their secrets
-(`WINGET_CREATE_GITHUB_TOKEN`, `CHOCO_API_KEY`) are no longer used. If you
-created them, you can delete them.
+WinGet and Chocolatey are no longer release channels. Their `winget` and
+`chocolatey` environments, the secrets in them (`WINGET_CREATE_GITHUB_TOKEN`,
+`CHOCO_API_KEY`) and the WinGet tokens were deleted on 2026-11-17; do not
+recreate them.
 
 Allow protected branch `main` in these environments because the authorized
 `workflow_dispatch` caller runs from `main`; add protected candidate/stable tags

@@ -35,7 +35,7 @@ jobs:
       generator_repository: ${{ steps.lock.outputs.generator_repository }}
       generator_commit: ${{ steps.lock.outputs.generator_commit }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           persist-credentials: false
 
@@ -157,14 +157,14 @@ jobs:
 
       - name: Check out the exact GuardScan generator
         if: steps.lock.outputs.published == 'true'
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           repository: ntanwir10/GuardScan
           ref: ${{ steps.lock.outputs.source_commit }}
           path: .guardscan-source
           persist-credentials: false
 
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         if: steps.lock.outputs.published == 'true'
         with:
           node-version: ${{ env.RELEASE_NODE_VERSION }}
@@ -197,7 +197,7 @@ jobs:
     needs: integrity
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           persist-credentials: false
       - name: Confirm the catalog is awaiting its first stable release
@@ -226,7 +226,7 @@ jobs:
     needs: integrity
     runs-on: windows-2025
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           persist-credentials: false
       - name: Confirm the catalog is awaiting its first stable release
@@ -235,7 +235,7 @@ jobs:
         run: Write-Output 'Scoop lifecycle will activate with the first generated catalog release.'
       - name: Check out the pinned Scoop installer
         if: needs.integrity.outputs.published == 'true'
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           repository: ScoopInstaller/Install
           ref: ${{ env.SCOOP_INSTALL_COMMIT }}
@@ -316,12 +316,12 @@ jobs:
     needs: [integrity, homebrew, scoop]
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           persist-credentials: false
       - name: Create a short-lived cross-repository app token
         id: app
-        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ vars.RELEASE_APP_ID }}
           private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}

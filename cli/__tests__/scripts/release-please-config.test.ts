@@ -44,8 +44,8 @@ describe('release pull request automation', () => {
     const workflow = yaml.load(source) as Record<string, unknown>;
 
     expect(workflow).toBeTruthy();
-    expect(source).toContain('actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349');
-    expect(source).toContain('googleapis/release-please-action@5c625bfb5d1ff62eadeeb3772007f7f66fdcf071');
+    expect(source).toContain('actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510');
+    expect(source).toContain('googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7');
     expect(source).toContain('secrets.RELEASE_APP_PRIVATE_KEY');
     expect(source).toContain('skip-github-release: true');
     expect(source).toContain("vars.RELEASE_PLEASE_ENABLED == 'true'");
