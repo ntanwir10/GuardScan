@@ -502,6 +502,28 @@ describe('release planning and state summaries', () => {
     expect(() => verifyNpmArtifact(source, outputDir)).toThrow(/does not match metadata/);
   });
 
+  it('revalidates every npm registry lookup instead of trusting the local HTTP cache', () => {
+    // Mock spawnSync rather than a fake npm executable: Windows cannot spawn a shebang script.
+    const calls: string[][] = [];
+    const spawnSync = jest.fn((_command: string, args: string[]) => {
+      calls.push(args);
+      return {status: 0, stderr: '', stdout: JSON.stringify(args.includes('dist-tags') ? {latest: '1.2.3'} : 'sha512-x')};
+    });
+    jest.isolateModules(() => {
+      jest.doMock('child_process', () => ({...jest.requireActual('child_process'), spawnSync}));
+      try {
+        const {queryNpmRemote: query} = require('../../scripts/release/npm-artifact');
+        const artifact = {packageName: 'guardscan', version: '1.2.3', integrity: 'sha512-x'};
+        expect(query(artifact, {expectedDistTag: 'latest'}))
+          .toMatchObject({matching: true, publishRequired: false, distTagRepairRequired: false});
+      } finally {
+        jest.dontMock('child_process');
+      }
+    });
+    expect(calls).toHaveLength(2);
+    for (const args of calls) expect(args).toContain('--prefer-online');
+  });
+
   it('accepts both npm 10/11 and npm 12 pack JSON shapes', () => {
     const packed = {name: 'guardscan', version: '1.2.3', filename: 'guardscan-1.2.3.tgz'};
     expect(parseNpmPackResult(JSON.stringify([packed]))).toEqual(packed);

@@ -205,8 +205,9 @@ function parseNpmPackResult(stdout) {
 
 function queryNpmRemote(localArtifact, options = {}) {
   const result = spawnSync(options.npmCommand || npmCommand(), [
+    // --prefer-online: npm's HTTP cache would otherwise replay the pre-publish packument for 5 minutes.
     'view', `${localArtifact.packageName}@${localArtifact.version}`, 'dist.integrity', '--json',
-    '--registry', 'https://registry.npmjs.org',
+    '--registry', 'https://registry.npmjs.org', '--prefer-online',
   ], {
     encoding: 'utf8',
     shell: false,
@@ -234,7 +235,7 @@ function queryNpmRemote(localArtifact, options = {}) {
   }
   const tags = spawnSync(options.npmCommand || npmCommand(), [
     'view', localArtifact.packageName, 'dist-tags', '--json',
-    '--registry', 'https://registry.npmjs.org',
+    '--registry', 'https://registry.npmjs.org', '--prefer-online',
   ], {
     encoding: 'utf8',
     shell: false,
