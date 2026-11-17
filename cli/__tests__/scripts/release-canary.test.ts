@@ -1,6 +1,7 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import vm from 'vm';
 import Ajv from 'ajv';
 import addFormats from 'ajv-formats';
 import yaml from 'js-yaml';
@@ -861,5 +862,52 @@ describe('release soak chain', () => {
     expect(job.if).toContain("vars.RELEASE_AUTOMATION_ENABLED == 'true'");
     expect(job.if).toContain("needs.prepare.outputs.channel == 'rc'");
     expect(job.steps.at(-1).run).toContain('\nretry gh workflow run release-canary.yml --repo "$GITHUB_REPOSITORY"');
+  });
+
+  test('the train reconciles right after stable publication, without waiting for cron or the tap hint', () => {
+    const job = workflowFile('release-train.yml').jobs['start-stable-verification'];
+    expect(job.needs).toEqual(['prepare', 'record']);
+    expect(job.if).toContain("needs.prepare.outputs.channel == 'stable'");
+    const dispatch = job.steps.at(-1).run as string;
+    expect(dispatch).toContain('"workflow", "run", "release-train.yml"');
+    expect(dispatch).toContain('"-f", "action=reconcile"');
+    for (const input of ['version=${process.env.RELEASE_TAG.replace(/^v/, "")}',
+      'release_pr=${process.env.RELEASE_PR}', 'expected_head=${process.env.SOURCE_PR_HEAD}']) {
+      expect(dispatch).toContain(input);
+    }
+    expect(dispatch).not.toContain('release-canary.yml');
+  });
+
+  test('reconcile dispatches install checks only for an unverified, unblocked stable release with a published catalog', () => {
+    const steps = workflowFile('release-train.yml').jobs.reconcile.steps as Array<{name: string; if?: string; run?: string}>;
+    const index = (name: string) => steps.findIndex(candidate => candidate.name === name);
+    const step = steps[index('Dispatch install checks for an unverified stable release')];
+    expect(index('Dispatch install checks for an unverified stable release'))
+      .toBeGreaterThan(index('Persist refetched catalog publication evidence'));
+    expect(step.if).toContain("!contains(inputs.version, '-rc.')");
+    const script = step.run!.match(/node - <<'NODE'\n([\s\S]*?)\nNODE/)?.[1];
+    expect(script).toBeTruthy();
+    const dispatched = (channels: Record<string, string>, incidents: Record<string, any> = {}) => {
+      const calls: string[][] = [];
+      vm.runInNewContext(script!, {
+        require: (name: string) => {
+          if (name === 'child_process') return {execFileSync: (command: string, args: string[]) => calls.push([command, ...args])};
+          if (name.endsWith('/reconcile')) return {reconcileRelease};
+          return {readEvents: () => [], materializeReleaseState: () => ({
+            channels: Object.fromEntries(Object.entries(channels).map(([id, status]) => [id, {status}])), incidents,
+          })};
+        },
+        console: {log: () => undefined},
+        process: {env: {GITHUB_REPOSITORY: 'owner/repo', RELEASE_VERSION: '1.2.3'}},
+      });
+      return calls;
+    };
+    const published = Object.fromEntries(SOAK_CHANNELS.map(channel => [channel, 'published']));
+    expect(dispatched(published)).toEqual([['gh', 'workflow', 'run', 'release-canary.yml',
+      '--repo', 'owner/repo', '-f', 'version=1.2.3']]);
+    expect(dispatched({...published, homebrew: 'submitted'})).toEqual([]);
+    expect(dispatched(Object.fromEntries(SOAK_CHANNELS.map(channel => [channel, 'verified'])))).toEqual([]);
+    expect(dispatched({...published, npm: 'failed'})).toEqual([]);
+    expect(dispatched(published, {'canary-1': {status: 'open'}})).toEqual([]);
   });
 });
