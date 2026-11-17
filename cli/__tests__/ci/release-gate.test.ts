@@ -78,7 +78,7 @@ describe('required GitHub release gate', () => {
     const sourceContract = workflow.jobs?.['source-contract'];
     const audit = sourceContract?.steps?.find(step => step.name === 'Audit locked dependency graph');
 
-    expect(audit?.run).toBe('npm audit --audit-level=moderate');
+    expect(audit?.run).toBe('node scripts/release/audit-gate.js --audit-level=moderate');
     expect(audit?.['continue-on-error']).not.toBe(true);
     expect(sourceContract?.['continue-on-error']).not.toBe(true);
   });

@@ -65,7 +65,7 @@ jobs:
           npm run build
           npm test -- --coverage --runInBand
           npm run lint:ratchet
-          npm audit --omit=dev --audit-level=high
+          node scripts/release/audit-gate.js --omit=dev --audit-level=high
           npm run test:release
           npm run test:package
           npm run test:package-manager -- --manager npm

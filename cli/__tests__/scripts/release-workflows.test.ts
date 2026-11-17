@@ -262,8 +262,8 @@ describe('zero-touch release workflow contracts', () => {
       'package-manager', 'standalone', 'integration', 'release-gate',
     ]);
     expect(source).toContain('npm test -- --coverage --runInBand');
-    expect(source).toContain('npm audit --audit-level=moderate');
-    expect(source).not.toContain('npm audit --omit=dev');
+    expect(source).toContain('node scripts/release/audit-gate.js --audit-level=moderate');
+    expect(source).not.toContain('audit-gate.js --omit=dev');
     expect(source).toContain('npm ci --omit=optional');
     expect(source).toContain('Build without optional native dependencies');
     expect(source).toContain('npm run test:package');

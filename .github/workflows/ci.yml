@@ -52,7 +52,7 @@ jobs:
           git diff --check "$BASE_SHA" HEAD --
       - name: Audit locked dependency graph
         working-directory: cli
-        run: npm audit --audit-level=moderate
+        run: node scripts/release/audit-gate.js --audit-level=moderate
       - name: Build without optional native dependencies
         working-directory: cli
         run: |
