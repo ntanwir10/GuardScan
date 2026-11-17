@@ -44,7 +44,6 @@ const {
 const {
   classifyNpmRemote,
   parseNpmPackResult,
-  queryNpmRemote,
   verifyNpmArtifact,
 } = require('../../scripts/release/npm-artifact') as {
   classifyNpmRemote: (
@@ -53,10 +52,6 @@ const {
     options?: Record<string, string>
   ) => Record<string, boolean>;
   parseNpmPackResult: (stdout: string) => Record<string, unknown>;
-  queryNpmRemote: (
-    artifact: Record<string, unknown>,
-    options?: Record<string, string>
-  ) => Record<string, boolean>;
   verifyNpmArtifact: (
     source: Record<string, string>,
     outputDir: string
@@ -508,24 +503,25 @@ describe('release planning and state summaries', () => {
   });
 
   it('revalidates every npm registry lookup instead of trusting the local HTTP cache', () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'guardscan-npm-view-'));
-    const log = path.join(dir, 'calls.jsonl');
-    const npm = path.join(dir, 'npm');
-    fs.writeFileSync(npm, `#!${process.execPath}\n${[
-      "const args = process.argv.slice(2);",
-      `require('fs').appendFileSync(${JSON.stringify(log)}, JSON.stringify(args) + '\\n');`,
-      "console.log(JSON.stringify(args.includes('dist-tags') ? {latest: '1.2.3'} : 'sha512-x'));",
-    ].join('\n')}\n`, {mode: 0o755});
-    try {
-      const artifact = {packageName: 'guardscan', version: '1.2.3', integrity: 'sha512-x'};
-      expect(queryNpmRemote(artifact, {npmCommand: npm, expectedDistTag: 'latest'}))
-        .toMatchObject({matching: true, publishRequired: false, distTagRepairRequired: false});
-      const calls = fs.readFileSync(log, 'utf8').trim().split('\n').map(line => JSON.parse(line));
-      expect(calls).toHaveLength(2);
-      for (const args of calls) expect(args).toContain('--prefer-online');
-    } finally {
-      fs.rmSync(dir, {recursive: true, force: true});
-    }
+    // Mock spawnSync rather than a fake npm executable: Windows cannot spawn a shebang script.
+    const calls: string[][] = [];
+    const spawnSync = jest.fn((_command: string, args: string[]) => {
+      calls.push(args);
+      return {status: 0, stderr: '', stdout: JSON.stringify(args.includes('dist-tags') ? {latest: '1.2.3'} : 'sha512-x')};
+    });
+    jest.isolateModules(() => {
+      jest.doMock('child_process', () => ({...jest.requireActual('child_process'), spawnSync}));
+      try {
+        const {queryNpmRemote: query} = require('../../scripts/release/npm-artifact');
+        const artifact = {packageName: 'guardscan', version: '1.2.3', integrity: 'sha512-x'};
+        expect(query(artifact, {expectedDistTag: 'latest'}))
+          .toMatchObject({matching: true, publishRequired: false, distTagRepairRequired: false});
+      } finally {
+        jest.dontMock('child_process');
+      }
+    });
+    expect(calls).toHaveLength(2);
+    for (const args of calls) expect(args).toContain('--prefer-online');
   });
 
   it('accepts both npm 10/11 and npm 12 pack JSON shapes', () => {
