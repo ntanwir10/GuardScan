@@ -115,7 +115,7 @@ jobs:
     steps:
       - name: Create short-lived release app token
         id: app
-        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ vars.RELEASE_APP_ID }}
           private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
@@ -151,7 +151,7 @@ jobs:
     steps:
       - name: Create short-lived cross-repository release app token
         id: app
-        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ vars.RELEASE_APP_ID }}
           private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
@@ -301,13 +301,13 @@ jobs:
             throw new Error('release request expected head is invalid');
           }
           NODE
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           ref: ${{ github.workflow_sha }}
           fetch-depth: 0
           token: ${{ github.token }}
           persist-credentials: false
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: ${{ env.RELEASE_NODE_VERSION }}
       - name: Install trusted control-plane dependencies without lifecycle scripts
@@ -394,7 +394,7 @@ jobs:
           echo "pr_state=$(node -p 'require("./release-pr.json").merged ? "MERGED" : "OPEN"')" >> "$GITHUB_OUTPUT"
           # An open PR's REST merge_commit_sha is GitHub's test merge, never a release merge.
           echo "merge_sha=$(node -p 'const pr = require("./release-pr.json"); pr.merged === true && pr.merge_commit_sha || ""')" >> "$GITHUB_OUTPUT"
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           ref: ${{ steps.source.outputs.head_sha }}
           fetch-depth: 0
@@ -457,7 +457,7 @@ jobs:
       - name: Create short-lived exact release PR readiness token
         if: inputs.action == 'candidate' && steps.source.outputs.is_draft == 'true'
         id: readiness-app
-        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ vars.RELEASE_APP_ID }}
           private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
@@ -568,7 +568,7 @@ jobs:
       - name: Create short-lived release App token after candidate validation
         if: inputs.action == 'candidate'
         id: candidate-app
-        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ vars.RELEASE_APP_ID }}
           private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
@@ -737,7 +737,7 @@ jobs:
       - name: Create short-lived release App token after promotion eligibility
         if: inputs.action == 'promote'
         id: promote-app
-        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ vars.RELEASE_APP_ID }}
           private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
@@ -954,14 +954,14 @@ jobs:
           }
           fs.appendFileSync(process.env.GITHUB_OUTPUT, 'mode=public\n');
           NODE
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         if: steps.remote.outputs.mode != 'build'
         with:
           ref: ${{ github.workflow_sha }}
           fetch-depth: 0
           token: ${{ github.token }}
           persist-credentials: false
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         if: steps.remote.outputs.mode != 'build'
         with:
           ref: ${{ needs.prepare.outputs.ref }}
@@ -972,7 +972,7 @@ jobs:
       - name: Restore the classified release snapshot after checkouts
         if: steps.remote.outputs.mode != 'build'
         run: cp "$RUNNER_TEMP/classified-release-state.json" release-state.json
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         if: steps.remote.outputs.mode != 'build'
         with:
           node-version: ${{ env.RELEASE_NODE_VERSION }}
@@ -1132,14 +1132,14 @@ jobs:
               *) echo "Ambiguous current-run recovery artifact: $NAME" >&2; exit 1 ;;
             esac
           done
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         if: steps.remote.outputs.mode != 'build' && steps.existing-handoffs.outputs.payload_exists == 'false'
         with:
           name: release-payload-${{ needs.prepare.outputs.tag }}
           path: rehydrated/payload/
           if-no-files-found: error
           retention-days: 30
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         if: steps.remote.outputs.mode != 'build' && steps.existing-handoffs.outputs.npm_exists == 'false'
         with:
           name: release-npm-${{ needs.prepare.outputs.tag }}
@@ -1184,30 +1184,30 @@ jobs:
       actions: read
       contents: write
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           ref: ${{ github.workflow_sha }}
           fetch-depth: 0
           token: ${{ github.token }}
           persist-credentials: false
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           ref: ${{ needs.prepare.outputs.ref }}
           fetch-depth: 0
           path: source
           token: ${{ github.token }}
           persist-credentials: false
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: ${{ env.RELEASE_NODE_VERSION }}
       - name: Install trusted checkpoint tooling without lifecycle scripts
         working-directory: cli
         run: npm ci --ignore-scripts
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           name: release-payload-${{ needs.prepare.outputs.tag }}
           path: checkpoint-root/payload
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           name: release-npm-${{ needs.prepare.outputs.tag }}
           path: checkpoint-npm
@@ -1252,7 +1252,7 @@ jobs:
             --producer checkpoint-producer.json --timestamp "$TIMESTAMP" \
             --output-dir checkpoint-assets
       - name: Persist canonical checkpoint pair before remote upload
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: release-checkpoint-${{ needs.prepare.outputs.tag }}
           path: checkpoint-assets/
@@ -1347,13 +1347,13 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           ref: ${{ github.workflow_sha }}
           fetch-depth: 1
           token: ${{ github.token }}
           persist-credentials: false
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           name: release-payload-${{ needs.prepare.outputs.tag }}
           path: payload
@@ -1361,7 +1361,7 @@ jobs:
         run: |
           mkdir dist
           cp payload/*.whl dist/
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.13"
       - name: Reject conflicting TestPyPI files
@@ -1462,7 +1462,7 @@ jobs:
           - id: windows-x64
             runner: windows-2025
     steps:
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.13"
       - name: Test TestPyPI wheel through pip and pipx on ${{ matrix.target.id }}
@@ -1545,19 +1545,19 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           ref: ${{ github.workflow_sha }}
           fetch-depth: 1
           token: ${{ github.token }}
           persist-credentials: false
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           name: release-payload-${{ needs.prepare.outputs.tag }}
           path: dist
       - name: Keep only wheel distributions
         run: find dist -maxdepth 1 -type f ! -name '*.whl' -delete
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.13"
       - name: Reject conflicting PyPI files
@@ -1655,7 +1655,7 @@ jobs:
             files,
           });
           NODE
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: release-pypi-evidence-${{ needs.prepare.outputs.tag }}
           path: pypi-publication-evidence.json
@@ -1707,48 +1707,48 @@ jobs:
     steps:
       - name: Create short-lived release app token
         id: app
-        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ vars.RELEASE_APP_ID }}
           private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
           permission-contents: write
           permission-metadata: read
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           ref: ${{ github.workflow_sha }}
           fetch-depth: 0
           token: ${{ github.token }}
           persist-credentials: false
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           ref: ${{ needs.prepare.outputs.ref }}
           fetch-depth: 0
           path: source
           token: ${{ github.token }}
           persist-credentials: false
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: ${{ env.RELEASE_NODE_VERSION }}
       - name: Install trusted ledger tooling without lifecycle scripts
         working-directory: cli
         run: npm ci --ignore-scripts
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           name: release-payload-${{ needs.prepare.outputs.tag }}
           path: payload
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           name: release-github-evidence-${{ needs.prepare.outputs.tag }}
           path: provider-evidence/github
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           name: release-npm-evidence-${{ needs.prepare.outputs.tag }}
           path: provider-evidence/npm
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           name: release-pypi-evidence-${{ needs.prepare.outputs.tag }}
           path: provider-evidence/pypi
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           name: release-catalog-${{ needs.prepare.outputs.tag }}
           path: catalog-evidence
@@ -2007,7 +2007,7 @@ jobs:
     steps:
       - name: Create short-lived canary dispatch token
         id: app
-        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ vars.RELEASE_APP_ID }}
           private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
@@ -2035,7 +2035,7 @@ jobs:
     steps:
       - name: Create short-lived reconciliation dispatch token
         id: app
-        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ vars.RELEASE_APP_ID }}
           private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
@@ -2101,7 +2101,7 @@ jobs:
           NODE
       - name: Create short-lived cross-repository release app token
         id: app
-        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ vars.RELEASE_APP_ID }}
           private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
@@ -2111,20 +2111,20 @@ jobs:
           permission-contents: write
           permission-pull-requests: write
           permission-metadata: read
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           ref: ${{ github.workflow_sha }}
           fetch-depth: 0
           token: ${{ github.token }}
           persist-credentials: false
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           ref: v${{ inputs.version }}
           fetch-depth: 0
           path: source
           token: ${{ github.token }}
           persist-credentials: false
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: ${{ env.RELEASE_NODE_VERSION }}
       - name: Install trusted reconciliation tooling without lifecycle scripts
@@ -2149,7 +2149,7 @@ jobs:
           cat reconciliation.json
       - name: Create short-lived catalog workflow writer token
         id: catalog-app
-        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ vars.RELEASE_APP_ID }}
           private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
@@ -2649,7 +2649,7 @@ jobs:
           NODE
       - name: Create short-lived cross-repository release app token
         id: app
-        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ vars.RELEASE_APP_ID }}
           private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
@@ -2658,13 +2658,13 @@ jobs:
           permission-contents: write
           permission-pull-requests: write
           permission-metadata: read
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           ref: ${{ github.workflow_sha }}
           fetch-depth: 0
           token: ${{ github.token }}
           persist-credentials: false
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: ${{ env.RELEASE_NODE_VERSION }}
       - name: Install trusted rollback tooling without lifecycle scripts
@@ -2983,7 +2983,7 @@ jobs:
           echo "commit=$FORWARD_FIX_HEAD" >> "$GITHUB_OUTPUT"
       - name: Create short-lived catalog workflow writer token
         id: catalog-app
-        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ vars.RELEASE_APP_ID }}
           private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
@@ -3320,7 +3320,7 @@ jobs:
             fi
             git -c credential.helper= -c 'credential.https://github.com.helper=!gh auth git-credential' push origin HEAD:release-ledger
           )
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: rollback-plan-v${{ inputs.version }}
           path: |

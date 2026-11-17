@@ -39,7 +39,7 @@ jobs:
           NODE
       - name: Create short-lived cross-repository release app token
         id: app
-        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ vars.RELEASE_APP_ID }}
           private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
@@ -48,14 +48,14 @@ jobs:
           permission-contents: write
           permission-pull-requests: write
           permission-metadata: read
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           repository: ${{ job.workflow_repository }}
           ref: ${{ job.workflow_sha }}
           fetch-depth: 0
           token: ${{ github.token }}
           persist-credentials: false
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: ${{ env.RELEASE_NODE_VERSION }}
       - working-directory: cli
@@ -450,7 +450,7 @@ jobs:
             git -c credential.helper= -c 'credential.https://github.com.helper=!gh auth git-credential' \
               push origin HEAD:release-ledger
           )
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: rollback-plan-v${{ inputs.version }}
           path: |

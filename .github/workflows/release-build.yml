@@ -47,12 +47,12 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           ref: ${{ inputs.ref }}
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: ${{ env.RELEASE_NODE_VERSION }}
       - working-directory: cli
@@ -79,12 +79,12 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           ref: ${{ inputs.ref }}
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: ${{ env.RELEASE_NODE_VERSION }}
       - working-directory: cli
@@ -93,7 +93,7 @@ jobs:
         run: npm run release:package -- --output-dir ../npm-artifact
       - working-directory: cli
         run: npm run release:verify-npm -- --artifact-dir ../npm-artifact
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: release-npm-input-${{ inputs.tag }}
           path: npm-artifact/
@@ -111,25 +111,25 @@ jobs:
       id-token: write
       attestations: write
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           repository: ${{ job.workflow_repository }}
           ref: ${{ job.workflow_sha }}
           fetch-depth: 1
           persist-credentials: false
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           ref: ${{ inputs.ref }}
           path: source
           fetch-depth: 1
           persist-credentials: false
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: ${{ env.RELEASE_NODE_VERSION }}
       - working-directory: cli
         run: npm ci --ignore-scripts
       - id: download-npm-input
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           name: release-npm-input-${{ inputs.tag }}
           path: npm-artifact
@@ -171,7 +171,7 @@ jobs:
           NODE
       - name: Attest exact npm tarball
         id: attest-npm
-        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
+        uses: actions/attest-build-provenance@96278af6caaf10aea03fd8d33a09a777ca52d62f # v3.2.0
         with:
           subject-path: npm-artifact/*.tgz
       - name: Bind npm tarball to source and provenance
@@ -216,7 +216,7 @@ jobs:
             tag: metadata.tag, commit: metadata.commit, createdAt: metadata.createdAt, artifact,
           }, null, 2)}\n`);
           NODE
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: release-npm-${{ inputs.tag }}
           path: npm-artifact/
@@ -224,7 +224,7 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: release-npm-provenance-${{ inputs.tag }}
           path: npm-provenance/
@@ -249,12 +249,12 @@ jobs:
           - {id: darwin-x64, runner: macos-15-intel, os: darwin, arch: x64, libc: '', executable: guardscan, archive: zip}
           - {id: windows-x64, runner: windows-2025, os: windows, arch: x64, libc: '', executable: guardscan.exe, archive: zip}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           ref: ${{ inputs.ref }}
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: ${{ env.RELEASE_NODE_VERSION }}
       - working-directory: cli
@@ -264,7 +264,7 @@ jobs:
       - name: Build unsigned source SEA
         working-directory: cli
         run: npm run release:build -- --kind standalone --output-dir ../standalone
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: release-native-input-${{ matrix.id }}-${{ inputs.tag }}
           path: standalone/
@@ -284,7 +284,7 @@ jobs:
       linux: ${{ steps.policy.outputs.linux }}
       windows: ${{ steps.policy.outputs.windows }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           repository: ${{ job.workflow_repository }}
           ref: ${{ job.workflow_sha }}
@@ -319,25 +319,25 @@ jobs:
           - {id: darwin-x64, runner: macos-15-intel, os: darwin, arch: x64, libc: '', executable: guardscan, archive: zip}
           - {id: windows-x64, runner: windows-2025, os: windows, arch: x64, libc: '', executable: guardscan.exe, archive: zip}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           repository: ${{ job.workflow_repository }}
           ref: ${{ job.workflow_sha }}
           fetch-depth: 1
           persist-credentials: false
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           ref: ${{ inputs.ref }}
           path: source
           fetch-depth: 1
           persist-credentials: false
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: ${{ env.RELEASE_NODE_VERSION }}
       - working-directory: cli
         run: npm ci --ignore-scripts
       - id: download-native-input
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           name: release-native-input-${{ matrix.id }}-${{ inputs.tag }}
           path: standalone
@@ -527,7 +527,7 @@ jobs:
           node cli/scripts/release/index.js build "${ARGS[@]}"
       - name: Attest signed executable
         id: attest-executable
-        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
+        uses: actions/attest-build-provenance@96278af6caaf10aea03fd8d33a09a777ca52d62f # v3.2.0
         with:
           subject-path: standalone/${{ matrix.executable }}
       - name: Create verified evidence descriptor
@@ -625,7 +625,7 @@ jobs:
           cp "$RUNNER_TEMP/notary.json" "native-output/${{ matrix.id }}.apple-notarization.json"
       - name: Attest signed archive
         id: attest-archive
-        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
+        uses: actions/attest-build-provenance@96278af6caaf10aea03fd8d33a09a777ca52d62f # v3.2.0
         with:
           subject-path: native-output/guardscan-*.${{ matrix.archive }}
       - name: Bind archive metadata to archive attestation
@@ -667,7 +667,7 @@ jobs:
           node cli/scripts/release/index.js build "${ARGS[@]}"
       - name: Attest and cryptographically verify Python wheel
         id: attest-wheel
-        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
+        uses: actions/attest-build-provenance@96278af6caaf10aea03fd8d33a09a777ca52d62f # v3.2.0
         with:
           subject-path: wheel-output/*.whl
       - name: Verify Python wheel bundle and write bound evidence
@@ -709,7 +709,7 @@ jobs:
           WHEEL_META="$(find wheel-output -name '*.whl.json' -print -quit)"
           STANDALONE_META="$(find native-output -name '*.metadata.json' -print -quit)"
           node cli/scripts/release/index.js build --kind python-wheel-artifact --wheel-metadata "$WHEEL_META" --standalone-metadata "$STANDALONE_META" --provenance-evidence wheel-output/python-wheel-provenance.json --output wheel-output/python-wheel.metadata.json --package-root "$GITHUB_WORKSPACE/source/cli" --repository-root "$GITHUB_WORKSPACE/source" --schema-root "$GITHUB_WORKSPACE/cli"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: release-native-${{ matrix.id }}-${{ inputs.tag }}
           overwrite: true
@@ -730,48 +730,48 @@ jobs:
       id-token: write
       attestations: write
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           repository: ${{ job.workflow_repository }}
           ref: ${{ job.workflow_sha }}
           fetch-depth: 1
           persist-credentials: false
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           ref: ${{ inputs.ref }}
           path: source
           fetch-depth: 1
           persist-credentials: false
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: ${{ env.RELEASE_NODE_VERSION }}
       - working-directory: cli
         run: npm ci --ignore-scripts
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           name: release-native-linux-x64-glibc-${{ inputs.tag }}
           path: collected/linux-x64-glibc
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           name: release-native-linux-arm64-glibc-${{ inputs.tag }}
           path: collected/linux-arm64-glibc
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           name: release-native-darwin-arm64-${{ inputs.tag }}
           path: collected/darwin-arm64
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           name: release-native-darwin-x64-${{ inputs.tag }}
           path: collected/darwin-x64
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           name: release-native-windows-x64-${{ inputs.tag }}
           path: collected/windows-x64
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           name: release-npm-${{ inputs.tag }}
           path: collected/npm
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           name: release-npm-provenance-${{ inputs.tag }}
           path: collected/npm-provenance
@@ -882,12 +882,12 @@ jobs:
             --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
             release/SHA256SUMS
       - name: Attest complete release payload
-        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
+        uses: actions/attest-build-provenance@96278af6caaf10aea03fd8d33a09a777ca52d62f # v3.2.0
         with:
           subject-path: |
             release/release-manifest.json
             release/SHA256SUMS
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: release-payload-${{ inputs.tag }}
           path: release/
@@ -895,7 +895,7 @@ jobs:
           if-no-files-found: error
           retention-days: 30
       - name: Retain immutable producer-attempt payload for interrupted draft recovery
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: release-canonical-${{ inputs.tag }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: release/
@@ -916,12 +916,12 @@ jobs:
           - {id: darwin-arm64, runner: macos-15, os: darwin, arch: arm64, executable: guardscan}
           - {id: windows-x64, runner: windows-2025, os: windows, arch: x64, executable: guardscan.exe}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           ref: ${{ inputs.ref }}
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: ${{ env.RELEASE_NODE_VERSION }}
       - working-directory: cli
@@ -930,7 +930,7 @@ jobs:
         run: npm run build
       - working-directory: cli
         run: npm run release:build -- --kind standalone --output-dir ../rehearsal-standalone
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: provider-rehearsal-input-${{ matrix.id }}
           path: rehearsal-standalone/
@@ -957,25 +957,25 @@ jobs:
           - {id: darwin-arm64, runner: macos-15, os: darwin, arch: arm64, executable: guardscan}
           - {id: windows-x64, runner: windows-2025, os: windows, arch: x64, executable: guardscan.exe}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           repository: ${{ job.workflow_repository }}
           ref: ${{ job.workflow_sha }}
           fetch-depth: 1
           persist-credentials: false
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           ref: ${{ inputs.ref }}
           path: source
           fetch-depth: 1
           persist-credentials: false
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: ${{ env.RELEASE_NODE_VERSION }}
       - working-directory: cli
         run: npm ci --ignore-scripts
       - id: download-provider-input
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           name: provider-rehearsal-input-${{ matrix.id }}
           path: rehearsal-standalone
@@ -1083,7 +1083,7 @@ jobs:
           fs.writeFileSync('rehearsal-standalone/provider-rehearsal-evidence.json', `${JSON.stringify({schemaVersion: 'guardscan.provider-rehearsal.v1', productionReady: false, source: {repository: process.env.GITHUB_REPOSITORY, commit: sourceCommit, ref: process.env.REHEARSAL_REF}, workflow: {runId: process.env.GITHUB_RUN_ID, mode: process.env.REHEARSAL_MODE}, platform: process.env.REHEARSAL_PLATFORM, checks: {standaloneBuild: true, appleSigningAndNotarization: process.env.REHEARSAL_PLATFORM.startsWith('darwin'), azureAuthenticodeSigning}, publication: {tag: false, release: false, package: false, catalog: false, ledger: false}}, null, 2)}\n`);
           NODE
           rm -f rehearsal-standalone/guardscan rehearsal-standalone/guardscan.exe
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: provider-rehearsal-${{ matrix.id }}
           path: rehearsal-standalone/
