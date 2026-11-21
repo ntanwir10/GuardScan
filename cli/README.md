@@ -57,6 +57,14 @@ guardscan run
 guardscan status
 ```
 
+### Update and uninstall
+
+Use `guardscan --update` or `guardscan update` to update through the package manager that owns your installation. Run `guardscan update --dry-run` to check existing copies first; use `--manager npm` (or pnpm, yarn, bun, brew, scoop, pipx) to select among multiple installations. Updates respect offline mode; enable network access with `guardscan config --offline false`.
+
+Automatic updates are opt-in: `guardscan update --auto on`, `--auto off`, or `--auto status`. They run after successful interactive commands, require one recognized installation, and stay disabled in CI and offline mode. Use `--no-auto-update` to skip them for one command. To remove the detected installation while keeping local configuration and reports, preview with `guardscan uninstall --dry-run`, then confirm with `guardscan uninstall --yes`.
+
+Windows Scoop/pipx installations and unmanaged standalone/source installations display manual instructions. See the [installation guide](https://github.com/ntanwir10/GuardScan/blob/main/docs/INSTALL.md) for channel details and limitations.
+
 ### 🐳 Docker / Alpine Linux
 
 No GuardScan Docker image is published; run the npm package inside a Node.js 22+ base image. See the [Docker guide](https://github.com/ntanwir10/GuardScan/blob/main/docs/DOCKER_GUIDE.md) for Alpine setup, `GUARDSCAN_HOME`, volumes and CI.

@@ -1,182 +1,107 @@
 import axios from "axios";
 import chalk from "chalk";
-import * as fs from "fs";
 import * as path from "path";
 import * as semver from "semver";
 import { ConfigManager } from "../core/config";
 import { API_CONSTANTS } from "../constants/api-constants";
 import { TELEMETRY_CONSTANTS } from "../constants/telemetry-constants";
 import { environmentRequestsOffline } from "./execution-policy";
+import { acquireFileLease, atomicReplaceJson, readJsonFileBounded } from "./private-state";
+import { detectInstallations, getInstallationCommand, runInstallationCommand } from "./installation";
 
-const packageJson = require("../../package.json");
-const CURRENT_VERSION = packageJson.version;
+const CURRENT_VERSION: string = require("../../package.json").version;
 
-interface VersionInfo {
-  latest: string;
-  checkedAt: string;
+export function isNewerVersion(latest: string, current: string): boolean {
+  return !!semver.valid(latest) && !!semver.valid(current) && semver.gt(latest, current);
 }
 
-/**
- * Check if a version is newer than the current version
- * Uses semver library for proper semantic version comparison
- */
-function isNewerVersion(latest: string, current: string): boolean {
-  // Validate versions first - if invalid, don't show update
-  if (!semver.valid(latest) || !semver.valid(current)) {
-    return false;
+export function assertUpdatesOnline(): void {
+  const manager = new ConfigManager();
+  if (environmentRequestsOffline() || (manager.exists() && manager.load().offlineMode)) {
+    throw new Error('Updates are disabled in offline mode. Run "guardscan config --offline false" and omit --offline to update.');
   }
-  return semver.gt(latest, current);
 }
 
-/**
- * Check for updates (non-blocking)
- */
-export async function checkForUpdates(): Promise<void> {
-  const debug = process.env.GUARDSCAN_DEBUG === "true";
-
-  try {
-    if (
-      process.env.GUARDSCAN_NO_TELEMETRY === "true" ||
-      environmentRequestsOffline()
-    ) {
-      if (debug)
-        {console.error("[VERSION] Skipping update check (--no-telemetry)");}
-      return;
-    }
-
-    const configManager = new ConfigManager();
-    if (!configManager.exists()) {
-      if (debug) {console.error("[VERSION] Skipping update check (no config)");}
-      return;
-    }
-
-    const config = configManager.load({ touchLastUsed: false });
-    if (!config.telemetryEnabled || config.offlineMode) {
-      if (debug) {
-        console.error("[VERSION] Skipping update check (telemetry disabled or offline mode enabled)");
-      }
-      return;
-    }
-
-    if (debug) {console.error("[VERSION] Checking for updates...");}
-
-    // Check cache first (only check once per day)
-    const cacheDir = configManager.getCacheDir();
-
-    if (debug) {console.error(`[VERSION] Cache dir: ${cacheDir}`);}
-
-    // Defensive: ensure cache directory exists before accessing files
-    if (!fs.existsSync(cacheDir)) {
-      if (debug)
-        {console.error("[VERSION] Cache dir does not exist, creating...");}
-      try {
-        fs.mkdirSync(cacheDir, { recursive: true });
-      } catch (dirError) {
-        if (debug)
-          {console.error(
-            "[VERSION] Failed to create cache dir, skipping version check"
-          );}
-        return; // Can't create cache dir, skip version check silently
-      }
-    }
-
-    const cacheFile = path.join(
-      cacheDir,
-      TELEMETRY_CONSTANTS.VERSION_CACHE_FILE
-    );
-
-    if (debug) {console.error(`[VERSION] Cache file: ${cacheFile}`);}
-    if (fs.existsSync(cacheFile)) {
-      const cache: VersionInfo = JSON.parse(
-        fs.readFileSync(cacheFile, "utf-8")
-      );
-      const lastCheck = new Date(cache.checkedAt);
-      const now = new Date();
-      const hoursSinceCheck =
-        (now.getTime() - lastCheck.getTime()) / (1000 * 60 * 60);
-
-      if (hoursSinceCheck < API_CONSTANTS.VERSION_CACHE_HOURS) {
-        // Use cached version
-        if (isNewerVersion(cache.latest, CURRENT_VERSION)) {
-          displayUpdateMessage(cache.latest);
-        }
-        return;
-      }
-    }
-
-    // Fetch latest version from npm registry
-    const response = await axios.get(API_CONSTANTS.VERSION_CHECK_URL, {
-      timeout: API_CONSTANTS.VERSION_CHECK_TIMEOUT,
-    });
-    // npm registry returns { version: "1.0.2" } - no "v" prefix needed
-    const latestVersion = response.data.version;
-
-    // Cache the result (defensive write)
-    const versionInfo: VersionInfo = {
-      latest: latestVersion,
-      checkedAt: new Date().toISOString(),
-    };
-
+/** Explicit checks bypass the daily cache; malformed cache entries are ignored. */
+export async function getLatestVersion(force = false): Promise<string> {
+  assertUpdatesOnline();
+  const cacheFile = path.join(new ConfigManager().getCacheDir(), TELEMETRY_CONSTANTS.VERSION_CACHE_FILE);
+  if (!force) {
     try {
-      fs.writeFileSync(cacheFile, JSON.stringify(versionInfo, null, 2));
-      if (debug) {console.error("[VERSION] Cache file written successfully");}
-    } catch (writeError) {
-      if (debug)
-        {console.error("[VERSION] Failed to write cache file:", writeError);}
-      // Continue anyway - version check still works, just won't cache
-    }
+      const cache = readJsonFileBounded(cacheFile, 4096) as {latest?: unknown; checkedAt?: unknown};
+      const age = typeof cache.checkedAt === 'string' ? Date.now() - Date.parse(cache.checkedAt) : NaN;
+      if (typeof cache.latest === 'string' && semver.valid(cache.latest) &&
+          !semver.prerelease(cache.latest) && age >= 0 && age < API_CONSTANTS.VERSION_CACHE_HOURS * 3600000) {
+        return cache.latest;
+      }
+    } catch { /* A missing or invalid cache must not prevent an update check. */ }
+  }
 
-    // Display message if update available (only if latest is actually newer)
-    if (isNewerVersion(latestVersion, CURRENT_VERSION)) {
-      displayUpdateMessage(latestVersion);
+  const response = await axios.get(API_CONSTANTS.VERSION_CHECK_URL, {
+    timeout: API_CONSTANTS.VERSION_CHECK_TIMEOUT,
+    maxContentLength: 1024 * 1024,
+    maxRedirects: 0,
+  });
+  const latest: unknown = response.data?.version;
+  if (typeof latest !== 'string' || !semver.valid(latest) || semver.prerelease(latest)) {
+    throw new Error('The update registry returned an invalid stable version.');
+  }
+  try {
+    atomicReplaceJson(cacheFile, {latest, checkedAt: new Date().toISOString()});
+  } catch { /* Update checks still work when the cache is read-only. */ }
+  return latest;
+}
+
+export async function withInstallationLease(operation: () => Promise<void>): Promise<void> {
+  const lease = acquireFileLease(path.join(new ConfigManager().getCacheDir(), 'installation.lock'), 15 * 60_000);
+  try {await operation();} finally {lease.release();}
+}
+
+/** Automatic updates run after successful interactive commands, never in CI. */
+export async function checkForUpdates(options: {allowAutoUpdate?: boolean} = {}): Promise<void> {
+  let automatic = false;
+  try {
+    if (environmentRequestsOffline()) {return;}
+    const manager = new ConfigManager();
+    if (!manager.exists()) {return;}
+    const config = manager.load({touchLastUsed: false});
+    if (config.offlineMode) {return;}
+    automatic = config.autoUpdate === true && options.allowAutoUpdate === true &&
+      !!process.stdin.isTTY && !!process.stdout.isTTY && !!process.stderr.isTTY && !process.env.CI;
+    const notifications = config.telemetryEnabled && process.env.GUARDSCAN_NO_TELEMETRY !== 'true';
+    if (!automatic && !notifications) {return;}
+
+    const latest = await getLatestVersion();
+    if (!isNewerVersion(latest, CURRENT_VERSION)) {return;}
+    // Native channels can lag npm and failures can persist, so try each target version at most once per cache window.
+    const attemptFile = path.join(manager.getCacheDir(), '.auto-update-attempt');
+    if (automatic) {
+      try {
+        const attempt = readJsonFileBounded(attemptFile, 4096) as {latest?: unknown; attemptedAt?: unknown};
+        const age = typeof attempt.attemptedAt === 'string' ? Date.now() - Date.parse(attempt.attemptedAt) : NaN;
+        automatic = !(attempt.latest === latest && age >= 0 && age < API_CONSTANTS.VERSION_CACHE_HOURS * 3600000);
+      } catch { /* No previous attempt. */ }
+    }
+    if (automatic) {
+      atomicReplaceJson(attemptFile, {latest, attemptedAt: new Date().toISOString()});
+      await withInstallationLease(async () => {
+        const installations = await detectInstallations();
+        if (installations.length !== 1 || !installations[0].active) {
+          throw new Error('Multiple or missing installations; run "guardscan update --check" and select --manager.');
+        }
+        const plan = getInstallationCommand(installations[0], 'update');
+        console.error(`Updating GuardScan using ${installations[0].manager}...`);
+        await runInstallationCommand(plan);
+        console.error('Package-manager update completed. Run "guardscan --version" to check the installed version.');
+      });
+    } else if (notifications) {
+      console.error(chalk.yellow(`\nUpdate Available! ${CURRENT_VERSION} → ${latest}\nRun: guardscan update\n`));
     }
   } catch (error) {
-    if (debug) {console.error("[VERSION] Check failed:", error);}
-    // Silent fail - don't disrupt user experience
+    if (automatic || process.env.GUARDSCAN_DEBUG === 'true') {
+      console.error(`[UPDATE] ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
-}
-
-/**
- * Display update notification with dynamic padding
- */
-function displayUpdateMessage(latestVersion: string): void {
-  const width = 60;
-  const border = "─".repeat(width);
-
-  const title = "Update Available!";
-  const currentText = `Current: ${CURRENT_VERSION}`;
-  const latestText = `Latest: ${latestVersion}`;
-  const versionLine = `${currentText}  →  ${latestText}`;
-  const updateText = `Run: ${chalk.cyan("npm update -g guardscan")}`;
-
-  // Calculate padding dynamically
-  const titlePadding = " ".repeat(Math.max(0, width - title.length - 2));
-  const versionPadding = " ".repeat(
-    Math.max(0, width - versionLine.length - 2)
-  );
-  const updatePadding = " ".repeat(
-    Math.max(0, width - updateText.length + 10 - 2)
-  ); // +10 for chalk color codes
-  const emptyLine = " ".repeat(width);
-
-  console.error("");
-  console.error(chalk.yellow(`┌${border}┐`));
-  console.error(
-    chalk.yellow("│") +
-      "  " +
-      chalk.bold(title) +
-      titlePadding +
-      chalk.yellow("│")
-  );
-  console.error(
-    chalk.yellow("│") + "  " + versionLine + versionPadding + chalk.yellow("│")
-  );
-  console.error(chalk.yellow("│") + emptyLine + chalk.yellow("│"));
-  console.error(
-    chalk.yellow("│") + "  " + updateText + updatePadding + chalk.yellow("│")
-  );
-  console.error(chalk.yellow(`└${border}┘`));
-  console.error("");
 }
 
 export function getCurrentVersion(): string {

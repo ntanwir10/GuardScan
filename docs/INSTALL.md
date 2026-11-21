@@ -18,6 +18,35 @@ From 1.1.1, GuardScan is distributed through the channels below. This table is t
 
 Node.js 22 or newer for npm, pnpm, Yarn and Bun; the other channels install a standalone binary with Node.js bundled. Node.js, npm, pnpm, Yarn and Bun are third-party tools; install them from their own websites.
 
+## Update and uninstall from GuardScan
+
+```bash
+guardscan update --dry-run        # list detected copies and preview the update
+guardscan config --offline false  # allow network access for updates
+guardscan update --check          # list installed copies and check the latest stable version
+guardscan --update                # same as guardscan update
+guardscan update --manager npm    # select a manager when several copies exist
+guardscan uninstall --dry-run     # preview removal; preserve local data
+guardscan uninstall --yes         # confirm removal using the detected owner
+```
+
+GuardScan checks its running executable and GuardScan launchers on `PATH` against package-manager ownership metadata. It uses the manager that owns the selected copy, even if you launched it through another manager. Multiple copies require `--manager`; multiple copies owned by the same manager require fixing `PATH` and that manager's global configuration first. Unrecognized, source, and directly downloaded installations show manual instructions instead of guessing which global package to change. Detection does not search every Node version or directory on your machine.
+
+Commands such as `npm uninstall -g guardscan` only affect npm's installation. They cannot remove a copy owned by pipx, Homebrew, or another manager. Use `guardscan uninstall` to detect the owner, or use the matching command below. GuardScan does not intercept third-party install or uninstall commands; check existing installations before switching channels.
+
+On Windows, close GuardScan and run the displayed Scoop or pipx command directly: Windows keeps their running executable open. Standalone downloads and source checkouts continue to use the manual upgrade and removal instructions below.
+
+### Automatic updates
+
+```bash
+guardscan update --auto on
+guardscan update --auto status
+guardscan update --auto off
+guardscan security --no-auto-update  # skip automatic updates for one command
+```
+
+Automatic updates are off by default. When enabled, GuardScan checks the stable npm version (cached for 24 hours) after successful interactive commands and updates through the detected owner. Automatic updates require exactly one recognized, active installation, work independently of telemetry consent, and are skipped in CI, noninteractive sessions, redirected output, and offline mode. Help, version, configuration, reset, update, and uninstall commands never trigger automatic updates. The package manager determines which stable version is available in its channel; a native channel can lag behind npm. GuardScan attempts each new version automatically at most once every 24 hours, so a lagging channel or a failed update does not rerun the package manager on every command. Errors leave the original command's exit status intact and display update guidance.
+
 ## Node.js package managers
 
 ### npm
@@ -138,13 +167,14 @@ Uninstalling the package leaves GuardScan's configuration and caches in `~/.guar
 guardscan reset --all --force   # clears config, caches, snapshots and the telemetry queue
 ```
 
-Then uninstall with the same package manager you installed with. `guardscan config --telemetry=false` also deletes queued telemetry without a full reset.
+Then use `guardscan uninstall --yes`, or uninstall with the same package manager you installed with. `guardscan config --telemetry=false` also deletes queued telemetry without a full reset.
 
 ## Check the installation
 
 ```bash
 guardscan --version
 guardscan status
+guardscan update --dry-run
 ```
 
 ## Telemetry notice for old versions

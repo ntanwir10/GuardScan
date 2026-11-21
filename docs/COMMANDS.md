@@ -12,6 +12,8 @@ scanning
 
 Options:
   -V, --version               output the version number
+  --update                    Update GuardScan (alias for the update command)
+  --no-auto-update            Skip automatic updates for this command
   --no-telemetry              Disable telemetry for this command
   --no-cache                  Disable response, semantic, and advisory caches
                               for this command
@@ -65,6 +67,39 @@ When several results apply in one run, the highest code wins. Use `--ci` to opt 
 - [`telemetry`](#guardscan-telemetry)
 - [`capabilities`](#guardscan-capabilities)
 - [`vuln`](#guardscan-vuln)
+- [`update`](#guardscan-update)
+- [`uninstall`](#guardscan-uninstall)
+
+### `guardscan update`
+
+`guardscan --update` is an alias. Updates use the detected installation's package manager and respect offline mode.
+
+```text
+Usage: guardscan update [options]
+
+Options:
+  --check               List installations and check the latest stable version
+  --auto <mode>         Configure automatic updates: on, off, status (default: off)
+  --manager <manager>   Select npm, pnpm, yarn, bun, brew, scoop, or pipx
+  --dry-run             Preview the installation and update command
+  -h, --help            Display help
+```
+
+Use `--auto` separately from the other update options. Automatic updates require a successful interactive command, one recognized installation, and online mode. Use the global `--no-auto-update` to suppress them for one command. See [installation behavior and limits](INSTALL.md#update-and-uninstall-from-guardscan).
+
+### `guardscan uninstall`
+
+```text
+Usage: guardscan uninstall [options]
+
+Options:
+  --manager <manager>   Select the package manager when multiple copies exist
+  --dry-run             Preview the installation and uninstall command
+  -y, --yes             Confirm removal of the selected installation
+  -h, --help            Display help
+```
+
+Local configuration and reports are kept. Multiple installations require explicit selection; unmanaged copies and locked Windows native installations display manual instructions.
 
 ### `guardscan init`
 

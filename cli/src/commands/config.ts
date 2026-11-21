@@ -108,7 +108,7 @@ function showConfig(): void {
   });
 
   console.log(chalk.cyan.bold("\n📋 GuardScan Configuration\n"));
-  console.log(chalk.gray("─".repeat(70)) + "\n");
+  console.log(chalk.gray("─".repeat(70)) + `\n\nAutomatic updates: ${config.autoUpdate === true ? 'on' : 'off'} (guardscan update --auto on|off)\n`);
 
   const mode = getModeFromProvider(config.provider);
 

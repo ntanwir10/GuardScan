@@ -176,6 +176,9 @@ describe('ConfigManager', () => {
       ['offlineMode', '"false"'],
       ['offlineMode', '1'],
       ['offlineMode', 'null'],
+      ['autoUpdate', '"true"'],
+      ['autoUpdate', '1'],
+      ['autoUpdate', 'null'],
     ])('rejects malformed privacy boolean %s=%s', (field, yamlValue) => {
       configManager.init();
       const configPath = path.join(configManager.getConfigDir(), 'config.yml');
@@ -188,6 +191,7 @@ describe('ConfigManager', () => {
         'provider: none',
         `telemetryEnabled: ${values.telemetryEnabled}`,
         `offlineMode: ${values.offlineMode}`,
+        ...(values.autoUpdate === undefined ? [] : [`autoUpdate: ${values.autoUpdate}`]),
       ].join('\n'));
 
       expect(() => configManager.load()).toThrow(`configuration.${field} must be a boolean`);

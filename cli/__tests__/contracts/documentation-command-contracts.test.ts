@@ -99,14 +99,14 @@ describe('public command documentation contracts', () => {
     expect(release).toContain('The GuardScan-hosted Cloudflare telemetry service');
   });
 
-  it('keeps the documented 29-command inventory identical to installed CLI help', () => {
+  it('keeps the documented 31-command inventory identical to installed CLI help', () => {
     const documented = documentedQuickstartCommands(quickstart);
     const actual = actualTopLevelCommands(runHelp());
 
-    expect(new Set(documented).size).toBe(29);
-    expect(documented).toHaveLength(29);
-    expect(new Set(actual).size).toBe(29);
-    expect(actual).toHaveLength(29);
+    expect(new Set(documented).size).toBe(31);
+    expect(documented).toHaveLength(31);
+    expect(new Set(actual).size).toBe(31);
+    expect(actual).toHaveLength(31);
     expect([...documented].sort()).toEqual([...actual].sort());
   });
 
@@ -118,8 +118,8 @@ describe('public command documentation contracts', () => {
     const documented = documentedAcceptanceCommands(acceptance);
     const actual = actualTopLevelCommands(runHelp());
 
-    expect(documented).toHaveLength(29);
-    expect(new Set(documented).size).toBe(29);
+    expect(documented).toHaveLength(31);
+    expect(new Set(documented).size).toBe(31);
     expect([...documented].sort()).toEqual([...actual].sort());
   });
 
