@@ -53,6 +53,47 @@ describe('CLI config and global option parsing', () => {
     expect(result.stdout).toContain('guardscan.vulnerability-snapshot-status.v1');
   });
 
+  it.each([
+    ['--update', '--auto', 'on'],
+    ['--offline', '--update', '--auto', 'on'],
+    ['update', '--auto', 'on', '--offline', '--no-auto-update'],
+  ])('persists opt-in automatic updates using the command and flag alias (%j)', (...args) => {
+    const result = cli(args);
+    expect({status: result.status, stderr: result.stderr}).toEqual({status: 0, stderr: ''});
+    expect(result.stdout).toContain('Automatic updates: on');
+    expect(yaml.load(fs.readFileSync(path.join(home, '.guardscan', 'config.yml'), 'utf8')))
+      .toMatchObject({autoUpdate: true, offlineMode: true, telemetryEnabled: false});
+  });
+
+  it('shows automatic update status without creating or changing config', () => {
+    const configPath = path.join(home, '.guardscan', 'config.yml');
+    const before = fs.readFileSync(configPath, 'utf8');
+    const result = cli(['update', '--auto', 'status']);
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('Automatic updates: off');
+    expect(fs.readFileSync(configPath, 'utf8')).toBe(before);
+  });
+
+  it.each([
+    ['update', '--auto', 'maybe'],
+    ['update', '--auto', 'on', '--dry-run'],
+    ['status', '--update'],
+  ])('rejects ambiguous or invalid lifecycle options without changing config (%j)', (...args) => {
+    const configPath = path.join(home, '.guardscan', 'config.yml');
+    const before = fs.readFileSync(configPath, 'utf8');
+    const result = cli(args);
+    expect(result.status).not.toBe(0);
+    expect(fs.readFileSync(configPath, 'utf8')).toBe(before);
+  });
+
+  it.each(['update', 'uninstall'])('shows %s help without network or installation changes', command => {
+    const result = cli([command, '--help']);
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain(`Usage: guardscan ${command}`);
+    expect(result.stdout).toContain('--dry-run');
+    expect(result.stderr).toBe('');
+  });
+
   it.each([[], ['--isolate-project-network']])('explains blocked offline project execution without running it (%j)', (...isolation) => {
     const repository = path.join(home, 'project');
     fs.mkdirSync(repository);

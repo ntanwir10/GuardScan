@@ -40,6 +40,10 @@ function prioritizeGlobalOptions(program: Command, args: string[]): string[] {
 
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
+  const updateFlag = args.indexOf('--update');
+  if (updateFlag >= 0 && args.slice(0, updateFlag).every(arg => arg.startsWith('-') && arg !== '--')) {
+    args[updateFlag] = 'update';
+  }
   applyEarlyEnvironmentFlags(args);
 
   const [
@@ -73,6 +77,7 @@ async function main(): Promise<void> {
     { createCapabilitiesCommand },
     { createVulnerabilityCommand },
     { checkForUpdates },
+    { createUpdateCommand, createUninstallCommand },
     { displayLogo },
   ] = await Promise.all([
     import("./commands/init"),
@@ -105,6 +110,7 @@ async function main(): Promise<void> {
     import("./commands/capabilities"),
     import("./commands/vuln"),
     import("./utils/version"),
+    import("./commands/update"),
     import("./utils/ascii-art"),
   ]);
 
@@ -116,6 +122,8 @@ async function main(): Promise<void> {
       "GuardScan - Privacy-first AI Code Review CLI with comprehensive security scanning"
     )
     .version(packageJson.version)
+    .option("--update", "Update GuardScan (alias for the update command)")
+    .option("--no-auto-update", "Skip automatic updates for this command")
     .option("--no-telemetry", "Disable telemetry for this command")
     .option("--no-cache", "Disable response, semantic, and advisory caches for this command")
     .option("--offline", "Block cloud and GuardScan network services for this command")
@@ -438,6 +446,8 @@ async function main(): Promise<void> {
   program.addCommand(createTelemetryCommand());
   program.addCommand(createCapabilitiesCommand());
   program.addCommand(createVulnerabilityCommand());
+  program.addCommand(createUpdateCommand());
+  program.addCommand(createUninstallCommand());
 
   // Keep config's value-taking --offline distinct while preserving existing
   // global boolean flags before or after commands, including nested commands.
@@ -453,15 +463,22 @@ async function main(): Promise<void> {
     displayLogo("Privacy-First AI Code Review & Security Scanning");
   }
 
-  checkForUpdates().catch(() => {
-    // Silent fail
+  program.hook('preAction', () => {
+    if (program.opts().update) {throw new Error('Use --update on its own, or use the update command with options.');}
+  });
+  program.hook('postAction', async (_program, action) => {
+    let command = action;
+    while (command.parent && command.parent !== program) {command = command.parent;}
+    if (process.exitCode || ['update', 'uninstall', 'config', 'init', 'reset'].includes(command.name())) {return;}
+    await checkForUpdates({allowAutoUpdate: program.opts().autoUpdate !== false});
   });
 
   await program.parseAsync(normalizedArgs, {from: 'user'});
 }
 
 main().catch((error) => {
+  // Thrown command errors carry user guidance; stacks are for debugging.
   // eslint-disable-next-line no-console
-  console.error(error);
+  console.error(error instanceof Error && process.env.GUARDSCAN_DEBUG !== 'true' ? `Error: ${error.message}` : error);
   process.exit(1);
 });

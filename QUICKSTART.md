@@ -27,6 +27,8 @@ guardscan init                  Initialize local configuration
 guardscan config                Configure AI provider, privacy and local settings
 guardscan status                Show provider, repository and local status
 guardscan reset                 Clear local context and cache
+guardscan update                Update through the owning package manager (--check, --dry-run, --auto)
+guardscan uninstall             Uninstall through the owning package manager; keeps local data
 guardscan security              Local heuristic security checks
 guardscan scan                  Security, quality and SBOM scan in parallel
 guardscan vuln                  Exact-version dependency vulnerabilities via OSV (aliases: cve, audit)

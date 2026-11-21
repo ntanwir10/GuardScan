@@ -31,6 +31,7 @@ export interface Config {
   embeddingFallback?: 'ollama' | 'lmstudio' | 'none';
   telemetryEnabled: boolean;
   offlineMode: boolean;
+  autoUpdate?: boolean;
   createdAt: string;
   lastUsed: string;
   
@@ -517,7 +518,7 @@ const ROUTING_TASKS = [
 ] as const;
 const TOP_LEVEL_KEYS = [
   'clientId', 'provider', 'apiKey', 'apiEndpoint', 'allowRemoteSelfHosted', 'model', 'embeddingFallback',
-  'telemetryEnabled', 'offlineMode', 'createdAt', 'lastUsed', 'retry', 'circuitBreaker',
+  'telemetryEnabled', 'offlineMode', 'autoUpdate', 'createdAt', 'lastUsed', 'retry', 'circuitBreaker',
   'rateLimit', 'cache', 'vulnerabilities', 'observability', 'budget', 'modelRouting',
 ] as const;
 
@@ -542,6 +543,7 @@ export function parseConfig(value: unknown): Config {
   validateOptionalTimestamp(input, 'lastUsed');
   validateOptionalBoolean(input, 'telemetryEnabled');
   validateOptionalBoolean(input, 'offlineMode');
+  validateOptionalBoolean(input, 'autoUpdate');
 
   const config: Config = {
     provider,
@@ -555,6 +557,7 @@ export function parseConfig(value: unknown): Config {
   if (typeof input.apiKey === 'string') {config.apiKey = input.apiKey;}
   if (typeof input.apiEndpoint === 'string') {config.apiEndpoint = input.apiEndpoint;}
   if (typeof input.model === 'string') {config.model = input.model;}
+  if (input.autoUpdate !== undefined) {config.autoUpdate = input.autoUpdate === true;}
   if (isOneOf(input.embeddingFallback, ['ollama', 'lmstudio', 'none'])) {
     config.embeddingFallback = input.embeddingFallback;
   }
