@@ -79,3 +79,5 @@ cli/test_results.txt
 .claude/
 .cursor/
 .agents/
+# graphify knowledge graph: regenerated locally by `graphify update .` and its git hooks
+graphify-out/
