@@ -6,6 +6,8 @@ import {securityCommand} from '../../src/commands/security';
 import {configManager} from '../../src/core/config';
 import {repositoryManager} from '../../src/core/repository';
 import {scanEngine} from '../../src/core/scan-engine';
+import {lintStagedText} from '../../src/core/staged-lint';
+import {scanStagedChanges} from '../../src/core/staged-secrets';
 import type {ScanEngineResult} from '../../src/core/scan-engine';
 
 // Runtime overrides (GIT_CONFIG_COUNT, GIT_CONFIG_PARAMETERS) beat config files, so they must be cleared too.
@@ -257,5 +259,25 @@ describe('staged lint and code-pattern checks', () => {
     expect(lint(await scan())).toEqual([
       'gen.js:1:guardscan.lint.todo-comment', 'gen.js:2:guardscan.lint.debug-statement',
     ]);
+  });
+});
+
+describe('staged lint at scale', () => {
+  it('checks a long run of spaces in linear time', () => {
+    const started = Date.now();
+    expect(lintStagedText('a.txt', `${' '.repeat(80000)}x\n`, 'all')).toEqual([]);
+    expect(Date.now() - started).toBeLessThan(1000);
+  });
+
+  it('collects very many findings from one staged file without overflowing push()', () => {
+    const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'guardscan-staged-scale-'));
+    try {
+      git(repo, 'init', '-q');
+      write(repo, 'spaces.txt', ' \n'.repeat(150000));
+      git(repo, 'add', 'spaces.txt');
+      expect(scanStagedChanges(repo).lint).toHaveLength(150000);
+    } finally {
+      fs.rmSync(repo, {recursive: true, force: true});
+    }
   });
 });

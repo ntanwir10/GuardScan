@@ -151,8 +151,9 @@ function scanBlobBatch(root: string, batch: StagedEntry[], result: StagedScanRes
       result.excluded.push({path: blob.path, reason: 'binary'});
     } else {
       const text = content.toString('utf8');
-      result.findings.push(...secretsDetector.scanContent(blob.path, text));
-      result.lint.push(...lintStagedText(blob.path, text, blob.added));
+      // Append one by one: spreading a large result into push() exceeds the engine's argument limit.
+      for (const finding of secretsDetector.scanContent(blob.path, text)) {result.findings.push(finding);}
+      for (const finding of lintStagedText(blob.path, text, blob.added)) {result.lint.push(finding);}
     }
   }
 }

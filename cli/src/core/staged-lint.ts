@@ -43,7 +43,8 @@ const COMMENT_OPENING: Readonly<Record<Language, RegExp>> = {
 
 const CONFLICT_BOUNDARY = /^(?:<{7}|>{7}) /;
 const CONFLICT_SEPARATOR = /^={7}$/;
-const TRAILING_WHITESPACE = /[ \t]+$/;
+// Only the last character matters; `[ \t]+$` backtracks quadratically on long space runs.
+const TRAILING_WHITESPACE = /[ \t]$/;
 const TODO_MARKER = /\b(?:TODO|FIXME|XXX)\b/;
 // shortcut: longer lines (usually minified or generated) skip the code rules; raise the cap if real code needs it.
 const MAX_CODE_LINE_CHARS = 4096;
