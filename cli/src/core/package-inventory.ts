@@ -20,6 +20,8 @@ export interface DependencyCoordinate {
   dependencyPaths: string[];
   /** Complete immediate-parent identities for graph-capable lockfiles. */
   dependencyParents?: string[];
+  /** npm lockfile v2/v3 `hasInstallScript` or pnpm `requiresBuild`; set only when true. */
+  installScript?: true;
 }
 
 export interface PackageInventoryError {
@@ -52,7 +54,7 @@ interface PackageInventoryCache {
 const MAX_INVENTORY_FILE_BYTES = 32 * 1024 * 1024;
 const INVENTORY_READ_CHUNK_BYTES = 64 * 1024;
 
-function readInventoryText(file: string): string {
+export function readInventoryText(file: string): string {
   const descriptor = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK || 0));
   try {
     const metadata = fs.fstatSync(descriptor);
@@ -138,7 +140,7 @@ const IGNORED_DIRS = new Set([
 
 const MAX_DEPENDENCY_PATHS_PER_COORDINATE = 64;
 
-function isRequirementsInventoryFile(file: string): boolean {
+export function isRequirementsInventoryFile(file: string): boolean {
   const basename = path.basename(file).toLowerCase();
   if (/^constraints?(?:[-_.][a-z0-9_.-]+)?\.txt$/.test(basename)) {return false;}
   return /^requirements(?:[-_.][a-z0-9_.-]+)?\.txt$/.test(basename) ||
@@ -185,7 +187,7 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
     : undefined;
 }
 
-function isWithinRoot(root: string, candidate: string): boolean {
+export function isWithinRoot(root: string, candidate: string): boolean {
   const rel = path.relative(root, candidate);
   return rel === '' || (!rel.startsWith(`..${path.sep}`) && rel !== '..' && !path.isAbsolute(rel));
 }
@@ -745,6 +747,7 @@ function parseNpmLock(
               ? [...pathsByNode.get(node.packagePath)!].sort()
               : [node.packagePath],
             dependencyParents: [...(parentsByNode.get(node.packagePath) || [])].sort(),
+            ...(node.value.hasInstallScript === true ? {installScript: true as const} : {}),
           });
         }
       }
@@ -1337,6 +1340,8 @@ function parsePnpmLock(
       const nodeKey = nodeIdentity(parsed.name, parsed.version, rawKey);
       const directValues = directDependencies.get(nodeKey) || [];
       const dependencyPaths = pathsByNode.get(nodeKey);
+      const requiresBuild = asRecord(records[rawKey])?.requiresBuild === true ||
+        asRecord(asRecord(data?.packages)?.[rawKey])?.requiresBuild === true;
       const outputs: Array<PnpmDirectDependency | undefined> = directValues.length > 0 ? directValues : [undefined];
       for (const direct of outputs) {
         addCoordinate(coordinates, {
@@ -1348,6 +1353,7 @@ function parsePnpmLock(
             ? [...dependencyPaths].sort()
             : [versionedIdentity(parsed.name, parsed.version)],
           dependencyParents: [...(parentsByNode.get(nodeKey) || [])].sort(),
+          ...(requiresBuild ? {installScript: true as const} : {}),
         });
       }
     }
@@ -2517,6 +2523,7 @@ function mergeCoordinates(coordinates: DependencyCoordinate[]): DependencyCoordi
           ...(coordinate.dependencyParents || []),
         ])].sort();
       }
+      if (coordinate.installScript) {existing.installScript = true;}
       if (coordinate.manifestPath < existing.manifestPath) {existing.manifestPath = coordinate.manifestPath;}
       if (coordinate.lockfilePath < existing.lockfilePath) {existing.lockfilePath = coordinate.lockfilePath;}
     }
