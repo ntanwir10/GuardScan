@@ -78,6 +78,7 @@ async function main(): Promise<void> {
     { createVulnerabilityCommand },
     { checkForUpdates },
     { createUpdateCommand, createUninstallCommand, warnIfInstalledTwice },
+    { createHookCommand },
     { displayLogo },
   ] = await Promise.all([
     import("./commands/init"),
@@ -111,6 +112,7 @@ async function main(): Promise<void> {
     import("./commands/vuln"),
     import("./utils/version"),
     import("./commands/update"),
+    import("./commands/hook"),
     import("./utils/ascii-art"),
   ]);
 
@@ -179,6 +181,7 @@ async function main(): Promise<void> {
     .command("security")
     .description("Run local heuristic security checks")
     .option("-f, --files <patterns...>", "Specific files or patterns to scan")
+    .option("--staged", "Scan only content staged for the next commit, for secrets only")
     .option("--licenses", "Include license compliance scanning")
     .option("--cve", "Include exact-version dependency vulnerability scanning")
     .option("--no-cve", "Skip dependency vulnerability scanning")
@@ -448,6 +451,7 @@ async function main(): Promise<void> {
   program.addCommand(createVulnerabilityCommand());
   program.addCommand(createUpdateCommand());
   program.addCommand(createUninstallCommand());
+  program.addCommand(createHookCommand());
 
   // Keep config's value-taking --offline distinct while preserving existing
   // global boolean flags before or after commands, including nested commands.

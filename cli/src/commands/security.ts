@@ -1,3 +1,4 @@
+/* eslint-disable no-console -- The security command reports scan progress and its summary. */
 import chalk from 'chalk';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -17,6 +18,7 @@ import {
   scanEngine,
   writeScanResult,
 } from '../core/scan-engine';
+import { STAGED_SCOPE, StagedExclusion } from '../core/staged-secrets';
 import { createTelemetryRecorder } from '../core/telemetry';
 import { FixSuggestionsGenerator, SecurityIssue } from '../features/fix-suggestions';
 import {
@@ -24,13 +26,14 @@ import {
   ProviderFactory,
 } from '../providers/factory';
 import { displaySimpleBanner } from '../utils/ascii-art';
-import { handleCommandError } from '../utils/error-handler';
+import { GuardScanError, handleCommandError } from '../utils/error-handler';
 import { environmentDisablesCache, resolveExecutionPolicy } from '../utils/execution-policy';
 import { Finding, reporter, ReviewResult } from '../utils/reporter';
 import { SECURITY_CONSTANTS } from '../constants/security-constants';
 
 interface SecurityOptions {
   files?: string[];
+  staged?: boolean;
   licenses?: boolean;
   cve?: boolean;
   allowPartial?: boolean;
@@ -54,6 +57,7 @@ export async function securityCommand(options: SecurityOptions): Promise<void> {
   displaySimpleBanner('security');
 
   try {
+    assertStagedOptions(options);
     const config = configManager.loadOrInit();
     warnDeprecatedNoCloud(options.cloud);
     const repoInfo = repositoryManager.getRepoInfo();
@@ -74,7 +78,8 @@ export async function securityCommand(options: SecurityOptions): Promise<void> {
     const inventory = includeVulnerabilities || options.licenses
       ? collectPackageInventory(repoInfo.path)
       : undefined;
-    const locResult = await locCounter.count(options.files);
+    // Staged mode reads only the Git index, so working-tree line counts do not apply.
+    const locResult = options.staged ? emptyLocResult() : await locCounter.count(options.files);
     const licenseReport = options.licenses
       ? licenseScanner.scan(repoInfo.path, 'proprietary', { offline, inventory })
       : undefined;
@@ -85,6 +90,7 @@ export async function securityCommand(options: SecurityOptions): Promise<void> {
       files: locResult.fileBreakdown,
       fileSelection: options.files ? 'explicit' : 'discovered',
       skippedFiles: locResult.skippedFiles,
+      staged: options.staged === true,
       offline,
       includeLicenses: options.licenses === true,
       includeVulnerabilities,
@@ -151,7 +157,7 @@ export async function securityCommand(options: SecurityOptions): Promise<void> {
     }
 
     console.log(chalk.green(`✓ Report saved: ${reportPath}`));
-    displaySecuritySummary(scanResult.findings, scanResult.status, policyResult);
+    displaySecuritySummary(scanResult, policyResult);
     applyExitCode(policyResult.exitCode);
 
     await createTelemetryRecorder(config).record({
@@ -177,6 +183,7 @@ export function securityReview(
   return {
     summary: [
       `Security scan found ${findings.length} issue(s).`,
+      ...stagedScopeLines(scanResult),
       ...Object.entries(counts).map(([severity, count]) => `${severity}: ${count}`),
       `Coverage: ${scanResult.status}`,
       `Policy: ${policy.outcome}`,
@@ -211,12 +218,12 @@ export function securityReview(
   };
 }
 
-function displaySecuritySummary(
-  findings: Finding[],
-  coverage: string,
-  policy: ScanPolicyResult
-): void {
+function displaySecuritySummary(scanResult: ScanEngineResult, policy: ScanPolicyResult): void {
+  const findings = scanResult.findings;
   console.log(chalk.white.bold('\n🔒 Security Summary'));
+  for (const line of stagedScopeLines(scanResult)) {
+    console.log(`  ${line}`);
+  }
   const counts = countSeverities(findings);
   for (const [severity, count] of Object.entries(counts)) {
     if (count > 0) {
@@ -226,11 +233,45 @@ function displaySecuritySummary(
   if (findings.length === 0) {
     console.log(chalk.green('  No security findings'));
   }
-  console.log(`  Coverage: ${coverage}`);
+  console.log(`  Coverage: ${scanResult.status}`);
   console.log(`  Policy: ${policy.outcome}`);
   for (const reason of policy.reasons) {
     console.log(chalk.red(`    - ${reason}`));
   }
+}
+
+/** Scope and per-entry exclusions of a staged scan, so a clean result never overstates what was checked. */
+function stagedScopeLines(scanResult: ScanEngineResult): string[] {
+  const metadata = scanResult.scannerResults.find(scanner => scanner.metadata?.scope === STAGED_SCOPE)?.metadata;
+  if (!metadata) {return [];}
+  const excluded = Array.isArray(metadata.excluded) ? metadata.excluded as StagedExclusion[] : [];
+  return [
+    `Scope: ${STAGED_SCOPE}`,
+    ...excluded.map(entry => `Not scanned (${entry.reason}): ${JSON.stringify(entry.path)}`),
+  ];
+}
+
+function assertStagedOptions(options: SecurityOptions): void {
+  if (!options.staged) {return;}
+  const conflicts = ([
+    ['--files', options.files !== undefined],
+    ['--licenses', options.licenses === true],
+    ['--cve', options.cve === true],
+    ['--ai-fix', options.aiFix === true],
+    ['--interactive', options.interactive === true],
+  ] as const).filter(([, used]) => used).map(([flag]) => flag);
+  if (conflicts.length > 0) {
+    throw new GuardScanError(
+      `--staged scans staged changes for secrets only and cannot be combined with ${conflicts.join(', ')}.`,
+      'STAGED_OPTION_CONFLICT'
+    );
+  }
+}
+
+function emptyLocResult(): Awaited<ReturnType<typeof locCounter.count>> {
+  return {
+    totalLines: 0, codeLines: 0, commentLines: 0, blankLines: 0, fileCount: 0, fileBreakdown: [], skippedFiles: [],
+  };
 }
 
 function countSeverities(findings: Finding[]): Record<Finding['severity'], number> {

@@ -69,6 +69,7 @@ When several results apply in one run, the highest code wins. Use `--ci` to opt 
 - [`vuln`](#guardscan-vuln)
 - [`update`](#guardscan-update)
 - [`uninstall`](#guardscan-uninstall)
+- [`hook`](#guardscan-hook)
 
 ### `guardscan update`
 
@@ -180,6 +181,8 @@ Run local heuristic security checks
 
 Options:
   -f, --files <patterns...>  Specific files or patterns to scan
+  --staged                   Scan only content staged for the next commit, for
+                             secrets only
   --licenses                 Include license compliance scanning
   --cve                      Include exact-version dependency vulnerability
                              scanning
@@ -204,6 +207,51 @@ Options:
   --max-findings <number>    Fail when finding count exceeds this number
   -h, --help                 display help for command
 ```
+
+`--staged` scans only what the next commit would contain, for secrets only. It reads each staged blob from the Git index by object ID and never reads the working tree, so a partially staged file is judged by its staged version. Git history is not scanned. Results report the scope as "staged changes (secrets only)".
+
+- Symlinks, submodules, binary blobs (a NUL byte in the first 8000 bytes), and blobs larger than 2 MiB are not scanned. Each one is listed as excluded in the console summary, the Markdown summary, and the `secrets` scanner's `metadata.excluded` in JSON. Exclusions do not fail the run.
+- An index with unmerged paths, a directory outside a Git work tree, or a Git failure exits `2`.
+- `--staged` cannot be combined with `--files`, `--licenses`, `--cve`, `--ai-fix`, or `--interactive`.
+
+`guardscan security --staged --ci` exits `1` for high or critical findings, because `--ci` defaults `--fail-on` to `high`. Medium findings, such as JWTs, do not block unless you pass `--fail-on medium`. Like any `--ci` run, it writes `guardscan-security.json` to the current directory unless you pass `--output`. The hook that `guardscan hook install` adds writes its report to `guardscan-pre-commit.json` in the Git directory instead, so the report can never be committed.
+
+### `guardscan hook`
+
+```text
+Usage: guardscan hook [options] [command]
+
+Install, remove, or check the GuardScan Git pre-commit hook
+
+Options:
+  -h, --help      display help for command
+
+Commands:
+  install         Scan staged changes for secrets before each commit
+  uninstall       Remove only GuardScan's block from the pre-commit hook
+  status          Show the pre-commit hook path and whether GuardScan is
+                  installed
+  help [command]  display help for command
+```
+
+`guardscan hook install` adds this block to `<hooks>/pre-commit`, where `<hooks>` is `git rev-parse --git-path hooks`. That path honors `core.hooksPath` and linked worktrees.
+
+```sh
+# >>> guardscan >>>
+guardscan security --staged --ci --output "$(git rev-parse --git-dir)/guardscan-pre-commit.json"
+guardscan_status=$?
+if [ "$guardscan_status" -ne 0 ]; then [ "$guardscan_status" -le 2 ] || guardscan_status=2; exit "$guardscan_status"; fi
+# <<< guardscan <<<
+```
+
+The block fails closed: any status above `2`, including `127` when `guardscan` is not on `PATH`, becomes `2`. On success it falls through, so the rest of an existing hook still runs.
+
+- `install` creates `#!/bin/sh` plus the block, executable, when no hook exists. In an existing `sh`, `bash`, `zsh`, or `dash` hook, or one with no shebang, it inserts the block right after the shebang line. Running it again replaces the block in place.
+- `install` refuses, and prints the block for you to add by hand, when the hook is not a shell script, when the hook is a symlink, or when the hooks path is inside `.husky`. Husky regenerates its hooks, so add the line to `.husky/pre-commit` yourself.
+- `uninstall` removes only GuardScan's block. It deletes the hook if nothing but a shebang and whitespace remains, and leaves all other content byte for byte.
+- `status` prints the hook path and whether the block is installed.
+
+None of these commands runs the hook or changes repository state through Git.
 
 ### `guardscan test`
 

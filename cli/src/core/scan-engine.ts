@@ -14,7 +14,8 @@ import { licenseScanner, LicenseReport } from './license-scanner';
 import { owaspScanner } from './owasp-scanner';
 import { PackageInventory } from './package-inventory';
 import { isGuardScanReport } from './scan-ignored-directories';
-import { secretsDetector } from './secrets-detector';
+import { SecretFinding, secretsDetector } from './secrets-detector';
+import { resolveStagedWorkTree, scanStagedSecrets, STAGED_SCOPE } from './staged-secrets';
 
 export type ScanSeverity = Finding['severity'];
 export type ScanOutputFormat = 'json' | 'sarif';
@@ -89,6 +90,8 @@ export interface ScanEngineOptions {
   includeLicenses?: boolean;
   includeVulnerabilities?: boolean;
   includeGitHistory?: boolean;
+  /** Scan only blobs staged in the Git index, for secrets only. The working tree is never read. */
+  staged?: boolean;
   allowPartial?: boolean;
   cache?: boolean;
   vulnerabilityScope?: 'all' | 'runtime';
@@ -222,18 +225,24 @@ export class ScanEngine {
   async runSecurityScan(options: ScanEngineOptions = {}): Promise<ScanEngineResult> {
     const startedAtMs = Date.now();
     const startedAt = new Date(startedAtMs).toISOString();
-    const repoPath = resolveRepositoryRoot(options.repoPath || process.cwd());
+    const requestedRoot = resolveRepositoryRoot(options.repoPath || process.cwd());
+    // Staged paths are relative to the work-tree root, so findings normalize against it.
+    const repoPath = options.staged ? resolveStagedWorkTree(requestedRoot) : requestedRoot;
     const offline = options.offline === true;
     const concurrency = validateConcurrency(options.concurrency);
-    const files = options.files
-      ? resolveScanFiles(options.files, repoPath)
-      : await this.loadFiles(repoPath);
+    const files = options.staged
+      ? []
+      : options.files
+        ? resolveScanFiles(options.files, repoPath)
+        : await this.loadFiles(repoPath);
     const fileSelection = options.files !== undefined && options.fileSelection !== 'discovered'
       ? 'explicit'
       : 'discovered';
     const tasks = options.scannerTasks
       ? [...options.scannerTasks]
-      : this.createBuiltInTasks({...options, fileSelection}, repoPath, files, offline);
+      : options.staged
+        ? [stagedSecretsTask(repoPath)]
+        : this.createBuiltInTasks({...options, fileSelection}, repoPath, files, offline);
 
     const scannerResults = await runBounded(
       tasks,
@@ -399,29 +408,7 @@ export class ScanEngine {
             ? []
             : await secretsDetector.scanGitHistory(repoPath, onSkippedInput);
 
-          const findings = [...fileSecrets, ...gitSecrets].map(secret => {
-            const normalizedFile = normalizeArtifactPath(secret.file, repoPath) || '<unknown>';
-            const secretDigest = createHash('sha256').update(secret.secret).digest('hex');
-            const fingerprint = createHash('sha256').update([
-              'guardscan.secret.v1',
-              normalizedFile,
-              String(secret.line),
-              secretDigest,
-            ].join('\0')).digest('hex');
-            return {
-              severity: normalizeSeverity(secret.severity),
-              category: secret.file.startsWith('commit:')
-                ? `Secret in Git History: ${secret.type}`
-                : `Secret Detection: ${secret.type}`,
-              file: secret.file,
-              line: secret.line,
-              description: `Potential secret detected (entropy: ${secret.entropy.toFixed(2)})`,
-              suggestion: secret.recommendation,
-              ruleId: `guardscan.secret.${sanitizeRuleId(secret.type)}`,
-              fingerprint,
-              scanners: ['secrets'],
-            };
-          });
+          const findings = [...fileSecrets, ...gitSecrets].map(secret => toSecretScanFinding(secret, repoPath));
           return coverageAwareOutput(findings, skippedInputs, 'SECRET_SCAN_PARTIAL', 'Secret');
         },
       },
@@ -662,6 +649,47 @@ export class ScanEngine {
     }
     return resolved.sort((a, b) => a.path.localeCompare(b.path));
   }
+}
+
+/** The only task in staged mode: index blobs, secrets only, no working tree and no Git history. */
+function stagedSecretsTask(repoPath: string): ScannerTask {
+  return {
+    scanner: 'secrets',
+    required: true,
+    // Synchronous git work; runScanner still records a throw as a scanner failure.
+    run: () => {
+      const staged = scanStagedSecrets(repoPath);
+      return Promise.resolve({
+        findings: staged.findings.map(secret => toSecretScanFinding(secret, repoPath)),
+        // Exclusions are unsupported content (binary, link, submodule, oversized), not a scanner failure.
+        metadata: {scope: STAGED_SCOPE, excluded: staged.excluded},
+      });
+    },
+  };
+}
+
+function toSecretScanFinding(secret: SecretFinding, repoPath: string): ScanFinding {
+  const normalizedFile = normalizeArtifactPath(secret.file, repoPath) || '<unknown>';
+  const secretDigest = createHash('sha256').update(secret.secret).digest('hex');
+  const fingerprint = createHash('sha256').update([
+    'guardscan.secret.v1',
+    normalizedFile,
+    String(secret.line),
+    secretDigest,
+  ].join('\0')).digest('hex');
+  return {
+    severity: normalizeSeverity(secret.severity),
+    category: secret.file.startsWith('commit:')
+      ? `Secret in Git History: ${secret.type}`
+      : `Secret Detection: ${secret.type}`,
+    file: secret.file,
+    line: secret.line,
+    description: `Potential secret detected (entropy: ${secret.entropy.toFixed(2)})`,
+    suggestion: secret.recommendation,
+    ruleId: `guardscan.secret.${sanitizeRuleId(secret.type)}`,
+    fingerprint,
+    scanners: ['secrets'],
+  };
 }
 
 export function evaluateScanPolicy(
