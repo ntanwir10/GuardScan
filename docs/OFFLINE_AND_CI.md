@@ -94,6 +94,10 @@ jobs:
 
 ## Pre-commit hook
 
+Run `guardscan hook install` in the repository. It adds a managed block to the pre-commit hook that runs `guardscan security --staged --ci`, which scans only the staged changes for secrets and never reads the working tree. The block fails closed: a scanner exit above `2`, including a missing `guardscan`, blocks the commit with `2`. It keeps any existing shell hook and honors `core.hooksPath`. Use `guardscan hook status` to check it and `guardscan hook uninstall` to remove it. See [`guardscan hook`](COMMANDS.md#guardscan-hook).
+
+To scan the whole working tree with every heuristic scanner before each commit instead, use a hook like this:
+
 ```bash
 #!/bin/bash
 guardscan security --offline --no-cve --ci --format json --output guardscan.json

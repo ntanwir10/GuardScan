@@ -6,7 +6,7 @@ import { StringDecoder } from 'string_decoder';
 import { SECURITY_CONSTANTS } from '../constants/security-constants';
 import { isGuardScanReport, isPythonVirtualEnvironment } from './scan-ignored-directories';
 
-const MAX_SECRET_FILE_BYTES = 2 * 1024 * 1024;
+export const MAX_SECRET_FILE_BYTES = 2 * 1024 * 1024;
 const MAX_SECRET_LINE_FRAGMENT_CHARS = 256 * 1024;
 const SECRET_LINE_OVERLAP_CHARS = 1024;
 const SECRET_IGNORED_DIRECTORIES = new Set([
@@ -157,10 +157,8 @@ export class SecretsDetector {
     return findings;
   }
 
-  /**
-   * Scan content for secrets
-   */
-  private scanContent(file: string, content: string): SecretFinding[] {
+  /** Scan text for secrets; `file` is reported as given, so pass a repository-relative path for index content. */
+  scanContent(file: string, content: string): SecretFinding[] {
     const findings: SecretFinding[] = [];
     const lines = content.split('\n');
 
