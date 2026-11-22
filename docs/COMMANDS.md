@@ -182,7 +182,7 @@ Run local heuristic security checks
 Options:
   -f, --files <patterns...>  Specific files or patterns to scan
   --staged                   Scan only content staged for the next commit, for
-                             secrets only
+                             secrets, lint, and code patterns
   --licenses                 Include license compliance scanning
   --cve                      Include exact-version dependency vulnerability
                              scanning
@@ -208,13 +208,33 @@ Options:
   -h, --help                 display help for command
 ```
 
-`--staged` scans only what the next commit would contain, for secrets only. It reads each staged blob from the Git index by object ID and never reads the working tree, so a partially staged file is judged by its staged version. Git history is not scanned. Results report the scope as "staged changes (secrets only)".
+`--staged` scans only what the next commit would contain. It reads each staged blob from the Git index by object ID and never reads the working tree, so a partially staged file is judged by its staged version. Git history is not scanned. Results report the scope as "staged changes (secrets, lint, code patterns)".
 
-- Symlinks, submodules, binary blobs (a NUL byte in the first 8000 bytes), and blobs larger than 2 MiB are not scanned. Each one is listed as excluded in the console summary, the Markdown summary, and the `secrets` scanner's `metadata.excluded` in JSON. Exclusions do not fail the run.
+- Secrets are checked in the whole staged blob.
+- Lint and code-pattern rules check only the lines the commit adds: every line of a new file, and the added lines of a modified file. An issue already in a touched file is not reported. When Git shows no text diff for a modified file (it was binary before, or `.gitattributes` sets `-diff`), every line is checked.
+- Symlinks, submodules, binary blobs (a NUL byte in the first 8000 bytes), and blobs larger than 2 MiB are not scanned, for secrets or line checks. Each one is listed as excluded in the console summary, the Markdown summary, and the `secrets` scanner's `metadata.excluded` in JSON. Exclusions do not fail the run.
 - An index with unmerged paths, a directory outside a Git work tree, or a Git failure exits `2`.
 - `--staged` cannot be combined with `--files`, `--licenses`, `--cve`, `--ai-fix`, or `--interactive`.
 
-`guardscan security --staged --ci` exits `1` for high or critical findings, because `--ci` defaults `--fail-on` to `high`. Medium findings, such as JWTs, do not block unless you pass `--fail-on medium`. Like any `--ci` run, it writes `guardscan-security.json` to the current directory unless you pass `--output`. The hook that `guardscan hook install` adds writes its report to `guardscan-pre-commit.json` in the Git directory instead, so the report can never be committed.
+Line checks run in the same `secrets` scanner task and are told apart by rule ID. Rules are chosen by file extension: JS/TS (`.js`, `.jsx`, `.mjs`, `.cjs`, `.ts`, `.tsx`, `.mts`, `.cts`), Python (`.py`), Ruby (`.rb`), PHP (`.php`), Go (`.go`), and Java (`.java`). The first two rules apply to every text file.
+
+| Rule ID | Severity | Files | Flags an added line with |
+| --- | --- | --- | --- |
+| `guardscan.lint.merge-conflict-marker` | high | All text | `<<<<<<< ` or `>>>>>>> ` at line start, or a line of exactly `=======` when the file's added lines also hold one of the other two markers |
+| `guardscan.lint.trailing-whitespace` | info | All text | Spaces or tabs at the end of the line; a CRLF line ending alone is not flagged |
+| `guardscan.lint.todo-comment` | info | Code | `TODO`, `FIXME`, or `XXX` after a comment opener (`//`, `/*`, `*`, or `#` in Python, Ruby, and PHP) |
+| `guardscan.lint.debug-statement` | low | Code | JS/TS `debugger;`, `console.log`, `console.debug`, `console.trace`; Python `breakpoint()`, `pdb.set_trace()`, `ipdb.set_trace()`, `import pdb`; Ruby `binding.pry`, `byebug`; PHP `var_dump(`, `dd(`, `dump(`; Go `spew.Dump(`; Java `System.out.println(`, `printStackTrace()` |
+| `guardscan.pattern.dynamic-code-execution` | medium | Code | JS/TS `eval(`, `new Function(`; Python `eval(`, `exec(`; PHP `eval(`; Ruby `eval` |
+| `guardscan.pattern.unsafe-yaml-load` | medium | Python | `yaml.load(` or `yaml.load_all(` without `SafeLoader` on the same line |
+| `guardscan.pattern.unsafe-deserialization` | medium | Python | `pickle.loads(` or `pickle.load(` |
+| `guardscan.pattern.sql-string-building` | medium | Code | A string literal that opens an upper-case `SELECT ... FROM`, `INSERT INTO`, `UPDATE ... SET`, or `DELETE FROM`, joined with `+` (PHP: `. $var`) or interpolated: a JS/TS template `${`, a Python f-string, `%`, or `.format(`, Ruby `#{`, or a PHP `"$var"` |
+| `guardscan.pattern.shell-command-injection` | medium | Python, JS/TS | `subprocess.*(..., shell=True)` on one line; `exec(` or `execSync(` (bare, or on `child_process`) with a template or concatenated string |
+
+- Rules other than `todo-comment` skip a line that is a full-line comment.
+- Code rules skip lines longer than 4096 characters, which are usually minified or generated.
+- Findings never quote the flagged line, so a secret on it stays out of reports.
+
+`guardscan security --staged --ci` exits `1` for high or critical findings, because `--ci` defaults `--fail-on` to `high`. So by default only merge-conflict markers and high or critical secrets block. Code patterns, debug statements, TODO comments, trailing whitespace, and medium secrets such as JWTs are reported without blocking. Pass `--fail-on medium` to also block code patterns and medium secrets. Like any `--ci` run, it writes `guardscan-security.json` to the current directory unless you pass `--output`. The hook that `guardscan hook install` adds writes its report to `guardscan-pre-commit.json` in the Git directory instead, so the report can never be committed.
 
 ### `guardscan hook`
 
@@ -227,7 +247,8 @@ Options:
   -h, --help      display help for command
 
 Commands:
-  install         Scan staged changes for secrets before each commit
+  install         Scan staged changes for secrets, lint, and code patterns
+                  before each commit
   uninstall       Remove only GuardScan's block from the pre-commit hook
   status          Show the pre-commit hook path and whether GuardScan is
                   installed

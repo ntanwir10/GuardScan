@@ -167,7 +167,7 @@ export function hookStatus(cwd: string = process.cwd()): void {
 export function createHookCommand(): Command {
   const command = new Command('hook').description('Install, remove, or check the GuardScan Git pre-commit hook');
   command.command('install')
-    .description('Scan staged changes for secrets before each commit')
+    .description('Scan staged changes for secrets, lint, and code patterns before each commit')
     .action(() => installHook());
   command.command('uninstall')
     .description("Remove only GuardScan's block from the pre-commit hook")

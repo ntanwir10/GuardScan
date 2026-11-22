@@ -262,7 +262,7 @@ function assertStagedOptions(options: SecurityOptions): void {
   ] as const).filter(([, used]) => used).map(([flag]) => flag);
   if (conflicts.length > 0) {
     throw new GuardScanError(
-      `--staged scans staged changes for secrets only and cannot be combined with ${conflicts.join(', ')}.`,
+      `--staged scans only the staged changes and cannot be combined with ${conflicts.join(', ')}.`,
       'STAGED_OPTION_CONFLICT'
     );
   }

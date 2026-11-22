@@ -226,7 +226,7 @@ case $? in
 esac
 ```
 
-For most repositories, run `guardscan hook install` instead of writing a hook by hand. It adds a fail-closed block that scans only the staged changes for secrets (`guardscan security --staged --ci`) and keeps any existing shell hook. The hook above scans the whole working tree with every heuristic scanner. See [`guardscan hook`](COMMANDS.md#guardscan-hook).
+For most repositories, run `guardscan hook install` instead of writing a hook by hand. It adds a fail-closed block that scans only the staged changes (`guardscan security --staged --ci`) and keeps any existing shell hook. It checks staged files for secrets, and the lines the commit adds for lint and code patterns. By default only merge-conflict markers and high or critical secrets block the commit; pass `--fail-on medium` to block code patterns too. The hook above scans the whole working tree with every heuristic scanner. See [`guardscan hook`](COMMANDS.md#guardscan-hook).
 
 ### CI/CD Integration
 
