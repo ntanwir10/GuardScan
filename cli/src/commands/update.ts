@@ -26,7 +26,9 @@ function printInstallations(installations: Installation[]): void {
 
 /** Warn once per new set of PATH launchers when GuardScan is installed more than once. Advisory only. */
 export async function warnIfInstalledTwice(): Promise<void> {
-  if (!process.stderr.isTTY || process.env.CI) {return;}
+  // Skip package scripts and npx (npm_lifecycle_event): detection there drops npm_* settings and could
+  // mislabel global copies, then record the launcher set so a later shell run never warns correctly.
+  if (!process.stderr.isTTY || process.env.CI || process.env.npm_lifecycle_event !== undefined) {return;}
   try {
     const launchers = pathLaunchers();
     if (launchers.length < 2) {return;}

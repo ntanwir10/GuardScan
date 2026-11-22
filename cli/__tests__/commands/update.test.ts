@@ -175,6 +175,7 @@ describe('installation lifecycle commands', () => {
       stderrTTY = Object.getOwnPropertyDescriptor(process.stderr, 'isTTY');
       Object.defineProperty(process.stderr, 'isTTY', {configurable: true, value: true});
       delete process.env.CI;
+      delete process.env.npm_lifecycle_event; // set when the suite itself runs through `npm test`
       jest.spyOn(console, 'error').mockImplementation(() => undefined);
       launchers.mockReturnValue(['/npm/bin/guardscan', '/brew/bin/guardscan']);
       detect.mockResolvedValue([npm, brew]);
@@ -228,6 +229,16 @@ describe('installation lifecycle commands', () => {
       await warnIfInstalledTwice();
       expect(output()).toContain('unknown: /a/bin/guardscan (1.1.2)');
       expect(output()).toContain('npm: /b/bin/guardscan (1.1.2)  remove with: guardscan uninstall --manager npm');
+    });
+
+    it('skips package scripts and npx without using up the warning for a later shell run', async () => {
+      process.env.npm_lifecycle_event = 'npx';
+      await warnIfInstalledTwice();
+      expect(detect).not.toHaveBeenCalled();
+
+      delete process.env.npm_lifecycle_event;
+      await warnIfInstalledTwice();
+      expect(output()).toContain('More than one GuardScan installation found.');
     });
 
     it('never fails the command when detection fails', async () => {
