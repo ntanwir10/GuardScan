@@ -343,11 +343,13 @@ function launchersIn(directories: string[]): string[] {
   return directories.flatMap(directory => extensions.map(ext => path.join(directory, `guardscan${ext}`))).filter(executable);
 }
 
-/** `guardscan` launchers on PATH with distinct targets, in PATH order, skipping project-local and npx directories. */
+/** `guardscan` launchers on PATH with distinct entry points, in PATH order, skipping project-local and npx directories. */
 export function pathLaunchers(): string[] {
   const targets = new Set<string>();
   return launchersIn(managerDirectories(process.env, process.platform)).filter(file => {
-    const target = realFile(file);
+    const real = realFile(file);
+    // Resolve npm/pnpm shims, so one install's guardscan, .cmd and .ps1 wrappers count once.
+    const target = real && (shimTarget(real) ?? real);
     if (!target || targets.has(target)) {return false;}
     targets.add(target);
     return true;

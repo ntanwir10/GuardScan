@@ -241,6 +241,17 @@ describe('installation lifecycle commands', () => {
       expect(output()).toContain('More than one GuardScan installation found.');
     });
 
+    it('gives the manager command instead of an ambiguous --manager selector', async () => {
+      const pipx: installation.Installation = {manager: 'pipx', path: '/user/bin/guardscan', active: true};
+      const globalPipx: installation.Installation = {manager: 'pipx', path: '/global/bin/guardscan', global: true};
+      launchers.mockReturnValue([pipx.path, globalPipx.path]);
+      detect.mockResolvedValue([pipx, globalPipx]);
+      await warnIfInstalledTwice();
+      expect(output()).not.toContain('--manager pipx');
+      expect(planCommand).toHaveBeenCalledWith(globalPipx, 'uninstall');
+      expect(output()).toContain('pipx: /global/bin/guardscan  remove with: pipx uninstall guardscan');
+    });
+
     it('never fails the command when detection fails', async () => {
       detect.mockRejectedValue(new Error('package manager hung'));
       await expect(warnIfInstalledTwice()).resolves.toBeUndefined();

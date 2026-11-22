@@ -109,7 +109,9 @@ process.exit(reply.status ?? 0);
     const alias = launch('alias', first);
     const local = launch(path.join('project', 'node_modules', '.bin'), makePackage(path.join(root, 'project', 'pkg')));
     const second = launch('other', makePackage(path.join(root, 'b', 'node_modules', 'guardscan')));
-    cli(first, [path.dirname(first), path.dirname(alias), path.dirname(local), path.dirname(second)]);
+    const shim = path.join(root, 'shims', 'guardscan');
+    write(shim, '#!/bin/sh\nexec node "$basedir/../a/node_modules/guardscan/dist/index.js" "$@"\n', 0o755);
+    cli(first, [path.dirname(first), path.dirname(alias), path.dirname(local), path.dirname(shim), path.dirname(second)]);
 
     expect(pathLaunchers()).toEqual([first, second]);
   });

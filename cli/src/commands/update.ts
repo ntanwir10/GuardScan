@@ -51,8 +51,14 @@ export async function warnIfInstalledTwice(): Promise<void> {
     if (copies.length < 2) {return;}
     console.error(chalk.yellow(`\nMore than one GuardScan installation found. "guardscan" on PATH runs ${launchers[0]}.`));
     for (const copy of copies) {
-      const managed = !['unknown', 'source', 'standalone'].includes(copy.manager);
-      console.error(`  ${copy.manager}: ${copy.path}${copy.version ? ` (${copy.version})` : ''}${managed ? `  remove with: guardscan uninstall --manager ${copy.manager}` : ''}`);
+      let removal = '';
+      if (!['unknown', 'source', 'standalone'].includes(copy.manager)) {
+        // --manager only selects a copy when that manager owns exactly one; otherwise give the manager's own command.
+        const plan = getInstallationCommand(copy, 'uninstall');
+        removal = copies.filter(other => other.manager === copy.manager).length === 1
+          ? `guardscan uninstall --manager ${copy.manager}` : [plan.command, ...plan.args].join(' ');
+      }
+      console.error(`  ${copy.manager}: ${copy.path}${copy.version ? ` (${copy.version})` : ''}${removal ? `  remove with: ${removal}` : ''}`);
     }
     console.error('Keep one copy. An "unknown" copy may be a different tool named guardscan; remove it with its own installer.\n');
   } catch { /* The check never affects the command. */ }
