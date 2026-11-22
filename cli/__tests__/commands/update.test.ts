@@ -3,7 +3,7 @@ import { Command } from 'commander';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { createUninstallCommand, createUpdateCommand } from '../../src/commands/update';
+import { createUninstallCommand, createUpdateCommand, warnIfInstalledTwice } from '../../src/commands/update';
 import { ConfigManager } from '../../src/core/config';
 import * as installation from '../../src/utils/installation';
 
@@ -164,5 +164,65 @@ describe('installation lifecycle commands', () => {
     await expect(invoke(createUpdateCommand())).rejects.toThrow('package manager failed');
 
     expect(console.log).not.toHaveBeenCalledWith(expect.stringContaining('update completed'));
+  });
+
+  describe('duplicate installation warning', () => {
+    const launchers = jest.mocked(installation.pathLaunchers);
+    let stderrTTY: PropertyDescriptor | undefined;
+    const output = () => jest.mocked(console.error).mock.calls.map(call => String(call[0])).join('\n');
+
+    beforeEach(() => {
+      stderrTTY = Object.getOwnPropertyDescriptor(process.stderr, 'isTTY');
+      Object.defineProperty(process.stderr, 'isTTY', {configurable: true, value: true});
+      delete process.env.CI;
+      jest.spyOn(console, 'error').mockImplementation(() => undefined);
+      launchers.mockReturnValue(['/npm/bin/guardscan', '/brew/bin/guardscan']);
+      detect.mockResolvedValue([npm, brew]);
+    });
+
+    afterEach(() => {
+      if (stderrTTY) {Object.defineProperty(process.stderr, 'isTTY', stderrTTY);} else {Reflect.deleteProperty(process.stderr, 'isTTY');}
+    });
+
+    it('names each copy and its uninstall command once per set of launchers', async () => {
+      await warnIfInstalledTwice();
+      expect(output()).toContain('More than one GuardScan installation found. "guardscan" on PATH runs /npm/bin/guardscan.');
+      expect(output()).toContain('brew: /brew/bin/guardscan (1.1.0)  remove with: guardscan uninstall --manager brew');
+
+      jest.mocked(console.error).mockClear();
+      await warnIfInstalledTwice();
+      expect(detect).toHaveBeenCalledTimes(1);
+      expect(console.error).not.toHaveBeenCalled();
+
+      launchers.mockReturnValue(['/npm/bin/guardscan', '/brew/bin/guardscan', '/pipx/bin/guardscan']);
+      await warnIfInstalledTwice();
+      expect(detect).toHaveBeenCalledTimes(2);
+    });
+
+    it.each([
+      ['one launcher on PATH', () => launchers.mockReturnValue(['/npm/bin/guardscan'])],
+      ['redirected stderr', () => Object.defineProperty(process.stderr, 'isTTY', {configurable: true, value: false})],
+      ['CI', () => { process.env.CI = 'true'; }],
+    ])('stays silent without running package managers for %s', async (_case, arrange) => {
+      arrange();
+      await warnIfInstalledTwice();
+      expect(detect).not.toHaveBeenCalled();
+      expect(console.error).not.toHaveBeenCalled();
+    });
+
+    it('does not count a copy run through npx or a source checkout as a second installation', async () => {
+      detect.mockResolvedValue([
+        {manager: 'unknown', path: '/cache/_npx/1/node_modules/.bin/guardscan', active: true},
+        {...npm, active: false},
+      ]);
+      await warnIfInstalledTwice();
+      expect(console.error).not.toHaveBeenCalled();
+    });
+
+    it('never fails the command when detection fails', async () => {
+      detect.mockRejectedValue(new Error('package manager hung'));
+      await expect(warnIfInstalledTwice()).resolves.toBeUndefined();
+      expect(console.error).not.toHaveBeenCalled();
+    });
   });
 });

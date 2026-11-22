@@ -338,13 +338,26 @@ function samePath(a: string, b: string): boolean {
   return process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b;
 }
 
+function launchersIn(directories: string[]): string[] {
+  const extensions = process.platform === 'win32' ? ['.exe', '.cmd', '.ps1'] : [''];
+  return directories.flatMap(directory => extensions.map(ext => path.join(directory, `guardscan${ext}`))).filter(executable);
+}
+
+/** `guardscan` launchers on PATH with distinct targets, in PATH order, skipping project-local and npx directories. */
+export function pathLaunchers(): string[] {
+  const targets = new Set<string>();
+  return launchersIn(managerDirectories(process.env, process.platform)).filter(file => {
+    const target = realFile(file);
+    if (!target || targets.has(target)) {return false;}
+    targets.add(target);
+    return true;
+  });
+}
+
 export async function detectInstallations(): Promise<Installation[]> {
   const sea = isSea();
   const current = sea ? process.execPath : process.argv[1];
-  const extension = process.platform === 'win32' ? ['.exe', '.cmd', '.ps1'] : [''];
-  const launchers = pathDirectories(process.env, process.platform)
-    .flatMap(directory => extension.map(ext => path.join(directory, `guardscan${ext}`)))
-    .filter(executable);
+  const launchers = launchersIn(pathDirectories(process.env, process.platform));
   const candidates = [...(current ? [path.resolve(current)] : []), ...launchers].flatMap((file, index) => {
     const real = realFile(file);
     if (!real) {return [];}

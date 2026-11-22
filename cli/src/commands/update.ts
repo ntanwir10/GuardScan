@@ -1,7 +1,10 @@
 /* eslint-disable no-console -- Lifecycle commands report installation status and actions. */
+import chalk from 'chalk';
 import { Command, Option } from 'commander';
+import * as path from 'path';
 import { ConfigManager } from '../core/config';
-import { detectInstallations, getInstallationCommand, Installation, runInstallationCommand } from '../utils/installation';
+import { detectInstallations, getInstallationCommand, Installation, pathLaunchers, runInstallationCommand } from '../utils/installation';
+import { atomicReplaceJson, readJsonFileBounded } from '../utils/private-state';
 import { assertUpdatesOnline, getCurrentVersion, getLatestVersion, isNewerVersion, withInstallationLease } from '../utils/version';
 
 interface LifecycleOptions {
@@ -18,6 +21,35 @@ function printInstallations(installations: Installation[]): void {
   for (const installation of installations) {
     console.log(`  ${installation.manager}: ${installation.path}${installation.version ? ` (${installation.version})` : ''}`);
   }
+}
+
+/** Warn once per new set of PATH launchers when GuardScan is installed more than once. Advisory only. */
+export async function warnIfInstalledTwice(): Promise<void> {
+  if (!process.stderr.isTTY || process.env.CI) {return;}
+  try {
+    const launchers = pathLaunchers();
+    if (launchers.length < 2) {return;}
+    const stateFile = path.join(new ConfigManager().getCacheDir(), '.installation-check');
+    const key = launchers.join('\n');
+    let checked: string[] = [];
+    try {
+      const state = readJsonFileBounded(stateFile, 64 * 1024) as {checked?: unknown};
+      if (Array.isArray(state.checked)) {checked = state.checked.filter((item): item is string => typeof item === 'string');}
+    } catch { /* No earlier check. */ }
+    if (checked.includes(key)) {return;}
+    // Record first, so a slow or failing detection is not repeated on every command.
+    atomicReplaceJson(stateFile, {checked: [...checked, key].slice(-20)});
+    // A copy run through npx, a project script, or a source checkout is not a second installation.
+    const copies = (await detectInstallations())
+      .filter(copy => !(copy.active && (copy.manager === 'unknown' || copy.manager === 'source')));
+    if (copies.length < 2) {return;}
+    console.error(chalk.yellow(`\nMore than one GuardScan installation found. "guardscan" on PATH runs ${launchers[0]}.`));
+    for (const copy of copies) {
+      const managed = !['unknown', 'source', 'standalone'].includes(copy.manager);
+      console.error(`  ${copy.manager}: ${copy.path}${copy.version ? ` (${copy.version})` : ''}${managed ? `  remove with: guardscan uninstall --manager ${copy.manager}` : ''}`);
+    }
+    console.error('Keep one copy. An "unknown" copy may be a different tool named guardscan; remove it with its own installer.\n');
+  } catch { /* The check never affects the command. */ }
 }
 
 function selectInstallation(installations: Installation[], manager?: string): Installation {
