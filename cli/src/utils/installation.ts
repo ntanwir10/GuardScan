@@ -338,13 +338,28 @@ function samePath(a: string, b: string): boolean {
   return process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b;
 }
 
+function launchersIn(directories: string[]): string[] {
+  const extensions = process.platform === 'win32' ? ['.exe', '.cmd', '.ps1'] : [''];
+  return directories.flatMap(directory => extensions.map(ext => path.join(directory, `guardscan${ext}`))).filter(executable);
+}
+
+/** `guardscan` launchers on PATH with distinct entry points, in PATH order, skipping project-local and npx directories. */
+export function pathLaunchers(): string[] {
+  const targets = new Set<string>();
+  return launchersIn(managerDirectories(process.env, process.platform)).filter(file => {
+    const real = realFile(file);
+    // Resolve npm/pnpm shims, so one install's guardscan, .cmd and .ps1 wrappers count once.
+    const target = real && (shimTarget(real) ?? real);
+    if (!target || targets.has(target)) {return false;}
+    targets.add(target);
+    return true;
+  });
+}
+
 export async function detectInstallations(): Promise<Installation[]> {
   const sea = isSea();
   const current = sea ? process.execPath : process.argv[1];
-  const extension = process.platform === 'win32' ? ['.exe', '.cmd', '.ps1'] : [''];
-  const launchers = pathDirectories(process.env, process.platform)
-    .flatMap(directory => extension.map(ext => path.join(directory, `guardscan${ext}`)))
-    .filter(executable);
+  const launchers = launchersIn(pathDirectories(process.env, process.platform));
   const candidates = [...(current ? [path.resolve(current)] : []), ...launchers].flatMap((file, index) => {
     const real = realFile(file);
     if (!real) {return [];}
@@ -420,9 +435,14 @@ function lookupOwnership(owner: Ownership): Promise<Ownership | null | undefined
   }
 }
 
+/** Windows keeps a running Scoop or pipx executable open, so only its manager can change it, after GuardScan exits. */
+export function lockedWhileRunning(plan: { command: string; active?: boolean }): boolean {
+  return process.platform === 'win32' && Boolean(plan.active) && (plan.command === 'scoop' || plan.command === 'pipx');
+}
+
 export async function runInstallationCommand(plan: InstallationCommand): Promise<void> {
   if (plan.blockedReason) {throw new Error(plan.blockedReason);}
-  if (process.platform === 'win32' && plan.active && (plan.command === 'scoop' || plan.command === 'pipx')) {
+  if (lockedWhileRunning(plan)) {
     throw new Error(`Windows keeps this GuardScan installation open while it runs. Run ${plan.command} ${plan.args.join(' ')} after GuardScan exits.`);
   }
   const proof = plannedActions.get(plan);

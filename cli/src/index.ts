@@ -77,7 +77,7 @@ async function main(): Promise<void> {
     { createCapabilitiesCommand },
     { createVulnerabilityCommand },
     { checkForUpdates },
-    { createUpdateCommand, createUninstallCommand },
+    { createUpdateCommand, createUninstallCommand, warnIfInstalledTwice },
     { displayLogo },
   ] = await Promise.all([
     import("./commands/init"),
@@ -463,13 +463,18 @@ async function main(): Promise<void> {
     displayLogo("Privacy-First AI Code Review & Security Scanning");
   }
 
-  program.hook('preAction', () => {
-    if (program.opts().update) {throw new Error('Use --update on its own, or use the update command with options.');}
-  });
-  program.hook('postAction', async (_program, action) => {
+  const topLevelName = (action: Command): string => {
     let command = action;
     while (command.parent && command.parent !== program) {command = command.parent;}
-    if (process.exitCode || ['update', 'uninstall', 'config', 'init', 'reset'].includes(command.name())) {return;}
+    return command.name();
+  };
+  program.hook('preAction', async (_program, action) => {
+    if (program.opts().update) {throw new Error('Use --update on its own, or use the update command with options.');}
+    // Before the action, so first commands like init and failing scans still get the warning.
+    if (!['update', 'uninstall'].includes(topLevelName(action))) {await warnIfInstalledTwice();}
+  });
+  program.hook('postAction', async (_program, action) => {
+    if (process.exitCode || ['update', 'uninstall', 'config', 'init', 'reset'].includes(topLevelName(action))) {return;}
     await checkForUpdates({allowAutoUpdate: program.opts().autoUpdate !== false});
   });
 

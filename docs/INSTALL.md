@@ -34,6 +34,8 @@ GuardScan checks its running executable and GuardScan launchers on `PATH` agains
 
 Commands such as `npm uninstall -g guardscan` only affect npm's installation. They cannot remove a copy owned by pipx, Homebrew, or another manager. Use `guardscan uninstall` to detect the owner, or use the matching command below. GuardScan does not intercept third-party install or uninstall commands; check existing installations before switching channels.
 
+GuardScan cannot warn while a package manager installs it, so it warns the first time a new copy runs. In an interactive terminal, when it sees a new set of `guardscan` commands on `PATH`, it checks for more than one installation. If it finds several, it lists each copy with its owning manager and the `guardscan uninstall --manager <manager>` command that removes it, then runs your command as usual. It warns again only when the set of copies changes. It stays silent in CI, when output is redirected, and inside package scripts or `npx` (it warns on your next run from a shell instead), ignores a project's `node_modules/.bin` copy, and never changes the command's result. A copy listed as `unknown` may be a different tool that is also named `guardscan`.
+
 On Windows, close GuardScan and run the displayed Scoop or pipx command directly: Windows keeps their running executable open. Standalone downloads and source checkouts continue to use the manual upgrade and removal instructions below.
 
 ### Automatic updates

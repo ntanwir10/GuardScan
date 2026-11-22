@@ -1,7 +1,13 @@
 /* eslint-disable no-console -- Lifecycle commands report installation status and actions. */
+import chalk from 'chalk';
 import { Command, Option } from 'commander';
+import * as fs from 'fs';
+import * as path from 'path';
 import { ConfigManager } from '../core/config';
-import { detectInstallations, getInstallationCommand, Installation, runInstallationCommand } from '../utils/installation';
+import {
+  detectInstallations, getInstallationCommand, Installation, lockedWhileRunning, pathLaunchers, runInstallationCommand,
+} from '../utils/installation';
+import { atomicReplaceJson, readJsonFileBounded } from '../utils/private-state';
 import { assertUpdatesOnline, getCurrentVersion, getLatestVersion, isNewerVersion, withInstallationLease } from '../utils/version';
 
 interface LifecycleOptions {
@@ -18,6 +24,48 @@ function printInstallations(installations: Installation[]): void {
   for (const installation of installations) {
     console.log(`  ${installation.manager}: ${installation.path}${installation.version ? ` (${installation.version})` : ''}`);
   }
+}
+
+/** Warn once per new set of PATH launchers when GuardScan is installed more than once. Advisory only. */
+export async function warnIfInstalledTwice(): Promise<void> {
+  // Skip package scripts and npx (npm_lifecycle_event): detection there drops npm_* settings and could
+  // mislabel global copies, then record the launcher set so a later shell run never warns correctly.
+  if (!process.stderr.isTTY || process.env.CI || process.env.npm_lifecycle_event !== undefined) {return;}
+  try {
+    const launchers = pathLaunchers();
+    if (launchers.length < 2) {return;}
+    const stateFile = path.join(new ConfigManager().getCacheDir(), '.installation-check');
+    const key = launchers.join('\n');
+    let checked: string[] = [];
+    try {
+      const state = readJsonFileBounded(stateFile, 64 * 1024) as {checked?: unknown};
+      if (Array.isArray(state.checked)) {checked = state.checked.filter((item): item is string => typeof item === 'string');}
+    } catch { /* No earlier check. */ }
+    if (checked.includes(key)) {return;}
+    // Record first, so a slow or failing detection is not repeated on every command.
+    atomicReplaceJson(stateFile, {checked: [...checked, key].slice(-20)});
+    // A running unowned copy off PATH (npx, a project's node_modules/.bin, a checkout) is not a second
+    // installation; one that is a PATH launcher, such as a second npm prefix, is.
+    const realTarget = (file: string) => { try {return fs.realpathSync(file);} catch {return file;} };
+    const onPath = new Set(launchers.map(realTarget));
+    const copies = (await detectInstallations()).filter(copy =>
+      !(copy.active && (copy.manager === 'unknown' || copy.manager === 'source') && !onPath.has(realTarget(copy.path))));
+    if (copies.length < 2) {return;}
+    console.error(chalk.yellow(`\nMore than one GuardScan installation found. "guardscan" on PATH runs ${launchers[0]}.`));
+    for (const copy of copies) {
+      // A blocked copy (held by Scoop, or in a shared pnpm group) is always refused, so explain why instead.
+      let removal = copy.blockedReason ?? '';
+      if (!removal && !['unknown', 'source', 'standalone'].includes(copy.manager)) {
+        // Use --manager only when it selects exactly one copy that guardscan uninstall can change;
+        // otherwise give the manager's own command (ambiguous owner, or a running Windows Scoop/pipx copy).
+        const plan = getInstallationCommand(copy, 'uninstall');
+        removal = `remove with: ${copies.filter(other => other.manager === copy.manager).length === 1 && !lockedWhileRunning(plan)
+          ? `guardscan uninstall --manager ${copy.manager}` : [plan.command, ...plan.args].join(' ')}`;
+      }
+      console.error(`  ${copy.manager}: ${copy.path}${copy.version ? ` (${copy.version})` : ''}${removal ? `  ${removal}` : ''}`);
+    }
+    console.error('Keep one copy. An "unknown" copy may be a different tool named guardscan; remove it with its own installer.\n');
+  } catch { /* The check never affects the command. */ }
 }
 
 function selectInstallation(installations: Installation[], manager?: string): Installation {

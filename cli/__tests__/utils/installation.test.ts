@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import {
-  detectInstallations, getInstallationCommand, resolveInstallationInvocation, runInstallationCommand,
+  detectInstallations, getInstallationCommand, pathLaunchers, resolveInstallationInvocation, runInstallationCommand,
 } from '../../src/utils/installation';
 
 type Response = { stdout?: string; status?: number; remove?: string; replace?: { file: string; content: string } };
@@ -102,6 +102,18 @@ process.exit(reply.status ?? 0);
       expect.objectContaining({ path: other, manager: 'unknown', active: false }),
     ]);
     expect(() => getInstallationCommand(installations[0], 'uninstall')).toThrow(/original installer/);
+  });
+
+  test('lists PATH launchers with distinct targets, skipping aliases and project-local bins', () => {
+    const first = launch('bin', makePackage(path.join(root, 'a', 'node_modules', 'guardscan')));
+    const alias = launch('alias', first);
+    const local = launch(path.join('project', 'node_modules', '.bin'), makePackage(path.join(root, 'project', 'pkg')));
+    const second = launch('other', makePackage(path.join(root, 'b', 'node_modules', 'guardscan')));
+    const shim = path.join(root, 'shims', 'guardscan');
+    write(shim, '#!/bin/sh\nexec node "$basedir/../a/node_modules/guardscan/dist/index.js" "$@"\n', 0o755);
+    cli(first, [path.dirname(first), path.dirname(alias), path.dirname(local), path.dirname(shim), path.dirname(second)]);
+
+    expect(pathLaunchers()).toEqual([first, second]);
   });
 
   test('treats a linked source checkout and a project-local copy as unmanaged', async () => {
