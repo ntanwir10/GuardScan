@@ -4,7 +4,9 @@ import { Command, Option } from 'commander';
 import * as fs from 'fs';
 import * as path from 'path';
 import { ConfigManager } from '../core/config';
-import { detectInstallations, getInstallationCommand, Installation, pathLaunchers, runInstallationCommand } from '../utils/installation';
+import {
+  detectInstallations, getInstallationCommand, Installation, lockedWhileRunning, pathLaunchers, runInstallationCommand,
+} from '../utils/installation';
 import { atomicReplaceJson, readJsonFileBounded } from '../utils/private-state';
 import { assertUpdatesOnline, getCurrentVersion, getLatestVersion, isNewerVersion, withInstallationLease } from '../utils/version';
 
@@ -53,9 +55,10 @@ export async function warnIfInstalledTwice(): Promise<void> {
     for (const copy of copies) {
       let removal = '';
       if (!['unknown', 'source', 'standalone'].includes(copy.manager)) {
-        // --manager only selects a copy when that manager owns exactly one; otherwise give the manager's own command.
+        // Use --manager only when it selects exactly one copy that guardscan uninstall can change;
+        // otherwise give the manager's own command (ambiguous owner, or a running Windows Scoop/pipx copy).
         const plan = getInstallationCommand(copy, 'uninstall');
-        removal = copies.filter(other => other.manager === copy.manager).length === 1
+        removal = copies.filter(other => other.manager === copy.manager).length === 1 && !lockedWhileRunning(plan)
           ? `guardscan uninstall --manager ${copy.manager}` : [plan.command, ...plan.args].join(' ');
       }
       console.error(`  ${copy.manager}: ${copy.path}${copy.version ? ` (${copy.version})` : ''}${removal ? `  remove with: ${removal}` : ''}`);

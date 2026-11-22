@@ -252,6 +252,17 @@ describe('installation lifecycle commands', () => {
       expect(output()).toContain('pipx: /global/bin/guardscan  remove with: pipx uninstall guardscan');
     });
 
+    it('gives the manager command for a running copy Windows keeps locked', async () => {
+      const scoop: installation.Installation = {manager: 'scoop', path: 'C:\\scoop\\shims\\guardscan.exe', active: true};
+      launchers.mockReturnValue([scoop.path, npm.path]);
+      detect.mockResolvedValue([scoop, {...npm, active: false}]);
+      jest.mocked(installation.lockedWhileRunning).mockImplementation(plan => plan.command === 'scoop');
+      await warnIfInstalledTwice();
+      expect(output()).toContain('scoop: C:\\scoop\\shims\\guardscan.exe  remove with: scoop uninstall guardscan');
+      expect(output()).not.toContain('--manager scoop');
+      expect(output()).toContain('remove with: guardscan uninstall --manager npm');
+    });
+
     it('never fails the command when detection fails', async () => {
       detect.mockRejectedValue(new Error('package manager hung'));
       await expect(warnIfInstalledTwice()).resolves.toBeUndefined();

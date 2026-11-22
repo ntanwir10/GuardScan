@@ -435,9 +435,14 @@ function lookupOwnership(owner: Ownership): Promise<Ownership | null | undefined
   }
 }
 
+/** Windows keeps a running Scoop or pipx executable open, so only its manager can change it, after GuardScan exits. */
+export function lockedWhileRunning(plan: { command: string; active?: boolean }): boolean {
+  return process.platform === 'win32' && Boolean(plan.active) && (plan.command === 'scoop' || plan.command === 'pipx');
+}
+
 export async function runInstallationCommand(plan: InstallationCommand): Promise<void> {
   if (plan.blockedReason) {throw new Error(plan.blockedReason);}
-  if (process.platform === 'win32' && plan.active && (plan.command === 'scoop' || plan.command === 'pipx')) {
+  if (lockedWhileRunning(plan)) {
     throw new Error(`Windows keeps this GuardScan installation open while it runs. Run ${plan.command} ${plan.args.join(' ')} after GuardScan exits.`);
   }
   const proof = plannedActions.get(plan);
