@@ -8,6 +8,7 @@ export const STAGED_SCOPE = 'staged changes (secrets only)';
 /** Git's own binary heuristic: a NUL byte in the first 8000 bytes. */
 const BINARY_SNIFF_BYTES = 8000;
 const GIT_OUTPUT_MAX_BYTES = 256 * 1024 * 1024;
+const READ_BATCH_BYTES = 32 * 1024 * 1024;
 
 export interface StagedExclusion {
   path: string;
@@ -107,12 +108,25 @@ export function scanStagedSecrets(root: string): StagedSecretsResult {
     if (blob.size > MAX_SECRET_FILE_BYTES) {excluded.push({path: blob.path, reason: 'oversized'});}
     else {readable.push(blob);}
   });
-  if (readable.length === 0) {return result;}
+  // Read in byte-bounded batches, so many staged files never need one huge buffer.
+  for (let start = 0; start < readable.length;) {
+    let end = start;
+    let bytes = 0;
+    while (end < readable.length && (end === start || bytes + readable[end].size <= READ_BATCH_BYTES)) {
+      bytes += readable[end].size;
+      end++;
+    }
+    scanBlobBatch(root, readable.slice(start, end), result);
+    start = end;
+  }
+  return result;
+}
 
-  const expectedBytes = readable.reduce((total, blob) => total + blob.oid.length + 32 + blob.size, 0);
-  const output = git(root, ['--no-replace-objects', 'cat-file', '--batch'], readable.map(blob => `${blob.oid}\n`).join(''), expectedBytes + 1024);
+function scanBlobBatch(root: string, batch: StagedEntry[], result: StagedSecretsResult): void {
+  const expectedBytes = batch.reduce((total, blob) => total + blob.oid.length + 32 + blob.size, 0);
+  const output = git(root, ['--no-replace-objects', 'cat-file', '--batch'], batch.map(blob => `${blob.oid}\n`).join(''), expectedBytes + 1024);
   let offset = 0;
-  for (const blob of readable) {
+  for (const blob of batch) {
     const headerEnd = output.indexOf(0x0a, offset);
     const contentEnd = headerEnd + 1 + blob.size;
     if (headerEnd < 0 || output.toString('utf8', offset, headerEnd) !== `${blob.oid} blob ${blob.size}` ||
@@ -122,10 +136,9 @@ export function scanStagedSecrets(root: string): StagedSecretsResult {
     const content = output.subarray(headerEnd + 1, contentEnd);
     offset = contentEnd + 1;
     if (content.subarray(0, BINARY_SNIFF_BYTES).includes(0)) {
-      excluded.push({path: blob.path, reason: 'binary'});
+      result.excluded.push({path: blob.path, reason: 'binary'});
     } else {
       result.findings.push(...secretsDetector.scanContent(blob.path, content.toString('utf8')));
     }
   }
-  return result;
 }

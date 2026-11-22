@@ -13,6 +13,7 @@ import { iacScanner } from './iac-scanner';
 import { licenseScanner, LicenseReport } from './license-scanner';
 import { owaspScanner } from './owasp-scanner';
 import { PackageInventory } from './package-inventory';
+import { normalizeRelativePathForPlatform } from './loc-counter';
 import { isGuardScanReport } from './scan-ignored-directories';
 import { SecretFinding, secretsDetector } from './secrets-detector';
 import { resolveStagedWorkTree, scanStagedSecrets, STAGED_SCOPE } from './staged-secrets';
@@ -1224,7 +1225,8 @@ function normalizeArtifactPath(filePath: string, repoRoot: string): string | und
     return filePath;
   }
 
-  const normalizedInput = filePath.replace(/\\/g, '/');
+  // A backslash separates directories only on Windows; on POSIX it is a literal filename character.
+  const normalizedInput = normalizeRelativePathForPlatform(filePath);
   const absolute = path.isAbsolute(filePath)
     ? path.resolve(filePath)
     : path.resolve(repoRoot, normalizedInput);
@@ -1232,7 +1234,7 @@ function normalizeArtifactPath(filePath: string, repoRoot: string): string | und
   if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
     return '<external>';
   }
-  return relative.replace(/\\/g, '/') || '.';
+  return normalizeRelativePathForPlatform(relative) || '.';
 }
 
 function sanitizeScannerError(scanner: string, error: unknown, repoRoot: string): ScannerError {

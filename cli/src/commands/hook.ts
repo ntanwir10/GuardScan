@@ -23,8 +23,15 @@ interface HookLocation {
   hookPath: string;
 }
 
+// Hook management targets the checkout at cwd; an inherited repository location (for example from a
+// running hook) must not redirect it to another repository. Runtime config such as core.hooksPath is kept.
+const LOCATION_ENV = ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR', 'GIT_INDEX_FILE', 'GIT_OBJECT_DIRECTORY',
+  'GIT_ALTERNATE_OBJECT_DIRECTORIES', 'GIT_IMPLICIT_WORK_TREE', 'GIT_PREFIX'];
+
 function git(args: string[], cwd: string): string {
-  return execFileSync('git', args, {cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], shell: false})
+  const env = {...process.env};
+  for (const name of LOCATION_ENV) {delete env[name];}
+  return execFileSync('git', args, {cwd, env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], shell: false})
     .replace(/\r?\n$/, '');
 }
 
@@ -97,6 +104,8 @@ export function installHook(cwd: string = process.cwd()): void {
     refuse(`Husky manages ${hooksDir} and regenerates its hooks, so add the block to .husky/pre-commit yourself.`);
   }
   const existing = readHook(hookPath);
+  // A compiled hook has no shebang; prepending shell text would break it.
+  if (existing?.includes('\0')) {refuse(`${hookPath} is a binary executable, not a shell script.`);}
   let content: string;
   if (existing === undefined) {
     content = `#!/bin/sh\n${HOOK_BLOCK}`;

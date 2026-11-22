@@ -4,7 +4,9 @@ import * as os from 'os';
 import * as path from 'path';
 import {HOOK_BLOCK, hookStatus, installHook, uninstallHook} from '../../src/commands/hook';
 
-const GIT_ENV = ['GIT_CONFIG_GLOBAL', 'GIT_CONFIG_NOSYSTEM', 'GIT_CEILING_DIRECTORIES', 'GIT_DIR', 'GIT_INDEX_FILE', 'GIT_WORK_TREE'];
+// Runtime overrides (GIT_CONFIG_COUNT, GIT_CONFIG_PARAMETERS) beat config files, so they must be cleared too.
+const CLEARED_ENV = ['GIT_DIR', 'GIT_INDEX_FILE', 'GIT_WORK_TREE', 'GIT_COMMON_DIR', 'GIT_CONFIG_COUNT', 'GIT_CONFIG_PARAMETERS'];
+const GIT_ENV = ['GIT_CONFIG_GLOBAL', 'GIT_CONFIG_NOSYSTEM', 'GIT_CEILING_DIRECTORIES', ...CLEARED_ENV];
 const savedEnv = Object.fromEntries(GIT_ENV.map(name => [name, process.env[name]]));
 const tempRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'guardscan-hook-')));
 const posixIt = process.platform === 'win32' ? it.skip : it;
@@ -15,7 +17,7 @@ beforeAll(() => {
   process.env.GIT_CONFIG_GLOBAL = path.join(tempRoot, 'gitconfig');
   process.env.GIT_CONFIG_NOSYSTEM = '1';
   process.env.GIT_CEILING_DIRECTORIES = tempRoot;
-  for (const name of ['GIT_DIR', 'GIT_INDEX_FILE', 'GIT_WORK_TREE']) {delete process.env[name];}
+  for (const name of CLEARED_ENV) {delete process.env[name];}
 });
 
 afterAll(() => {
@@ -51,6 +53,29 @@ describe('guardscan hook', () => {
 
     expect(fs.readFileSync(hookPath, 'utf8')).toBe(`#!/bin/sh\n${HOOK_BLOCK}`);
     if (process.platform !== 'win32') {expect(fs.statSync(hookPath).mode & 0o777).toBe(0o755);}
+  });
+
+  it('refuses a binary hook without changing it', () => {
+    const binary = Buffer.from([0x7f, 0x45, 0x4c, 0x46, 0x02, 0x01, 0x01, 0x00, 0x00, 0x00]);
+    fs.writeFileSync(hookPath, binary, {mode: 0o755});
+
+    expect(() => installHook(repo)).toThrow(/binary executable/);
+    expect(fs.readFileSync(hookPath).equals(binary)).toBe(true);
+  });
+
+  it('manages the given checkout even when GIT_DIR points at another repository', () => {
+    const other = fs.mkdtempSync(path.join(tempRoot, 'other-'));
+    execFileSync('git', ['init', '-q'], {cwd: other});
+    process.env.GIT_DIR = path.join(other, '.git');
+    try {
+      installHook(repo);
+    } finally {
+      delete process.env.GIT_DIR;
+    }
+
+    expect(fs.existsSync(hookPath)).toBe(true);
+    expect(fs.existsSync(path.join(other, '.git', 'hooks', 'pre-commit'))).toBe(false);
+    fs.rmSync(other, {recursive: true, force: true});
   });
 
   it('reinstalls idempotently', () => {

@@ -12,7 +12,9 @@ import {STAGED_SCOPE} from '../../src/core/staged-secrets';
 
 const RAW_SECRET = 'AKIAIOSFODNN7EXAMPLE';
 const SECRET_LINE = `AWS_ACCESS_KEY=${RAW_SECRET}\n`;
-const GIT_ENV = ['GIT_CONFIG_GLOBAL', 'GIT_CONFIG_NOSYSTEM', 'GIT_CEILING_DIRECTORIES', 'GIT_DIR', 'GIT_INDEX_FILE', 'GIT_WORK_TREE'];
+// Runtime overrides (GIT_CONFIG_COUNT, GIT_CONFIG_PARAMETERS) beat config files, so they must be cleared too.
+const CLEARED_ENV = ['GIT_DIR', 'GIT_INDEX_FILE', 'GIT_WORK_TREE', 'GIT_COMMON_DIR', 'GIT_CONFIG_COUNT', 'GIT_CONFIG_PARAMETERS'];
+const GIT_ENV = ['GIT_CONFIG_GLOBAL', 'GIT_CONFIG_NOSYSTEM', 'GIT_CEILING_DIRECTORIES', ...CLEARED_ENV];
 const savedEnv = Object.fromEntries(GIT_ENV.map(name => [name, process.env[name]]));
 const tempRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'guardscan-staged-')));
 
@@ -22,7 +24,7 @@ beforeAll(() => {
   process.env.GIT_CONFIG_GLOBAL = path.join(tempRoot, 'gitconfig');
   process.env.GIT_CONFIG_NOSYSTEM = '1';
   process.env.GIT_CEILING_DIRECTORIES = tempRoot;
-  for (const name of ['GIT_DIR', 'GIT_INDEX_FILE', 'GIT_WORK_TREE']) {delete process.env[name];}
+  for (const name of CLEARED_ENV) {delete process.env[name];}
 });
 
 afterAll(() => {
@@ -55,6 +57,14 @@ function stagedMetadata(result: ScanEngineResult): Record<string, unknown> | und
 describe('staged secret scan', () => {
   let repo: string;
   const scan = (): Promise<ScanEngineResult> => scanEngine.runSecurityScan({repoPath: repo, staged: true, offline: true});
+
+  (process.platform === 'win32' ? it.skip : it)('keeps a literal backslash in a staged path distinct from a directory', async () => {
+    write(repo, 'a\\b.env', SECRET_LINE);
+    write(repo, 'a/b.env', SECRET_LINE);
+    git(repo, 'add', '-A');
+
+    expect(secretFiles(await scan())).toEqual(['a/b.env', 'a\\b.env']);
+  });
 
   beforeEach(() => {
     repo = fs.mkdtempSync(path.join(tempRoot, 'repo-'));
