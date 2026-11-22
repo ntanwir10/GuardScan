@@ -1,6 +1,7 @@
 /* eslint-disable no-console -- Lifecycle commands report installation status and actions. */
 import chalk from 'chalk';
 import { Command, Option } from 'commander';
+import * as fs from 'fs';
 import * as path from 'path';
 import { ConfigManager } from '../core/config';
 import { detectInstallations, getInstallationCommand, Installation, pathLaunchers, runInstallationCommand } from '../utils/installation';
@@ -39,9 +40,12 @@ export async function warnIfInstalledTwice(): Promise<void> {
     if (checked.includes(key)) {return;}
     // Record first, so a slow or failing detection is not repeated on every command.
     atomicReplaceJson(stateFile, {checked: [...checked, key].slice(-20)});
-    // A copy run through npx, a project script, or a source checkout is not a second installation.
-    const copies = (await detectInstallations())
-      .filter(copy => !(copy.active && (copy.manager === 'unknown' || copy.manager === 'source')));
+    // A running unowned copy off PATH (npx, a project's node_modules/.bin, a checkout) is not a second
+    // installation; one that is a PATH launcher, such as a second npm prefix, is.
+    const realTarget = (file: string) => { try {return fs.realpathSync(file);} catch {return file;} };
+    const onPath = new Set(launchers.map(realTarget));
+    const copies = (await detectInstallations()).filter(copy =>
+      !(copy.active && (copy.manager === 'unknown' || copy.manager === 'source') && !onPath.has(realTarget(copy.path))));
     if (copies.length < 2) {return;}
     console.error(chalk.yellow(`\nMore than one GuardScan installation found. "guardscan" on PATH runs ${launchers[0]}.`));
     for (const copy of copies) {

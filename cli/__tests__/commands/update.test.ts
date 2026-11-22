@@ -219,6 +219,17 @@ describe('installation lifecycle commands', () => {
       expect(console.error).not.toHaveBeenCalled();
     });
 
+    it('counts a running unowned copy that is itself a PATH launcher, such as a second npm prefix', async () => {
+      launchers.mockReturnValue(['/a/bin/guardscan', '/b/bin/guardscan']);
+      detect.mockResolvedValue([
+        {manager: 'unknown', path: '/a/bin/guardscan', version: '1.1.2', active: true},
+        {manager: 'npm', path: '/b/bin/guardscan', version: '1.1.2'},
+      ]);
+      await warnIfInstalledTwice();
+      expect(output()).toContain('unknown: /a/bin/guardscan (1.1.2)');
+      expect(output()).toContain('npm: /b/bin/guardscan (1.1.2)  remove with: guardscan uninstall --manager npm');
+    });
+
     it('never fails the command when detection fails', async () => {
       detect.mockRejectedValue(new Error('package manager hung'));
       await expect(warnIfInstalledTwice()).resolves.toBeUndefined();
