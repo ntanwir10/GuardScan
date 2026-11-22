@@ -2,7 +2,7 @@ import {execFileSync, spawnSync} from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import {HOOK_BLOCK, hookStatus, installHook, uninstallHook} from '../../src/commands/hook';
+import {HOOK_BLOCK, hookBlock, hookStatus, installHook, uninstallHook} from '../../src/commands/hook';
 
 // Runtime overrides (GIT_CONFIG_COUNT, GIT_CONFIG_PARAMETERS) beat config files, so they must be cleared too.
 const CLEARED_ENV = ['GIT_DIR', 'GIT_INDEX_FILE', 'GIT_WORK_TREE', 'GIT_COMMON_DIR', 'GIT_CONFIG_COUNT', 'GIT_CONFIG_PARAMETERS'];
@@ -165,6 +165,45 @@ describe('guardscan hook', () => {
     expect(fs.realpathSync.native(reported[1])).toBe(fs.realpathSync.native(hookPath));
     expect(lines).toContain('GuardScan: not installed');
     expect(lines).toContain('GuardScan: installed');
+  });
+
+  it('writes a chosen threshold into the block, and a reinstall without one restores the default', () => {
+    installHook(repo, {failOn: 'medium'});
+    expect(fs.readFileSync(hookPath, 'utf8')).toBe(`#!/bin/sh\n${hookBlock('medium')}`);
+    expect(hookBlock('medium')).toContain(
+      'guardscan security --staged --ci --fail-on medium --output "$(git rev-parse --git-dir)/guardscan-pre-commit.json"'
+    );
+    hookStatus(repo);
+
+    installHook(repo);
+    hookStatus(repo);
+
+    expect(fs.readFileSync(hookPath, 'utf8')).toBe(`#!/bin/sh\n${HOOK_BLOCK}`);
+    const lines = log.mock.calls.map(call => String(call[0]));
+    expect(lines.filter(line => line.startsWith('Fail on: '))).toEqual(['Fail on: medium', 'Fail on: high (default)']);
+  });
+
+  it('rejects an unknown threshold without touching the hook', () => {
+    fs.writeFileSync(hookPath, '#!/bin/sh\necho kept\n', {mode: 0o755});
+
+    expect(() => installHook(repo, {failOn: 'medium; rm -rf ~'})).toThrow('--fail-on must be one of critical, high, medium, low, info.');
+    expect(fs.readFileSync(hookPath, 'utf8')).toBe('#!/bin/sh\necho kept\n');
+  });
+
+  posixIt('passes the chosen threshold to guardscan', () => {
+    installHook(repo, {failOn: 'low'});
+    const stubDirectory = fs.mkdtempSync(path.join(tempRoot, 'stub-'));
+    const argsFile = path.join(stubDirectory, 'args');
+    fs.writeFileSync(path.join(stubDirectory, 'guardscan'), '#!/bin/sh\nprintf "%s\\n" "$@" > "$ARGS_FILE"\n', {mode: 0o755});
+
+    const result = spawnSync('sh', [hookPath], {
+      cwd: repo,
+      encoding: 'utf8',
+      env: {...process.env, PATH: `${stubDirectory}${path.delimiter}${process.env.PATH}`, ARGS_FILE: argsFile},
+    });
+
+    expect(result.status).toBe(0);
+    expect(fs.readFileSync(argsFile, 'utf8').split('\n').slice(0, 5)).toEqual(['security', '--staged', '--ci', '--fail-on', 'low']);
   });
 
   it('fails clearly outside a Git work tree', () => {

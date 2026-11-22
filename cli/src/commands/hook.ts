@@ -1,21 +1,36 @@
 /* eslint-disable no-console -- Hook commands report the managed hook path and its state. */
 import { execFileSync } from 'child_process';
-import { Command } from 'commander';
+import { Command, Option } from 'commander';
 import * as fs from 'fs';
 import * as path from 'path';
 
 const BLOCK_START = '# >>> guardscan >>>';
 const BLOCK_END = '# <<< guardscan <<<';
-/** Fails closed: any status above 2, including 127 when guardscan is missing, becomes 2. */
-export const HOOK_BLOCK = [
-  BLOCK_START,
-  // The report goes in the git dir, so a later `git add -A` can never commit it.
-  'guardscan security --staged --ci --output "$(git rev-parse --git-dir)/guardscan-pre-commit.json"',
-  'guardscan_status=$?',
-  'if [ "$guardscan_status" -ne 0 ]; then [ "$guardscan_status" -le 2 ] || guardscan_status=2; exit "$guardscan_status"; fi',
-  BLOCK_END,
-  '',
-].join('\n');
+export const HOOK_FAIL_ON = ['critical', 'high', 'medium', 'low', 'info'] as const;
+const FAIL_ON_ARGUMENT = /--fail-on[ =](critical|high|medium|low|info)\b/;
+
+/**
+ * The managed block. `failOn` is written into the scan line; without it `--ci` blocks at high.
+ * Fails closed: any status above 2, including 127 when guardscan is missing, becomes 2.
+ */
+export function hookBlock(failOn?: string): string {
+  // The value is written into a shell script, so only the fixed severity words are accepted.
+  if (failOn !== undefined && !(HOOK_FAIL_ON as readonly string[]).includes(failOn)) {
+    throw new Error(`--fail-on must be one of ${HOOK_FAIL_ON.join(', ')}.`);
+  }
+  return [
+    BLOCK_START,
+    // The report goes in the git dir, so a later `git add -A` can never commit it.
+    `guardscan security --staged --ci${failOn ? ` --fail-on ${failOn}` : ''} --output "$(git rev-parse --git-dir)/guardscan-pre-commit.json"`,
+    'guardscan_status=$?',
+    'if [ "$guardscan_status" -ne 0 ]; then [ "$guardscan_status" -le 2 ] || guardscan_status=2; exit "$guardscan_status"; fi',
+    BLOCK_END,
+    '',
+  ].join('\n');
+}
+
+/** The default block: findings at or above high block the commit. */
+export const HOOK_BLOCK = hookBlock();
 const SHELL_SHEBANG = /^#!\s*(?:\S*\/)?(?:env\s+)?(?:\S*\/)?(?:sh|bash|zsh|dash)(?=\s|$)/;
 
 interface HookLocation {
@@ -47,8 +62,8 @@ function locateHook(cwd: string): HookLocation {
   return {hooksDir, hookPath: path.join(hooksDir, 'pre-commit')};
 }
 
-function refuse(reason: string): never {
-  throw new Error(`${reason}\nAdd GuardScan's block to your hook by hand:\n\n${HOOK_BLOCK}`);
+function refuse(reason: string, block: string): never {
+  throw new Error(`${reason}\nAdd GuardScan's block to your hook by hand:\n\n${block}`);
 }
 
 function markerLine(content: string, marker: string, from: number): number {
@@ -68,8 +83,8 @@ function findBlock(content: string, hookPath: string): {start: number; end: numb
   return {start, end: newline < 0 ? content.length : newline + 1};
 }
 
-/** Read the hook as latin1 so every foreign byte round-trips unchanged. */
-function readHook(hookPath: string, forUninstall = false): string | undefined {
+/** Read the hook as latin1 so every foreign byte round-trips unchanged. `installBlock` is absent for uninstall. */
+function readHook(hookPath: string, installBlock?: string): string | undefined {
   let stat: fs.Stats;
   try {
     stat = fs.lstatSync(hookPath);
@@ -79,8 +94,8 @@ function readHook(hookPath: string, forUninstall = false): string | undefined {
   }
   if (stat.isSymbolicLink()) {
     const reason = `${hookPath} is a symlink; changing it would change the file it points to.`;
-    if (forUninstall) {throw new Error(`${reason} Remove GuardScan's block from the link target by hand.`);}
-    refuse(reason);
+    if (installBlock === undefined) {throw new Error(`${reason} Remove GuardScan's block from the link target by hand.`);}
+    refuse(reason, installBlock);
   }
   if (!stat.isFile()) {throw new Error(`${hookPath} is not a regular file.`);}
   return fs.readFileSync(hookPath, 'latin1');
@@ -98,31 +113,33 @@ function writeHook(hookPath: string, content: string, mode: number): void {
   }
 }
 
-export function installHook(cwd: string = process.cwd()): void {
+/** Installing without `failOn` writes the default block, so a reinstall resets the threshold to high. */
+export function installHook(cwd: string = process.cwd(), options: {failOn?: string} = {}): void {
+  const hookBlockText = hookBlock(options.failOn);
   const {hooksDir, hookPath} = locateHook(cwd);
   if (hooksDir.split(path.sep).includes('.husky')) {
-    refuse(`Husky manages ${hooksDir} and regenerates its hooks, so add the block to .husky/pre-commit yourself.`);
+    refuse(`Husky manages ${hooksDir} and regenerates its hooks, so add the block to .husky/pre-commit yourself.`, hookBlockText);
   }
-  const existing = readHook(hookPath);
+  const existing = readHook(hookPath, hookBlockText);
   // A compiled hook has no shebang; prepending shell text would break it.
-  if (existing?.includes('\0')) {refuse(`${hookPath} is a binary executable, not a shell script.`);}
+  if (existing?.includes('\0')) {refuse(`${hookPath} is a binary executable, not a shell script.`, hookBlockText);}
   let content: string;
   if (existing === undefined) {
-    content = `#!/bin/sh\n${HOOK_BLOCK}`;
+    content = `#!/bin/sh\n${hookBlockText}`;
   } else {
     const block = findBlock(existing, hookPath);
     const firstLineEnd = existing.indexOf('\n');
     const firstLine = firstLineEnd < 0 ? existing : existing.slice(0, firstLineEnd);
     if (block) {
-      content = existing.slice(0, block.start) + HOOK_BLOCK + existing.slice(block.end);
+      content = existing.slice(0, block.start) + hookBlockText + existing.slice(block.end);
     } else if (!firstLine.startsWith('#!')) {
-      content = HOOK_BLOCK + existing;
+      content = hookBlockText + existing;
     } else if (!SHELL_SHEBANG.test(firstLine)) {
-      refuse(`${hookPath} is not a shell script (${firstLine.trim()}).`);
+      refuse(`${hookPath} is not a shell script (${firstLine.trim()}).`, hookBlockText);
     } else {
       content = firstLineEnd < 0
-        ? `${existing}\n${HOOK_BLOCK}`
-        : existing.slice(0, firstLineEnd + 1) + HOOK_BLOCK + existing.slice(firstLineEnd + 1);
+        ? `${existing}\n${hookBlockText}`
+        : existing.slice(0, firstLineEnd + 1) + hookBlockText + existing.slice(firstLineEnd + 1);
     }
   }
   fs.mkdirSync(hooksDir, {recursive: true});
@@ -136,7 +153,7 @@ export function installHook(cwd: string = process.cwd()): void {
 
 export function uninstallHook(cwd: string = process.cwd()): void {
   const {hookPath} = locateHook(cwd);
-  const existing = readHook(hookPath, true);
+  const existing = readHook(hookPath);
   const block = existing === undefined ? undefined : findBlock(existing, hookPath);
   if (existing === undefined || !block) {
     console.log(`GuardScan is not installed in ${hookPath}.`);
@@ -160,20 +177,30 @@ export function hookStatus(cwd: string = process.cwd()): void {
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {throw error;}
   }
+  const start = content === undefined ? -1 : markerLine(content, BLOCK_START, 0);
   console.log(`Hook: ${hookPath}`);
-  console.log(`GuardScan: ${content !== undefined && markerLine(content, BLOCK_START, 0) >= 0 ? 'installed' : 'not installed'}`);
+  console.log(`GuardScan: ${start >= 0 ? 'installed' : 'not installed'}`);
+  if (content !== undefined && start >= 0) {
+    const end = markerLine(content, BLOCK_END, start);
+    const failOn = FAIL_ON_ARGUMENT.exec(content.slice(start, end < 0 ? undefined : end))?.[1];
+    console.log(`Fail on: ${failOn ?? 'high (default)'}`);
+  }
 }
 
 export function createHookCommand(): Command {
   const command = new Command('hook').description('Install, remove, or check the GuardScan Git pre-commit hook');
   command.command('install')
     .description('Scan staged changes for secrets, lint, and code patterns before each commit')
-    .action(() => installHook());
+    .addOption(new Option(
+      '--fail-on <severity>',
+      'Block commits on findings at or above this severity (default: high); reinstalling without it restores high'
+    ).choices(HOOK_FAIL_ON))
+    .action((options: {failOn?: string}) => installHook(process.cwd(), options));
   command.command('uninstall')
     .description("Remove only GuardScan's block from the pre-commit hook")
     .action(() => uninstallHook());
   command.command('status')
-    .description('Show the pre-commit hook path and whether GuardScan is installed')
+    .description('Show the pre-commit hook path, whether GuardScan is installed, and its threshold')
     .action(() => hookStatus());
   return command;
 }

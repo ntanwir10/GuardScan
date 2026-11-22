@@ -27,13 +27,32 @@ const LANGUAGES: Readonly<Record<string, Language>> = {
   '.py': 'python', '.rb': 'ruby', '.php': 'php', '.go': 'go', '.java': 'java',
 };
 
-const C_FULL_LINE_COMMENT = /^\s*(?:\/\/|\/\*|\*(?:\s|\/|$))/;
-const FULL_LINE_COMMENT: Readonly<Record<Language, RegExp>> = {
-  js: C_FULL_LINE_COMMENT, go: C_FULL_LINE_COMMENT, java: C_FULL_LINE_COMMENT,
-  python: /^\s*#/, ruby: /^\s*#/,
-  // `#[` opens a PHP 8 attribute, not a comment.
-  php: /^\s*(?:\/\/|\/\*|\*(?:\s|\/|$)|#(?!\[))/,
-};
+const BLOCK_COMMENT_START = /^(?:\/\*|\*(?:\s|\/|$))/;
+// `#[` opens a PHP 8 attribute, not a comment.
+const PHP_HASH_COMMENT = /^#(?!\[)/;
+
+/**
+ * True when a C-style line holds only comments: a `//` line, an unterminated `/*`, a `*`
+ * continuation line, or `/* … *\/` blocks with nothing but a line comment after the last close.
+ */
+function cCommentOnly(text: string, hashComments: boolean): boolean {
+  const lineComment = (value: string): boolean => value.startsWith('//') || (hashComments && PHP_HASH_COMMENT.test(value));
+  let rest = text.trimStart();
+  if (lineComment(rest)) {return true;}
+  if (!BLOCK_COMMENT_START.test(rest)) {return false;}
+  // A `*` continuation line is already inside a block comment; `/*` opens one, and `/*/` does not close it.
+  let close = rest.indexOf('*/', rest.startsWith('/*') ? 2 : 0);
+  while (close >= 0) {
+    rest = rest.slice(close + 2).trimStart();
+    if (!rest.startsWith('/*')) {return rest === '' || lineComment(rest);}
+    close = rest.indexOf('*/', 2);
+  }
+  return true;
+}
+
+function commentOnly(text: string, language: Language): boolean {
+  return language === 'python' || language === 'ruby' ? /^\s*#/.test(text) : cCommentOnly(text, language === 'php');
+}
 // A comment opening before a TODO marker; `://` in a URL does not open one.
 const C_COMMENT_OPENING = /(?:^|[^:])\/\/|\/\*|^\s*\*/;
 const COMMENT_OPENING: Readonly<Record<Language, RegExp>> = {
@@ -190,7 +209,7 @@ export function lintStagedText(file: string, content: string, added: readonly nu
     if (todo && COMMENT_OPENING[language].test(text.slice(0, todo.index))) {
       findings.push(finding(TODO_COMMENT, file, line));
     }
-    if (FULL_LINE_COMMENT[language].test(text)) {return;}
+    if (commentOnly(text, language)) {return;}
     for (const rule of CODE_RULES) {
       if (rule.patterns[language]?.some(pattern => pattern.test(text))) {findings.push(finding(rule, file, line));}
     }

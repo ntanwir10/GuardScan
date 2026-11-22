@@ -9,6 +9,10 @@ import {scanEngine} from '../../src/core/scan-engine';
 import {lintStagedText} from '../../src/core/staged-lint';
 import {scanStagedChanges} from '../../src/core/staged-secrets';
 import type {ScanEngineResult} from '../../src/core/scan-engine';
+import {MAX_SECRET_FILE_BYTES} from '../../src/core/secrets-detector';
+
+// The real module object the source calls through, so a spy sees every git invocation.
+const childProcess = jest.requireActual<typeof import('child_process')>('child_process');
 
 // Runtime overrides (GIT_CONFIG_COUNT, GIT_CONFIG_PARAMETERS) beat config files, so they must be cleared too.
 const CLEARED_ENV = [
@@ -78,6 +82,10 @@ const POSITIVE: ReadonlyArray<readonly [string, string, string]> = [
   ['guardscan.pattern.dynamic-code-execution', 'py', 'exec(code)'],
   ['guardscan.pattern.dynamic-code-execution', 'php', 'eval($code);'],
   ['guardscan.pattern.dynamic-code-execution', 'rb', 'eval(code)'],
+  ['guardscan.pattern.dynamic-code-execution', 'js', '/* note */ eval(input);'],
+  ['guardscan.pattern.dynamic-code-execution', 'js', '/* a */ /* b */ eval(input);'],
+  ['guardscan.pattern.dynamic-code-execution', 'php', '/* note */ eval($code);'],
+  ['guardscan.lint.debug-statement', 'ts', ' */ console.log(value);'],
   ['guardscan.pattern.unsafe-yaml-load', 'py', 'data = yaml.load(text, Loader=yaml.FullLoader)'],
   ['guardscan.pattern.unsafe-deserialization', 'py', 'obj = pickle.loads(blob)'],
   ['guardscan.pattern.sql-string-building', 'js', 'db.query("SELECT * FROM users WHERE id = " + id);'],
@@ -127,7 +135,22 @@ const NEGATIVE: ReadonlyArray<readonly [string, string]> = [
   ['js', 'execFile("ls", [dir]);'],
   ['js', 'exec(command);'],
   ['ts', '// eval(code); new Function(body); db.query("SELECT * FROM t WHERE id = " + id);'],
+  ['js', '/* eval(input); */'],
+  ['js', '/* eval(input);'],
+  ['js', ' * eval(input);'],
+  ['js', '/*/ eval(input);'],
+  ['js', '/* note */ // eval(input);'],
+  ['js', '/* a */ /* eval(input); */'],
+  ['php', '/* note */ # eval($code);'],
+  ['php', '# eval($code);'],
 ];
+
+/** The path arguments of each added-lines diff that a spy on execFileSync saw. */
+function diffPathspecs(spy: jest.SpyInstance): string[][] {
+  return spy.mock.calls.map(call => call[1] as string[])
+    .filter(args => args[0] === '--literal-pathspecs')
+    .map(args => args.slice(args.indexOf('--') + 1));
+}
 
 describe('staged lint and code-pattern checks', () => {
   let repo: string;
@@ -259,6 +282,44 @@ describe('staged lint and code-pattern checks', () => {
     expect(lint(await scan())).toEqual([
       'gen.js:1:guardscan.lint.todo-comment', 'gen.js:2:guardscan.lint.debug-statement',
     ]);
+  });
+
+  it('diffs only eligible modified files, so an oversized one never reaches the patch', async () => {
+    write(repo, 'big.txt', 'small\n');
+    write(repo, 'shrunk.js', `${'x'.repeat(MAX_SECRET_FILE_BYTES)}\n`);
+    write(repo, 'app.js', 'const a = 1;\n');
+    git(repo, 'add', '-A');
+    git(repo, 'commit', '-qm', 'initial');
+    write(repo, 'big.txt', `small\n${'y'.repeat(MAX_SECRET_FILE_BYTES)}\n`);
+    // Its oversized old version would flood the patch with removed lines, so every new line is checked instead.
+    write(repo, 'shrunk.js', '// TODO: now small\n');
+    write(repo, 'app.js', 'const a = 1;\n// TODO: new\n');
+    git(repo, 'add', '-A');
+    const spy = jest.spyOn(childProcess, 'execFileSync');
+
+    const result = await scan();
+
+    expect(diffPathspecs(spy)).toEqual([['app.js']]);
+    expect(lint(result)).toEqual(['app.js:2:guardscan.lint.todo-comment', 'shrunk.js:1:guardscan.lint.todo-comment']);
+    expect(result.scannerResults[0].metadata?.excluded).toEqual([{path: 'big.txt', reason: 'oversized'}]);
+  });
+
+  it('splits the diff into pathspec chunks under 16 KiB and merges their results', async () => {
+    const files = Array.from({length: 600}, (_file, index) => `a long directory name/file number ${String(index).padStart(4, '0')}.js`);
+    for (const file of files) {write(repo, file, 'const a = 1;\n');}
+    git(repo, 'add', '-A');
+    git(repo, 'commit', '-qm', 'initial');
+    for (const file of files) {write(repo, file, 'const a = 1;\n// TODO: new\n');}
+    git(repo, 'add', '-A');
+    const spy = jest.spyOn(childProcess, 'execFileSync');
+
+    const found = lint(await scan());
+
+    const chunks = diffPathspecs(spy);
+    expect(chunks.length).toBeGreaterThan(1);
+    for (const chunk of chunks) {expect(chunk.reduce((bytes, file) => bytes + Buffer.byteLength(file) + 1, 0)).toBeLessThanOrEqual(16 * 1024);}
+    expect(chunks.flat().sort()).toEqual([...files].sort());
+    expect(found).toEqual(files.map(file => `${file}:2:guardscan.lint.todo-comment`).sort());
   });
 });
 

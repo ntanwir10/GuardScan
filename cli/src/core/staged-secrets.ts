@@ -10,6 +10,8 @@ export const STAGED_SCOPE = 'staged changes (secrets, lint, code patterns)';
 const BINARY_SNIFF_BYTES = 8000;
 const GIT_OUTPUT_MAX_BYTES = 256 * 1024 * 1024;
 const READ_BATCH_BYTES = 32 * 1024 * 1024;
+// Path arguments per git call stay far under the 32,767-character Windows command line.
+const PATHSPEC_CHUNK_BYTES = 16 * 1024;
 
 export interface StagedExclusion {
   path: string;
@@ -38,7 +40,8 @@ function git(cwd: string, args: string[], input?: string, maxBuffer = GIT_OUTPUT
   try {
     return execFileSync('git', args, {cwd, input, maxBuffer, stdio: ['pipe', 'pipe', 'pipe'], shell: false});
   } catch (error) {
-    throw new GuardScanError(`git ${args.join(' ')} failed: ${gitFailure(error)}`, 'STAGED_GIT_FAILED');
+    const shown = args.includes('--') ? [...args.slice(0, args.indexOf('--')), '-- <paths>'] : args;
+    throw new GuardScanError(`git ${shown.join(' ')} failed: ${gitFailure(error)}`, 'STAGED_GIT_FAILED');
   }
 }
 
@@ -108,14 +111,10 @@ export function scanStagedChanges(root: string): StagedScanResult {
   if (blobs.length === 0) {return result;}
 
   // Sizes first, so oversized blobs are never loaded into memory.
-  const sizes = git(root, ['--no-replace-objects', 'cat-file', '--batch-check'], blobs.map(blob => `${blob.oid}\n`).join(''))
-    .toString('utf8')
-    .split('\n');
+  const sizes = blobSizes(root, blobs.map(blob => blob.oid));
   const readable: StagedEntry[] = [];
   blobs.forEach((blob, index) => {
-    const [oid, type, size] = (sizes[index] || '').split(' ');
-    if (oid !== blob.oid || type !== 'blob' || !/^\d+$/.test(size || '')) {throw unexpectedGitOutput('cat-file --batch-check');}
-    blob.size = Number(size);
+    blob.size = sizes[index];
     if (blob.size > MAX_SECRET_FILE_BYTES) {excluded.push({path: blob.path, reason: 'oversized'});}
     else {readable.push(blob);}
   });
@@ -158,23 +157,66 @@ function scanBlobBatch(root: string, batch: StagedEntry[], result: StagedScanRes
   }
 }
 
+function blobSizes(root: string, oids: readonly string[]): number[] {
+  const lines = git(root, ['--no-replace-objects', 'cat-file', '--batch-check'], oids.map(oid => `${oid}\n`).join(''))
+    .toString('utf8')
+    .split('\n');
+  return oids.map((oid, index) => {
+    const [echoed, type, size] = (lines[index] || '').split(' ');
+    if (echoed !== oid || type !== 'blob' || !/^\d+$/.test(size || '')) {throw unexpectedGitOutput('cat-file --batch-check');}
+    return Number(size);
+  });
+}
+
 /**
  * Give each modified blob the lines this commit adds. Added, copied, and type-changed
  * entries keep `all`: they have no earlier text version of the same path.
  */
-function assignAddedLines(root: string, blobs: StagedEntry[]): void {
-  const modified = blobs.filter(blob => blob.status === 'M');
-  if (modified.length === 0) {return;}
-  // shortcut: the modified files' patch must fit GIT_OUTPUT_MAX_BYTES; stream it if huge staged edits become common.
-  const patch = git(root, [
-    'diff', '--cached', '--patch', '-U0', '--inter-hunk-context=0', '--no-renames', '--diff-filter=M', '--full-index',
-    '--no-color', '--no-ext-diff', '--no-textconv', '--submodule=short',
-  ]).toString('latin1');
-  const addedByBlobPair = addedLinesByBlobPair(patch);
-  for (const blob of modified) {
-    // Same blob: only the mode changed. No hunks (git judged the pair binary, or `-diff` is set): check every line.
-    blob.added = blob.oldOid === blob.oid ? [] : addedByBlobPair.get(`${blob.oldOid}..${blob.oid}`) ?? 'all';
+function assignAddedLines(root: string, blobs: readonly StagedEntry[]): void {
+  // Same blob: only the mode changed, so nothing is added.
+  const modified = blobs.filter(blob => blob.status === 'M' && blob.oldOid !== blob.oid);
+  for (const blob of blobs) {
+    if (blob.status === 'M' && blob.oldOid === blob.oid) {blob.added = [];}
   }
+  if (modified.length === 0) {return;}
+  const oldSizes = blobSizes(root, modified.map(blob => blob.oldOid));
+  // Only eligible files are diffed: `blobs` holds no symlink, submodule, or oversized entry, and an
+  // oversized old version (whose removed lines would flood the patch) keeps `all` for its small new one.
+  const diffed = modified.flatMap((blob, index) => oldSizes[index] > MAX_SECRET_FILE_BYTES ? [] : [{blob, bytes: blob.size + oldSizes[index]}]);
+  const addedByBlobPair = new Map<string, number[]>();
+  for (const chunk of diffChunks(diffed)) {
+    const patch = git(root, [
+      '--literal-pathspecs', 'diff', '--cached', '--patch', '-U0', '--inter-hunk-context=0', '--no-renames', '--diff-filter=M',
+      '--full-index', '--no-color', '--no-ext-diff', '--no-textconv', '--submodule=short', '--', ...chunk,
+    ]).toString('latin1');
+    for (const [pair, added] of addedLinesByBlobPair(patch)) {addedByBlobPair.set(pair, added);}
+  }
+  for (const blob of modified) {
+    // No hunks (git judged the pair binary, `-diff` is set, or the old version is oversized): check every line.
+    blob.added = addedByBlobPair.get(`${blob.oldOid}..${blob.oid}`) ?? 'all';
+  }
+}
+
+/**
+ * Paths for successive diff calls: each call's path arguments stay under PATHSPEC_CHUNK_BYTES,
+ * and the blobs it compares under READ_BATCH_BYTES, so every patch stays well inside GIT_OUTPUT_MAX_BYTES.
+ */
+function diffChunks(entries: ReadonlyArray<{blob: StagedEntry; bytes: number}>): string[][] {
+  const chunks: string[][] = [];
+  let pathBytes = 0;
+  let blobBytes = 0;
+  for (const {blob, bytes} of entries) {
+    const size = Buffer.byteLength(blob.path) + 1;
+    if (chunks.length === 0 || pathBytes + size > PATHSPEC_CHUNK_BYTES || blobBytes + bytes > READ_BATCH_BYTES) {
+      chunks.push([]);
+      pathBytes = 0;
+      blobBytes = 0;
+    }
+    chunks[chunks.length - 1].push(blob.path);
+    pathBytes += size;
+    blobBytes += bytes;
+  }
+  return chunks;
 }
 
 const HUNK_HEADER = /^@@ -\d+(?:,(\d+))? \+(\d+)(?:,(\d+))? @@(?: |$)/;

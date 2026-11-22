@@ -234,7 +234,7 @@ Line checks run in the same `secrets` scanner task and are told apart by rule ID
 - Code rules skip lines longer than 4096 characters, which are usually minified or generated.
 - Findings never quote the flagged line, so a secret on it stays out of reports.
 
-`guardscan security --staged --ci` exits `1` for high or critical findings, because `--ci` defaults `--fail-on` to `high`. So by default only merge-conflict markers and high or critical secrets block. Code patterns, debug statements, TODO comments, trailing whitespace, and medium secrets such as JWTs are reported without blocking. Pass `--fail-on medium` to also block code patterns and medium secrets. Like any `--ci` run, it writes `guardscan-security.json` to the current directory unless you pass `--output`. The hook that `guardscan hook install` adds writes its report to `guardscan-pre-commit.json` in the Git directory instead, so the report can never be committed.
+`guardscan security --staged --ci` exits `1` for high or critical findings, because `--ci` defaults `--fail-on` to `high`. So by default only merge-conflict markers and high or critical secrets block. Code patterns, debug statements, TODO comments, trailing whitespace, and medium secrets such as JWTs are reported without blocking. Pass `--fail-on medium` to also block code patterns and medium secrets; for the pre-commit hook, install it with `guardscan hook install --fail-on medium`. Like any `--ci` run, it writes `guardscan-security.json` to the current directory unless you pass `--output`. The hook that `guardscan hook install` adds writes its report to `guardscan-pre-commit.json` in the Git directory instead, so the report can never be committed.
 
 ### `guardscan hook`
 
@@ -247,12 +247,24 @@ Options:
   -h, --help      display help for command
 
 Commands:
-  install         Scan staged changes for secrets, lint, and code patterns
-                  before each commit
-  uninstall       Remove only GuardScan's block from the pre-commit hook
-  status          Show the pre-commit hook path and whether GuardScan is
-                  installed
-  help [command]  display help for command
+  install [options]  Scan staged changes for secrets, lint, and code patterns
+                     before each commit
+  uninstall          Remove only GuardScan's block from the pre-commit hook
+  status             Show the pre-commit hook path, whether GuardScan is
+                     installed, and its threshold
+  help [command]     display help for command
+```
+
+```text
+Usage: guardscan hook install [options]
+
+Scan staged changes for secrets, lint, and code patterns before each commit
+
+Options:
+  --fail-on <severity>  Block commits on findings at or above this severity
+                        (default: high); reinstalling without it restores high
+                        (choices: "critical", "high", "medium", "low", "info")
+  -h, --help            display help for command
 ```
 
 `guardscan hook install` adds this block to `<hooks>/pre-commit`, where `<hooks>` is `git rev-parse --git-path hooks`. That path honors `core.hooksPath` and linked worktrees.
@@ -265,12 +277,14 @@ if [ "$guardscan_status" -ne 0 ]; then [ "$guardscan_status" -le 2 ] || guardsca
 # <<< guardscan <<<
 ```
 
+`guardscan hook install --fail-on <severity>` writes the threshold into the scan line, for example `guardscan security --staged --ci --fail-on medium --output ...`. Only `critical`, `high`, `medium`, `low`, and `info` are accepted. Without `--fail-on`, the block above is written and `--ci` blocks at `high`, so running `guardscan hook install` again without the flag resets a chosen threshold.
+
 The block fails closed: any status above `2`, including `127` when `guardscan` is not on `PATH`, becomes `2`. On success it falls through, so the rest of an existing hook still runs.
 
 - `install` creates `#!/bin/sh` plus the block, executable, when no hook exists. In an existing `sh`, `bash`, `zsh`, or `dash` hook, or one with no shebang, it inserts the block right after the shebang line. Running it again replaces the block in place.
 - `install` refuses, and prints the block for you to add by hand, when the hook is not a shell script, when the hook is a symlink, or when the hooks path is inside `.husky`. Husky regenerates its hooks, so add the line to `.husky/pre-commit` yourself.
 - `uninstall` removes only GuardScan's block. It deletes the hook if nothing but a shebang and whitespace remains, and leaves all other content byte for byte.
-- `status` prints the hook path and whether the block is installed.
+- `status` prints the hook path, whether the block is installed, and, when it is, the threshold (`Fail on: medium`, or `Fail on: high (default)`).
 
 None of these commands runs the hook or changes repository state through Git.
 
