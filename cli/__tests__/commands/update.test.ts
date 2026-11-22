@@ -263,6 +263,15 @@ describe('installation lifecycle commands', () => {
       expect(output()).toContain('remove with: guardscan uninstall --manager npm');
     });
 
+    it('explains a blocked copy instead of suggesting an uninstall GuardScan refuses', async () => {
+      const held = {...brew, manager: 'scoop' as const, blockedReason: 'Scoop has held this GuardScan installation. Manage it directly with Scoop.'};
+      detect.mockResolvedValue([npm, held]);
+      await warnIfInstalledTwice();
+      expect(output()).toContain('scoop: /brew/bin/guardscan (1.1.0)  Scoop has held this GuardScan installation.');
+      expect(output()).not.toContain('--manager scoop');
+      expect(planCommand).not.toHaveBeenCalledWith(held, 'uninstall');
+    });
+
     it('never fails the command when detection fails', async () => {
       detect.mockRejectedValue(new Error('package manager hung'));
       await expect(warnIfInstalledTwice()).resolves.toBeUndefined();

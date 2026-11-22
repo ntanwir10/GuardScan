@@ -53,15 +53,16 @@ export async function warnIfInstalledTwice(): Promise<void> {
     if (copies.length < 2) {return;}
     console.error(chalk.yellow(`\nMore than one GuardScan installation found. "guardscan" on PATH runs ${launchers[0]}.`));
     for (const copy of copies) {
-      let removal = '';
-      if (!['unknown', 'source', 'standalone'].includes(copy.manager)) {
+      // A blocked copy (held by Scoop, or in a shared pnpm group) is always refused, so explain why instead.
+      let removal = copy.blockedReason ?? '';
+      if (!removal && !['unknown', 'source', 'standalone'].includes(copy.manager)) {
         // Use --manager only when it selects exactly one copy that guardscan uninstall can change;
         // otherwise give the manager's own command (ambiguous owner, or a running Windows Scoop/pipx copy).
         const plan = getInstallationCommand(copy, 'uninstall');
-        removal = copies.filter(other => other.manager === copy.manager).length === 1 && !lockedWhileRunning(plan)
-          ? `guardscan uninstall --manager ${copy.manager}` : [plan.command, ...plan.args].join(' ');
+        removal = `remove with: ${copies.filter(other => other.manager === copy.manager).length === 1 && !lockedWhileRunning(plan)
+          ? `guardscan uninstall --manager ${copy.manager}` : [plan.command, ...plan.args].join(' ')}`;
       }
-      console.error(`  ${copy.manager}: ${copy.path}${copy.version ? ` (${copy.version})` : ''}${removal ? `  remove with: ${removal}` : ''}`);
+      console.error(`  ${copy.manager}: ${copy.path}${copy.version ? ` (${copy.version})` : ''}${removal ? `  ${removal}` : ''}`);
     }
     console.error('Keep one copy. An "unknown" copy may be a different tool named guardscan; remove it with its own installer.\n');
   } catch { /* The check never affects the command. */ }
