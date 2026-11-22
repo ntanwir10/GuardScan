@@ -134,7 +134,10 @@ describe('guardscan hook', () => {
     hookStatus(repo);
 
     const lines = log.mock.calls.map(call => String(call[0]));
-    expect(lines.filter(line => line === `Hook: ${hookPath}`)).toHaveLength(2);
+    const reported = lines.filter(line => line.startsWith('Hook: ')).map(line => line.slice('Hook: '.length));
+    expect(reported).toHaveLength(2);
+    // Git reports long-name paths while Windows temp dirs can use 8.3 short names, so compare real paths.
+    expect(fs.realpathSync.native(reported[1])).toBe(fs.realpathSync.native(hookPath));
     expect(lines).toContain('GuardScan: not installed');
     expect(lines).toContain('GuardScan: installed');
   });
