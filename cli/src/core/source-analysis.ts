@@ -224,6 +224,24 @@ function buildCtx(content: string, language: LexLanguage): Ctx {
       stringCont[nextLine] = 1;
     }
   }
+  if (language === 'python') {
+    // Lines inside open brackets are implicit continuations: like string lines, their indentation never ends a block.
+    let depth = 0;
+    let line = 0;
+    for (let i = 0; i < code.length; i++) {
+      const ch = code[i];
+      if (ch === '(' || ch === '[' || ch === '{') {
+        depth++;
+      } else if ((ch === ')' || ch === ']' || ch === '}') && depth > 0) {
+        depth--;
+      } else if (ch === '\n') {
+        line++;
+        if (depth > 0 && line < lines.length) {
+          stringCont[line] = 1;
+        }
+      }
+    }
+  }
   const lineOf = (offset: number): number => {
     let lo = 0;
     let hi = lineStarts.length - 1;
@@ -438,7 +456,9 @@ function braceFunctions(ctx: Ctx): Span[] {
         w--;
       }
       const prevWord = code.slice(w, q);
-      if (before !== '@' && before !== '[' && before !== '.' && prevWord !== 'new' && prevWord !== 'else' &&
+      // A declared name never follows `(`, `,`, `!`, `=`, `|`, `?` or `&&`: those are calls inside a condition or expression.
+      const inExpression = (before !== '' && '(,!=|?'.includes(before)) || (before === '&' && code[q - 2] === '&');
+      if (!inExpression && before !== '@' && before !== '[' && before !== '.' && prevWord !== 'new' && prevWord !== 'else' &&
           prevWord !== 'return' && prevWord !== 'throw' && !(before === '>' && code[q - 2] === '-')) {
         accept(s, name, p);
       }
@@ -983,7 +1003,8 @@ function importsOf(ctx: Ctx): string[] {
       const mod = m[1] ?? m[3];
       const dots = /^\.*/.exec(mod)?.[0].length ?? 0;
       const rest = mod.slice(dots).replace(/\./g, '/');
-      const prefix = dots === 1 ? './' : '../'.repeat(dots - 1);
+      // Absolute imports (`import os`) have no dots and no prefix; `repeat(-1)` would throw and blank the file's analysis.
+      const prefix = dots === 0 ? '' : dots === 1 ? './' : '../'.repeat(dots - 1);
       if (dots > 0 && rest === '' && m[2]) {
         // `from . import b` imports the sibling module b, not the package itself.
         const names = m[2].replace(/[()]/g, '').split(',').map(n => n.trim().split(/\s+/)[0]).filter(n => /^\w+$/.test(n));

@@ -144,3 +144,26 @@ describe('other languages', () => {
     expect(lexSource('$s = "a\nif (x) {}\nb";', 'php').code).not.toContain('if');
   });
 });
+
+describe('review round 3 regressions', () => {
+  it('analyzes Python files with absolute imports instead of blanking them', async () => {
+    const { analyzeSource } = await import('../../src/core/source-analysis');
+    const analysis = analyzeSource('import os\nfrom pathlib import Path\n\ndef f(a, b):\n    return a\n', 'a.py');
+    expect(analysis?.imports).toEqual(['os', 'pathlib']);
+    expect(analysis?.functions.map(fn => fn.name)).toEqual(['f']);
+  });
+
+  it('keeps a Python function open across an implicit bracket continuation', async () => {
+    const { analyzeSource } = await import('../../src/core/source-analysis');
+    const analysis = analyzeSource('def f():\n    text = (\n"a"\n)\n    return text\n', 'a.py');
+    expect(analysis?.functions).toEqual([expect.objectContaining({ name: 'f', returnCount: 1 })]);
+  });
+
+  it('does not treat calls inside conditions as C-family function declarations', async () => {
+    const { analyzeSource } = await import('../../src/core/source-analysis');
+    const body = Array.from({ length: 6 }, (_, i) => `  if (check(x${i})) { return ${i}; }\n  if (a && probe(x${i})) { return 9; }`).join('\n');
+    const analysis = analyzeSource(`int f(int x) {\n${body}\n  return 0;\n}\n`, 'a.c');
+    expect(analysis?.functions.map(fn => fn.name)).toEqual(['f']);
+    expect(analysis?.functions[0].returnCount).toBe(13);
+  });
+});
