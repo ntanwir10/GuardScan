@@ -298,6 +298,16 @@ describe('Python dependency hygiene', () => {
     expect(scanPythonSource('if TYPE_CHECKING: import yaml\n').imports).toEqual(['yaml']);
     expect(scanPythonSource('import os; import yaml\ntry: from a.b import c\nexcept ImportError: import d\n').imports)
       .toEqual(['os', 'yaml', 'a.b', 'd']);
+    // Colons inside brackets, strings, walrus and lambda bodies are not the suite colon.
+    expect(scanPythonSource([
+      'if data[1:2]: import a',
+      'if {"k": 1}.get("k"): import b',
+      'while (n := next(it)): import c',
+      'if (lambda x: x)(1): import d',
+      'if lambda: 0: import e',
+      'if "x:y": import f',
+      'if x: y = 1',
+    ].join('\n')).imports).toEqual(['a', 'b', 'c', 'd', 'e', 'f']);
   });
 
   it('does not throw on import names that match Object.prototype members', async () => {

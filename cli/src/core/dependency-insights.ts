@@ -752,6 +752,31 @@ function normalizePythonName(name: string): string {
 }
 
 /** Blanks comments and string literals, then reads `import x` / `from x import y` statements. */
+/**
+ * Offset just past a compound header's suite colon (0 when the statement is not a header). Strings are already
+ * blanked, so only colons inside brackets (slices, dicts), `:=` and `lambda` bodies must be skipped.
+ */
+function pythonSuiteStart(statement: string): number {
+  if (!/^(?:async\s+)?(?:if|elif|else|try|except|finally|with|for|while)\b/.test(statement)) {return 0;}
+  let depth = 0;
+  let lambdas = 0;
+  for (let index = 0; index < statement.length; index += 1) {
+    const character = statement[index];
+    if ('([{'.includes(character)) {
+      depth += 1;
+    } else if (')]}'.includes(character)) {
+      depth = Math.max(0, depth - 1);
+    } else if (depth === 0 && character === ':' && statement[index + 1] !== '=') {
+      if (lambdas === 0) {return index + 1;}
+      lambdas -= 1;
+    } else if (depth === 0 && statement.startsWith('lambda', index) &&
+      !/\w/.test(statement[index - 1] || '') && !/\w/.test(statement[index + 6] || '')) {
+      lambdas += 1;
+    }
+  }
+  return 0;
+}
+
 export function scanPythonSource(text: string): {imports: string[]; strings: string[]} {
   let code = '';
   const strings: string[] = [];
@@ -782,7 +807,8 @@ export function scanPythonSource(text: string): {imports: string[]; strings: str
   for (const line of code.replace(/\\\r?\n/g, ' ').split(/\r?\n/)) {
     for (const part of line.split(';')) {
       // A compound header may carry its body on the same line: `if x: import y`.
-      const statement = part.trim().replace(/^(?:async\s+)?(?:if|elif|else|try|except|finally|with|for|while)\b[^:]*:\s*/, '');
+      const trimmed = part.trim();
+      const statement = trimmed.slice(pythonSuiteStart(trimmed)).trim();
       const plain = statement.match(/^import\s+(.+)$/);
       if (plain) {
         for (const part of plain[1].split(',')) {
