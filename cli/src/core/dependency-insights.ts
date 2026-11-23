@@ -140,7 +140,7 @@ function hygieneFinding(
   metadata: Record<string, unknown>
 ): DependencyInsightFinding {
   return {
-    severity: kind === 'missing' ? 'medium' : 'low',
+    severity: kind === 'missing' ? 'low' : 'info',
     category: HYGIENE_CATEGORY,
     file: manifest,
     description: kind === 'missing'
@@ -209,6 +209,8 @@ interface TsConfigInfo {
   pathsDir: string;
   baseUrl?: string;
   importHelpers: boolean;
+  /** First explicit `compilerOptions.types` along the extends chain; undefined means every @types package loads implicitly. */
+  types?: string[];
   jsx?: string;
   jsxImportSource?: string;
 }
@@ -225,6 +227,8 @@ interface NpmManifest {
   missing: Map<string, string[]>;
   uncertain: UncertainItem[];
   incomplete: string[];
+  /** True when no tsconfig sets `types`, so @types packages may load as ambient types without an import. */
+  ambientTypes: boolean;
 }
 
 /** Incomplete evidence in a workspace also makes every ancestor manifest it resolves through uncertain. */
@@ -236,6 +240,26 @@ function npmPackageName(specifier: string): string | undefined {
   const parts = specifier.split('/');
   const name = specifier.startsWith('@') ? parts.slice(0, 2).join('/') : parts[0];
   return /^(?:@[a-z0-9~][\w.~-]*\/)?[a-z0-9~][\w.~-]*$/i.test(name) && !name.startsWith('~') ? name : undefined;
+}
+
+/** The @types package that types `name` (`@scope/pkg` -> `@types/scope__pkg`). */
+function typesPackageName(name: string): string {
+  return `@types/${name.replace(/^@/, '').replace('/', '__')}`;
+}
+
+const STYLE_EXTENSIONS = new Set(['.css', '.scss', '.sass', '.less']);
+
+/** Bare package specifiers in `@import`, `@use`, `@forward`, `@plugin` and `@reference`. Never used for missing findings. */
+function styleSpecifiers(text: string): string[] {
+  const found: string[] = [];
+  for (const rule of text.matchAll(/@(?:import|use|forward|plugin|reference)\b([^;\n{]*)/g)) {
+    if (/^\s*url\(/.test(rule[1])) {continue;}
+    for (const quoted of rule[1].matchAll(/["']([^"'\n]*)["']/g)) {
+      const specifier = quoted[1].replace(/^~/, '');
+      if (specifier && !/^[./]/.test(specifier) && !/^(?:https?:|url\()/i.test(specifier)) {found.push(specifier);}
+    }
+  }
+  return found;
 }
 
 function configCandidates(value: string): string[] {
@@ -271,6 +295,18 @@ function collectJsonStrings(value: unknown, output: string[], depth = 0): void {
   }
 }
 
+/** Target strings of a package.json `imports` map; keys (`#alias`, conditions) are not targets. */
+function collectImportTargets(value: unknown, output: string[], depth = 0): void {
+  if (depth > 20) {return;}
+  if (typeof value === 'string') {
+    output.push(value);
+  } else if (Array.isArray(value)) {
+    for (const item of value) {collectImportTargets(item, output, depth + 1);}
+  } else {
+    for (const item of Object.values(asRecord(value) || {})) {collectImportTargets(item, output, depth + 1);}
+  }
+}
+
 function scriptKind(ts: typeof TypeScript, file: string): TypeScript.ScriptKind {
   const extension = path.extname(file);
   if (extension === '.tsx') {return ts.ScriptKind.TSX;}
@@ -279,26 +315,42 @@ function scriptKind(ts: typeof TypeScript, file: string): TypeScript.ScriptKind 
   return ts.ScriptKind.JS;
 }
 
-interface ParsedJs {specifiers: string[]; dynamic: number; typeReferences: string[]; strings: string[]; jsx: boolean}
+interface ParsedJs {specifiers: string[]; typeOnly: Set<string>; dynamic: number; typeReferences: string[]; strings: string[]; jsx: boolean}
 
 /** Reads module references with the TypeScript parser: imports, re-exports, require(), import(). */
 function parseJs(ts: typeof TypeScript, file: string, text: string, collectStrings: boolean): ParsedJs {
   const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, false, scriptKind(ts, file));
   const result: ParsedJs = {
-    specifiers: [], dynamic: 0, typeReferences: source.typeReferenceDirectives.map(reference => reference.fileName),
+    specifiers: [], typeOnly: new Set(), dynamic: 0, typeReferences: source.typeReferenceDirectives.map(reference => reference.fileName),
     strings: [], jsx: false,
+  };
+  const valueSpecifiers = new Set<string>();
+  const add = (specifier: string, typeOnly: boolean): void => {
+    result.specifiers.push(specifier);
+    if (typeOnly) {result.typeOnly.add(specifier);} else {valueSpecifiers.add(specifier);}
   };
   const visit = (node: TypeScript.Node): void => {
     if (ts.isJsxElement(node) || ts.isJsxSelfClosingElement(node) || ts.isJsxFragment(node)) {result.jsx = true;}
     if ((ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) &&
       node.moduleSpecifier && ts.isStringLiteral(node.moduleSpecifier)) {
-      result.specifiers.push(node.moduleSpecifier.text);
+      let typeOnly = false;
+      if (ts.isImportDeclaration(node)) {
+        const clause = node.importClause;
+        const bindings = clause?.namedBindings;
+        typeOnly = Boolean(clause?.isTypeOnly) || Boolean(clause && !clause.name && bindings && ts.isNamedImports(bindings) &&
+          bindings.elements.length > 0 && bindings.elements.every(element => element.isTypeOnly));
+      } else {
+        const bindings = node.exportClause;
+        typeOnly = node.isTypeOnly || Boolean(bindings && ts.isNamedExports(bindings) &&
+          bindings.elements.length > 0 && bindings.elements.every(element => element.isTypeOnly));
+      }
+      add(node.moduleSpecifier.text, typeOnly);
     } else if (ts.isImportEqualsDeclaration(node) && ts.isExternalModuleReference(node.moduleReference) &&
       ts.isStringLiteral(node.moduleReference.expression)) {
-      result.specifiers.push(node.moduleReference.expression.text);
+      add(node.moduleReference.expression.text, node.isTypeOnly);
     } else if (ts.isImportTypeNode(node) && ts.isLiteralTypeNode(node.argument) &&
       ts.isStringLiteral(node.argument.literal)) {
-      result.specifiers.push(node.argument.literal.text);
+      add(node.argument.literal.text, true);
     } else if (ts.isCallExpression(node)) {
       const callee = node.expression;
       const loadsModule = callee.kind === ts.SyntaxKind.ImportKeyword ||
@@ -307,7 +359,7 @@ function parseJs(ts: typeof TypeScript, file: string, text: string, collectStrin
           callee.expression.text === 'require' && callee.name.text === 'resolve');
       const argument = node.arguments[0];
       if (loadsModule && argument) {
-        if (ts.isStringLiteralLike(argument)) {result.specifiers.push(argument.text);}
+        if (ts.isStringLiteralLike(argument)) {add(argument.text, false);}
         else {result.dynamic += 1;}
       }
     } else if (collectStrings && ts.isStringLiteralLike(node)) {
@@ -319,6 +371,7 @@ function parseJs(ts: typeof TypeScript, file: string, text: string, collectStrin
     ts.forEachChild(node, visit);
   };
   visit(source);
+  for (const specifier of valueSpecifiers) {result.typeOnly.delete(specifier);}
   return result;
 }
 
@@ -338,6 +391,7 @@ function readTsConfig(run: Run, ts: typeof TypeScript, directory: string): TsCon
   let baseUrlSet = false;
   let importHelpersSet = false;
   let pathsSet = false;
+  let typesSet = false;
   for (let file: string | undefined = start; file && !seen.has(file) && seen.size < 5;) {
     seen.add(file);
     const text = readSource(run, file);
@@ -362,6 +416,10 @@ function readTsConfig(run: Run, ts: typeof TypeScript, directory: string): TsCon
       const baseUrl = insideRoot(run, path.resolve(path.dirname(file), options.baseUrl));
       info.baseUrl = baseUrl;
       baseUrlSet = true;
+    }
+    if (!typesSet && Array.isArray(options.types)) {
+      info.types = options.types.filter((type): type is string => typeof type === 'string');
+      typesSet = true;
     }
     if (info.jsx === undefined && typeof options.jsx === 'string') {info.jsx = options.jsx;}
     if (info.jsxImportSource === undefined && typeof options.jsxImportSource === 'string') {
@@ -462,7 +520,8 @@ function installedPackageMetadata(
     const keys = fromManifest ? [`${fromManifest}/node_modules/${name}`, `node_modules/${name}`] : [`node_modules/${name}`];
     for (const key of lock ? keys : []) {
       const entry = asRecord(lock?.packages[key]);
-      if (entry) {return entry;}
+      // A workspace link records no bin; treating it as metadata would suppress the name-based fallback.
+      if (entry && entry.link !== true) {return entry;}
     }
   }
   // Declared names are repository-controlled; only real package names may form a path.
@@ -479,11 +538,15 @@ function installedPackageMetadata(
   return undefined;
 }
 
-function binariesOf(metadata: Record<string, unknown> | undefined, name: string): string[] {
+/** Recorded bins come from metadata; a name-based guess is made only when no metadata exists for the package. */
+function binariesOf(
+  metadata: Record<string, unknown> | undefined,
+  name: string
+): {recorded: string[]; guessed: string[]} {
   const bin = metadata?.bin;
   const unscoped = name.split('/').pop() || name;
-  if (typeof bin === 'string') {return [unscoped];}
-  return [unscoped, ...Object.keys(asRecord(bin) || {})];
+  if (metadata === undefined) {return {recorded: [], guessed: [unscoped]};}
+  return {recorded: typeof bin === 'string' ? [unscoped] : Object.keys(asRecord(bin) || {}), guessed: []};
 }
 
 async function analyzeNpm(run: Run, inventory: PackageInventory, locks: Map<string, NpmLock>): Promise<void> {
@@ -514,7 +577,7 @@ async function analyzeNpm(run: Run, inventory: PackageInventory, locks: Map<stri
     }
     manifests.set(path.dirname(file), {
       dir: path.dirname(file), rel: manifest, name: typeof data.name === 'string' ? data.name : undefined, data,
-      declared, neverUnused, chain: [], used: new Set(), missing: new Map(), uncertain: [], incomplete: [],
+      declared, neverUnused, chain: [], used: new Set(), missing: new Map(), uncertain: [], incomplete: [], ambientTypes: false,
     });
   }
   const workspaceNames = new Set([...manifests.values()].flatMap(manifest => manifest.name ? [manifest.name] : []));
@@ -546,6 +609,7 @@ async function analyzeNpm(run: Run, inventory: PackageInventory, locks: Map<stri
     const tsconfig = manifest.chain.map(owner => readTsConfig(run, ts, owner.dir)).find(Boolean);
     const configStrings: string[] = [];
     let typescriptSources = Boolean(tsconfig);
+    manifest.ambientTypes = tsconfig?.types === undefined;
     let styleSources = false;
     let jsxSources = false;
     const before = run.coverage.sourceFilesSkipped + run.coverage.sourceFilesTooLarge;
@@ -556,6 +620,14 @@ async function analyzeNpm(run: Run, inventory: PackageInventory, locks: Map<stri
         return;
       }
       if (extension === '.scss' || extension === '.sass') {styleSources = true;}
+      if (STYLE_EXTENSIONS.has(extension)) {
+        const style = readSource(run, file);
+        for (const specifier of style === undefined ? [] : styleSpecifiers(style)) {
+          const styleName = npmPackageName(specifier);
+          if (styleName) {markUsed(manifest, styleName);}
+        }
+        return;
+      }
       const isConfig = path.dirname(file) === manifest.dir && CONFIG_FILE.test(name);
       if (!JS_EXTENSIONS.has(extension) && !isConfig) {return;}
       const text = readSource(run, file);
@@ -591,6 +663,8 @@ async function analyzeNpm(run: Run, inventory: PackageInventory, locks: Map<stri
         const name = npmPackageName(specifier);
         if (name) {importedNames.add(name);}
         if (name && markUsed(manifest, name)) {continue;}
+        // A type-only import needs no runtime package, so a declared @types package satisfies it.
+        if (name && parsed.typeOnly.has(specifier) && markUsed(manifest, typesPackageName(name))) {continue;}
         const alias = matchPathAlias(run, tsconfig, specifier);
         if (alias === 'resolved') {continue;}
         if (name && (manifest.chain.some(owner => owner.name === name) || NODE_BUILTINS.has(name) ||
@@ -616,17 +690,26 @@ async function analyzeNpm(run: Run, inventory: PackageInventory, locks: Map<stri
     for (const value of configStrings) {
       for (const candidate of configCandidates(value)) {markUsed(manifest, candidate);}
     }
+    const importTargets: string[] = [];
+    collectImportTargets(manifest.data.imports, importTargets);
+    for (const target of importTargets) {
+      const targetName = /^[./]/.test(target) ? undefined : npmPackageName(target);
+      if (targetName) {markUsed(manifest, targetName);}
+    }
     for (const key of Object.keys(manifest.data)) {
       if (manifest.declared.has(key)) {manifest.used.add(key);}
     }
-    const binaries = new Map<string, string>();
+    const recordedBins = new Map<string, string>();
+    const guessedBins = new Map<string, string>();
     for (const owner of manifest.chain) {
       for (const name of owner.declared.keys()) {
-        for (const binary of binariesOf(metadataOf(manifest, name), name)) {
-          if (!binaries.has(binary)) {binaries.set(binary, name);}
-        }
+        const {recorded, guessed} = binariesOf(metadataOf(manifest, name), name);
+        for (const binary of recorded) {if (!recordedBins.has(binary)) {recordedBins.set(binary, name);}}
+        for (const binary of guessed) {if (!guessedBins.has(binary)) {guessedBins.set(binary, name);}}
       }
     }
+    // Recorded bin entries win over name-based guesses, whatever the declaration order.
+    const binaries = new Map([...guessedBins, ...recordedBins]);
     for (const [binary, owner] of Object.entries(KNOWN_BINARIES)) {
       if (!binaries.has(binary) && manifest.chain.some(candidate => candidate.declared.has(owner))) {
         binaries.set(binary, owner);
@@ -640,6 +723,10 @@ async function analyzeNpm(run: Run, inventory: PackageInventory, locks: Map<stri
         const name = token.includes('/') ? npmPackageName(token) : undefined;
         if (name) {markUsed(manifest, name);}
       }
+    }
+    for (const type of tsconfig?.types || []) {
+      markUsed(manifest, type);
+      markUsed(manifest, typesPackageName(type));
     }
     markUsed(manifest, '@types/node');
     if (typescriptSources) {markUsed(manifest, 'typescript');}
@@ -690,6 +777,10 @@ async function analyzeNpm(run: Run, inventory: PackageInventory, locks: Map<stri
         const target = name.slice('@types/'.length);
         const typed = target.includes('__') ? `@${target.replace('__', '/')}` : target;
         if (usedAnywhere.has(typed)) {continue;}
+      }
+      if (name.startsWith('@types/') && manifest.ambientTypes) {
+        unusedUncertain.push({name, reason: 'not imported, but @types packages may be loaded implicitly as ambient types'});
+        continue;
       }
       if (manifest.incomplete.length > 0) {
         unusedUncertain.push({name, reason: `not imported, but usage evidence is incomplete (${listFiles(manifest.incomplete).join(', ')})`});
@@ -757,7 +848,7 @@ function normalizePythonName(name: string): string {
  * blanked, so only colons inside brackets (slices, dicts), `:=` and `lambda` bodies must be skipped.
  */
 function pythonSuiteStart(statement: string): number {
-  if (!/^(?:async\s+)?(?:if|elif|else|try|except|finally|with|for|while)\b/.test(statement)) {return 0;}
+  if (!/^(?:async\s+)?(?:if|elif|else|try|except|finally|with|for|while|def|class)\b/.test(statement)) {return 0;}
   let depth = 0;
   let lambdas = 0;
   for (let index = 0; index < statement.length; index += 1) {
@@ -867,7 +958,7 @@ function requirementIncludes(run: Run, start: string): Set<string> {
   return reached;
 }
 
-/** Collects declared names; returns false when an include was missing, unreadable, oversized or outside the repository. */
+/** Collects declared names; returns false when an include was missing, unreadable, oversized or outside the repository, or an editable install hides declarations. */
 function readRequirementNames(run: Run, requested: string, declared: Map<string, string>, seen: Set<string>): boolean {
   const file = insideRoot(run, requested);
   if (!file || seen.size > 50) {return false;}
@@ -882,6 +973,8 @@ function readRequirementNames(run: Run, requested: string, declared: Map<string,
       complete = readRequirementNames(run, path.resolve(path.dirname(file), include[1]), declared, seen) && complete;
       continue;
     }
+    // An editable install declares its dependencies in a project file this check does not read.
+    if (/^(?:-e|--editable)(?:=|\s|$)/.test(line)) {complete = false;}
     if (!line || line.startsWith('-') || /^[a-z+]+:\/\//i.test(line)) {continue;}
     const name = line.match(/^([A-Za-z0-9][A-Za-z0-9._-]*)/)?.[1];
     if (name && !declared.has(normalizePythonName(name))) {declared.set(normalizePythonName(name), rel(run, file));}
@@ -958,7 +1051,7 @@ function analyzePython(run: Run, inventory: PackageInventory): void {
         const group = missing.get(table[0]);
         if (group) {group.files.push(...importers);} else {missing.set(table[0], {name: found.key, files: [...importers]});}
       } else if (!declarationsComplete && table && !table.some(candidate => candidate.endsWith('*'))) {
-        uncertain.push({name: top, reason: 'a requirements include could not be read, so the declaration may be elsewhere'});
+        uncertain.push({name: top, reason: 'requirement declarations are incomplete (an include could not be read or an editable install was used), so the declaration may be elsewhere'});
       } else {
         uncertain.push({
           name: top,
@@ -1063,10 +1156,61 @@ function parseGoModule(text: string): {module?: string; requires: Map<string, bo
   return {module, requires, tools};
 }
 
+function goWorkDirectories(text: string): string[] {
+  const directories: string[] = [];
+  const unquote = (value: string): string => value.replace(/^["`]|["`]$/g, '');
+  let block = false;
+  for (const raw of text.split(/\r?\n/)) {
+    const body = raw.replace(/\/\/.*$/, '').trim();
+    if (!body) {continue;}
+    if (block) {
+      if (body === ')') {block = false;} else {directories.push(unquote(body.split(/\s+/)[0]));}
+    } else if (/^use\s*\($/.test(body)) {
+      block = true;
+    } else {
+      const single = body.match(/^use\s+(\S+)$/);
+      if (single) {directories.push(unquote(single[1]));}
+    }
+  }
+  return directories;
+}
+
+/** Module paths of every module a go.work above `directory` (inside the repository) lists with `use`. */
+function goWorkspaceModules(run: Run, directory: string, cache: Map<string, string[]>): string[] {
+  const paths: string[] = [];
+  for (let current = directory; !path.relative(run.root, current).startsWith('..'); current = path.dirname(current)) {
+    const work = insideRoot(run, path.join(current, 'go.work'));
+    if (work) {
+      if (!cache.has(work)) {
+        const modules: string[] = [];
+        for (const used of goWorkDirectories(readLimited(work))) {
+          const goMod = insideRoot(run, path.resolve(path.dirname(work), used, 'go.mod'));
+          const module = goMod ? parseGoModule(readLimited(goMod)).module : undefined;
+          if (module) {modules.push(module);}
+        }
+        cache.set(work, modules);
+      }
+      paths.push(...(cache.get(work) || []));
+    }
+    if (current === run.root) {break;}
+  }
+  return paths;
+}
+
+/** Reads a bounded text file for go.work lookups; coverage counters stay untouched. */
+function readLimited(file: string): string {
+  try {
+    return fs.statSync(file).size <= MAX_SOURCE_BYTES ? readInventoryText(file) : '';
+  } catch {
+    return '';
+  }
+}
+
 function analyzeGo(run: Run, inventory: PackageInventory): void {
   const modules = new Set(inventory.manifests
     .filter(manifest => path.posix.basename(manifest) === 'go.mod')
     .map(manifest => path.dirname(path.join(run.root, manifest))));
+  const workCache = new Map<string, string[]>();
   for (const directory of modules) {
     const manifest = rel(run, path.join(directory, 'go.mod'));
     const text = readSource(run, path.join(directory, 'go.mod'), MAX_SOURCE_BYTES, true);
@@ -1075,6 +1219,7 @@ function analyzeGo(run: Run, inventory: PackageInventory): void {
     const {module, requires, tools} = parseGoModule(text);
     const used = new Set<string>();
     const missing = new Map<string, string[]>();
+    const workspace = goWorkspaceModules(run, directory, workCache);
     const ownerOf = (importPath: string): string | undefined => [...requires.keys()]
       .filter(required => importPath === required || importPath.startsWith(`${required}/`))
       .sort((left, right) => right.length - left.length)[0];
@@ -1094,6 +1239,7 @@ function analyzeGo(run: Run, inventory: PackageInventory): void {
         if (importPath === 'C' || (module && (importPath === module || importPath.startsWith(`${module}/`)))) {continue;}
         if (!importPath.split('/')[0].includes('.')) {continue;}
         const owner = ownerOf(importPath);
+        if (!owner && workspace.some(local => importPath === local || importPath.startsWith(`${local}/`))) {continue;}
         const importers = missing.get(importPath);
         if (owner) {used.add(owner);} else if (importers) {importers.push(rel(run, file));} else {missing.set(importPath, [rel(run, file)]);}
       }

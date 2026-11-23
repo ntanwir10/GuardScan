@@ -9,6 +9,7 @@ import {
   scanPythonSource,
 } from '../../src/core/dependency-insights';
 import { collectPackageInventory } from '../../src/core/package-inventory';
+import { evaluateComprehensivePolicy } from '../../src/commands/scan';
 import { createScanEnvelope, ScanEngine } from '../../src/core/scan-engine';
 import { detectServices } from '../../src/core/service-catalog';
 
@@ -55,7 +56,7 @@ describe('JavaScript and TypeScript dependency hygiene', () => {
       devDependencies: {typescript: '^5.0.0', '@babel/cli': '^7.0.0', eslint: '^8.0.0', 'eslint-plugin-react': '^7.0.0'},
     },
     '.eslintrc.json': {plugins: ['react']},
-    'tsconfig.json': {compilerOptions: {strict: true}},
+    'tsconfig.json': {compilerOptions: {strict: true, types: []}},
     'packages/a/package.json': {
       name: '@acme/a',
       dependencies: {
@@ -88,11 +89,11 @@ describe('JavaScript and TypeScript dependency hygiene', () => {
 
     expect(names(report, HYGIENE_RULES.missing)).toEqual(['dayjs']);
     expect(report.findings.find(finding => finding.ruleId === HYGIENE_RULES.missing)).toMatchObject({
-      severity: 'medium', category: 'Dependency hygiene', file: 'packages/a/package.json',
+      severity: 'low', category: 'Dependency hygiene', file: 'packages/a/package.json',
       metadata: {importedBy: ['packages/a/src/index.ts']},
     });
     expect(names(report, HYGIENE_RULES.unused, 'packages/a/package.json')).toEqual(['@types/never-used', 'left-pad']);
-    expect(report.findings.find(finding => finding.ruleId === HYGIENE_RULES.unused)?.severity).toBe('low');
+    expect(report.findings.find(finding => finding.ruleId === HYGIENE_RULES.unused)?.severity).toBe('info');
     expect(names(report, HYGIENE_RULES.unused, 'packages/b/package.json')).toEqual([]);
     expect(uncertainNames(report, 'packages/b/package.json')).toEqual(['@acme/a']);
     expect(report.coverage.manifestsAnalyzed.npm).toBe(3);
@@ -224,6 +225,73 @@ describe('JavaScript and TypeScript dependency hygiene', () => {
   });
 });
 
+describe('JavaScript review follow-ups', () => {
+  it('reports an unmatched @types package as uncertain unless tsconfig types is set', async () => {
+    const files = {
+      'package.json': {name: 'app', devDependencies: {'@types/webpack-env': '^1.0.0', '@types/lodash': '^4.0.0'}},
+      'src/index.ts': 'const ctx = require.context("./a", true);\nexport default ctx;\n',
+    };
+    const unset = await analyze(fixture({...files, 'tsconfig.json': {compilerOptions: {strict: true}}}));
+    expect(names(unset, HYGIENE_RULES.unused)).toEqual([]);
+    expect(uncertainNames(unset, 'package.json')).toEqual(['@types/lodash', '@types/webpack-env']);
+
+    const listed = await analyze(fixture({
+      ...files,
+      'tsconfig.base.json': {compilerOptions: {types: []}},
+      'tsconfig.json': {extends: './tsconfig.base.json', compilerOptions: {types: ['webpack-env']}},
+    }));
+    expect(names(listed, HYGIENE_RULES.unused)).toEqual(['@types/lodash']);
+  });
+
+  it('counts stylesheet package imports as used and never reports them missing', async () => {
+    const report = await analyze(fixture({
+      'package.json': {name: 'app', dependencies: {tailwindcss: '^4.0.0', bootstrap: '^5.0.0', 'left-pad': '1.0.0'}},
+      'src/app.css': '@import "tailwindcss";\n@import url("https://x.test/a.css");\n@import "./local.css";\n@import "nope-pkg";\n',
+      'src/theme.scss': '@use "~bootstrap/scss/bootstrap";\n@use "sass:math";\n@import "/abs";\n',
+    }));
+    expect(names(report, HYGIENE_RULES.unused)).toEqual(['left-pad']);
+    expect(names(report, HYGIENE_RULES.missing)).toEqual([]);
+  });
+
+  it('prefers recorded bin entries over name-based guesses, whatever the declaration order', async () => {
+    const report = await analyze(fixture({
+      'package.json': {
+        name: 'app', scripts: {build: 'vite build'},
+        devDependencies: {'@tailwindcss/vite': '^4.0.0', vite: '^6.0.0'},
+      },
+      'node_modules/vite/package.json': {name: 'vite', version: '6.0.0', bin: {vite: 'bin/vite.js'}},
+      'node_modules/@tailwindcss/vite/package.json': {name: '@tailwindcss/vite', version: '4.0.0'},
+    }));
+    expect(names(report, HYGIENE_RULES.unused)).toEqual(['@tailwindcss/vite']);
+  });
+
+  it('counts package.json imports targets, including conditional ones, as used', async () => {
+    const report = await analyze(fixture({
+      'package.json': {
+        name: 'app', dependencies: {pg: '^8.0.0', 'pg-native': '^3.0.0', node: '^1.0.0'},
+        imports: {'#db': 'pg', '#fast': {node: 'pg-native', default: './x.js'}},
+      },
+    }));
+    expect(names(report, HYGIENE_RULES.unused)).toEqual(['node']);
+  });
+
+  it('lets a declared @types package satisfy a type-only import', async () => {
+    const report = await analyze(fixture({
+      'package.json': {name: 'app', devDependencies: {'@types/lodash': '^4.0.0', '@types/dayjs': '^1.0.0'}},
+      'src/index.ts': [
+        'import type {A} from "lodash";',
+        'import {type B} from "dayjs";',
+        'export type {C} from "lodash";',
+        'import {value} from "undeclared";',
+        'import {type D, e} from "mixed";',
+        'export const x = [value, e] as unknown as [A, B, D];',
+      ].join('\n'),
+    }));
+    expect(names(report, HYGIENE_RULES.missing)).toEqual(['mixed', 'undeclared']);
+    expect(names(report, HYGIENE_RULES.unused)).toEqual([]);
+  });
+});
+
 describe('Python dependency hygiene', () => {
   it('maps import names to distributions and marks unmapped names uncertain', async () => {
     const report = await analyze(fixture({
@@ -308,6 +376,11 @@ describe('Python dependency hygiene', () => {
       'if "x:y": import f',
       'if x: y = 1',
     ].join('\n')).imports).toEqual(['a', 'b', 'c', 'd', 'e', 'f']);
+    expect(scanPythonSource([
+      'def f(x: int) -> Dict[str, int]: import a',
+      'class A(B): import b',
+      'async def g(): import c',
+    ].join('\n')).imports).toEqual(['a', 'b', 'c']);
   });
 
   it('does not throw on import names that match Object.prototype members', async () => {
@@ -356,6 +429,31 @@ describe('Python dependency hygiene', () => {
   it('skips comments and strings in the tokenizer', () => {
     expect(scanPythonSource('x = 1  # import a\ny = \'\'\'\nimport b\n\'\'\'\nimport c.d as e, f\nfrom g.h import (i)\n').imports)
       .toEqual(['c.d', 'f', 'g.h']);
+  });
+});
+
+describe('review follow-ups for pip and Go', () => {
+  it('reports unmatched imports as uncertain when requirements use an editable install', async () => {
+    const report = await analyze(fixture({
+      'requirements.txt': '-e .\n',
+      'pyproject.toml': '[project]\nname = "x"\ndependencies = ["PyYAML"]\n',
+      'app.py': 'import yaml\n',
+    }));
+    expect(names(report, HYGIENE_RULES.missing)).toEqual([]);
+    expect(uncertainNames(report, 'requirements.txt')).toEqual(['yaml']);
+  });
+
+  it('treats imports of go.work modules as local', async () => {
+    const files = {
+      'go.work': 'go 1.22\n\nuse (\n\t./app\n\t./lib // shared\n)\n',
+      'app/go.mod': 'module example.com/app\n\ngo 1.22\n',
+      'app/main.go': 'package main\n\nimport "example.com/lib/x"\n\nfunc main() { x.Do() }\n',
+      'lib/go.mod': 'module example.com/lib\n\ngo 1.22\n',
+      'lib/x/x.go': 'package x\n\nfunc Do() {}\n',
+    };
+    expect(names(await analyze(fixture(files)), HYGIENE_RULES.missing)).toEqual([]);
+    const without = await analyze(fixture({...files, 'go.work': 'go 1.22\n'}));
+    expect(names(without, HYGIENE_RULES.missing)).toEqual(['example.com/lib/x']);
   });
 });
 
@@ -581,5 +679,30 @@ describe('dependency-insights scanner', () => {
       .toMatchObject({status: 'skipped', skipReason: 'disabled'});
     const omitted = await engine.runSecurityScan(options);
     expect(omitted.scannerResults.map(item => item.scanner)).not.toContain('dependency-insights');
+  });
+
+  it('reports heuristic findings without failing the default policy or --fail-on medium', async () => {
+    const root = fixture({
+      'package.json': {name: 'app', dependencies: {'left-pad': '1.0.0'}},
+      'index.js': 'const dayjs = require("dayjs");\nmodule.exports = dayjs;\n',
+    });
+    const result = await new ScanEngine().runSecurityScan({
+      repoPath: root, offline: true, includeVulnerabilities: false, includeGitHistory: false,
+      packageInventory: collectPackageInventory(root), includeDependencyInsights: true,
+    });
+    expect(result.findings.map(finding => [finding.ruleId, finding.severity]).sort()).toEqual([
+      [HYGIENE_RULES.missing, 'low'], [HYGIENE_RULES.unused, 'info'],
+    ]);
+    const done = {status: 'succeeded' as const, durationMs: 1, data: []};
+    const quality = {status: 'complete' as const, checks: {
+      tests: done, metrics: done, smells: done, lint: done, performance: done, mutation: done,
+    }};
+    const outcome = (failOn?: 'high' | 'medium' | 'low'): string => evaluateComprehensivePolicy(
+      result, quality, {status: 'succeeded', document: {}}, {failOn, allowPartial: false}
+    ).result.outcome;
+    expect(outcome()).toBe('passed');
+    expect(outcome('high')).toBe('passed');
+    expect(outcome('medium')).toBe('passed');
+    expect(outcome('low')).toBe('policy-failed');
   });
 });
