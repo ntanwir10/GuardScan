@@ -1160,7 +1160,9 @@ function analyzeInstallScripts(run: Run, inventory: PackageInventory, locks: Map
 function rootGitignore(root: string): ReturnType<typeof ignore> {
   const matcher = ignore();
   try {
-    matcher.add(readInventoryText(path.join(root, '.gitignore')));
+    // Like every other input here, a .gitignore that resolves outside the repository or is oversized is not read.
+    const file = fs.realpathSync(path.join(root, '.gitignore'));
+    if (isWithinRoot(root, file) && fs.statSync(file).size <= MAX_SOURCE_BYTES) {matcher.add(readInventoryText(file));}
   } catch {
     // No readable .gitignore: nothing extra is excluded.
   }
