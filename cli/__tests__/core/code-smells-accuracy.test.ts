@@ -13,6 +13,20 @@ import { lexSource } from '../../src/utils/source-lexer';
 
 const dirs: string[] = [];
 
+// Windows runners without symlink privilege cannot create the links these tests need.
+function canSymlink(): boolean {
+  const probe = fs.mkdtempSync(path.join(os.tmpdir(), 'guardscan-symlink-probe-'));
+  try {
+    fs.symlinkSync(probe, path.join(probe, 'link'));
+    return true;
+  } catch {
+    return false;
+  } finally {
+    fs.rmSync(probe, { recursive: true, force: true });
+  }
+}
+const itSymlink = canSymlink() ? it : it.skip;
+
 function makeDir(files: Record<string, string>): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'guardscan-smells-'));
   dirs.push(dir);
@@ -232,6 +246,30 @@ describe('JavaScript / TypeScript smells (AST based)', () => {
       'deep.js': `var x = ${'['.repeat(30000)}${']'.repeat(30000)};\n`,
     });
     expect(Array.isArray(smells)).toBe(true);
+  });
+});
+
+describe('uses hidden by string syntax and type-only imports', () => {
+  it('counts identifiers inside triple-quoted f-strings and Ruby #{} outside plain strings as uses', async () => {
+    const q3 = '"'.repeat(3);
+    const smells = await smellsOf({
+      'a.py': `def f():\n    shown = 1\n    return f${q3}{shown}${q3}\n`,
+      'a.rb': 'def f\n  name = "x"\n  re = /#{name}/\n  re\nend\n',
+      'C.cs': `class C {\n    string M() {\n        var shown = 1;\n        return $${q3}{shown}${q3};\n    }\n}\n`,
+    });
+    expect(ofType(smells, 'Unused Variable')).toEqual([]);
+  });
+
+  it('does not report cycles that exist only through type-only imports', async () => {
+    const smells = await smellsOf({
+      'a.ts': "import type { B } from './b';\nexport interface A { b: B }\n",
+      'b.ts': "import { type A } from './a';\nexport interface B { a: A }\n",
+      'c.ts': "import { d } from './d';\nexport const c = d;\n",
+      'd.ts': "import { c } from './c';\nexport const d = () => c;\n",
+    });
+    const cycles = ofType(smells, 'Circular Dependency');
+    expect(cycles).toHaveLength(1);
+    expect(cycles[0].details.cycle.map((f: string) => path.basename(f))).toEqual(['c.ts', 'd.ts', 'c.ts']);
   });
 });
 
@@ -488,6 +526,15 @@ describe('availability on hostile input', () => {
     ['PHP unterminated quotes', 'php', `<?php ${'"x '.repeat(500_000)}\n`],
     ['Java pointer-star run at line start', 'java', `${'*'.repeat(1_000_000)}\n`],
     ['C ampersand run at line start', 'c', `${'&'.repeat(1_000_000)} x = 1;\n`],
+    ['Python deeply nested defs', 'py', Array.from({ length: 1400 }, (_, i) => `${' '.repeat(i)}def f():\n${' '.repeat(i + 1)}v = 1\n`).join('')],
+    ['Ruby unterminated defs', 'rb', 'def a\n'.repeat(150_000)],
+    ['Ruby unterminated classes', 'rb', 'class A\n'.repeat(120_000)],
+    ['Java many classes with methods', 'java', 'class A{void f(){}}\n'.repeat(50_000)],
+    ['Go unclosed nested bodies', 'go', 'func f(){\nv := 1\n'.repeat(60_000)],
+    ['JS many same-name declarations', 'js', 'var x = 1;\n'.repeat(100_000)],
+    ['JS many functions with same-name locals', 'js', 'function f(){var x=1;}\n'.repeat(40_000)],
+    ['JS thousands of identical lines', 'js', 'const aaaaaaaaaaaaaaaa = bbbbbbbbbbbbbbbbbbbbbb + cccccccccccccccc;\n'.repeat(30_000)],
+    ['Go unterminated generic brackets', 'go', 'func f['.repeat(200_000)],
     ['C operator run', 'c', `int a = ${'a && '.repeat(500_000)} 1;\n`],
   ])('stays linear: %s', async (_name, ext, source) => {
     const dir = makeDir({ [`hostile.${ext}`]: source });
@@ -510,7 +557,7 @@ describe('availability on hostile input', () => {
     expect(ofType(smells, 'Unreachable Code').map(s => s.line)).toEqual([7]);
   });
 
-  it('skips symlinks and files over the size cap', async () => {
+  itSymlink('skips symlinks and files over the size cap', async () => {
     const outside = makeDir({ 'secret.js': 'try { a(); } catch (e) {}\n' });
     const dir = makeDir({ 'ok.js': 'module.exports = 1;\n' });
     fs.symlinkSync(path.join(outside, 'secret.js'), path.join(dir, 'link.js'));
@@ -522,7 +569,7 @@ describe('availability on hostile input', () => {
     expect(metrics.map(m => path.basename(m.file))).toEqual(['ok.js']);
   });
 
-  it('one unreadable entry does not hide its siblings', async () => {
+  itSymlink('one unreadable entry does not hide its siblings', async () => {
     const dir = makeDir({ 'a.js': 'try { a(); } catch (e) {}\n' });
     fs.symlinkSync(path.join(dir, 'does-not-exist'), path.join(dir, 'broken'));
     const smells = await codeSmellDetector.detect(dir);

@@ -102,8 +102,12 @@ export class CodeSmellDetector {
 
     for (const instances of blockHashes.values()) {
       if (instances.length > 1) {
+        // Cap the listed locations: K copies of a block would otherwise build K*K strings.
+        const MAX_LISTED = 50;
+        const listed = instances.slice(0, MAX_LISTED + 1).map(o => `${o.file}:${o.line}`);
         for (const instance of instances) {
-          const others = instances.filter(i => i.file !== instance.file || i.line !== instance.line);
+          const self = `${instance.file}:${instance.line}`;
+          const others = listed.filter(l => l !== self).slice(0, MAX_LISTED);
           smells.push({
             type: 'Duplicate Code',
             file: instance.file,
@@ -113,7 +117,7 @@ export class CodeSmellDetector {
             recommendation: 'Extract common logic into a shared function',
             details: {
               duplicateCount: instances.length,
-              otherLocations: others.map(o => `${o.file}:${o.line}`),
+              otherLocations: others,
             },
           });
         }
@@ -312,7 +316,7 @@ export class CodeSmellDetector {
 
     for (const [file, analysis] of analyses) {
       const deps = new Set<string>();
-      for (const spec of analysis.imports) {
+      for (const spec of new Set(analysis.imports)) {
         const resolved = this.resolveImport(file, spec, repoPath, known);
         if (resolved && resolved !== file) {deps.add(resolved);}
       }

@@ -120,6 +120,22 @@ export function analyzeJs(content: string, filePath: string, language: 'javascri
   const classStack: ClassRec[] = [];
   let cognitive = 0;
 
+  const isTypeOnlyDeclaration = (n: TS.ImportDeclaration | TS.ExportDeclaration): boolean => {
+    if (ts.isExportDeclaration(n)) {
+      return n.isTypeOnly || (!!n.exportClause && ts.isNamedExports(n.exportClause) && n.exportClause.elements.length > 0 &&
+        n.exportClause.elements.every(e => e.isTypeOnly));
+    }
+    const clause = n.importClause;
+    if (!clause) {
+      return false;
+    }
+    if (clause.isTypeOnly) {
+      return true;
+    }
+    return !clause.name && !!clause.namedBindings && ts.isNamedImports(clause.namedBindings) &&
+      clause.namedBindings.elements.length > 0 && clause.namedBindings.elements.every(e => e.isTypeOnly);
+  };
+
   const isFunctionLike = (n: TS.Node): n is TS.FunctionLikeDeclaration =>
     ts.isFunctionDeclaration(n) || ts.isFunctionExpression(n) || ts.isArrowFunction(n) ||
     ts.isMethodDeclaration(n) || ts.isConstructorDeclaration(n) || ts.isGetAccessorDeclaration(n) ||
@@ -333,7 +349,8 @@ export function analyzeJs(content: string, filePath: string, language: 'javascri
         });
       }
     } else if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) {
-      if (node.moduleSpecifier && ts.isStringLiteral(node.moduleSpecifier)) {
+      // Type-only imports are erased at compile time, so they cannot form a runtime cycle.
+      if (node.moduleSpecifier && ts.isStringLiteral(node.moduleSpecifier) && !isTypeOnlyDeclaration(node)) {
         result.imports.push(node.moduleSpecifier.text);
       }
     } else if (ts.isImportEqualsDeclaration(node) && ts.isExternalModuleReference(node.moduleReference) &&
@@ -377,9 +394,25 @@ export function analyzeJs(content: string, filePath: string, language: 'javascri
   }
 
   if (!filePath.endsWith('.d.ts')) {
+    // refs are in ascending position order; count same-name references inside the scope by binary search.
+    const lowerBound = (list: number[], value: number): number => {
+      let lo = 0;
+      let hi = list.length;
+      while (lo < hi) {
+        const mid = (lo + hi) >> 1;
+        if (list[mid] < value) {
+          lo = mid + 1;
+        } else {
+          hi = mid;
+        }
+      }
+      return lo;
+    };
     for (const d of decls) {
-      const uses = (refs.get(d.name) || []).filter(pos => pos !== d.pos && pos >= d.scopeStart && pos <= d.scopeEnd);
-      if (uses.length === 0) {
+      const list = refs.get(d.name) || [];
+      const inScope = lowerBound(list, d.scopeEnd + 1) - lowerBound(list, d.scopeStart);
+      const ownName = list[lowerBound(list, d.pos)] === d.pos ? 1 : 0;
+      if (inScope - ownName <= 0) {
         result.unusedVariables.push({ name: d.name, line: d.line });
       }
     }

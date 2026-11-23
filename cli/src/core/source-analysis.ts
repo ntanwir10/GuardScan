@@ -149,6 +149,11 @@ interface Ctx {
   lineStarts: number[];
   match: Int32Array;
   lineOf(offset: number): number;
+  /** Remaining character budget for rescans of overlapping ranges (nested bodies), so nesting cannot go quadratic. */
+  budget: number;
+  rubyEnds?: Map<number, number>;
+  /** Leading-whitespace width per line, or -1 for blank lines (computed once: deep indentation makes rescans costly). */
+  indents: Int32Array;
 }
 
 const BRACE_LANGS = new Set<LexLanguage>(['go', 'java', 'php', 'c', 'cpp', 'csharp']);
@@ -199,6 +204,11 @@ function buildCtx(content: string, language: LexLanguage): Ctx {
       match[i] = open;
     }
   }
+  const indents = new Int32Array(lines.length);
+  lines.forEach((l, i) => {
+    const w = indentOf(l);
+    indents[i] = l.slice(w).trim() === '' ? -1 : w;
+  });
   const lineOf = (offset: number): number => {
     let lo = 0;
     let hi = lineStarts.length - 1;
@@ -212,7 +222,7 @@ function buildCtx(content: string, language: LexLanguage): Ctx {
     }
     return lo + 1;
   };
-  return { language, code, comments: lexed.comments, noComments: lexed.noComments, lines, lineStarts, match, lineOf };
+  return { language, code, comments: lexed.comments, noComments: lexed.noComments, lines, lineStarts, match, lineOf, indents, budget: 8 * code.length + 100000 };
 }
 
 /** Split a parameter list on top-level commas, so "a, Map<K, V> b" is two parameters. */
@@ -328,11 +338,11 @@ function braceFunctions(ctx: Ctx): Span[] {
       const name = code.slice(nameStart, i);
       skipWs();
       if (language === 'go' && code[i] === '[') {
-        const close = code.indexOf(']', i);
-        if (close === -1) {
+        const rel = code.slice(i, i + 120).indexOf(']');
+        if (rel === -1) {
           continue;
         }
-        i = close + 1;
+        i += rel + 1;
         skipWs();
       }
       if (code[i] === '(') {
@@ -376,36 +386,39 @@ function braceFunctions(ctx: Ctx): Span[] {
 
 const RUBY_ENDLESS = /^def\s+[\w.?!]+(?:\([^)]*\))?\s*=(?![=~>])/;
 
+/** Match every Ruby block opener to its `end` in one pass; an opener with no `end` runs to the last line. */
 function rubyEnd(ctx: Ctx, startLineIdx: number): number {
-  let depth = 0;
-  for (let i = startLineIdx; i < ctx.lines.length; i++) {
-    const t = ctx.lines[i].trim();
-    if (/^(?:if|unless|while|until|case|begin|for|class|module)\b/.test(t)) {
-      depth++;
-    } else if (/^def\b/.test(t) && !RUBY_ENDLESS.test(t)) {
-      depth++;
-    }
-    if (!/^(?:while|until|for)\b/.test(t) && /\bdo(?:\s*\|[^|]*\|)?$/.test(t)) {
-      depth++;
-    }
-    if (/^end\b/.test(t) || (/\bend$/.test(t) && !/^def\b.*=/.test(t))) {
-      depth--;
-    }
-    if (depth <= 0) {
-      return i;
-    }
+  if (!ctx.rubyEnds) {
+    const ends = new Map<number, number>();
+    const stack: number[] = [];
+    ctx.lines.forEach((raw, i) => {
+      const t = raw.trim();
+      if (/^(?:if|unless|while|until|case|begin|for|class|module)\b/.test(t) || (/^def\b/.test(t) && !RUBY_ENDLESS.test(t))) {
+        stack.push(i);
+      }
+      if (!/^(?:while|until|for)\b/.test(t) && /\bdo(?:\s*\|[^|]*\|)?$/.test(t)) {
+        stack.push(i);
+      }
+      if (/^end\b/.test(t) || (/\bend$/.test(t) && !/^def\b.*=/.test(t))) {
+        const opener = stack.pop();
+        if (opener !== undefined) {
+          ends.set(opener, i);
+        }
+      }
+    });
+    ctx.rubyEnds = ends;
   }
-  return ctx.lines.length - 1;
+  return ctx.rubyEnds.get(startLineIdx) ?? ctx.lines.length - 1;
 }
 
 function pythonEnd(ctx: Ctx, headerLineIdx: number, indent: number): number {
   let last = headerLineIdx;
   for (let i = headerLineIdx + 1; i < ctx.lines.length; i++) {
-    const line = ctx.lines[i];
-    if (line.trim() === '') {
+    const w = ctx.indents[i];
+    if (w === -1) {
       continue;
     }
-    if (indentOf(line) <= indent) {
+    if (w <= indent) {
       break;
     }
     last = i;
@@ -536,21 +549,28 @@ function classes(ctx: Ctx, spans: Span[]): ClassInfo[] {
     }
   }
 
-  const innermostClass = (off: number) => {
-    let best: (typeof ranges)[number] | undefined;
-    for (const r of ranges) {
-      if (off > r.start && off <= r.end && (!best || r.start > best.start)) {
-        best = r;
-      }
+  // Owner of each function: the innermost class range containing it (one sorted sweep, not a scan per function).
+  const byStart = [...ranges].sort((x, y) => x.start - y.start);
+  const owners = new Map<Span, (typeof ranges)[number]>();
+  const open: Array<(typeof ranges)[number]> = [];
+  let next = 0;
+  for (const fn of [...spans].sort((x, y) => x.start - y.start)) {
+    while (next < byStart.length && byStart[next].start < fn.start) {
+      open.push(byStart[next++]);
     }
-    return best;
-  };
+    while (open.length > 0 && open[open.length - 1].end < fn.start) {
+      open.pop();
+    }
+    if (open.length > 0) {
+      owners.set(fn, open[open.length - 1]);
+    }
+  }
 
   // A function nested inside another function of the same class is not a method.
   const isNestedIn = (fn: Span, owner: { start: number }) =>
     spans.length <= 3000 && spans.some(o => o !== fn && o.start > owner.start && o.start < fn.start && fn.start <= o.bodyEnd);
   for (const fn of spans) {
-    const owner = innermostClass(fn.start);
+    const owner = owners.get(fn);
     if (owner && !isNestedIn(fn, owner)) {
       owner.info.methodCount++;
     }
@@ -558,7 +578,9 @@ function classes(ctx: Ctx, spans: Span[]): ClassInfo[] {
 
   for (const r of ranges) {
     const fields = new Set<string>();
-    if (language === 'python') {
+    if ((language === 'python' || language === 'ruby') && (ctx.budget -= r.end - r.start) < 0) {
+      // Nested classes rescan the same text; stop once the shared budget is spent.
+    } else if (language === 'python') {
       const text = code.slice(r.start, r.end);
       for (const m of text.matchAll(/\bself\.(\w+)\s*(?::[^=\n]+)?=(?!=)/g)) {
         fields.add(m[1]);
@@ -607,7 +629,10 @@ function classes(ctx: Ctx, spans: Span[]): ClassInfo[] {
   return out;
 }
 
-function tokenCounts(ctx: Ctx, from: number, to: number): Map<string, number> {
+function tokenCounts(ctx: Ctx, from: number, to: number): Map<string, number> | undefined {
+  if ((ctx.budget -= to - from) < 0) {
+    return undefined;
+  }
   const counts = new Map<string, number>();
   const re = ctx.language === 'php' ? /\$?[A-Za-z_]\w*/g : /[A-Za-z_]\w*/g;
   const text = ctx.code.slice(from, to);
@@ -666,6 +691,9 @@ function unusedVariables(ctx: Ctx, spans: Span[]): Array<{ name: string; line: n
     let counts = cache.get(owner);
     if (!counts) {
       counts = tokenCounts(ctx, owner.bodyStart, owner.bodyEnd);
+      if (!counts) {
+        return;
+      }
       cache.set(owner, counts);
     }
     const line = ctx.lineOf(f.offset);

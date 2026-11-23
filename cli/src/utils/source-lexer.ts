@@ -150,7 +150,9 @@ export function lexSource(content: string, language: LexLanguage): LexedSource {
     }
 
     const lineTok = spec.line.find(tok => content.startsWith(tok, i));
-    if (lineTok && !(language === 'php' && lineTok === '#' && content[i + 1] === '[')) {
+    // `#[` starts a PHP attribute and `#{` is Ruby interpolation inside a regex, heredoc or %Q string.
+    const notComment = lineTok === '#' && ((language === 'php' && content[i + 1] === '[') || (language === 'ruby' && content[i + 1] === '{'));
+    if (lineTok && !notComment) {
       flushPlain(i);
       const eol = content.indexOf('\n', i);
       const end = eol === -1 ? n : eol;
@@ -187,7 +189,7 @@ export function lexSource(content: string, language: LexLanguage): LexedSource {
         j += content[j] === '\\' ? 2 : 1;
       }
       const end = j >= n ? n : j + 3;
-      addString(i, end, i + 3, j >= n ? n : j, undefined);
+      addString(i, end, i + 3, j >= n ? n : j, interpolationFor(content, i, '"', language));
       i = plainStart = end;
       continue;
     }
