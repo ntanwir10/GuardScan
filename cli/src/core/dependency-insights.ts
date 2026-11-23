@@ -799,12 +799,14 @@ function analyzePython(run: Run, inventory: PackageInventory): void {
   const reached = new Map(files.map(file => [file, requirementIncludes(run, file)]));
   const real = (file: string): string => insideRoot(run, file) || file;
   for (const file of files) {
-    const directory = projectOf(file);
-    // A file that another project includes is checked against that project's sources, unless they include each other.
-    const ownedElsewhere = files.some(other => projectOf(other) !== directory &&
-      reached.get(other)?.has(real(file)) && !reached.get(file)?.has(real(other)));
-    if (ownedElsewhere) {continue;}
-    projects.set(directory, [...(projects.get(directory) || []), file]);
+    projects.set(projectOf(file), [...(projects.get(projectOf(file)) || []), file]);
+  }
+  // A directory whose requirement files are all included by other projects is not a project of its own:
+  // those files are checked through the including project's sources. Mutual includes keep both projects.
+  const ownedElsewhere = (file: string): boolean => files.some(other => projectOf(other) !== projectOf(file) &&
+    reached.get(other)?.has(real(file)) && !reached.get(file)?.has(real(other)));
+  for (const [directory, members] of [...projects]) {
+    if (members.every(ownedElsewhere)) {projects.delete(directory);}
   }
   for (const [directory, files] of projects) {
     run.coverage.manifestsAnalyzed.pip += 1;
@@ -865,6 +867,9 @@ function analyzePython(run: Run, inventory: PackageInventory): void {
     }
     for (const [name, manifest] of declared) {
       if (used.has(name) || PYTHON_TOOL_DISTRIBUTION.test(name)) {continue;}
+      // An included file that is still part of its own project is judged there, against that project's sources.
+      const owner = projectOf(path.join(run.root, manifest));
+      if (owner !== directory && projects.has(owner)) {continue;}
       const importName = reverse.get(name) || name.replace(/-/g, '_');
       if (stringNames.has(importName)) {continue;}
       if (incomplete) {

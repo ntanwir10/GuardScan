@@ -210,6 +210,19 @@ describe('Python dependency hygiene', () => {
     expect(report.coverage.manifestsAnalyzed.pip).toBe(1);
   });
 
+  it('keeps an included requirements file in its own project when that directory has other requirement files', async () => {
+    const report = await analyze(fixture({
+      'requirements.txt': '-r config/requirements.txt\n',
+      'config/requirements.txt': 'PyYAML==6.0.1\n',
+      'config/requirements-dev.txt': 'leftpad==1.0\n',
+      'config/tool.py': 'import yaml\n',
+    }));
+
+    expect(names(report, HYGIENE_RULES.missing)).toEqual([]);
+    expect(names(report, HYGIENE_RULES.unused)).toEqual(['leftpad']);
+    expect(report.coverage.manifestsAnalyzed.pip).toBe(2);
+  });
+
   it('skips comments and strings in the tokenizer', () => {
     expect(scanPythonSource('x = 1  # import a\ny = \'\'\'\nimport b\n\'\'\'\nimport c.d as e, f\nfrom g.h import (i)\n').imports)
       .toEqual(['c.d', 'f', 'g.h']);
