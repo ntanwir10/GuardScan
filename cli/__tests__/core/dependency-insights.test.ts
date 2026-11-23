@@ -619,6 +619,31 @@ describe('install scripts', () => {
 
     expect(report.coverage.installScripts).toEqual({lockfilesChecked: 1, notDeterminable: []});
   });
+  it('ignores package-lock.json beside a malformed npm-shrinkwrap.json, as npm does', async () => {
+    const report = await analyze(fixture({
+      'package.json': {name: 'app', version: '1.0.0', dependencies: {esbuild: '0.20.0'}},
+      'npm-shrinkwrap.json': '{ not json',
+      'package-lock.json': {
+        name: 'app', version: '1.0.0', lockfileVersion: 3,
+        packages: {'': {name: 'app'}, 'node_modules/esbuild': {version: '0.20.0', hasInstallScript: true}},
+      },
+      'index.js': 'require("esbuild");\n',
+    }));
+
+    expect(report.findings.filter(finding => finding.ruleId === HYGIENE_RULES.installScript)).toEqual([]);
+  });
+
+  it('marks inline type-only imports uncertain when verbatimModuleSyntax may come from a package base', async () => {
+    const report = await analyze(fixture({
+      'package.json': {name: 'app', devDependencies: {'@types/lodash': '^4.0.0', '@tsconfig/strictest': '^2.0.0'}},
+      'tsconfig.json': {extends: '@tsconfig/strictest/tsconfig.json'},
+      'src/a.ts': 'import { type LoDashStatic } from "lodash";\nimport type { Dictionary } from "lodash";\nexport type T = [LoDashStatic, Dictionary<string>];\n',
+    }));
+
+    expect(names(report, HYGIENE_RULES.missing)).toEqual([]);
+    expect(uncertainNames(report, 'package.json')).toEqual(['lodash']);
+  });
+
   it('reports package-lock v3 hasInstallScript with its dependency path', async () => {
     const report = await analyze(fixture({
       'package.json': {name: 'app', version: '1.0.0', dependencies: {esbuild: '0.20.0'}},

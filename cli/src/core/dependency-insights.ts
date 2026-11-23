@@ -216,6 +216,8 @@ interface TsConfigInfo {
   jsxImportSource?: string;
   /** First explicit value along the extends chain; keeps `import {type X}` as a runtime import. */
   verbatimModuleSyntax?: boolean;
+  /** Some config in the chain extends a package base, whose options this check does not read. */
+  packageExtends?: boolean;
 }
 
 interface NpmManifest {
@@ -458,6 +460,9 @@ function readTsConfigFile(run: Run, ts: typeof TypeScript, start: string): TsCon
       importHelpersSet = true;
     }
     // Only relative `extends` is followed; a package base is read as a config string instead.
+    if (config?.extends !== undefined && !(typeof config.extends === 'string' && config.extends.startsWith('.'))) {
+      info.packageExtends = true;
+    }
     const parent: string | undefined = typeof config?.extends === 'string' && config.extends.startsWith('.')
       ? path.resolve(path.dirname(file), config.extends)
       : undefined;
@@ -522,13 +527,16 @@ interface NpmLock {dir: string; file: string; version: number; packages: Record<
 
 function loadNpmLocks(run: Run, inventory: PackageInventory): Map<string, NpmLock> {
   const locks = new Map<string, NpmLock>();
+  // npm uses npm-shrinkwrap.json whenever it exists, even if it cannot be parsed, and then ignores package-lock.json.
+  const shrinkwrapDirs = new Set(inventory.manifests
+    .filter(manifest => path.posix.basename(manifest) === 'npm-shrinkwrap.json')
+    .map(manifest => path.dirname(path.join(run.root, manifest))));
   for (const manifest of inventory.manifests) {
     const basename = path.posix.basename(manifest);
     if (basename !== 'package-lock.json' && basename !== 'npm-shrinkwrap.json') {continue;}
     const file = path.join(run.root, manifest);
     const directory = path.dirname(file);
-    // npm prefers npm-shrinkwrap.json when both exist.
-    if (locks.has(directory) && basename === 'package-lock.json') {continue;}
+    if (basename === 'package-lock.json' && shrinkwrapDirs.has(directory)) {continue;}
     try {
       const data = asRecord(JSON.parse(readInventoryText(file)) as unknown);
       if (!data) {continue;}
@@ -685,6 +693,10 @@ async function analyzeNpm(run: Run, inventory: PackageInventory, locks: Map<stri
       run.coverage.sourceFilesAnalyzed += 1;
       if (/\.[cm]?tsx?$/.test(name)) {typescriptSources = true;}
       const parsed = parseJs(ts, file, text, isConfig, tsconfig?.verbatimModuleSyntax);
+      // verbatimModuleSyntax may come from a package-based `extends`; then only statement-level `import type` is surely type-only.
+      const statementTypeOnly = tsconfig?.verbatimModuleSyntax === undefined && tsconfig?.packageExtends
+        ? parseJs(ts, file, text, false, true).typeOnly
+        : parsed.typeOnly;
       if (parsed.jsx || extension === '.jsx' || extension === '.tsx') {jsxSources = true;}
       configStrings.push(...parsed.strings);
       for (const reference of parsed.typeReferences) {
@@ -702,7 +714,12 @@ async function analyzeNpm(run: Run, inventory: PackageInventory, locks: Map<stri
         if (name) {importedNames.add(name);}
         if (name && markUsed(manifest, name)) {continue;}
         // A type-only import needs no runtime package, so a declared @types package satisfies it.
-        if (name && parsed.typeOnly.has(specifier) && markUsed(manifest, typesPackageName(name))) {continue;}
+        if (name && parsed.typeOnly.has(specifier) && markUsed(manifest, typesPackageName(name))) {
+          if (!statementTypeOnly.has(specifier)) {
+            manifest.uncertain.push({name, reason: 'inline type-only import; verbatimModuleSyntax may be set by a package-based tsconfig extends'});
+          }
+          continue;
+        }
         const alias = matchPathAlias(run, tsconfig, specifier);
         if (alias === 'resolved') {continue;}
         if (name && (manifest.chain.some(owner => owner.name === name) || NODE_BUILTINS.has(name) ||
