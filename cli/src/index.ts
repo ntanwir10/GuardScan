@@ -181,7 +181,7 @@ async function main(): Promise<void> {
     .command("security")
     .description("Run local heuristic security checks")
     .option("-f, --files <patterns...>", "Specific files or patterns to scan")
-    .option("--staged", "Scan only content staged for the next commit, for secrets only")
+    .option("--staged", "Scan only content staged for the next commit, for secrets, lint, and code patterns")
     .option("--licenses", "Include license compliance scanning")
     .option("--cve", "Include exact-version dependency vulnerability scanning")
     .option("--no-cve", "Skip dependency vulnerability scanning")

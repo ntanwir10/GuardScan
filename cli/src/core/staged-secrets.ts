@@ -2,29 +2,37 @@ import { execFileSync } from 'child_process';
 import * as fs from 'fs';
 import { GuardScanError } from '../utils/error-handler';
 import { MAX_SECRET_FILE_BYTES, SecretFinding, secretsDetector } from './secrets-detector';
+import { lintStagedText, StagedLintFinding } from './staged-lint';
 
-export const STAGED_SCOPE = 'staged changes (secrets only)';
+export const STAGED_SCOPE = 'staged changes (secrets, lint, code patterns)';
 
 /** Git's own binary heuristic: a NUL byte in the first 8000 bytes. */
 const BINARY_SNIFF_BYTES = 8000;
 const GIT_OUTPUT_MAX_BYTES = 256 * 1024 * 1024;
 const READ_BATCH_BYTES = 32 * 1024 * 1024;
+// Path arguments per git call stay far under the 32,767-character Windows command line.
+const PATHSPEC_CHUNK_BYTES = 16 * 1024;
 
 export interface StagedExclusion {
   path: string;
   reason: 'symlink' | 'submodule' | 'binary' | 'oversized';
 }
 
-export interface StagedSecretsResult {
+export interface StagedScanResult {
   findings: SecretFinding[];
+  lint: StagedLintFinding[];
   excluded: StagedExclusion[];
 }
 
 interface StagedEntry {
   path: string;
+  status: string;
   mode: string;
+  oldOid: string;
   oid: string;
   size: number;
+  /** Line numbers this commit adds, or `all` when there is no earlier text version to compare against. */
+  added: readonly number[] | 'all';
 }
 
 // The inherited environment matters: under `git commit -a`, GIT_INDEX_FILE names the index being committed.
@@ -32,7 +40,8 @@ function git(cwd: string, args: string[], input?: string, maxBuffer = GIT_OUTPUT
   try {
     return execFileSync('git', args, {cwd, input, maxBuffer, stdio: ['pipe', 'pipe', 'pipe'], shell: false});
   } catch (error) {
-    throw new GuardScanError(`git ${args.join(' ')} failed: ${gitFailure(error)}`, 'STAGED_GIT_FAILED');
+    const shown = args.includes('--') ? [...args.slice(0, args.indexOf('--')), '-- <paths>'] : args;
+    throw new GuardScanError(`git ${shown.join(' ')} failed: ${gitFailure(error)}`, 'STAGED_GIT_FAILED');
   }
 }
 
@@ -77,15 +86,20 @@ function stagedEntries(root: string): StagedEntry[] {
   if (fields.pop() !== '' || fields.length % 2 !== 0) {throw unexpectedGitOutput('diff');}
   const entries: StagedEntry[] = [];
   for (let index = 0; index < fields.length; index += 2) {
-    const header = /^:[0-7]{6} ([0-7]{6}) [0-9a-f]+ ([0-9a-f]+) [ACMT]$/.exec(fields[index]);
+    const header = /^:[0-7]{6} ([0-7]{6}) ([0-9a-f]+) ([0-9a-f]+) ([ACMT])$/.exec(fields[index]);
     if (!header || !fields[index + 1]) {throw unexpectedGitOutput('diff');}
-    entries.push({path: fields[index + 1], mode: header[1], oid: header[2], size: 0});
+    entries.push({
+      path: fields[index + 1], status: header[4], mode: header[1], oldOid: header[2], oid: header[3], size: 0, added: 'all',
+    });
   }
   return entries;
 }
 
-/** Scan the blobs staged for the next commit. The working tree is never read. */
-export function scanStagedSecrets(root: string): StagedSecretsResult {
+/**
+ * Scan the blobs staged for the next commit: whole blobs for secrets, and the lines this
+ * commit adds for lint and code patterns. The working tree is never read.
+ */
+export function scanStagedChanges(root: string): StagedScanResult {
   const excluded: StagedExclusion[] = [];
   const blobs: StagedEntry[] = [];
   for (const entry of stagedEntries(root)) {
@@ -93,21 +107,18 @@ export function scanStagedSecrets(root: string): StagedSecretsResult {
     else if (entry.mode === '160000') {excluded.push({path: entry.path, reason: 'submodule'});}
     else {blobs.push(entry);}
   }
-  const result = {findings: [] as SecretFinding[], excluded};
+  const result: StagedScanResult = {findings: [], lint: [], excluded};
   if (blobs.length === 0) {return result;}
 
   // Sizes first, so oversized blobs are never loaded into memory.
-  const sizes = git(root, ['--no-replace-objects', 'cat-file', '--batch-check'], blobs.map(blob => `${blob.oid}\n`).join(''))
-    .toString('utf8')
-    .split('\n');
+  const sizes = blobSizes(root, blobs.map(blob => blob.oid));
   const readable: StagedEntry[] = [];
   blobs.forEach((blob, index) => {
-    const [oid, type, size] = (sizes[index] || '').split(' ');
-    if (oid !== blob.oid || type !== 'blob' || !/^\d+$/.test(size || '')) {throw unexpectedGitOutput('cat-file --batch-check');}
-    blob.size = Number(size);
+    blob.size = sizes[index];
     if (blob.size > MAX_SECRET_FILE_BYTES) {excluded.push({path: blob.path, reason: 'oversized'});}
     else {readable.push(blob);}
   });
+  assignAddedLines(root, readable);
   // Read in byte-bounded batches, so many staged files never need one huge buffer.
   for (let start = 0; start < readable.length;) {
     let end = start;
@@ -122,7 +133,7 @@ export function scanStagedSecrets(root: string): StagedSecretsResult {
   return result;
 }
 
-function scanBlobBatch(root: string, batch: StagedEntry[], result: StagedSecretsResult): void {
+function scanBlobBatch(root: string, batch: StagedEntry[], result: StagedScanResult): void {
   const expectedBytes = batch.reduce((total, blob) => total + blob.oid.length + 32 + blob.size, 0);
   const output = git(root, ['--no-replace-objects', 'cat-file', '--batch'], batch.map(blob => `${blob.oid}\n`).join(''), expectedBytes + 1024);
   let offset = 0;
@@ -138,7 +149,127 @@ function scanBlobBatch(root: string, batch: StagedEntry[], result: StagedSecrets
     if (content.subarray(0, BINARY_SNIFF_BYTES).includes(0)) {
       result.excluded.push({path: blob.path, reason: 'binary'});
     } else {
-      result.findings.push(...secretsDetector.scanContent(blob.path, content.toString('utf8')));
+      const text = content.toString('utf8');
+      // Append one by one: spreading a large result into push() exceeds the engine's argument limit.
+      for (const finding of secretsDetector.scanContent(blob.path, text)) {result.findings.push(finding);}
+      for (const finding of lintStagedText(blob.path, text, blob.added)) {result.lint.push(finding);}
     }
   }
+}
+
+function blobSizes(root: string, oids: readonly string[]): number[] {
+  const lines = git(root, ['--no-replace-objects', 'cat-file', '--batch-check'], oids.map(oid => `${oid}\n`).join(''))
+    .toString('utf8')
+    .split('\n');
+  return oids.map((oid, index) => {
+    const [echoed, type, size] = (lines[index] || '').split(' ');
+    if (echoed !== oid || type !== 'blob' || !/^\d+$/.test(size || '')) {throw unexpectedGitOutput('cat-file --batch-check');}
+    return Number(size);
+  });
+}
+
+/**
+ * Give each modified blob the lines this commit adds. Added, copied, and type-changed
+ * entries keep `all`: they have no earlier text version of the same path.
+ */
+function assignAddedLines(root: string, blobs: readonly StagedEntry[]): void {
+  // Same blob: only the mode changed, so nothing is added.
+  const modified = blobs.filter(blob => blob.status === 'M' && blob.oldOid !== blob.oid);
+  for (const blob of blobs) {
+    if (blob.status === 'M' && blob.oldOid === blob.oid) {blob.added = [];}
+  }
+  if (modified.length === 0) {return;}
+  const oldSizes = blobSizes(root, modified.map(blob => blob.oldOid));
+  // Only eligible files are diffed: `blobs` holds no symlink, submodule, or oversized entry, and an
+  // oversized old version (whose removed lines would flood the patch) keeps `all` for its small new one.
+  const diffed = modified.flatMap((blob, index) => oldSizes[index] > MAX_SECRET_FILE_BYTES ? [] : [{blob, bytes: blob.size + oldSizes[index]}]);
+  const addedByBlobPair = new Map<string, number[]>();
+  for (const chunk of diffChunks(diffed)) {
+    const patch = git(root, [
+      '--literal-pathspecs', 'diff', '--cached', '--patch', '-U0', '--inter-hunk-context=0', '--no-renames', '--diff-filter=M',
+      '--full-index', '--no-color', '--no-ext-diff', '--no-textconv', '--submodule=short', '--', ...chunk,
+    ]).toString('latin1');
+    for (const [pair, added] of addedLinesByBlobPair(patch)) {addedByBlobPair.set(pair, added);}
+  }
+  for (const blob of modified) {
+    // No hunks (git judged the pair binary, `-diff` is set, or the old version is oversized): check every line.
+    blob.added = addedByBlobPair.get(`${blob.oldOid}..${blob.oid}`) ?? 'all';
+  }
+}
+
+/**
+ * Paths for successive diff calls: each call's path arguments stay under PATHSPEC_CHUNK_BYTES,
+ * and the blobs it compares under READ_BATCH_BYTES, so every patch stays well inside GIT_OUTPUT_MAX_BYTES.
+ */
+function diffChunks(entries: ReadonlyArray<{blob: StagedEntry; bytes: number}>): string[][] {
+  const chunks: string[][] = [];
+  let pathBytes = 0;
+  let blobBytes = 0;
+  for (const {blob, bytes} of entries) {
+    const size = Buffer.byteLength(blob.path) + 1;
+    if (chunks.length === 0 || pathBytes + size > PATHSPEC_CHUNK_BYTES || blobBytes + bytes > READ_BATCH_BYTES) {
+      chunks.push([]);
+      pathBytes = 0;
+      blobBytes = 0;
+    }
+    chunks[chunks.length - 1].push(blob.path);
+    pathBytes += size;
+    blobBytes += bytes;
+  }
+  return chunks;
+}
+
+const HUNK_HEADER = /^@@ -\d+(?:,(\d+))? \+(\d+)(?:,(\d+))? @@(?: |$)/;
+const BLOB_PAIR = /^index ([0-9a-f]+)\.\.([0-9a-f]+)(?: [0-7]{6})?$/;
+
+/**
+ * Added line numbers per `old..new` blob pair, from `git diff --patch --full-index`. Paths are
+ * never parsed: patch headers quote unusual paths, and the blob IDs already identify each entry.
+ * Hunk bodies are walked by their line counts, so file content can never pass for a header.
+ */
+export function addedLinesByBlobPair(patch: string): Map<string, number[]> {
+  const lines = patch.split('\n');
+  if (lines.pop() !== '' || (lines.length > 0 && !lines[0].startsWith('diff --git '))) {throw unexpectedGitOutput('diff');}
+  const pairs = new Map<string, number[]>();
+  let pair: string | undefined;
+  let added: number[] | undefined;
+  for (let index = 0; index < lines.length;) {
+    const line = lines[index++];
+    const hunk = HUNK_HEADER.exec(line);
+    if (line.startsWith('diff --git ')) {
+      pair = undefined;
+      added = undefined;
+    } else if (!hunk) {
+      // Before the first hunk only extended headers appear; after one, only "\ No newline at end of file".
+      if (added && !line.startsWith('\\')) {throw unexpectedGitOutput('diff');}
+      const ids = added ? null : BLOB_PAIR.exec(line);
+      if (ids) {pair = `${ids[1]}..${ids[2]}`;}
+    } else {
+      if (!pair) {throw unexpectedGitOutput('diff');}
+      // Entries with the same blob pair have the same hunks, so a later section replaces an earlier one.
+      if (!added) {pairs.set(pair, added = []);}
+      let oldLeft = Number(hunk[1] ?? 1);
+      let newLeft = Number(hunk[3] ?? 1);
+      let next = Number(hunk[2]);
+      // GIT_DIFF_OPTS can force context lines into a -U0 hunk, so count them rather than assume none.
+      while (oldLeft > 0 || newLeft > 0) {
+        const body = index < lines.length ? lines[index++] : undefined;
+        if (body === undefined) {throw unexpectedGitOutput('diff');}
+        if (body.startsWith('\\')) {continue;}
+        if (body.startsWith('+') && newLeft > 0) {
+          added.push(next++);
+          newLeft--;
+        } else if (body.startsWith('-') && oldLeft > 0) {
+          oldLeft--;
+        } else if ((body === '' || body.startsWith(' ')) && oldLeft > 0 && newLeft > 0) {
+          next++;
+          oldLeft--;
+          newLeft--;
+        } else {
+          throw unexpectedGitOutput('diff');
+        }
+      }
+    }
+  }
+  return pairs;
 }

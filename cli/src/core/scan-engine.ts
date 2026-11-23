@@ -16,7 +16,7 @@ import { PackageInventory } from './package-inventory';
 import { normalizeRelativePathForPlatform } from './loc-counter';
 import { isGuardScanReport } from './scan-ignored-directories';
 import { SecretFinding, secretsDetector } from './secrets-detector';
-import { resolveStagedWorkTree, scanStagedSecrets, STAGED_SCOPE } from './staged-secrets';
+import { resolveStagedWorkTree, scanStagedChanges, STAGED_SCOPE } from './staged-secrets';
 
 export type ScanSeverity = Finding['severity'];
 export type ScanOutputFormat = 'json' | 'sarif';
@@ -91,7 +91,7 @@ export interface ScanEngineOptions {
   includeLicenses?: boolean;
   includeVulnerabilities?: boolean;
   includeGitHistory?: boolean;
-  /** Scan only blobs staged in the Git index, for secrets only. The working tree is never read. */
+  /** Scan only blobs staged in the Git index: secrets, plus lint and code patterns on added lines. The working tree is never read. */
   staged?: boolean;
   allowPartial?: boolean;
   cache?: boolean;
@@ -242,7 +242,7 @@ export class ScanEngine {
     const tasks = options.scannerTasks
       ? [...options.scannerTasks]
       : options.staged
-        ? [stagedSecretsTask(repoPath)]
+        ? [stagedTask(repoPath)]
         : this.createBuiltInTasks({...options, fileSelection}, repoPath, files, offline);
 
     const scannerResults = await runBounded(
@@ -652,16 +652,17 @@ export class ScanEngine {
   }
 }
 
-/** The only task in staged mode: index blobs, secrets only, no working tree and no Git history. */
-function stagedSecretsTask(repoPath: string): ScannerTask {
+/** The only task in staged mode: index blobs only, no working tree and no Git history. */
+function stagedTask(repoPath: string): ScannerTask {
   return {
+    // Line checks share this task, and so its one read of each blob and its exclusions; it keeps the `secrets` name.
     scanner: 'secrets',
     required: true,
     // Synchronous git work; runScanner still records a throw as a scanner failure.
     run: () => {
-      const staged = scanStagedSecrets(repoPath);
+      const staged = scanStagedChanges(repoPath);
       return Promise.resolve({
-        findings: staged.findings.map(secret => toSecretScanFinding(secret, repoPath)),
+        findings: [...staged.findings.map(secret => toSecretScanFinding(secret, repoPath)), ...staged.lint],
         // Exclusions are unsupported content (binary, link, submodule, oversized), not a scanner failure.
         metadata: {scope: STAGED_SCOPE, excluded: staged.excluded},
       });

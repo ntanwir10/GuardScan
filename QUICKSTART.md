@@ -29,8 +29,8 @@ guardscan status                Show provider, repository and local status
 guardscan reset                 Clear local context and cache
 guardscan update                Update through the owning package manager (--check, --dry-run, --auto)
 guardscan uninstall             Uninstall through the owning package manager; keeps local data
-guardscan security              Local heuristic security checks (--staged: staged secrets only)
-guardscan hook                  Install, remove or check the pre-commit secret scan
+guardscan security              Local heuristic security checks (--staged: staged secrets, lint and code patterns)
+guardscan hook                  Install, remove or check the pre-commit staged scan
 guardscan scan                  Security, quality and SBOM scan in parallel
 guardscan vuln                  Exact-version dependency vulnerabilities via OSV (aliases: cve, audit)
 guardscan run                   Local review with optional AI enrichment
