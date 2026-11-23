@@ -132,6 +132,19 @@ describe('JavaScript and TypeScript dependency hygiene', () => {
     expect(uncertainNames(report, 'package.json')).toEqual(['~/b']);
   });
 
+  it('reads path aliases from the projects a solution-style tsconfig references', async () => {
+    const report = await analyze(fixture({
+      'package.json': {name: 'app', dependencies: {}},
+      'tsconfig.json': {files: [], references: [{path: './tsconfig.app.json'}, {path: './tsconfig.node.json'}]},
+      'tsconfig.app.json': {compilerOptions: {baseUrl: '.', paths: {'@app/*': ['src/*']}}, include: ['src']},
+      'tsconfig.node.json': {compilerOptions: {types: ['node']}},
+      'src/main.ts': 'import {local} from "@app/local";\nimport {sdk} from "@vendor/sdk";\nexport {local, sdk};\n',
+      'src/local.ts': 'export const local = 1;\n',
+    }));
+
+    expect(names(report, HYGIENE_RULES.missing)).toEqual(['@vendor/sdk']);
+  });
+
   it('lets a child tsconfig paths, even an empty one, replace the inherited aliases', async () => {
     for (const childPaths of [{'@app/*': ['src/*']}, {}]) {
       const report = await analyze(fixture({
@@ -335,6 +348,18 @@ describe('Python dependency hygiene', () => {
     expect(names(report, HYGIENE_RULES.unused)).toEqual([]);
   });
 
+  it('does not let an unrelated nested module hide a missing distribution', async () => {
+    const report = await analyze(fixture({
+      'requirements.txt': '',
+      'app.py': 'import yaml\nimport helpers\n',
+      'helpers.py': 'VALUE = 1\n',
+      'tests/yaml.py': 'VALUE = 1\n',
+    }));
+
+    expect(names(report, HYGIENE_RULES.missing)).toEqual(['yaml']);
+    expect(JSON.stringify(report.findings)).not.toContain('helpers');
+  });
+
   it('checks an included requirements file against the project that includes it', async () => {
     const report = await analyze(fixture({
       'requirements.txt': '-r config/requirements.txt\n',
@@ -509,6 +534,16 @@ describe('Go dependency hygiene', () => {
     expect(names(report, HYGIENE_RULES.unused)).toEqual(['github.com/unused/mod']);
     expect(names(report, HYGIENE_RULES.missing)).toEqual(['github.com/missing/thing/pkg']);
     expect(report.coverage.manifestsAnalyzed.go).toBe(1);
+  });
+
+  it('credits a required module nested under the main module path', async () => {
+    const report = await analyze(fixture({
+      'go.mod': 'module example.com/project\n\ngo 1.22\n\nrequire example.com/project/sdk v0.0.0\n\nreplace example.com/project/sdk => ./sdk\n',
+      'main.go': 'package main\n\nimport (\n\t"example.com/project/sdk"\n\t"example.com/project/internal/x"\n)\n\nfunc main() { sdk.Run(); x.Y() }\n',
+    }));
+
+    expect(names(report, HYGIENE_RULES.unused)).toEqual([]);
+    expect(names(report, HYGIENE_RULES.missing)).toEqual([]);
   });
 
   it('ignores Go files whose names start with a dot or an underscore', async () => {

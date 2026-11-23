@@ -204,7 +204,8 @@ const KNOWN_BINARIES: Readonly<Record<string, string>> = {
 };
 
 interface TsConfigInfo {
-  paths: Array<{pattern: string; targets: string[]}>;
+  /** `base` is set on aliases taken from a referenced project, which resolve against that project's config. */
+  paths: Array<{pattern: string; targets: string[]; base?: string}>;
   /** Directory of the config that set `paths`; targets resolve here when no baseUrl is set. */
   pathsDir: string;
   baseUrl?: string;
@@ -385,7 +386,23 @@ function parseJsonc(ts: typeof TypeScript, file: string, text: string): unknown 
 function readTsConfig(run: Run, ts: typeof TypeScript, directory: string): TsConfigInfo | undefined {
   const start = ['tsconfig.json', 'jsconfig.json'].map(name => insideRoot(run, path.join(directory, name))).find(Boolean);
   if (!start) {return undefined;}
-  const info: TsConfigInfo = {paths: [], pathsDir: path.dirname(start), importHelpers: false};
+  const info = readTsConfigFile(run, ts, start);
+  // A solution-style config (Vite's tsconfig.json -> tsconfig.app.json) keeps its aliases in referenced projects.
+  if (info.paths.length === 0) {
+    for (const reference of info.references.slice(0, 10)) {
+      const target = /\.json$/i.test(reference) ? reference : path.join(reference, 'tsconfig.json');
+      const file = insideRoot(run, target);
+      if (!file || file === start) {continue;}
+      const referenced = readTsConfigFile(run, ts, file);
+      const base = referenced.baseUrl || referenced.pathsDir;
+      info.paths.push(...referenced.paths.map(alias => ({...alias, base: alias.base || base})));
+    }
+  }
+  return info;
+}
+
+function readTsConfigFile(run: Run, ts: typeof TypeScript, start: string): TsConfigInfo & {references: string[]} {
+  const info: TsConfigInfo & {references: string[]} = {paths: [], pathsDir: path.dirname(start), importHelpers: false, references: []};
   const seen = new Set<string>();
   // Child settings win, so walk the extends chain from the starting file and keep the first value seen.
   let baseUrlSet = false;
@@ -403,6 +420,12 @@ function readTsConfig(run: Run, ts: typeof TypeScript, directory: string): TsCon
       break;
     }
     const options = asRecord(config?.compilerOptions) || {};
+    if (file === start && Array.isArray(config?.references)) {
+      for (const reference of config.references) {
+        const target = asRecord(reference)?.path;
+        if (typeof target === 'string') {info.references.push(path.resolve(path.dirname(file), target));}
+      }
+    }
     // TypeScript replaces, not merges, an inherited `paths`; an explicit empty object still wins.
     if (!pathsSet && 'paths' in options) {
       info.paths = Object.entries(asRecord(options.paths) || {}).map(([pattern, targets]) => ({
@@ -460,7 +483,7 @@ function resolvesLocally(run: Run, base: string): boolean {
 /** 'resolved' when a matching `paths` pattern has a target file, 'unresolved' when patterns match but none does. */
 function matchPathAlias(run: Run, config: TsConfigInfo | undefined, specifier: string): 'resolved' | 'unresolved' | undefined {
   let result: 'resolved' | 'unresolved' | undefined;
-  for (const {pattern, targets} of config?.paths || []) {
+  for (const {pattern, targets, base: aliasBase} of config?.paths || []) {
     const star = pattern.indexOf('*');
     const prefix = star < 0 ? pattern : pattern.slice(0, star);
     const suffix = star < 0 ? '' : pattern.slice(star + 1);
@@ -469,7 +492,7 @@ function matchPathAlias(run: Run, config: TsConfigInfo | undefined, specifier: s
       : specifier.length >= prefix.length + suffix.length && specifier.startsWith(prefix) && specifier.endsWith(suffix);
     if (!matches) {continue;}
     const captured = star < 0 ? '' : specifier.slice(prefix.length, specifier.length - suffix.length);
-    const base = config?.baseUrl || config?.pathsDir || run.root;
+    const base = aliasBase || config?.baseUrl || config?.pathsDir || run.root;
     if (targets.some(target => resolvesLocally(run, path.resolve(base, target.replace('*', captured))))) {return 'resolved';}
     result = 'unresolved';
   }
@@ -1011,12 +1034,9 @@ function analyzePython(run: Run, inventory: PackageInventory): void {
     const primary = rel(run, files.find(file => path.basename(file) === 'requirements.txt') || files[0]);
     const imports = new Map<string, string[]>();
     const stringNames = new Set<string>();
-    const localNames = new Set<string>();
     const before = run.coverage.sourceFilesSkipped + run.coverage.sourceFilesTooLarge;
     walkOwned(run, directory, candidate => projects.has(candidate), (file, name) => {
       if (!name.endsWith('.py')) {return;}
-      localNames.add(name.slice(0, -3));
-      localNames.add(path.basename(path.dirname(file)));
       const text = readSource(run, file);
       if (text === undefined) {return;}
       run.coverage.sourceFilesAnalyzed += 1;
@@ -1032,6 +1052,11 @@ function analyzePython(run: Run, inventory: PackageInventory): void {
       }
     });
     const incomplete = run.coverage.sourceFilesSkipped + run.coverage.sourceFilesTooLarge > before;
+    // A top-level import is local only when it resolves beside an importer, at the project root or in src/,
+    // not because a file with that name exists somewhere else in the project.
+    const isLocalModule = (top: string, importers: string[]): boolean =>
+      [...new Set([directory, path.join(directory, 'src'), ...importers.map(file => path.dirname(path.join(run.root, file)))])]
+        .some(base => fs.existsSync(path.join(base, `${top}.py`)) || fs.existsSync(path.join(base, top)));
     const used = new Set<string>();
     const uncertain: UncertainItem[] = [];
     const missing = new Map<string, {name: string; files: string[]}>();
@@ -1044,7 +1069,7 @@ function analyzePython(run: Run, inventory: PackageInventory): void {
       const matched = [...declared.keys()].filter(name => candidates.some(candidate => pythonDistributionMatches(candidate, name)));
       if (matched.length > 0) {
         for (const name of matched) {used.add(name);}
-      } else if (localNames.has(top)) {
+      } else if (isLocalModule(top, importers)) {
         continue;
       } else if (found && table && !table.some(candidate => candidate.endsWith('*')) && declarationsComplete) {
         // One finding per expected distribution, so google.protobuf and google.genai stay separate.
@@ -1236,9 +1261,11 @@ function analyzeGo(run: Run, inventory: PackageInventory): void {
       if (source === undefined) {return;}
       run.coverage.sourceFilesAnalyzed += 1;
       for (const importPath of scanGoImports(source)) {
-        if (importPath === 'C' || (module && (importPath === module || importPath.startsWith(`${module}/`)))) {continue;}
-        if (!importPath.split('/')[0].includes('.')) {continue;}
+        if (importPath === 'C') {continue;}
+        // A required module nested under this module's path (example.com/app/sdk) wins over the same-module skip.
         const owner = ownerOf(importPath);
+        if (!owner && module && (importPath === module || importPath.startsWith(`${module}/`))) {continue;}
+        if (!importPath.split('/')[0].includes('.')) {continue;}
         if (!owner && workspace.some(local => importPath === local || importPath.startsWith(`${local}/`))) {continue;}
         const importers = missing.get(importPath);
         if (owner) {used.add(owner);} else if (importers) {importers.push(rel(run, file));} else {missing.set(importPath, [rel(run, file)]);}
