@@ -250,7 +250,7 @@ const BIDI_RULE: TextRule = {
   category: 'Malware Hygiene: Bidirectional Control Character',
   description: 'Bidirectional control characters in source can make code read differently from how it runs.',
   suggestion: 'Remove the characters; use escapes if the text really needs them.',
-  matchers: [{anchor: /[‪-‮⁦-⁩]/}],
+  matchers: [{anchor: /[\u202A-\u202E\u2066-\u2069]/}],
 };
 
 const CREDENTIAL_FILE = /\.ssh\/id_(?:rsa|ed25519|ecdsa)|\.aws\/credentials|\.kube\/config|\.docker\/config\.json/;
@@ -504,7 +504,7 @@ function agentConfigFindings(file: string, text: string): Finding[] {
 // Instruction files (CLAUDE.md, AGENTS.md, SKILL.md, rules files)
 // ---------------------------------------------------------------------------
 
-const HIDDEN_CHARACTER = /[​-‏‪-‮⁠-⁤⁦-⁩]|[\u{E0000}-\u{E007F}]|﻿/u;
+const HIDDEN_CHARACTER = /[\u200B-\u200F\u202A-\u202E\u2060-\u2064\u2066-\u2069]|[\u{E0000}-\u{E007F}]|\uFEFF/u;
 const DATA_WORDS = /\b(?:secrets?|credentials?|tokens?|api[ _-]?keys?|\.env|ssh keys?|source code|file contents?|conversation|chat history|private)\b/i;
 
 const INSTRUCTION_RULES: readonly TextRule[] = [
@@ -599,7 +599,7 @@ function instructionFindings(file: string, text: string, starts: readonly number
       destructive += 1;
     }
     // A byte-order mark at the very start of a file is normal.
-    const candidate = i === 0 ? line.replace(/^﻿/, '') : line;
+    const candidate = i === 0 ? line.replace(/^\uFEFF/, '') : line;
     if (hidden < MAX_HITS_PER_RULE && HIDDEN_CHARACTER.test(candidate)) {
       findings.push(emit(HIDDEN_META, file, i + 1));
       hidden += 1;
