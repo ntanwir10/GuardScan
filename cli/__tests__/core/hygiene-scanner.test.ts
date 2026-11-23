@@ -101,6 +101,10 @@ describe('payment hygiene', () => {
     expect(ids('w.ts', unsafe, true)).toContain(rule('webhook-without-signature-check'));
     expect(ids('w.ts', safe, true)).not.toContain(rule('webhook-without-signature-check'));
     expect(ids('w.ts', 'const event = req.body; save(event);', true)).not.toContain(rule('webhook-without-signature-check'));
+    // Reading the signature header without verifying it is still unverified.
+    const headerOnly = 'app.post("/webhook", (req, res) => { const signature = req.headers["stripe-signature"]; ' +
+      'const event = req.body; fulfil(event); });';
+    expect(ids('w.ts', headerOnly, true)).toContain(rule('webhook-without-signature-check'));
   });
 
   it('flags Luhn-valid card numbers and CVV values in logs or storage', () => {
@@ -235,6 +239,19 @@ describe('performance and safety', () => {
     run();
     return Number(process.hrtime.bigint() - start) / 1e9;
   };
+
+  it('caps agent-config lookups so a config with thousands of servers stays fast', () => {
+    for (const separator of ['\n', '']) {
+      const servers = Array.from({length: 12000}, (_, index) =>
+        `"s${index}": {"url": "${J('ht', 'tp://')}host${index}.example.net/mcp"}`);
+      const config = `{"mcpServers": {${servers.join(`,${separator}`)}}}`;
+      let found: string[] = [];
+      const elapsed = seconds(() => {found = ids('.mcp.json', config);});
+      expect(found.filter(id => id === 'guardscan.agent-config.insecure-remote-http').length).toBeLessThanOrEqual(25);
+      expect(found).toContain('guardscan.agent-config.insecure-remote-http');
+      expect(elapsed).toBeLessThan(2);
+    }
+  });
 
   it.each([
     ['repeated eval prefixes', 'eval( ', 'src/a.js'],

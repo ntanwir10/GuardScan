@@ -342,7 +342,8 @@ const CLIENT_CARD_RULE: TextRule = {
 };
 
 const WEBHOOK_BODY_PARSE = /\bJSON\.parse\s{0,3}\(\s{0,3}(?:req|request)\.(?:body|rawBody)|\b(?:req|request)\.body\.type\b|[\w$]{1,30}\s{0,3}=\s{0,3}(?:req|request)\.body\b|\brequest\.get_json\s{0,3}\(|\bjson\.loads\s{0,3}\(\s{0,3}request\.(?:data|body)|\bawait\s{1,3}(?:req|request)\.json\s{0,3}\(/g;
-const WEBHOOK_VERIFY = /constructEvent|construct_event|verif\w{0,12}Signature|verify_header|stripe-signature|webhooks?\.verify|verify[_-]?webhook|createHmac|\bhmac\b/i;
+// Reading the `stripe-signature` header is not verification, so the header name alone does not count.
+const WEBHOOK_VERIFY = /constructEvent|construct_event|verif\w{0,12}Signature|verify_header|webhooks?\.verify|verify[_-]?webhook|createHmac|\bhmac\b/i;
 const WEBHOOK_META: Meta = {
   ruleId: 'guardscan.payments.webhook-without-signature-check',
   severity: 'medium',
@@ -477,6 +478,7 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
 }
 
+/** Line of the first occurrence; for a handful of calls per file only (agent configs use `lineAt` instead). */
 function firstLine(text: string, needle: string): number {
   const index = text.indexOf(needle);
   return index < 0 ? 1 : text.slice(0, index).split('\n').length;
@@ -487,8 +489,15 @@ function agentConfigFindings(file: string, text: string): Finding[] {
   try {doc = JSON.parse(text);} catch {return [];}
   const findings: Finding[] = [];
   const seen = new Set<string>();
+  const starts = lineStarts(text);
+  const attempts = new Map<string, number>();
   const add = (meta: Meta, needle: string): void => {
-    const line = firstLine(text, needle);
+    // Cap lookups (not just findings) per rule: each one searches the file, and a minified config puts every hit on one line.
+    const attempt = attempts.get(meta.ruleId) ?? 0;
+    if (attempt >= MAX_HITS_PER_RULE) {return;}
+    attempts.set(meta.ruleId, attempt + 1);
+    const index = text.indexOf(needle);
+    const line = index < 0 ? 1 : lineAt(starts, index);
     const key = `${meta.ruleId}:${line}`;
     if (!seen.has(key)) {seen.add(key); findings.push(emit(meta, file, line));}
   };
