@@ -486,6 +486,8 @@ describe('availability on hostile input', () => {
     ['JS import-shaped run', 'js', `${'import '.repeat(300_000)}\n`],
     ['JS word run', 'js', `var ${'z'.repeat(2_000_000)} = 1;\n`],
     ['PHP unterminated quotes', 'php', `<?php ${'"x '.repeat(500_000)}\n`],
+    ['Java pointer-star run at line start', 'java', `${'*'.repeat(1_000_000)}\n`],
+    ['C ampersand run at line start', 'c', `${'&'.repeat(1_000_000)} x = 1;\n`],
     ['C operator run', 'c', `int a = ${'a && '.repeat(500_000)} 1;\n`],
   ])('stays linear: %s', async (_name, ext, source) => {
     const dir = makeDir({ [`hostile.${ext}`]: source });
@@ -493,6 +495,11 @@ describe('availability on hostile input', () => {
     await codeSmellDetector.detect(dir);
     await codeMetricsAnalyzer.analyze(dir);
     expect(Date.now() - started).toBeLessThan(10_000);
+  });
+
+  it('does not overflow the stack when a file produces hundreds of thousands of findings', async () => {
+    const smells = await smellsOf({ 'flood.js': 'module.exports = [\n' + '  12345,\n'.repeat(250_000) + '];\n' });
+    expect(ofType(smells, 'Magic Number').length).toBe(250_000);
   });
 
   it('still reports real smells in a file that also contains a very long line', async () => {

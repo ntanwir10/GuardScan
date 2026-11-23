@@ -637,7 +637,7 @@ function unusedVariables(ctx: Ctx, spans: Span[]): Array<{ name: string; line: n
       re = /^[ \t]*([A-Za-z_]\w*(?:[ \t]*,[ \t]*[A-Za-z_]\w*)*)[ \t]*:=|^[ \t]*var[ \t]+([A-Za-z_]\w*)/gm;
       break;
     default:
-      re = /^[ \t]*(?:(?:final|const|static|readonly|var|auto|unsigned|signed|long|short|volatile|struct)[ \t]+)*([\w.<>[\],?*&]+)(?:[ \t]*[*&]+)?[ \t]+(\w+)[ \t]*=(?!=)/gm;
+      re = /^[ \t]*(?:(?:final|const|static|readonly|var|auto|unsigned|signed|long|short|volatile|struct)[ \t]+)*([\w.<>[\],?]+)(?:[ \t]*[*&]+)?[ \t]+(\w+)[ \t]*=(?!=)/gm;
   }
   const found: Array<{ offset: number; name: string }> = [];
   let m: RegExpExecArray | null;

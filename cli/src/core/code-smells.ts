@@ -29,6 +29,13 @@ function looksLikeCode(text: string): boolean {
   return /^[\w.$]+(?:\[[^\]]*\])?\s*[+\-*/|&]?=(?!=)\s*\S/.test(text) || /^[\w.$]+\([^)]*\)\s*;?$/.test(text);
 }
 
+/** Push in a loop: spreading a very large array into push() overflows the call stack. */
+function append<T>(target: T[], items: T[]): void {
+  for (const item of items) {
+    target.push(item);
+  }
+}
+
 export class CodeSmellDetector {
   /**
    * Detect code smells in repository
@@ -51,21 +58,21 @@ export class CodeSmellDetector {
     }
 
     // Detect duplicates across files
-    smells.push(...this.detectDuplicateCode(analyses));
+    append(smells, this.detectDuplicateCode(analyses));
 
     // Detect smells in individual files
     for (const [file, analysis] of analyses) {
-      smells.push(...this.detectDeadCode(file, analysis));
-      smells.push(...this.detectGodObjects(file, analysis));
-      smells.push(...this.detectLongParameterList(file, analysis));
-      smells.push(...this.detectMagicNumbers(file, analysis));
-      smells.push(...this.detectCommentedCode(file, analysis));
-      smells.push(...this.detectEmptyCatchBlocks(file, analysis));
-      smells.push(...this.detectTooManyReturns(file, analysis));
+      append(smells, this.detectDeadCode(file, analysis));
+      append(smells, this.detectGodObjects(file, analysis));
+      append(smells, this.detectLongParameterList(file, analysis));
+      append(smells, this.detectMagicNumbers(file, analysis));
+      append(smells, this.detectCommentedCode(file, analysis));
+      append(smells, this.detectEmptyCatchBlocks(file, analysis));
+      append(smells, this.detectTooManyReturns(file, analysis));
     }
 
     // Detect circular dependencies (needs multiple files)
-    smells.push(...this.detectCircularDependencies(repoPath, analyses));
+    append(smells, this.detectCircularDependencies(repoPath, analyses));
 
     return smells;
   }
