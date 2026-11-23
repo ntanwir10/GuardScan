@@ -576,3 +576,67 @@ describe('availability on hostile input', () => {
     expect(ofType(smells, 'Empty Catch Block')).toHaveLength(1);
   });
 });
+
+describe('review round 1 regressions', () => {
+  it('ignores Python imports that only appear inside strings', async () => {
+    const smells = await smellsOf({
+      'a.py': '"""\nfrom b import f\n"""\n\ndef f():\n    return 1\n',
+      'b.py': 'from a import f\n\ndef g():\n    return f()\n',
+    });
+    expect(ofType(smells, 'Circular Dependency')).toHaveLength(0);
+  });
+
+  it('counts compact and spaced ternaries alike and ignores null-safe operators', async () => {
+    const spaced = await metricsOf('a.c', 'int f(int a, int b, int c) {\n  return a ? b : c;\n}\n');
+    const compact = await metricsOf('b.c', 'int f(int a, int b, int c) {\n  return a?b:c;\n}\n');
+    expect(spaced.metrics.cyclomaticComplexity).toBe(2);
+    expect(compact.metrics.cyclomaticComplexity).toBe(2);
+    const nested = await metricsOf('c.java', 'class A { int f(int a, int b) { return a?b?1:2:3; } }\n');
+    expect(nested.metrics.cyclomaticComplexity).toBe(3);
+    const cs = await metricsOf('d.cs', 'class A {\n  void F(string a, string b) {\n    int? x = null;\n    var y = a?.Length;\n    var z = a ?? b;\n    z ??= b;\n    var w = a?[0];\n  }\n}\n');
+    expect(cs.metrics.cyclomaticComplexity).toBe(1);
+    const csMixed = await metricsOf('e.cs', 'class A {\n  void F(bool c) {\n    int? x = c ? 1 : 2;\n  }\n}\n');
+    expect(csMixed.metrics.cyclomaticComplexity).toBe(2);
+    const php = await metricsOf('f.php', '<?php\nfunction f(?int $a, $b) {\n  return $a?->x ?: $b;\n}\n');
+    expect(php.metrics.cyclomaticComplexity).toBe(2);
+    const java = await metricsOf('g.java', 'import java.util.*;\nclass A { Map<String, ?> m; List<? extends A> l; }\n');
+    expect(java.metrics.cyclomaticComplexity).toBe(1);
+  });
+
+  it('does not charge returns inside PHP closures or Go function literals to the enclosing function', async () => {
+    const callbacks = Array.from({ length: 6 }, () => '  $f[] = function() { return 1; };').join('\n');
+    const goCallbacks = Array.from({ length: 6 }, () => '\tf = func() int { return 1 }').join('\n');
+    const smells = await smellsOf({
+      'a.php': `<?php\nfunction outer() {\n${callbacks}\n  return 1;\n}\n`,
+      'a.go': `package main\n\nvar f func() int\n\nfunc outer() int {\n${goCallbacks}\n\treturn 1\n}\n`,
+    });
+    expect(ofType(smells, 'Too Many Returns')).toHaveLength(0);
+    const php = await metricsOf('b.php', `<?php\nfunction outer() {\n${callbacks}\n  return 1;\n}\n`);
+    expect(php.metrics.functionCount).toBe(1);
+  });
+
+  it('still counts real returns of a named function that contains closures', async () => {
+    const body = Array.from({ length: 6 }, (_, i) => `  if ($a === ${i}) { return ${i}; }`).join('\n');
+    const smells = await smellsOf({ 'a.php': `<?php\nfunction outer($a) {\n  $f = function() { return 1; };\n${body}\n  return 9;\n}\n` });
+    expect(ofType(smells, 'Too Many Returns')[0]?.details).toMatchObject({ returnCount: 7 });
+  });
+
+  it('honours the comment exemption for inline Python handlers', async () => {
+    const smells = await smellsOf({
+      'a.py': [
+        'try:', '    x()', 'except ValueError: pass  # deliberately ignored',
+        'try:', '    x()', 'except ValueError:', '    pass  # deliberately ignored',
+        'try:', '    x()', 'except ValueError: pass', '',
+      ].join('\n'),
+    });
+    expect(ofType(smells, 'Empty Catch Block').map(s => s.line)).toEqual([10]);
+  });
+
+  it('takes JS regex literals from the parser, including after a control-condition paren', async () => {
+    const src = 'if (x) /[/*]/.test(x);\nconst a = 1;\nconst b = 2;\nconst c = 3;\nconst d = 4;\nconsole.log(a, b, c, d);\n';
+    const m = await metricsOf('a.js', src);
+    expect(m.metrics.linesOfCode).toBe(6);
+    const smells = await smellsOf({ 'a.js': src });
+    expect(ofType(smells, 'Commented-Out Code')).toHaveLength(0);
+  });
+});

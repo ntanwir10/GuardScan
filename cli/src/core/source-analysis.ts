@@ -152,6 +152,8 @@ interface Ctx {
   /** Remaining character budget for rescans of overlapping ranges (nested bodies), so nesting cannot go quadratic. */
   budget: number;
   rubyEnds?: Map<number, number>;
+  /** Anonymous function bodies (PHP closures, Go func literals): they own their `return`s but are never reported. */
+  anon: Span[];
   /** Leading-whitespace width per line, or -1 for blank lines (computed once: deep indentation makes rescans costly). */
   indents: Int32Array;
 }
@@ -222,7 +224,7 @@ function buildCtx(content: string, language: LexLanguage): Ctx {
     }
     return lo + 1;
   };
-  return { language, code, comments: lexed.comments, noComments: lexed.noComments, lines, lineStarts, match, lineOf, indents, budget: 8 * code.length + 100000 };
+  return { language, code, comments: lexed.comments, noComments: lexed.noComments, lines, lineStarts, match, lineOf, indents, anon: [], budget: 8 * code.length + 100000 };
 }
 
 /** Split a parameter list on top-level commas, so "a, Map<K, V> b" is two parameters. */
@@ -306,6 +308,32 @@ function braceFunctions(ctx: Ctx): Span[] {
     });
   };
 
+  const acceptAnon = (open: number): void => {
+    const close = match[open];
+    if (close === -1) {
+      return;
+    }
+    let j = close + 1;
+    if (language === 'php') {
+      while (j < code.length && /\s/.test(code[j])) {
+        j++;
+      }
+      if (code.startsWith('use', j) && !isWordChar(code.charCodeAt(j + 3))) {
+        j += 3;
+        while (j < code.length && /\s/.test(code[j])) {
+          j++;
+        }
+        if (code[j] === '(' && match[j] !== -1) {
+          j = match[j] + 1;
+        }
+      }
+    }
+    const body = bodyAfterSignature(ctx, j);
+    if (body !== -1 && match[body] !== -1) {
+      ctx.anon.push({ name: '', start: open, startLine: ctx.lineOf(open), endLine: ctx.lineOf(match[body]), paramCount: 0, returnCount: 0, bodyStart: body, bodyEnd: match[body] });
+    }
+  };
+
   if (language === 'go' || language === 'php') {
     const keyword = language === 'go' ? /\bfunc\b/g : /\bfunction\b/g;
     let m: RegExpExecArray | null;
@@ -321,10 +349,16 @@ function braceFunctions(ctx: Ctx): Span[] {
         i++;
         skipWs();
       }
+      if (language === 'php' && code[i] === '(') {
+        acceptAnon(i);
+        continue;
+      }
+      let paramsOpen = -1;
       if (language === 'go' && code[i] === '(') {
         if (match[i] === -1) {
           continue;
         }
+        paramsOpen = i;
         i = match[i] + 1;
         skipWs();
       }
@@ -333,6 +367,9 @@ function braceFunctions(ctx: Ctx): Span[] {
         i++;
       }
       if (i === nameStart) {
+        if (paramsOpen !== -1) {
+          acceptAnon(paramsOpen);
+        }
         continue;
       }
       const name = code.slice(nameStart, i);
@@ -347,6 +384,8 @@ function braceFunctions(ctx: Ctx): Span[] {
       }
       if (code[i] === '(') {
         accept(nameStart, name, i);
+      } else if (paramsOpen !== -1) {
+        acceptAnon(paramsOpen);
       }
     }
     return out;
@@ -503,7 +542,7 @@ function countReturns(ctx: Ctx, spans: Span[]): void {
   while ((m = re.exec(ctx.code)) !== null) {
     offsets.push(m.index);
   }
-  innermost(offsets, spans).forEach(span => {
+  innermost(offsets, ctx.anon.length > 0 ? [...spans, ...ctx.anon] : spans).forEach(span => {
     if (span) {
       span.returnCount++;
     }
@@ -764,7 +803,7 @@ function emptyCatches(ctx: Ctx): number[] {
       }
       const isPass = (s: string) => /^(?:pass|\.\.\.)$/.test(s.trim());
       if (m[2].trim() !== '') {
-        if (isPass(m[2])) {
+        if (isPass(m[2]) && !hasComment(ctx.lineStarts[i], ctx.lineStarts[i] + lines[i].length)) {
           out.push(i + 1);
         }
         continue;
@@ -854,12 +893,15 @@ function magicNumbers(ctx: Ctx): Array<{ value: string; line: number }> {
   return out;
 }
 
-function importsOf(noComments: string, language: LexLanguage): string[] {
+function importsOf(ctx: Ctx): string[] {
+  const { noComments, code, language } = ctx;
   const out: string[] = [];
   const add = (re: RegExp, map: (m: RegExpExecArray) => string | undefined) => {
     let m: RegExpExecArray | null;
     while ((m = re.exec(noComments)) !== null) {
-      const v = map(m);
+      // The keyword must be real code: strings are blanked in the code view, so a docstring that mentions an import is skipped.
+      const kw = m.index + (m[0].length - m[0].trimStart().length);
+      const v = code.charCodeAt(kw) === 32 ? undefined : map(m);
       if (v) {
         out.push(v);
       }
@@ -880,6 +922,61 @@ function importsOf(noComments: string, language: LexLanguage): string[] {
   return out;
 }
 
+/**
+ * Count `?:` ternaries in C-family code regardless of spacing. A `?` counts only when a `:` closes it in the
+ * same statement at the same bracket depth, so `?.`, `??`, `?[` (C#), `?>`, `<?`, `?->`, generic wildcards and
+ * nullable types add nothing. One pass; the pending-`?` stack per bracket frame keeps it linear.
+ */
+function countTernaries(code: string, language: LexLanguage): number {
+  const frames: number[] = [0];
+  let count = 0;
+  for (let i = 0; i < code.length; i++) {
+    const c = code[i];
+    if (c === '(' || c === '[' || c === '{') {
+      if (c === '{') {
+        let b = i - 1;
+        while (b >= 0 && (code[b] === ' ' || code[b] === '\t' || code[b] === '\n' || code[b] === '\r')) {
+          b--;
+        }
+        if (code[b] === ')') {
+          frames[frames.length - 1] = 0;
+        }
+      }
+      frames.push(0);
+    } else if (c === ')' || c === ']' || c === '}') {
+      if (frames.length > 1) {
+        frames.pop();
+      }
+      if (c === '}') {
+        frames[frames.length - 1] = 0;
+      }
+    } else if (c === ';') {
+      frames[frames.length - 1] = 0;
+    } else if (c === '?') {
+      const next = code[i + 1];
+      if (next === '?') {
+        i++;
+        if (code[i + 1] === '=') {
+          i++;
+        }
+      } else if (next === '.' || next === '>' || (next === '[' && language === 'csharp') ||
+                 (next === '-' && code[i + 2] === '>') || code[i - 1] === '<') {
+        continue;
+      } else {
+        frames[frames.length - 1]++;
+      }
+    } else if (c === ':') {
+      if (code[i + 1] === ':') {
+        i++;
+      } else if (frames[frames.length - 1] > 0) {
+        frames[frames.length - 1]--;
+        count++;
+      }
+    }
+  }
+  return count;
+}
+
 function cyclomaticOf(ctx: Ctx): number {
   const { code, language } = ctx;
   let re: RegExp;
@@ -891,10 +988,10 @@ function cyclomaticOf(ctx: Ctx): number {
   } else if (language === 'go') {
     re = new RegExp(`${guard}(?:if|for|case)\\b|&&|\\|\\|`, 'g');
   } else {
-    re = new RegExp(`${guard}(?:if|for|foreach|while|case|catch|elseif)\\b|&&|\\|\\||\\s\\?\\s|\\?\\?`, 'g');
+    re = new RegExp(`${guard}(?:if|for|foreach|while|case|catch|elseif)\\b|&&|\\|\\|`, 'g');
   }
   const matches = code.match(re);
-  return 1 + (matches ? matches.length : 0);
+  return 1 + (matches ? matches.length : 0) + (language === 'ruby' || language === 'python' || language === 'go' ? 0 : countTernaries(code, language));
 }
 
 function cognitiveOf(ctx: Ctx): number {
@@ -998,7 +1095,7 @@ function analyzeGeneric(content: string, language: LexLanguage): SourceAnalysis 
     unreachableLines: unreachable(ctx),
     unusedVariables: unusedVariables(ctx, spans),
     magicNumbers: magicNumbers(ctx),
-    imports: importsOf(ctx.noComments, language),
+    imports: importsOf(ctx),
     cyclomatic: cyclomaticOf(ctx),
     cognitive: Math.round(cognitiveOf(ctx)),
   };

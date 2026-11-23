@@ -21,8 +21,8 @@ function getTs(): typeof TS {
 
 const SAFE_NUMBERS = new Set(['0', '1', '100', '1000']);
 
-/** Split source into comment text and comment-free text with the TypeScript scanner (regex and template aware). */
-function lexJs(ts: typeof TS, content: string, jsx: boolean): { comments: string; noComments: string } {
+/** Split source into comment text and comment-free text with the TypeScript scanner. Regex literal starts come from the parser, not from guessing at the previous token. */
+function lexJs(ts: typeof TS, content: string, jsx: boolean, regexStarts: Set<number>): { comments: string; noComments: string } {
   const scanner = ts.createScanner(
     ts.ScriptTarget.Latest,
     false,
@@ -30,21 +30,14 @@ function lexJs(ts: typeof TS, content: string, jsx: boolean): { comments: string
     content
   );
   const K = ts.SyntaxKind;
-  const operandKinds = new Set<TS.SyntaxKind>([
-    K.Identifier, K.NumericLiteral, K.BigIntLiteral, K.StringLiteral, K.RegularExpressionLiteral,
-    K.CloseParenToken, K.CloseBracketToken, K.CloseBraceToken, K.ThisKeyword, K.SuperKeyword,
-    K.TemplateTail, K.NoSubstitutionTemplateLiteral, K.PlusPlusToken, K.MinusMinusToken,
-    K.TrueKeyword, K.FalseKeyword, K.NullKeyword, K.PrivateIdentifier,
-  ]);
   const comments: string[] = [];
   const noComments: string[] = [];
   const blank = (t: string) => t.replace(/[^\r\n]/g, ' ');
   const templateDepth: number[] = [];
-  let prev: TS.SyntaxKind = K.Unknown;
 
   let kind = scanner.scan();
   while (kind !== K.EndOfFileToken) {
-    if ((kind === K.SlashToken || kind === K.SlashEqualsToken) && !operandKinds.has(prev)) {
+    if ((kind === K.SlashToken || kind === K.SlashEqualsToken) && regexStarts.has(scanner.getTokenStart())) {
       kind = scanner.reScanSlashToken();
     } else if (kind === K.CloseBraceToken && templateDepth.length > 0 && templateDepth[templateDepth.length - 1] === 0) {
       kind = scanner.reScanTemplateToken(false);
@@ -65,9 +58,6 @@ function lexJs(ts: typeof TS, content: string, jsx: boolean): { comments: string
     } else {
       comments.push(blank(text));
       noComments.push(text);
-      if (kind !== K.WhitespaceTrivia && kind !== K.NewLineTrivia) {
-        prev = kind;
-      }
     }
     kind = scanner.scan();
   }
@@ -88,12 +78,10 @@ export function analyzeJs(content: string, filePath: string, language: 'javascri
   const ts = getTs();
   const K = ts.SyntaxKind;
   const isTs = language === 'typescript';
-  const lexed = lexJs(ts, content, !isTs);
-
   const result: SourceAnalysis = {
     language,
-    noComments: lexed.noComments,
-    comments: lexed.comments,
+    noComments: content,
+    comments: '',
     functions: [],
     classes: [],
     emptyCatchLines: [],
@@ -113,6 +101,20 @@ export function analyzeJs(content: string, filePath: string, language: 'javascri
     isTs ? ts.ScriptKind.TS : ts.ScriptKind.JS
   );
   const lineOf = (pos: number) => sf.getLineAndCharacterOfPosition(pos).line + 1;
+
+  // Iterative walk (hostile nesting must not overflow the stack) for the parser's own regex literal ranges.
+  const regexStarts = new Set<number>();
+  const pending: TS.Node[] = [sf];
+  while (pending.length > 0) {
+    const n = pending.pop() as TS.Node;
+    if (n.kind === K.RegularExpressionLiteral) {
+      regexStarts.add(n.getStart(sf));
+    }
+    ts.forEachChild(n, c => { pending.push(c); });
+  }
+  const lexed = lexJs(ts, content, !isTs, regexStarts);
+  result.noComments = lexed.noComments;
+  result.comments = lexed.comments;
 
   const refs = new Map<string, number[]>();
   const decls: Array<{ name: string; pos: number; line: number; scopeStart: number; scopeEnd: number }> = [];
