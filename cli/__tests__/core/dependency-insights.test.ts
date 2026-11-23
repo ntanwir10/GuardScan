@@ -741,3 +741,79 @@ describe('dependency-insights scanner', () => {
     expect(outcome('low')).toBe('policy-failed');
   });
 });
+
+describe('PR 74 review round 5', () => {
+  it('uses only the nearest go.work', async () => {
+    const report = await analyze(fixture({
+      'go.work': 'go 1.22\n\nuse (\n\t./lib\n\t./nested/app\n)\n',
+      'lib/go.mod': 'module example.com/lib\n\ngo 1.22\n',
+      'nested/go.work': 'go 1.22\n\nuse ./app\n',
+      'nested/app/go.mod': 'module example.com/app\n\ngo 1.22\n',
+      'nested/app/main.go': 'package main\n\nimport "example.com/lib/x"\n\nfunc main() { x.Do() }\n',
+    }));
+    expect(names(report, HYGIENE_RULES.missing)).toEqual(['example.com/lib/x']);
+  });
+
+  it('takes install scripts only from the active npm lock', async () => {
+    const lock = (name: string) => ({
+      lockfileVersion: 3,
+      packages: {'': {name: 'app'}, [`node_modules/${name}`]: {version: '1.0.0', hasInstallScript: true}},
+    });
+    const report = await analyze(fixture({
+      'package.json': {name: 'app', dependencies: {esbuild: '1.0.0', lodash: '1.0.0'}},
+      'npm-shrinkwrap.json': lock('lodash'),
+      'package-lock.json': lock('esbuild'),
+    }));
+    expect(names(report, HYGIENE_RULES.installScript)).toEqual(['lodash']);
+  });
+
+  it('applies .gitignore to names that start with two dots', async () => {
+    const report = await analyze(fixture({
+      'package.json': {name: 'app', dependencies: {}},
+      '.gitignore': '..cache/\n',
+      '..cache/gen.js': 'require("ghostpkg");\n',
+      'index.js': 'require("realpkg");\n',
+    }));
+    expect(names(report, HYGIENE_RULES.missing)).toEqual(['realpkg']);
+  });
+
+  it('treats a non-editable local requirement as incomplete', async () => {
+    const report = await analyze(fixture({
+      'requirements.txt': '.\n',
+      'pyproject.toml': '[project]\nname = "x"\ndependencies = ["PyYAML"]\n',
+      'app.py': 'import yaml\n',
+    }));
+    expect(names(report, HYGIENE_RULES.missing)).toEqual([]);
+  });
+
+  it('selects the exact paths key before a wildcard', async () => {
+    const report = await analyze(fixture({
+      'package.json': {name: 'app', dependencies: {}},
+      'tsconfig.json': {compilerOptions: {paths: {'@app/*': ['./src/*'], '@app/widgets': ['./missing.ts']}}},
+      'src/widgets.ts': 'export const w = 1;\n',
+      'src/index.ts': 'import "@app/widgets";\n',
+    }));
+    expect(uncertainNames(report, 'package.json')).toEqual(['@app/widgets']);
+  });
+
+  it('keeps inline type imports at runtime under verbatimModuleSyntax', async () => {
+    const files = {
+      'package.json': {name: 'app', devDependencies: {'@types/lodash': '^4.0.0'}},
+      'src/index.ts': 'import {type LoDashStatic} from "lodash";\nexport type T = LoDashStatic;\n',
+    };
+    const off = await analyze(fixture({...files, 'tsconfig.json': {compilerOptions: {}}}));
+    expect(names(off, HYGIENE_RULES.missing)).toEqual([]);
+    const on = await analyze(fixture({...files, 'tsconfig.json': {compilerOptions: {verbatimModuleSyntax: true}}}));
+    expect(names(on, HYGIENE_RULES.missing)).toEqual(['lodash']);
+  });
+
+  it('substitutes .js specifiers with TypeScript sources', async () => {
+    const report = await analyze(fixture({
+      'package.json': {name: 'app', dependencies: {}},
+      'tsconfig.json': {compilerOptions: {baseUrl: './src'}},
+      'src/@app/widgets.ts': 'export const w = 1;\n',
+      'src/index.ts': 'import "@app/widgets.js";\n',
+    }));
+    expect(names(report, HYGIENE_RULES.missing)).toEqual([]);
+  });
+});

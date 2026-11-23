@@ -121,7 +121,7 @@ function walkOwned(
     for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
       const absolute = path.join(directory, entry.name);
       const relative = path.relative(run.root, absolute).split(path.sep).join('/');
-      if (relative && !relative.startsWith('..') && run.ignored.ignores(entry.isDirectory() ? `${relative}/` : relative)) {continue;}
+      if (relative && relative !== '..' && !relative.startsWith('../') && run.ignored.ignores(entry.isDirectory() ? `${relative}/` : relative)) {continue;}
       if (entry.isDirectory()) {
         if (!IGNORED_DIRS.has(entry.name) && !skipDirectory(absolute, entry.name)) {stack.push(absolute);}
       } else if (entry.isFile()) {
@@ -214,6 +214,8 @@ interface TsConfigInfo {
   types?: string[];
   jsx?: string;
   jsxImportSource?: string;
+  /** First explicit value along the extends chain; keeps `import {type X}` as a runtime import. */
+  verbatimModuleSyntax?: boolean;
 }
 
 interface NpmManifest {
@@ -319,7 +321,7 @@ function scriptKind(ts: typeof TypeScript, file: string): TypeScript.ScriptKind 
 interface ParsedJs {specifiers: string[]; typeOnly: Set<string>; dynamic: number; typeReferences: string[]; strings: string[]; jsx: boolean}
 
 /** Reads module references with the TypeScript parser: imports, re-exports, require(), import(). */
-function parseJs(ts: typeof TypeScript, file: string, text: string, collectStrings: boolean): ParsedJs {
+function parseJs(ts: typeof TypeScript, file: string, text: string, collectStrings: boolean, verbatim = false): ParsedJs {
   const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, false, scriptKind(ts, file));
   const result: ParsedJs = {
     specifiers: [], typeOnly: new Set(), dynamic: 0, typeReferences: source.typeReferenceDirectives.map(reference => reference.fileName),
@@ -338,11 +340,11 @@ function parseJs(ts: typeof TypeScript, file: string, text: string, collectStrin
       if (ts.isImportDeclaration(node)) {
         const clause = node.importClause;
         const bindings = clause?.namedBindings;
-        typeOnly = Boolean(clause?.isTypeOnly) || Boolean(clause && !clause.name && bindings && ts.isNamedImports(bindings) &&
+        typeOnly = Boolean(clause?.isTypeOnly) || Boolean(!verbatim && clause && !clause.name && bindings && ts.isNamedImports(bindings) &&
           bindings.elements.length > 0 && bindings.elements.every(element => element.isTypeOnly));
       } else {
         const bindings = node.exportClause;
-        typeOnly = node.isTypeOnly || Boolean(bindings && ts.isNamedExports(bindings) &&
+        typeOnly = node.isTypeOnly || Boolean(!verbatim && bindings && ts.isNamedExports(bindings) &&
           bindings.elements.length > 0 && bindings.elements.every(element => element.isTypeOnly));
       }
       add(node.moduleSpecifier.text, typeOnly);
@@ -448,6 +450,9 @@ function readTsConfigFile(run: Run, ts: typeof TypeScript, start: string): TsCon
     if (info.jsxImportSource === undefined && typeof options.jsxImportSource === 'string') {
       info.jsxImportSource = options.jsxImportSource;
     }
+    if (info.verbatimModuleSyntax === undefined && typeof options.verbatimModuleSyntax === 'boolean') {
+      info.verbatimModuleSyntax = options.verbatimModuleSyntax;
+    }
     if (!importHelpersSet && typeof options.importHelpers === 'boolean') {
       info.importHelpers = options.importHelpers;
       importHelpersSet = true;
@@ -475,28 +480,38 @@ function resolvesLocally(run: Run, base: string): boolean {
       return false;
     }
   };
-  return ['', ...RESOLVE_EXTENSIONS].some(extension => isFile(`${base}${extension}`)) ||
+  // TypeScript resolves `./x.js` to `./x.ts`, `.mjs` to `.mts` and `.cjs` to `.cts`.
+  const substituted = /\.(js|mjs|cjs)$/.test(base)
+    ? (base.endsWith('.mjs') ? ['.mts'] : base.endsWith('.cjs') ? ['.cts'] : ['.ts', '.tsx', '.d.ts']).map(extension => base.replace(/\.[cm]?js$/, extension))
+    : [];
+  return substituted.some(isFile) || ['', ...RESOLVE_EXTENSIONS].some(extension => isFile(`${base}${extension}`)) ||
     ['package.json', ...RESOLVE_EXTENSIONS.map(extension => `index${extension}`)]
       .some(name => isFile(path.join(base, name)));
 }
 
 /** 'resolved' when a matching `paths` pattern has a target file, 'unresolved' when patterns match but none does. */
 function matchPathAlias(run: Run, config: TsConfigInfo | undefined, specifier: string): 'resolved' | 'unresolved' | undefined {
-  let result: 'resolved' | 'unresolved' | undefined;
-  for (const {pattern, targets, base: aliasBase} of config?.paths || []) {
-    const star = pattern.indexOf('*');
-    const prefix = star < 0 ? pattern : pattern.slice(0, star);
-    const suffix = star < 0 ? '' : pattern.slice(star + 1);
-    const matches = star < 0
-      ? pattern === specifier
-      : specifier.length >= prefix.length + suffix.length && specifier.startsWith(prefix) && specifier.endsWith(suffix);
-    if (!matches) {continue;}
-    const captured = star < 0 ? '' : specifier.slice(prefix.length, specifier.length - suffix.length);
-    const base = aliasBase || config?.baseUrl || config?.pathsDir || run.root;
-    if (targets.some(target => resolvesLocally(run, path.resolve(base, target.replace('*', captured))))) {return 'resolved';}
-    result = 'unresolved';
+  // TypeScript picks one entry: an exact key, otherwise the wildcard with the longest prefix.
+  let selected: {entry: NonNullable<TsConfigInfo['paths']>[number]; captured: string} | undefined;
+  let longest = -1;
+  for (const entry of config?.paths || []) {
+    const star = entry.pattern.indexOf('*');
+    if (star < 0) {
+      if (entry.pattern === specifier) {selected = {entry, captured: ''}; break;}
+      continue;
+    }
+    const prefix = entry.pattern.slice(0, star);
+    const suffix = entry.pattern.slice(star + 1);
+    if (specifier.length >= prefix.length + suffix.length && specifier.startsWith(prefix) && specifier.endsWith(suffix) && prefix.length > longest) {
+      longest = prefix.length;
+      selected = {entry, captured: specifier.slice(prefix.length, specifier.length - suffix.length)};
+    }
   }
-  return result;
+  if (!selected) {return undefined;}
+  const base = selected.entry.base || config?.baseUrl || config?.pathsDir || run.root;
+  return selected.entry.targets.some(target => resolvesLocally(run, path.resolve(base, target.replace('*', selected.captured))))
+    ? 'resolved'
+    : 'unresolved';
 }
 
 function resolvesUnderBaseUrl(run: Run, config: TsConfigInfo | undefined, specifier: string): boolean {
@@ -669,7 +684,7 @@ async function analyzeNpm(run: Run, inventory: PackageInventory, locks: Map<stri
       }
       run.coverage.sourceFilesAnalyzed += 1;
       if (/\.[cm]?tsx?$/.test(name)) {typescriptSources = true;}
-      const parsed = parseJs(ts, file, text, isConfig);
+      const parsed = parseJs(ts, file, text, isConfig, tsconfig?.verbatimModuleSyntax);
       if (parsed.jsx || extension === '.jsx' || extension === '.tsx') {jsxSources = true;}
       configStrings.push(...parsed.strings);
       for (const reference of parsed.typeReferences) {
@@ -997,7 +1012,7 @@ function readRequirementNames(run: Run, requested: string, declared: Map<string,
       continue;
     }
     // An editable install declares its dependencies in a project file this check does not read.
-    if (/^(?:-e|--editable)(?:=|\s|$)/.test(line)) {complete = false;}
+    if (/^(?:-e|--editable)(?:=|\s|$)/.test(line) || /^(?:\.{1,2}(?:[\\/]|$)|file:)/i.test(line)) {complete = false;}
     if (!line || line.startsWith('-') || /^[a-z+]+:\/\//i.test(line)) {continue;}
     const name = line.match(/^([A-Za-z0-9][A-Za-z0-9._-]*)/)?.[1];
     if (name && !declared.has(normalizePythonName(name))) {declared.set(normalizePythonName(name), rel(run, file));}
@@ -1200,9 +1215,8 @@ function goWorkDirectories(text: string): string[] {
   return directories;
 }
 
-/** Module paths of every module a go.work above `directory` (inside the repository) lists with `use`. */
+/** Module paths of the modules the nearest go.work above `directory` (inside the repository) lists with `use`. */
 function goWorkspaceModules(run: Run, directory: string, cache: Map<string, string[]>): string[] {
-  const paths: string[] = [];
   for (let current = directory; !path.relative(run.root, current).startsWith('..'); current = path.dirname(current)) {
     const work = insideRoot(run, path.join(current, 'go.work'));
     if (work) {
@@ -1215,11 +1229,11 @@ function goWorkspaceModules(run: Run, directory: string, cache: Map<string, stri
         }
         cache.set(work, modules);
       }
-      paths.push(...(cache.get(work) || []));
+      return cache.get(work) || [];
     }
     if (current === run.root) {break;}
   }
-  return paths;
+  return [];
 }
 
 /** Reads a bounded text file for go.work lookups; coverage counters stay untouched. */
@@ -1295,7 +1309,13 @@ function analyzeGo(run: Run, inventory: PackageInventory): void {
 // Install scripts
 
 function analyzeInstallScripts(run: Run, inventory: PackageInventory, locks: Map<string, NpmLock>): void {
-  const withScripts = inventory.coordinates.filter(coordinate => coordinate.installScript);
+  const withScripts = inventory.coordinates.filter(coordinate => {
+    if (!coordinate.installScript) {return false;}
+    const name = path.posix.basename(coordinate.lockfilePath);
+    if (name !== 'package-lock.json' && name !== 'npm-shrinkwrap.json') {return true;}
+    // npm ignores package-lock.json beside npm-shrinkwrap.json.
+    return locks.get(path.dirname(path.join(run.root, coordinate.lockfilePath)))?.file === name;
+  });
   for (const coordinate of withScripts) {
     const pnpm = path.posix.basename(coordinate.lockfilePath) === 'pnpm-lock.yaml';
     run.findings.push({
