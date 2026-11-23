@@ -360,6 +360,19 @@ describe('Python dependency hygiene', () => {
     expect(JSON.stringify(report.findings)).not.toContain('helpers');
   });
 
+  it('follows -r with an attached path and treats an attached -e as editable', async () => {
+    const included = await analyze(fixture({
+      'requirements.txt': '-rdeps/base.txt\n',
+      'deps/base.txt': 'PyYAML==6.0.1\n',
+      'app.py': 'import yaml\n',
+    }));
+    expect(included.findings).toEqual([]);
+
+    const editable = await analyze(fixture({'requirements.txt': '-e.\n', 'app.py': 'import yaml\n'}));
+    expect(names(editable, HYGIENE_RULES.missing)).toEqual([]);
+    expect(uncertainNames(editable, 'requirements.txt')).toEqual(['yaml']);
+  });
+
   it('treats bare URL, archive and path requirements as incomplete declarations', async () => {
     for (const requirement of [
       'https://files.example.test/PyYAML-6.0.1-py3-none-any.whl',

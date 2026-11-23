@@ -988,7 +988,8 @@ function pythonDistributionMatches(candidate: string, declared: string): boolean
     : normalizePythonName(candidate) === declared;
 }
 
-const REQUIREMENT_INCLUDE = /^(?:-r|--requirement)(?:=|\s+)(\S+)$/;
+// pip accepts the short option with its path attached (`-rdeps/base.txt`) as well as `-r path` and `--requirement=path`.
+const REQUIREMENT_INCLUDE = /^(?:-r(?:=|\s*)|--requirement(?:=|\s+))(\S+)$/;
 
 /** Requirement files reached from `start` through `-r` includes. Reads here leave coverage counters alone. */
 function requirementIncludes(run: Run, start: string): Set<string> {
@@ -1029,7 +1030,7 @@ function readRequirementNames(run: Run, requested: string, declared: Map<string,
       continue;
     }
     // An editable install declares its dependencies in a project file this check does not read.
-    if (/^(?:-e|--editable)(?:=|\s|$)/.test(line) || /^(?:\.{1,2}(?:[\\/[]|$)|file:)/i.test(line)) {complete = false;}
+    if (/^(?:-e|--editable(?:=|\s|$))/.test(line) || /^(?:\.{1,2}(?:[\\/[]|$)|file:)/i.test(line)) {complete = false;}
     if (!line || line.startsWith('-')) {continue;}
     // A bare URL, archive or path installs a distribution whose name is not on the line; `name @ url` keeps its name.
     const named = /^[A-Za-z0-9][A-Za-z0-9._-]*(?:\[[^\]]*\])?\s*@\s*\S/.test(line);
