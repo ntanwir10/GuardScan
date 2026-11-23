@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import {builtinModules} from 'module';
 import * as path from 'path';
+import ignore from 'ignore';
 import yaml from 'js-yaml';
 import type * as TypeScript from 'typescript';
 import type {Finding} from '../utils/reporter';
@@ -58,6 +59,7 @@ const NOT_ANALYZED_MANIFESTS = new Set([
 
 interface Run {
   root: string;
+  ignored: ReturnType<typeof ignore>;
   coverage: DependencyInsightsCoverage;
   findings: DependencyInsightFinding[];
 }
@@ -85,10 +87,12 @@ function insideRoot(run: Run, file: string): string | undefined {
 }
 
 /** Returns undefined (and records why) when a file cannot be analyzed. */
-function readSource(run: Run, file: string, limit = MAX_SOURCE_BYTES): string | undefined {
+function readSource(run: Run, file: string, limit = MAX_SOURCE_BYTES, declaration = false): string | undefined {
   try {
     if (fs.statSync(file).size > limit) {
       run.coverage.sourceFilesTooLarge += 1;
+      // A skipped declaration drops its whole project, so the scanner output is partial.
+      if (declaration) {run.coverage.sourceFilesSkipped += 1;}
       return undefined;
     }
     return readInventoryText(file);
@@ -116,6 +120,8 @@ function walkOwned(
     }
     for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
       const absolute = path.join(directory, entry.name);
+      const relative = path.relative(run.root, absolute).split(path.sep).join('/');
+      if (relative && !relative.startsWith('..') && run.ignored.ignores(entry.isDirectory() ? `${relative}/` : relative)) {continue;}
       if (entry.isDirectory()) {
         if (!IGNORED_DIRS.has(entry.name) && !skipDirectory(absolute, entry.name)) {stack.push(absolute);}
       } else if (entry.isFile()) {
@@ -198,9 +204,13 @@ const KNOWN_BINARIES: Readonly<Record<string, string>> = {
 };
 
 interface TsConfigInfo {
-  pathPatterns: string[];
+  paths: Array<{pattern: string; targets: string[]}>;
+  /** Directory of the config that set `paths`; targets resolve here when no baseUrl is set. */
+  pathsDir: string;
   baseUrl?: string;
   importHelpers: boolean;
+  jsx?: string;
+  jsxImportSource?: string;
 }
 
 interface NpmManifest {
@@ -215,6 +225,11 @@ interface NpmManifest {
   missing: Map<string, string[]>;
   uncertain: UncertainItem[];
   incomplete: string[];
+}
+
+/** Incomplete evidence in a workspace also makes every ancestor manifest it resolves through uncertain. */
+function recordIncomplete(manifest: NpmManifest, what: string): void {
+  for (const owner of manifest.chain) {owner.incomplete.push(what);}
 }
 
 function npmPackageName(specifier: string): string | undefined {
@@ -264,16 +279,17 @@ function scriptKind(ts: typeof TypeScript, file: string): TypeScript.ScriptKind 
   return ts.ScriptKind.JS;
 }
 
-interface ParsedJs {specifiers: string[]; dynamic: number; typeReferences: string[]; strings: string[]}
+interface ParsedJs {specifiers: string[]; dynamic: number; typeReferences: string[]; strings: string[]; jsx: boolean}
 
 /** Reads module references with the TypeScript parser: imports, re-exports, require(), import(). */
 function parseJs(ts: typeof TypeScript, file: string, text: string, collectStrings: boolean): ParsedJs {
   const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, false, scriptKind(ts, file));
   const result: ParsedJs = {
     specifiers: [], dynamic: 0, typeReferences: source.typeReferenceDirectives.map(reference => reference.fileName),
-    strings: [],
+    strings: [], jsx: false,
   };
   const visit = (node: TypeScript.Node): void => {
+    if (ts.isJsxElement(node) || ts.isJsxSelfClosingElement(node) || ts.isJsxFragment(node)) {result.jsx = true;}
     if ((ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) &&
       node.moduleSpecifier && ts.isStringLiteral(node.moduleSpecifier)) {
       result.specifiers.push(node.moduleSpecifier.text);
@@ -316,7 +332,7 @@ function parseJsonc(ts: typeof TypeScript, file: string, text: string): unknown 
 function readTsConfig(run: Run, ts: typeof TypeScript, directory: string): TsConfigInfo | undefined {
   const start = ['tsconfig.json', 'jsconfig.json'].map(name => insideRoot(run, path.join(directory, name))).find(Boolean);
   if (!start) {return undefined;}
-  const info: TsConfigInfo = {pathPatterns: [], importHelpers: false};
+  const info: TsConfigInfo = {paths: [], pathsDir: path.dirname(start), importHelpers: false};
   const seen = new Set<string>();
   // Child settings win, so walk the extends chain from the starting file and keep the first value seen.
   let baseUrlSet = false;
@@ -335,13 +351,21 @@ function readTsConfig(run: Run, ts: typeof TypeScript, directory: string): TsCon
     const options = asRecord(config?.compilerOptions) || {};
     // TypeScript replaces, not merges, an inherited `paths`; an explicit empty object still wins.
     if (!pathsSet && 'paths' in options) {
-      info.pathPatterns = Object.keys(asRecord(options.paths) || {});
+      info.paths = Object.entries(asRecord(options.paths) || {}).map(([pattern, targets]) => ({
+        pattern,
+        targets: Array.isArray(targets) ? targets.filter((target): target is string => typeof target === 'string') : [],
+      }));
+      info.pathsDir = path.dirname(file);
       pathsSet = true;
     }
     if (!baseUrlSet && typeof options.baseUrl === 'string') {
       const baseUrl = insideRoot(run, path.resolve(path.dirname(file), options.baseUrl));
       info.baseUrl = baseUrl;
       baseUrlSet = true;
+    }
+    if (info.jsx === undefined && typeof options.jsx === 'string') {info.jsx = options.jsx;}
+    if (info.jsxImportSource === undefined && typeof options.jsxImportSource === 'string') {
+      info.jsxImportSource = options.jsxImportSource;
     }
     if (!importHelpersSet && typeof options.importHelpers === 'boolean') {
       info.importHelpers = options.importHelpers;
@@ -358,24 +382,47 @@ function readTsConfig(run: Run, ts: typeof TypeScript, directory: string): TsCon
   return info;
 }
 
-function matchesPathAlias(config: TsConfigInfo | undefined, specifier: string): boolean {
-  return (config?.pathPatterns || []).some(pattern => {
+const RESOLVE_EXTENSIONS = ['.ts', '.tsx', '.d.ts', '.js', '.jsx', '.mjs', '.cjs', '.json'];
+
+/** True when `base` is a file (as written or with a source extension) or a directory with an index or package.json. */
+function resolvesLocally(run: Run, base: string): boolean {
+  const isFile = (candidate: string): boolean => {
+    const real = insideRoot(run, candidate);
+    try {
+      return real !== undefined && fs.statSync(real).isFile();
+    } catch {
+      return false;
+    }
+  };
+  return ['', ...RESOLVE_EXTENSIONS].some(extension => isFile(`${base}${extension}`)) ||
+    ['package.json', ...RESOLVE_EXTENSIONS.map(extension => `index${extension}`)]
+      .some(name => isFile(path.join(base, name)));
+}
+
+/** 'resolved' when a matching `paths` pattern has a target file, 'unresolved' when patterns match but none does. */
+function matchPathAlias(run: Run, config: TsConfigInfo | undefined, specifier: string): 'resolved' | 'unresolved' | undefined {
+  let result: 'resolved' | 'unresolved' | undefined;
+  for (const {pattern, targets} of config?.paths || []) {
     const star = pattern.indexOf('*');
-    if (star < 0) {return pattern === specifier;}
-    const prefix = pattern.slice(0, star);
-    const suffix = pattern.slice(star + 1);
-    return specifier.length >= prefix.length + suffix.length && specifier.startsWith(prefix) && specifier.endsWith(suffix);
-  });
+    const prefix = star < 0 ? pattern : pattern.slice(0, star);
+    const suffix = star < 0 ? '' : pattern.slice(star + 1);
+    const matches = star < 0
+      ? pattern === specifier
+      : specifier.length >= prefix.length + suffix.length && specifier.startsWith(prefix) && specifier.endsWith(suffix);
+    if (!matches) {continue;}
+    const captured = star < 0 ? '' : specifier.slice(prefix.length, specifier.length - suffix.length);
+    const base = config?.baseUrl || config?.pathsDir || run.root;
+    if (targets.some(target => resolvesLocally(run, path.resolve(base, target.replace('*', captured))))) {return 'resolved';}
+    result = 'unresolved';
+  }
+  return result;
 }
 
-function resolvesUnderBaseUrl(config: TsConfigInfo | undefined, specifier: string): boolean {
-  if (!config?.baseUrl) {return false;}
-  const target = path.join(config.baseUrl, specifier.split('/')[0]);
-  return ['', '.ts', '.tsx', '.d.ts', '.js', '.jsx', '.mjs', '.cjs', '.json'].some(extension =>
-    fs.existsSync(`${target}${extension}`));
+function resolvesUnderBaseUrl(run: Run, config: TsConfigInfo | undefined, specifier: string): boolean {
+  return Boolean(config?.baseUrl) && resolvesLocally(run, path.join(config?.baseUrl || '', specifier));
 }
 
-interface NpmLock {dir: string; version: number; packages: Record<string, unknown>}
+interface NpmLock {dir: string; file: string; version: number; packages: Record<string, unknown>}
 
 function loadNpmLocks(run: Run, inventory: PackageInventory): Map<string, NpmLock> {
   const locks = new Map<string, NpmLock>();
@@ -391,6 +438,7 @@ function loadNpmLocks(run: Run, inventory: PackageInventory): Map<string, NpmLoc
       if (!data) {continue;}
       locks.set(directory, {
         dir: directory,
+        file: basename,
         version: typeof data.lockfileVersion === 'number' ? data.lockfileVersion : 1,
         packages: asRecord(data.packages) || {},
       });
@@ -445,7 +493,7 @@ async function analyzeNpm(run: Run, inventory: PackageInventory, locks: Map<stri
   const manifests = new Map<string, NpmManifest>();
   for (const manifest of manifestFiles) {
     const file = path.join(run.root, manifest);
-    const text = readSource(run, file);
+    const text = readSource(run, file, MAX_SOURCE_BYTES, true);
     let data: Record<string, unknown> | undefined;
     try {
       data = text === undefined ? undefined : asRecord(JSON.parse(text) as unknown);
@@ -499,11 +547,12 @@ async function analyzeNpm(run: Run, inventory: PackageInventory, locks: Map<stri
     const configStrings: string[] = [];
     let typescriptSources = Boolean(tsconfig);
     let styleSources = false;
+    let jsxSources = false;
     const before = run.coverage.sourceFilesSkipped + run.coverage.sourceFilesTooLarge;
     walkOwned(run, manifest.dir, directory => manifests.has(directory), (file, name) => {
       const extension = path.extname(name);
       if (UNPARSED_SOURCE_EXTENSIONS.has(extension)) {
-        manifest.incomplete.push(rel(run, file));
+        recordIncomplete(manifest, rel(run, file));
         return;
       }
       if (extension === '.scss' || extension === '.sass') {styleSources = true;}
@@ -526,6 +575,7 @@ async function analyzeNpm(run: Run, inventory: PackageInventory, locks: Map<stri
       run.coverage.sourceFilesAnalyzed += 1;
       if (/\.[cm]?tsx?$/.test(name)) {typescriptSources = true;}
       const parsed = parseJs(ts, file, text, isConfig);
+      if (parsed.jsx || extension === '.jsx' || extension === '.tsx') {jsxSources = true;}
       configStrings.push(...parsed.strings);
       for (const reference of parsed.typeReferences) {
         markUsed(manifest, reference);
@@ -534,28 +584,32 @@ async function analyzeNpm(run: Run, inventory: PackageInventory, locks: Map<stri
       if (parsed.dynamic > 0) {
         manifest.uncertain.push({name: rel(run, file), reason: 'require() or import() with a non-literal argument'});
         // The loaded name is unknown, so no declared package can be called unused with confidence.
-        manifest.incomplete.push(rel(run, file));
+        recordIncomplete(manifest, rel(run, file));
       }
       for (const specifier of parsed.specifiers) {
         if (!specifier || /^[./#]/.test(specifier) || /^[a-z][a-z0-9+.-]*:/i.test(specifier)) {continue;}
         const name = npmPackageName(specifier);
         if (name) {importedNames.add(name);}
         if (name && markUsed(manifest, name)) {continue;}
-        if (matchesPathAlias(tsconfig, specifier)) {continue;}
-        if (!name) {
-          manifest.uncertain.push({name: specifier, reason: 'not a package name; possibly an unresolved path alias'});
-        } else if (manifest.chain.some(owner => owner.name === name) || NODE_BUILTINS.has(name) ||
-          resolvesUnderBaseUrl(tsconfig, specifier)) {
+        const alias = matchPathAlias(run, tsconfig, specifier);
+        if (alias === 'resolved') {continue;}
+        if (name && (manifest.chain.some(owner => owner.name === name) || NODE_BUILTINS.has(name) ||
+          resolvesUnderBaseUrl(run, tsconfig, specifier))) {
           continue;
+        } else if (alias === 'unresolved') {
+          manifest.uncertain.push({name: specifier, reason: 'path alias matched but no target file was found'});
+        } else if (!name) {
+          manifest.uncertain.push({name: specifier, reason: 'not a package name; possibly an unresolved path alias'});
         } else if (workspaceNames.has(name)) {
           manifest.uncertain.push({name, reason: 'local workspace package imported without a declaration'});
         } else {
-          manifest.missing.set(name, [...(manifest.missing.get(name) || []), rel(run, file)]);
+          const importers = manifest.missing.get(name);
+          if (importers) {importers.push(rel(run, file));} else {manifest.missing.set(name, [rel(run, file)]);}
         }
       }
     });
     if (run.coverage.sourceFilesSkipped + run.coverage.sourceFilesTooLarge > before) {
-      manifest.incomplete.push('unreadable or oversized source files');
+      recordIncomplete(manifest, 'unreadable or oversized source files');
     }
 
     for (const field of PACKAGE_JSON_CONFIG_FIELDS) {collectJsonStrings(manifest.data[field], configStrings);}
@@ -590,6 +644,16 @@ async function analyzeNpm(run: Run, inventory: PackageInventory, locks: Map<stri
     markUsed(manifest, '@types/node');
     if (typescriptSources) {markUsed(manifest, 'typescript');}
     if (tsconfig?.importHelpers) {markUsed(manifest, 'tslib');}
+    if (jsxSources) {
+      // The automatic JSX runtime imports from jsxImportSource (default react) without an import statement.
+      const source = tsconfig?.jsxImportSource;
+      if (source) {
+        const jsxPackage = npmPackageName(source);
+        if (jsxPackage) {markUsed(manifest, jsxPackage);}
+      } else if (!tsconfig?.jsx || tsconfig.jsx === 'react-jsx' || tsconfig.jsx === 'react-jsxdev') {
+        markUsed(manifest, 'react');
+      }
+    }
     if (styleSources) {
       for (const name of ['sass', 'sass-embedded', 'node-sass']) {markUsed(manifest, name);}
     }
@@ -716,7 +780,9 @@ export function scanPythonSource(text: string): {imports: string[]; strings: str
   }
   const imports: string[] = [];
   for (const line of code.replace(/\\\r?\n/g, ' ').split(/\r?\n/)) {
-    for (const statement of line.split(';').map(part => part.trim())) {
+    for (const part of line.split(';')) {
+      // A compound header may carry its body on the same line: `if x: import y`.
+      const statement = part.trim().replace(/^(?:async\s+)?(?:if|elif|else|try|except|finally|with|for|while)\b[^:]*:\s*/, '');
       const plain = statement.match(/^import\s+(.+)$/);
       if (plain) {
         for (const part of plain[1].split(',')) {
@@ -732,11 +798,14 @@ export function scanPythonSource(text: string): {imports: string[]; strings: str
   return {imports, strings};
 }
 
-function pythonTableEntry(module: string): readonly string[] | undefined {
+function pythonTableEntry(module: string): {key: string; entry: readonly string[]} | undefined {
   const parts = module.split('.');
   for (let length = parts.length; length > 0; length -= 1) {
-    const entry = PYTHON_IMPORT_DISTRIBUTIONS[parts.slice(0, length).join('.')];
-    if (entry) {return entry;}
+    const key = parts.slice(0, length).join('.');
+    // Own properties only: `import constructor` must not reach Object.prototype members.
+    if (Object.prototype.hasOwnProperty.call(PYTHON_IMPORT_DISTRIBUTIONS, key)) {
+      return {key, entry: PYTHON_IMPORT_DISTRIBUTIONS[key]};
+    }
   }
   return undefined;
 }
@@ -772,22 +841,26 @@ function requirementIncludes(run: Run, start: string): Set<string> {
   return reached;
 }
 
-function readRequirementNames(run: Run, requested: string, declared: Map<string, string>, seen: Set<string>): void {
+/** Collects declared names; returns false when an include was missing, unreadable, oversized or outside the repository. */
+function readRequirementNames(run: Run, requested: string, declared: Map<string, string>, seen: Set<string>): boolean {
   const file = insideRoot(run, requested);
-  if (!file || seen.has(file) || seen.size > 50) {return;}
+  if (!file || seen.size > 50) {return false;}
+  if (seen.has(file)) {return true;}
   seen.add(file);
-  const text = readSource(run, file);
+  const text = readSource(run, file, MAX_SOURCE_BYTES, true);
+  let complete = text !== undefined;
   for (const raw of (text || '').split(/\r?\n/)) {
     const line = raw.replace(/(^|\s)#.*$/, '').trim();
     const include = line.match(REQUIREMENT_INCLUDE);
     if (include) {
-      readRequirementNames(run, path.resolve(path.dirname(file), include[1]), declared, seen);
+      complete = readRequirementNames(run, path.resolve(path.dirname(file), include[1]), declared, seen) && complete;
       continue;
     }
     if (!line || line.startsWith('-') || /^[a-z+]+:\/\//i.test(line)) {continue;}
     const name = line.match(/^([A-Za-z0-9][A-Za-z0-9._-]*)/)?.[1];
     if (name && !declared.has(normalizePythonName(name))) {declared.set(normalizePythonName(name), rel(run, file));}
   }
+  return complete;
 }
 
 function analyzePython(run: Run, inventory: PackageInventory): void {
@@ -812,7 +885,10 @@ function analyzePython(run: Run, inventory: PackageInventory): void {
     run.coverage.manifestsAnalyzed.pip += 1;
     const declared = new Map<string, string>();
     const seen = new Set<string>();
-    for (const file of files.sort()) {readRequirementNames(run, file, declared, seen);}
+    let declarationsComplete = true;
+    for (const file of files.sort()) {
+      declarationsComplete = readRequirementNames(run, file, declared, seen) && declarationsComplete;
+    }
     const primary = rel(run, files.find(file => path.basename(file) === 'requirements.txt') || files[0]);
     const imports = new Map<string, string[]>();
     const stringNames = new Set<string>();
@@ -826,7 +902,10 @@ function analyzePython(run: Run, inventory: PackageInventory): void {
       if (text === undefined) {return;}
       run.coverage.sourceFilesAnalyzed += 1;
       const scanned = scanPythonSource(text);
-      for (const module of scanned.imports) {imports.set(module, [...(imports.get(module) || []), rel(run, file)]);}
+      for (const module of scanned.imports) {
+        const importers = imports.get(module);
+        if (importers) {importers.push(rel(run, file));} else {imports.set(module, [rel(run, file)]);}
+      }
       for (const value of scanned.strings) {
         for (const token of value.split(/[^A-Za-z0-9_.]+/)) {
           if (token) {stringNames.add(token.split('.')[0]);}
@@ -836,19 +915,24 @@ function analyzePython(run: Run, inventory: PackageInventory): void {
     const incomplete = run.coverage.sourceFilesSkipped + run.coverage.sourceFilesTooLarge > before;
     const used = new Set<string>();
     const uncertain: UncertainItem[] = [];
-    const missing = new Map<string, {expected: string; files: string[]}>();
+    const missing = new Map<string, {name: string; files: string[]}>();
     for (const [module, importers] of imports) {
       const top = module.split('.')[0];
       if (PYTHON_STDLIB.has(top)) {continue;}
-      const table = pythonTableEntry(module);
+      const found = pythonTableEntry(module);
+      const table = found?.entry;
       const candidates = [...(table || []), top];
       const matched = [...declared.keys()].filter(name => candidates.some(candidate => pythonDistributionMatches(candidate, name)));
       if (matched.length > 0) {
         for (const name of matched) {used.add(name);}
       } else if (localNames.has(top)) {
         continue;
-      } else if (table && !table.some(candidate => candidate.endsWith('*'))) {
-        missing.set(top, {expected: table[0], files: [...(missing.get(top)?.files || []), ...importers]});
+      } else if (found && table && !table.some(candidate => candidate.endsWith('*')) && declarationsComplete) {
+        // One finding per expected distribution, so google.protobuf and google.genai stay separate.
+        const group = missing.get(table[0]);
+        if (group) {group.files.push(...importers);} else {missing.set(table[0], {name: found.key, files: [...importers]});}
+      } else if (!declarationsComplete && table && !table.some(candidate => candidate.endsWith('*'))) {
+        uncertain.push({name: top, reason: 'a requirements include could not be read, so the declaration may be elsewhere'});
       } else {
         uncertain.push({
           name: top,
@@ -856,10 +940,10 @@ function analyzePython(run: Run, inventory: PackageInventory): void {
         });
       }
     }
-    for (const [name, value] of missing) {
-      run.findings.push(hygieneFinding('missing', 'pip', primary, name,
-        `Declare ${value.expected} in ${primary}; the import resolves only if it is installed some other way.`,
-        {distribution: value.expected, importedBy: listFiles(value.files)}));
+    for (const [expected, value] of missing) {
+      run.findings.push(hygieneFinding('missing', 'pip', primary, value.name,
+        `Declare ${expected} in ${primary}; the import resolves only if it is installed some other way.`,
+        {distribution: expected, importedBy: listFiles(value.files)}));
     }
     const reverse = new Map<string, string>();
     for (const [module, distributions] of Object.entries(PYTHON_IMPORT_DISTRIBUTIONS)) {
@@ -959,12 +1043,19 @@ function analyzeGo(run: Run, inventory: PackageInventory): void {
     .map(manifest => path.dirname(path.join(run.root, manifest))));
   for (const directory of modules) {
     const manifest = rel(run, path.join(directory, 'go.mod'));
-    const text = readSource(run, path.join(directory, 'go.mod'));
+    const text = readSource(run, path.join(directory, 'go.mod'), MAX_SOURCE_BYTES, true);
     if (text === undefined) {continue;}
     run.coverage.manifestsAnalyzed.go += 1;
     const {module, requires, tools} = parseGoModule(text);
-    const used = new Set(tools);
+    const used = new Set<string>();
     const missing = new Map<string, string[]>();
+    const ownerOf = (importPath: string): string | undefined => [...requires.keys()]
+      .filter(required => importPath === required || importPath.startsWith(`${required}/`))
+      .sort((left, right) => right.length - left.length)[0];
+    for (const tool of tools) {
+      const owner = ownerOf(tool);
+      if (owner) {used.add(owner);}
+    }
     const before = run.coverage.sourceFilesSkipped + run.coverage.sourceFilesTooLarge;
     // The go tool ignores directory and file names that begin with "." or "_".
     walkOwned(run, directory, (candidate, name) =>
@@ -976,10 +1067,9 @@ function analyzeGo(run: Run, inventory: PackageInventory): void {
       for (const importPath of scanGoImports(source)) {
         if (importPath === 'C' || (module && (importPath === module || importPath.startsWith(`${module}/`)))) {continue;}
         if (!importPath.split('/')[0].includes('.')) {continue;}
-        const owner = [...requires.keys()]
-          .filter(required => importPath === required || importPath.startsWith(`${required}/`))
-          .sort((left, right) => right.length - left.length)[0];
-        if (owner) {used.add(owner);} else {missing.set(importPath, [...(missing.get(importPath) || []), rel(run, file)]);}
+        const owner = ownerOf(importPath);
+        const importers = missing.get(importPath);
+        if (owner) {used.add(owner);} else if (importers) {importers.push(rel(run, file));} else {missing.set(importPath, [rel(run, file)]);}
       }
     });
     for (const [importPath, files] of missing) {
@@ -1008,12 +1098,17 @@ function analyzeGo(run: Run, inventory: PackageInventory): void {
 function analyzeInstallScripts(run: Run, inventory: PackageInventory, locks: Map<string, NpmLock>): void {
   const withScripts = inventory.coordinates.filter(coordinate => coordinate.installScript);
   for (const coordinate of withScripts) {
+    const pnpm = path.posix.basename(coordinate.lockfilePath) === 'pnpm-lock.yaml';
     run.findings.push({
       severity: 'low',
       category: INSTALL_SCRIPT_CATEGORY,
       file: coordinate.lockfilePath,
-      description: `${coordinate.name}@${coordinate.exactVersion} runs an install script when installed`,
-      suggestion: 'Review the package\'s preinstall/install/postinstall script; install with --ignore-scripts or allow only trusted packages to run scripts.',
+      description: pnpm
+        ? `${coordinate.name}@${coordinate.exactVersion} is marked by pnpm as requiring a build`
+        : `${coordinate.name}@${coordinate.exactVersion} runs an install script when installed`,
+      suggestion: pnpm
+        ? 'Review what the package builds on install; install with --ignore-scripts or allow only trusted packages to build.'
+        : 'Review the package\'s preinstall/install/postinstall script; install with --ignore-scripts or allow only trusted packages to run scripts.',
       ruleId: HYGIENE_RULES.installScript,
       metadata: {
         ecosystem: coordinate.ecosystem, package: coordinate.name, version: coordinate.exactVersion,
@@ -1041,7 +1136,8 @@ function analyzeInstallScripts(run: Run, inventory: PackageInventory, locks: Map
       undetermined(manifest, 'yarn.lock does not record which packages have install scripts');
     } else if (basename === 'package-lock.json' || basename === 'npm-shrinkwrap.json') {
       const lock = locks.get(path.dirname(file));
-      if (!lock) {continue;}
+      // Only the lockfile npm reads counts; package-lock.json is inactive beside npm-shrinkwrap.json.
+      if (!lock || lock.file !== basename) {continue;}
       if (lock.version < 2) {
         undetermined(manifest, 'npm lockfile v1 does not record hasInstallScript');
       } else {
@@ -1060,10 +1156,22 @@ function analyzeInstallScripts(run: Run, inventory: PackageInventory, locks: Map
   }
 }
 
+// shortcut: only the root .gitignore is honored, not nested ones; load nested files if repos need them.
+function rootGitignore(root: string): ReturnType<typeof ignore> {
+  const matcher = ignore();
+  try {
+    matcher.add(readInventoryText(path.join(root, '.gitignore')));
+  } catch {
+    // No readable .gitignore: nothing extra is excluded.
+  }
+  return matcher;
+}
+
 /** Runs every dependency insight over manifests the inventory already found. */
 export async function analyzeDependencyInsights(inventory: PackageInventory): Promise<DependencyInsightsReport> {
   const run: Run = {
     root: inventory.repository,
+    ignored: rootGitignore(inventory.repository),
     findings: [],
     coverage: {
       manifestsAnalyzed: {npm: 0, pip: 0, go: 0},

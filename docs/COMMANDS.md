@@ -176,11 +176,11 @@ Options:
 `scan` also runs the optional `dependency-insights` scanner. It reads files only and runs no package manager:
 
 - Category `Dependency hygiene`. A package that is imported but not declared (`guardscan.dependency-hygiene.missing`) is medium. A package that is declared but not used (`guardscan.dependency-hygiene.unused`) is low. Results it cannot determine are grouped into one info finding per manifest (`guardscan.dependency-hygiene.uncertain`), with the reasons in `metadata.items`.
-- Category `Dependency install script`. Each package that runs an install script, according to `package-lock.json` v2/v3 `hasInstallScript` or pnpm `requiresBuild`, is low (`guardscan.dependency.install-script`). A lockfile that cannot answer the question (`yarn.lock`, npm lockfile v1, or pnpm lockfile v9+ with no `requiresBuild` entries) gets one info finding (`guardscan.dependency.install-script-undetermined`).
+- Category `Dependency install script`. Each package that runs an install script according to `package-lock.json` v2/v3 `hasInstallScript`, or that pnpm marks with `requiresBuild` as needing a build, is low (`guardscan.dependency.install-script`); the finding says which. Only the lockfile npm reads counts as checked (`npm-shrinkwrap.json` wins over `package-lock.json`). A lockfile that cannot answer the question (`yarn.lock`, npm lockfile v1, or pnpm lockfile v9+ with no `requiresBuild` entries) gets one info finding (`guardscan.dependency.install-script-undetermined`).
 
 The scanner is `required: false`, so its own errors never fail a scan. Its findings still count toward `--fail-on` and `--max-findings`: `--fail-on medium` fails on a missing dependency, and `--fail-on low` fails on an unused dependency or an install script. Use `--no-dependency-insights` to turn the scanner off.
 
-JSON reports add `sbom.services`, the services and SDKs found in direct dependencies, and `sbom.dependencyInsights`, the scanner's coverage. Markdown reports show both in the summary. See [Dependency insights](VULNERABILITY_SCANNING.md#dependency-insights).
+JSON reports always include `sbom.services`, the services and SDKs found in direct dependencies. They include `sbom.dependencyInsights`, the scanner's coverage, only when dependency insights ran; it is omitted with `--no-dependency-insights`. Markdown reports show both in the summary. See [Dependency insights](VULNERABILITY_SCANNING.md#dependency-insights).
 
 ### `guardscan security`
 

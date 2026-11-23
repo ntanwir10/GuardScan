@@ -22,6 +22,11 @@ export interface DependencyCoordinate {
   dependencyParents?: string[];
   /** npm lockfile v2/v3 `hasInstallScript` or pnpm `requiresBuild`; set only when true. */
   installScript?: true;
+  /**
+   * Every manifest that directly declares this package, set only when the merged `manifestPath`/`scope`
+   * alone would hide one (a workspace declaration merged with a transitive or another workspace's record).
+   */
+  directDeclarations?: Array<{manifestPath: string; scope: DependencyScope}>;
 }
 
 export interface PackageInventoryError {
@@ -2500,6 +2505,7 @@ function parsePom(root: string, file: string, coordinates: DependencyCoordinate[
 
 function mergeCoordinates(coordinates: DependencyCoordinate[]): DependencyCoordinate[] {
   const merged = new Map<string, DependencyCoordinate>();
+  const declarations = new Map<string, Map<string, DependencyScope>>();
   const scopeRank: Record<DependencyScope, number> = { unknown: 0, development: 1, optional: 2, runtime: 3 };
   for (const coordinate of coordinates) {
     const key = [
@@ -2508,6 +2514,11 @@ function mergeCoordinates(coordinates: DependencyCoordinate[]): DependencyCoordi
       coordinate.exactVersion,
       coordinate.lockfilePath,
     ].join('\0');
+    if (coordinate.direct) {
+      const pairs = declarations.get(key) || new Map<string, DependencyScope>();
+      pairs.set(coordinate.manifestPath, coordinate.scope);
+      declarations.set(key, pairs);
+    }
     const existing = merged.get(key);
     if (!existing) {
       merged.set(key, { ...coordinate });
@@ -2527,6 +2538,13 @@ function mergeCoordinates(coordinates: DependencyCoordinate[]): DependencyCoordi
       if (coordinate.manifestPath < existing.manifestPath) {existing.manifestPath = coordinate.manifestPath;}
       if (coordinate.lockfilePath < existing.lockfilePath) {existing.lockfilePath = coordinate.lockfilePath;}
     }
+  }
+  for (const [key, pairs] of declarations) {
+    const coordinate = merged.get(key);
+    if (!coordinate || (pairs.size === 1 && pairs.get(coordinate.manifestPath) === coordinate.scope)) {continue;}
+    coordinate.directDeclarations = [...pairs]
+      .map(([manifestPath, scope]) => ({manifestPath, scope}))
+      .sort((left, right) => left.manifestPath.localeCompare(right.manifestPath));
   }
   return [...merged.values()].sort((a, b) =>
     `${a.osvEcosystem}\0${a.name}\0${a.exactVersion}\0${a.lockfilePath}\0${a.scope}`.localeCompare(

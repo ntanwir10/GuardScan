@@ -1,4 +1,4 @@
-import {classifySbomInventoryErrors} from '../../src/commands/sbom';
+import {classifySbomInventoryErrors, formatServices} from '../../src/commands/sbom';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -21,6 +21,18 @@ describe('SBOM inventory error policy', () => {
       fatal: [errors[0]],
       warnings: [errors[1], errors[2]],
     });
+  });
+});
+
+describe('SBOM services output', () => {
+  it('escapes control characters from repository-supplied fields', () => {
+    const output = formatServices([{
+      service: 'Stripe', category: 'payments', ecosystem: 'npm', package: 'stripe', version: '1.0.0',
+      manifestPath: 'evil\u001b[2Jdir/package.json', scope: 'runtime',
+    }]);
+
+    expect(output).not.toContain('\u001b[2J');
+    expect(output).toContain('evil\\x1b[2Jdir/package.json');
   });
 });
 

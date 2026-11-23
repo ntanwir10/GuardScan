@@ -1,3 +1,4 @@
+import {analyzeDependencyInsights} from '../../src/core/dependency-insights';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -129,6 +130,19 @@ describe('runQualityAnalysis partial tool execution', () => {
       });
     }
   );
+
+  it('reports dependency insights as partial when a declaration manifest was skipped', async () => {
+    jest.spyOn(licenseScanner, 'generateSBOM').mockReturnValue({} as never);
+    fs.writeFileSync(path.join(repository, 'go.mod'), `module example.com/app\n// ${'x'.repeat(2 * 1024 * 1024 + 10)}\n`);
+    const inventory: PackageInventory = {
+      repository, coordinates: [], manifests: ['go.mod'], errors: [], digest: 'fixture',
+    };
+
+    await expect(createSbomSection(
+      Promise.resolve({findings: []} as unknown as LicenseReport), inventory, 'fixture',
+      analyzeDependencyInsights(inventory)
+    )).resolves.toMatchObject({dependencyInsights: {status: 'partial'}});
+  });
 
   it('keeps invalid manifests partial and counts only fatal SBOM errors', async () => {
     jest.spyOn(licenseScanner, 'generateSBOM').mockReturnValue({} as never);

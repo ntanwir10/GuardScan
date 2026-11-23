@@ -217,19 +217,21 @@ export function detectServices(coordinates: readonly DependencyCoordinate[]): Se
     if (!coordinate.direct) {continue;}
     const entry = lookupService(coordinate.ecosystem, coordinate.name);
     if (!entry) {continue;}
-    const detection: ServiceDetection = {
-      service: entry[0],
-      category: entry[1],
-      ecosystem: coordinate.ecosystem,
-      package: coordinate.name,
-      version: coordinate.exactVersion,
-      manifestPath: coordinate.manifestPath,
-      scope: coordinate.scope,
-    };
-    detections.set(
-      [detection.service, detection.ecosystem, detection.package, detection.version, detection.manifestPath].join('\0'),
-      detection
-    );
+    for (const declaration of coordinate.directDeclarations || [{manifestPath: coordinate.manifestPath, scope: coordinate.scope}]) {
+      const detection: ServiceDetection = {
+        service: entry[0],
+        category: entry[1],
+        ecosystem: coordinate.ecosystem,
+        package: coordinate.name,
+        version: coordinate.exactVersion,
+        manifestPath: declaration.manifestPath,
+        scope: declaration.scope,
+      };
+      detections.set(
+        [detection.service, detection.ecosystem, detection.package, detection.version, detection.manifestPath].join('\0'),
+        detection
+      );
+    }
   }
   return [...detections.values()].sort((left, right) =>
     left.category.localeCompare(right.category) ||

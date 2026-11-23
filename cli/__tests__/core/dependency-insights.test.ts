@@ -153,6 +153,75 @@ describe('JavaScript and TypeScript dependency hygiene', () => {
     expect(names(report, HYGIENE_RULES.unused)).toEqual([]);
     expect(uncertainNames(report, 'package.json')).toEqual(['index.js', 'lodash']);
   });
+
+  it('counts the automatic JSX runtime import source as used', async () => {
+    for (const [options, used, unused] of [
+      [{jsx: 'react-jsx'}, 'react', 'preact'],
+      [{jsx: 'react-jsx', jsxImportSource: 'preact'}, 'preact', 'react'],
+    ] as const) {
+      const report = await analyze(fixture({
+        'package.json': {name: 'app', dependencies: {react: '^18.0.0', preact: '^10.0.0'}},
+        'tsconfig.json': {compilerOptions: options},
+        'App.tsx': 'export const App = () => <div/>;\n',
+      }));
+
+      expect(names(report, HYGIENE_RULES.unused)).toEqual([unused]);
+      expect(names(report, HYGIENE_RULES.unused)).not.toContain(used);
+    }
+  });
+
+  it('records incomplete workspace evidence on every manifest in the resolution chain', async () => {
+    const report = await analyze(fixture({
+      'package.json': {name: 'root', private: true, workspaces: ['child'], dependencies: {lodash: '^4.0.0', sharp: '^0.33.0'}},
+      'child/package.json': {name: 'child', dependencies: {}},
+      'child/App.vue': '<template/>\n',
+    }));
+    expect(names(report, HYGIENE_RULES.unused)).toEqual([]);
+    expect(uncertainNames(report, 'package.json')).toEqual(['lodash', 'sharp']);
+
+    const dynamic = await analyze(fixture({
+      'package.json': {name: 'root', private: true, workspaces: ['child'], dependencies: {sharp: '^0.33.0'}},
+      'child/package.json': {name: 'child', dependencies: {}},
+      'child/index.js': 'const driver = process.env.D;\nmodule.exports = require(driver);\n',
+    }));
+    expect(names(dynamic, HYGIENE_RULES.unused)).toEqual([]);
+    expect(uncertainNames(dynamic, 'package.json')).toEqual(['sharp']);
+  });
+
+  it('resolves the complete specifier under baseUrl', async () => {
+    const files = {
+      'package.json': {name: 'app', dependencies: {}},
+      'tsconfig.json': {compilerOptions: {baseUrl: './src'}},
+      'src/@vendor/local.ts': 'export const local = 1;\n',
+    };
+    const missing = await analyze(fixture({...files, 'src/index.ts': 'import "@vendor/sdk";\n'}));
+    expect(names(missing, HYGIENE_RULES.missing)).toEqual(['@vendor/sdk']);
+    const local = await analyze(fixture({...files, 'src/index.ts': 'import "@vendor/local";\n'}));
+    expect(names(local, HYGIENE_RULES.missing)).toEqual([]);
+  });
+
+  it('only trusts a paths pattern when a target file exists', async () => {
+    const report = await analyze(fixture({
+      'package.json': {name: 'app', dependencies: {}},
+      'tsconfig.json': {compilerOptions: {paths: {'*': ['./src/*']}}},
+      'src/index.ts': 'import "lodash";\nimport "./local";\n',
+      'src/local.ts': 'export const local = 1;\n',
+    }));
+
+    expect(names(report, HYGIENE_RULES.missing)).toEqual([]);
+    expect(uncertainNames(report, 'package.json')).toEqual(['lodash']);
+  });
+
+  it('skips files excluded by the root .gitignore', async () => {
+    const report = await analyze(fixture({
+      'package.json': {name: 'app', dependencies: {}},
+      '.gitignore': 'generated/\n',
+      'generated/bundle.js': 'require("ghostpkg");\n',
+      'index.js': 'require("realpkg");\n',
+    }));
+
+    expect(names(report, HYGIENE_RULES.missing)).toEqual(['realpkg']);
+  });
 });
 
 describe('Python dependency hygiene', () => {
@@ -223,6 +292,57 @@ describe('Python dependency hygiene', () => {
     expect(report.coverage.manifestsAnalyzed.pip).toBe(2);
   });
 
+  it('recognizes imports after a compound header or a semicolon', () => {
+    const plain = scanPythonSource('if True:\n    import yaml\n').imports;
+    expect(scanPythonSource('if True: import yaml\n').imports).toEqual(plain);
+    expect(scanPythonSource('if TYPE_CHECKING: import yaml\n').imports).toEqual(['yaml']);
+    expect(scanPythonSource('import os; import yaml\ntry: from a.b import c\nexcept ImportError: import d\n').imports)
+      .toEqual(['os', 'yaml', 'a.b', 'd']);
+  });
+
+  it('does not throw on import names that match Object.prototype members', async () => {
+    const report = await analyze(fixture({
+      'requirements.txt': 'PyYAML==6.0.1\n',
+      'app.py': 'import yaml\nimport constructor\nimport toString\n',
+    }));
+
+    expect(names(report, HYGIENE_RULES.missing)).toEqual([]);
+    expect(uncertainNames(report, 'requirements.txt')).toEqual(['constructor', 'toString']);
+  });
+
+  it('reports a missing import as uncertain when a requirements include cannot be read', async () => {
+    const report = await analyze(fixture({
+      'requirements.txt': '-r deps.txt\n',
+      'app.py': 'import yaml\n',
+    }));
+
+    expect(names(report, HYGIENE_RULES.missing)).toEqual([]);
+    expect(uncertainNames(report, 'requirements.txt')).toEqual(['yaml']);
+  });
+
+  it('reports a missing import as uncertain when the top-level requirements file is oversized', async () => {
+    const report = await analyze(fixture({
+      'requirements.txt': `PyYAML==6.0.1\n# ${'x'.repeat(2 * 1024 * 1024 + 10)}\n`,
+      'app.py': 'import yaml\n',
+    }));
+
+    expect(names(report, HYGIENE_RULES.missing)).toEqual([]);
+    expect(uncertainNames(report, 'requirements.txt')).toEqual(['yaml']);
+  });
+
+  it('reports one missing finding per expected distribution', async () => {
+    const report = await analyze(fixture({
+      'requirements.txt': 'requests==2.0\n',
+      'a.py': 'import google.protobuf\n',
+      'b.py': 'import google.genai\nimport google.protobuf\n',
+    }));
+
+    const missing = report.findings.filter(finding => finding.ruleId === HYGIENE_RULES.missing);
+    expect(missing.map(finding => finding.metadata.distribution).sort()).toEqual(['google-genai', 'protobuf']);
+    expect(missing.find(finding => finding.metadata.distribution === 'protobuf')?.metadata.importedBy)
+      .toEqual(['a.py', 'b.py']);
+  });
+
   it('skips comments and strings in the tokenizer', () => {
     expect(scanPythonSource('x = 1  # import a\ny = \'\'\'\nimport b\n\'\'\'\nimport c.d as e, f\nfrom g.h import (i)\n').imports)
       .toEqual(['c.d', 'f', 'g.h']);
@@ -230,6 +350,25 @@ describe('Python dependency hygiene', () => {
 });
 
 describe('Go dependency hygiene', () => {
+
+  it('counts a go.mod tool directive as use of the module that provides it', async () => {
+    const report = await analyze(fixture({
+      'go.mod': 'module example.com/app\n\ngo 1.24\n\nrequire golang.org/x/tools v0.1.0\n\ntool golang.org/x/tools/cmd/stringer\n',
+      'main.go': 'package main\n',
+    }));
+
+    expect(names(report, HYGIENE_RULES.unused)).toEqual([]);
+  });
+
+  it('marks coverage as skipped when go.mod is over the size cap', async () => {
+    const report = await analyze(fixture({
+      'go.mod': `module example.com/app\n// ${'x'.repeat(2 * 1024 * 1024 + 10)}\n`,
+      'main.go': 'package main\n',
+    }));
+
+    expect(report.coverage.sourceFilesSkipped).toBeGreaterThan(0);
+    expect(report.coverage.manifestsAnalyzed.go).toBe(0);
+  });
   it('matches imports to go.mod requires by longest prefix and ignores the standard library', async () => {
     const report = await analyze(fixture({
       'go.mod': [
@@ -294,6 +433,30 @@ describe('Go dependency hygiene', () => {
 });
 
 describe('install scripts', () => {
+
+  it('words pnpm requiresBuild as a build requirement, not an install script', async () => {
+    const report = await analyze(fixture({
+      'package.json': {name: 'app', dependencies: {sharp: '0.33.0'}},
+      'pnpm-lock.yaml': [
+        "lockfileVersion: '6.0'", 'dependencies:', '  sharp:', '    specifier: 0.33.0', '    version: 0.33.0',
+        'packages:', '  /sharp@0.33.0:', '    resolution: {integrity: sha512-fixture}', '    requiresBuild: true', '    dev: false', '',
+      ].join('\n'),
+    }));
+
+    expect(report.findings.find(finding => finding.ruleId === HYGIENE_RULES.installScript)?.description)
+      .toBe('sharp@0.33.0 is marked by pnpm as requiring a build');
+  });
+
+  it('counts only the active npm lockfile as checked', async () => {
+    const packages = {'': {name: 'app', version: '1.0.0'}};
+    const report = await analyze(fixture({
+      'package.json': {name: 'app', version: '1.0.0'},
+      'package-lock.json': {name: 'app', version: '1.0.0', lockfileVersion: 1, dependencies: {}},
+      'npm-shrinkwrap.json': {name: 'app', version: '1.0.0', lockfileVersion: 3, packages},
+    }));
+
+    expect(report.coverage.installScripts).toEqual({lockfilesChecked: 1, notDeterminable: []});
+  });
   it('reports package-lock v3 hasInstallScript with its dependency path', async () => {
     const report = await analyze(fixture({
       'package.json': {name: 'app', version: '1.0.0', dependencies: {esbuild: '0.20.0'}},

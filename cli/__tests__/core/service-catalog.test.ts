@@ -54,4 +54,19 @@ describe('service catalog', () => {
       },
     ]);
   });
+
+  it('credits every manifest that directly declares a package', () => {
+    const detections = detectServices([coordinate({
+      manifestPath: 'package.json', direct: true,
+      directDeclarations: [
+        {manifestPath: 'packages/app/package.json', scope: 'runtime'},
+        {manifestPath: 'packages/web/package.json', scope: 'development'},
+      ],
+    })]);
+
+    expect(detections.map(item => [item.manifestPath, item.scope])).toEqual([
+      ['packages/app/package.json', 'runtime'],
+      ['packages/web/package.json', 'development'],
+    ]);
+  });
 });

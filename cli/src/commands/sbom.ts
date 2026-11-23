@@ -167,15 +167,20 @@ export async function sbomCommand(options: SBOMOptions): Promise<void> {
   }
 }
 
-function formatServices(services: ServiceDetection[]): string {
+/** Repository-supplied text must not carry terminal escape sequences into the console. */
+const printable = (value: string): string =>
+  // eslint-disable-next-line no-control-regex
+  value.replace(/[\u0000-\u001f\u007f-\u009f]/g, character => `\\x${character.charCodeAt(0).toString(16).padStart(2, '0')}`);
+
+export function formatServices(services: ServiceDetection[]): string {
   if (services.length === 0) {
     return `${chalk.gray('No known services or SDKs found in direct dependencies.')}\n`;
   }
   return [
     chalk.white.bold('Services and SDKs:'),
     ...services.map(service =>
-      `  ${service.service} (${service.category}): ${service.package}@${service.version} ` +
-      `in ${service.manifestPath} [${service.scope}]`
+      printable(`  ${service.service} (${service.category}): ${service.package}@${service.version} ` +
+      `in ${service.manifestPath} [${service.scope}]`)
     ),
     '',
   ].join('\n');
