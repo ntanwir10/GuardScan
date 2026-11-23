@@ -236,6 +236,27 @@ Line checks run in the same `secrets` scanner task and are told apart by rule ID
 
 `guardscan security --staged --ci` exits `1` for high or critical findings, because `--ci` defaults `--fail-on` to `high`. So by default only merge-conflict markers and high or critical secrets block. Code patterns, debug statements, TODO comments, trailing whitespace, and medium secrets such as JWTs are reported without blocking. Pass `--fail-on medium` to also block code patterns and medium secrets; for the pre-commit hook, install it with `guardscan hook install --fail-on medium`. Like any `--ci` run, it writes `guardscan-security.json` to the current directory unless you pass `--output`. The hook that `guardscan hook install` adds writes its report to `guardscan-pre-commit.json` in the Git directory instead, so the report can never be committed.
 
+#### Hygiene checks in `scan` and `security`
+
+Working-tree runs of `scan` and `security` (not `--staged`) include a built-in `hygiene` scanner. It walks the repository once, with the same exclusions, symlink handling, and 2 MiB per-file cap as the `secrets` scanner, and needs no custom rules. These are hygiene checks that point a reviewer at risky patterns. They do not detect every malicious file, and they do not protect against prompt injection. Findings never quote the matched text.
+
+Under `--ci` the default threshold is `high`; without `--ci`, no severity blocks unless you pass `--fail-on`. Only three rules are `high`, because their match is high confidence; every other rule is `medium` or lower and is reported without blocking.
+
+| Family | Rule IDs (severity) | Applies to |
+| --- | --- | --- |
+| Malware and obfuscation | `guardscan.malware.decoded-payload-eval` (**high**), `guardscan.malware.reverse-shell` (**high**), `guardscan.malware.cryptominer-marker` (medium), `guardscan.malware.download-execute` (medium), `guardscan.malware.install-script-download` (medium), `guardscan.malware.env-dump-to-network` (medium), `guardscan.malware.bidi-control-in-source` (medium), `guardscan.malware.quarantine-flag-removal` (low), `guardscan.obfuscation.charcode-sequence` (low), `guardscan.obfuscation.hex-escape-run` (low), `guardscan.exfil.credential-file-with-network` (low) | Source, scripts, Dockerfiles, and config files; `package.json` install scripts |
+| Payments | `guardscan.payments.webhook-without-signature-check`, `guardscan.payments.missing-idempotency-key`, `guardscan.payments.unvalidated-refund-amount`, `guardscan.payments.card-number-in-log-or-storage`, `guardscan.payments.cvv-in-log-or-storage`, `guardscan.payments.card-number-in-client-state` (all medium) | Source files outside test directories, and only when a payment SDK (Stripe, Braintree, PayPal, or Adyen) is a declared dependency in the package inventory |
+| Agent configuration | `guardscan.agent-config.download-pipe-shell` (**high**), `guardscan.agent-config.inline-secret`, `guardscan.agent-config.insecure-remote-http`, `guardscan.agent-config.shell-command`, `guardscan.agent-config.wildcard-permission` (all medium) | `.mcp.json`, `mcp.json`, `.cursor/mcp.json`, `.vscode/mcp.json`, `claude_desktop_config.json`, `mcp_config.json`, `.claude/settings.json`, `.gemini/settings.json` |
+| Agent instructions | `guardscan.agent-instructions.hidden-unicode`, `.send-data-external`, `.download-execute`, `.bypass-approvals`, `.unattended-destructive`, `.hidden-comment-directive`, `.untrusted-install` (medium), `.override-phrase` (low) | `CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, `SKILL.md`, `.cursorrules`, `.windsurfrules`, `copilot-instructions.md`, `.cursor/rules/*.mdc`, `.claude/{agents,commands,skills}/**/*.md` |
+| Gap fillers | `guardscan.xss.dangerously-set-inner-html`, `guardscan.auth.jwt-none-algorithm`, `guardscan.auth.jwt-hardcoded-secret`, `guardscan.crypto.hardcoded-key-or-iv` (medium) | JS/TS and other source files, including `.jsx` and `.tsx` |
+
+Notes:
+
+- `--staged` does not run these checks; it keeps its secrets and line checks only.
+- Every pattern is linear time: it finds a literal marker, then checks a bounded window around it. Each rule reports at most 25 hits per file.
+- Files over 2 MiB and files containing a NUL byte are skipped. A symlink is skipped and marks the scanner's coverage partial, as for the other scanners.
+- A repository that names a payment SDK only in a manifest that GuardScan cannot parse gets no payment findings.
+
 ### `guardscan hook`
 
 ```text
