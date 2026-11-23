@@ -350,3 +350,30 @@ function jestFn(): (() => void) & {count: number} {
   fn.count = 0;
   return fn;
 }
+
+describe('review round 3 regressions', () => {
+  const EVAL = 'guardscan.malware.decoded-payload-eval';
+  const JWT_NONE = 'guardscan.auth.jwt-none-algorithm';
+
+  it('does not treat RegExp exec on decoded text as executing it', () => {
+    expect(ids('a.js', 'const ok = /^[a-z]+$/.ex§ec(at§ob(encoded));')).not.toContain(EVAL);
+    expect(ids('a.js', 'const m = pattern.ex§ec(at§ob(encoded));')).not.toContain(EVAL);
+    expect(ids('a.js', 'ex§ec(at§ob(encoded));')).toContain(EVAL);
+    expect(ids('a.js', 'child_process.ex§ec(at§ob(encoded));')).toContain(EVAL);
+    expect(ids('a.py', 'ex§ec(base64.b64de§code(blob))')).toContain(EVAL);
+  });
+
+  it('finds none anywhere in a JWT algorithms array', () => {
+    expect(ids('a.ts', "jwt.verify(token, key, { algorithms: ['HS256', 'no§ne'] });")).toContain(JWT_NONE);
+    expect(ids('a.ts', "jwt.verify(token, key, { algorithms: ['no§ne', 'HS256'] });")).toContain(JWT_NONE);
+    expect(ids('a.ts', "jwt.verify(token, key, { algorithms: ['HS256', 'RS256'] });")).not.toContain(JWT_NONE);
+  });
+
+  it('stays linear when server names are escaped in the source', () => {
+    const servers = Array.from({length: 24000}, (_, index) => `"\\u0073${index}": {"command": "node", "args": ["s.js"]}`);
+    const config = `{"mcpServers": {${servers.join(',\n')}}}`;
+    const start = process.hrtime.bigint();
+    ids('.mcp.json', config);
+    expect(Number(process.hrtime.bigint() - start) / 1e9).toBeLessThan(2);
+  });
+});

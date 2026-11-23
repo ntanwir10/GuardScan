@@ -162,9 +162,10 @@ const MALWARE_RULES: readonly TextRule[] = [
     description: 'A decoded string (base64, hex, or character codes) is passed straight to eval, Function, or exec.',
     suggestion: 'Remove the decode-and-execute step; ship readable code and review where the payload came from.',
     matchers: [
-      {anchor: /\b(?:eval|Function|exec|execSync)\s{0,3}\(\s{0,3}(?:(?:window\.|global\.|globalThis\.)?atob|String\.fromCharCode|base64\.b64decode|bytes\.fromhex|codecs\.decode)\b/},
+      // `exec` counts as a standalone call or on child_process, never as a method such as RegExp.prototype.exec.
+      {anchor: /(?:\b(?:eval|Function|execSync)|(?<![.\w])exec|\b(?:child_process|childProcess|cp)\.exec)\s{0,3}\(\s{0,3}(?:(?:window\.|global\.|globalThis\.)?atob|String\.fromCharCode|base64\.b64decode|bytes\.fromhex|codecs\.decode)\b/},
       {
-        anchor: /\b(?:eval|Function|exec|execSync)\s{0,3}\(\s{0,3}Buffer\.from\b/,
+        anchor: /(?:\b(?:eval|Function|execSync)|(?<![.\w])exec|\b(?:child_process|childProcess|cp)\.exec)\s{0,3}\(\s{0,3}Buffer\.from\b/,
         window: 200,
         all: [/['"](?:base64|hex)['"]/],
       },
@@ -262,7 +263,8 @@ const CODE_RULES: readonly TextRule[] = [
     category: 'Auth Hygiene: JWT None Algorithm',
     description: 'A JWT configuration accepts the "none" algorithm, which means no signature.',
     suggestion: 'Allow only the specific signing algorithms you issue, for example HS256 or RS256.',
-    matchers: [{anchor: /\balgorithms?\s{0,3}[:=]\s{0,3}\[?\s{0,3}['"]none['"]/i}],
+    // `none` anywhere in a bounded algorithms array, not only as its first entry.
+    matchers: [{anchor: /\balgorithms?\s{0,3}[:=]\s{0,3}(?:\[[^\]\n]{0,200}?)?['"]none['"]/i}],
   },
   {
     ruleId: 'guardscan.auth.jwt-hardcoded-secret',
@@ -494,6 +496,7 @@ function agentConfigFindings(file: string, text: string): Finding[] {
   const attempts = new Map<string, number>();
   // Servers are visited in document order; searching from the current server locates a key shared by several servers in the right one.
   let cursor = 0;
+  let locating = true;
   const add = (meta: Meta, needle: string): void => {
     // Cap lookups (not just findings) per rule: each one searches the file, and a minified config puts every hit on one line.
     const attempt = attempts.get(meta.ruleId) ?? 0;
@@ -507,8 +510,12 @@ function agentConfigFindings(file: string, text: string): Finding[] {
   };
   const checkServer = (name: string, server: Record<string, unknown>): void => {
     const marker = JSON.stringify(name);
-    const at = text.indexOf(marker, cursor);
-    cursor = at < 0 ? 0 : at;
+    // Successful searches only move forward, so locating stays linear; an escaped name absent from the
+    // source stops locating instead of rescanning the file for every later server.
+    if (locating) {
+      const at = text.indexOf(marker, cursor);
+      if (at < 0) {locating = false;} else {cursor = at;}
+    }
     for (const bag of ['env', 'headers']) {
       for (const [key, value] of Object.entries(asRecord(server[bag]) ?? {})) {
         if (isLiteralSecret(key, value)) {add(AGENT_SECRET, JSON.stringify(key));}
