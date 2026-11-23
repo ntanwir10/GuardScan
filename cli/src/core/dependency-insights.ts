@@ -321,6 +321,7 @@ function readTsConfig(run: Run, ts: typeof TypeScript, directory: string): TsCon
   // Child settings win, so walk the extends chain from the starting file and keep the first value seen.
   let baseUrlSet = false;
   let importHelpersSet = false;
+  let pathsSet = false;
   for (let file: string | undefined = start; file && !seen.has(file) && seen.size < 5;) {
     seen.add(file);
     const text = readSource(run, file);
@@ -332,7 +333,11 @@ function readTsConfig(run: Run, ts: typeof TypeScript, directory: string): TsCon
       break;
     }
     const options = asRecord(config?.compilerOptions) || {};
-    info.pathPatterns.push(...Object.keys(asRecord(options.paths) || {}));
+    // TypeScript replaces, not merges, an inherited `paths`; an explicit empty object still wins.
+    if (!pathsSet && 'paths' in options) {
+      info.pathPatterns = Object.keys(asRecord(options.paths) || {});
+      pathsSet = true;
+    }
     if (!baseUrlSet && typeof options.baseUrl === 'string') {
       const baseUrl = insideRoot(run, path.resolve(path.dirname(file), options.baseUrl));
       info.baseUrl = baseUrl;
@@ -528,6 +533,8 @@ async function analyzeNpm(run: Run, inventory: PackageInventory, locks: Map<stri
       }
       if (parsed.dynamic > 0) {
         manifest.uncertain.push({name: rel(run, file), reason: 'require() or import() with a non-literal argument'});
+        // The loaded name is unknown, so no declared package can be called unused with confidence.
+        manifest.incomplete.push(rel(run, file));
       }
       for (const specifier of parsed.specifiers) {
         if (!specifier || /^[./#]/.test(specifier) || /^[a-z][a-z0-9+.-]*:/i.test(specifier)) {continue;}
@@ -621,7 +628,7 @@ async function analyzeNpm(run: Run, inventory: PackageInventory, locks: Map<stri
         if (usedAnywhere.has(typed)) {continue;}
       }
       if (manifest.incomplete.length > 0) {
-        unusedUncertain.push({name, reason: `not imported, but some sources were not analyzed (${listFiles(manifest.incomplete).join(', ')})`});
+        unusedUncertain.push({name, reason: `not imported, but usage evidence is incomplete (${listFiles(manifest.incomplete).join(', ')})`});
         continue;
       }
       run.findings.push(hygieneFinding('unused', 'npm', manifest.rel, name,
@@ -740,6 +747,31 @@ function pythonDistributionMatches(candidate: string, declared: string): boolean
     : normalizePythonName(candidate) === declared;
 }
 
+const REQUIREMENT_INCLUDE = /^(?:-r|--requirement)(?:=|\s+)(\S+)$/;
+
+/** Requirement files reached from `start` through `-r` includes. Reads here leave coverage counters alone. */
+function requirementIncludes(run: Run, start: string): Set<string> {
+  const reached = new Set<string>();
+  const pending = [start];
+  for (let file = pending.pop(); file !== undefined && reached.size <= 50; file = pending.pop()) {
+    let text = '';
+    try {
+      if (fs.statSync(file).size <= MAX_SOURCE_BYTES) {text = readInventoryText(file);}
+    } catch {
+      // readRequirementNames records the unreadable file when its project is analyzed.
+    }
+    for (const raw of text.split(/\r?\n/)) {
+      const include = raw.replace(/(^|\s)#.*$/, '').trim().match(REQUIREMENT_INCLUDE);
+      const target = include ? insideRoot(run, path.resolve(path.dirname(file), include[1])) : undefined;
+      if (target && !reached.has(target)) {
+        reached.add(target);
+        pending.push(target);
+      }
+    }
+  }
+  return reached;
+}
+
 function readRequirementNames(run: Run, requested: string, declared: Map<string, string>, seen: Set<string>): void {
   const file = insideRoot(run, requested);
   if (!file || seen.has(file) || seen.size > 50) {return;}
@@ -747,7 +779,7 @@ function readRequirementNames(run: Run, requested: string, declared: Map<string,
   const text = readSource(run, file);
   for (const raw of (text || '').split(/\r?\n/)) {
     const line = raw.replace(/(^|\s)#.*$/, '').trim();
-    const include = line.match(/^(?:-r|--requirement)(?:=|\s+)(\S+)$/);
+    const include = line.match(REQUIREMENT_INCLUDE);
     if (include) {
       readRequirementNames(run, path.resolve(path.dirname(file), include[1]), declared, seen);
       continue;
@@ -760,11 +792,18 @@ function readRequirementNames(run: Run, requested: string, declared: Map<string,
 
 function analyzePython(run: Run, inventory: PackageInventory): void {
   const projects = new Map<string, string[]>();
-  for (const manifest of inventory.manifests.filter(isRequirementsInventoryFile)) {
-    const file = path.join(run.root, manifest);
-    const directory = path.basename(path.dirname(file)).toLowerCase() === 'requirements'
-      ? path.dirname(path.dirname(file))
-      : path.dirname(file);
+  const projectOf = (file: string): string => path.basename(path.dirname(file)).toLowerCase() === 'requirements'
+    ? path.dirname(path.dirname(file))
+    : path.dirname(file);
+  const files = inventory.manifests.filter(isRequirementsInventoryFile).map(manifest => path.join(run.root, manifest));
+  const reached = new Map(files.map(file => [file, requirementIncludes(run, file)]));
+  const real = (file: string): string => insideRoot(run, file) || file;
+  for (const file of files) {
+    const directory = projectOf(file);
+    // A file that another project includes is checked against that project's sources, unless they include each other.
+    const ownedElsewhere = files.some(other => projectOf(other) !== directory &&
+      reached.get(other)?.has(real(file)) && !reached.get(file)?.has(real(other)));
+    if (ownedElsewhere) {continue;}
     projects.set(directory, [...(projects.get(directory) || []), file]);
   }
   for (const [directory, files] of projects) {
@@ -921,9 +960,11 @@ function analyzeGo(run: Run, inventory: PackageInventory): void {
     const {module, requires, tools} = parseGoModule(text);
     const used = new Set(tools);
     const missing = new Map<string, string[]>();
+    const before = run.coverage.sourceFilesSkipped + run.coverage.sourceFilesTooLarge;
+    // The go tool ignores directory and file names that begin with "." or "_".
     walkOwned(run, directory, (candidate, name) =>
       modules.has(candidate) || name === 'testdata' || name.startsWith('.') || name.startsWith('_'), (file, name) => {
-      if (!name.endsWith('.go')) {return;}
+      if (!name.endsWith('.go') || name.startsWith('.') || name.startsWith('_')) {return;}
       const source = readSource(run, file);
       if (source === undefined) {return;}
       run.coverage.sourceFilesAnalyzed += 1;
@@ -941,11 +982,18 @@ function analyzeGo(run: Run, inventory: PackageInventory): void {
         `Add the module that provides ${importPath} to ${manifest} (go get or go mod tidy).`,
         {importedBy: listFiles(files)}));
     }
+    const incomplete = run.coverage.sourceFilesSkipped + run.coverage.sourceFilesTooLarge > before;
+    const uncertain: UncertainItem[] = [];
     for (const [required, indirect] of requires) {
       if (indirect || used.has(required)) {continue;}
+      if (incomplete) {
+        uncertain.push({name: required, reason: 'not imported, but some sources were unreadable or oversized'});
+        continue;
+      }
       run.findings.push(hygieneFinding('unused', 'go', manifest, required,
         `Remove ${required} from ${manifest} if no package imports it (go mod tidy).`, {}));
     }
+    addUncertain(run, 'go', manifest, uncertain);
   }
 }
 

@@ -130,6 +130,29 @@ describe('JavaScript and TypeScript dependency hygiene', () => {
     expect(names(report, HYGIENE_RULES.missing)).toEqual([]);
     expect(uncertainNames(report, 'package.json')).toEqual(['~/b']);
   });
+
+  it('lets a child tsconfig paths, even an empty one, replace the inherited aliases', async () => {
+    for (const childPaths of [{'@app/*': ['src/*']}, {}]) {
+      const report = await analyze(fixture({
+        'package.json': {name: 'app', dependencies: {}},
+        'tsconfig.base.json': {compilerOptions: {paths: {'@vendor/*': ['vendor/*']}}},
+        'tsconfig.json': {extends: './tsconfig.base.json', compilerOptions: {paths: childPaths}},
+        'src/index.ts': 'import {sdk} from "@vendor/sdk";\nexport {sdk};\n',
+      }));
+
+      expect(names(report, HYGIENE_RULES.missing)).toEqual(['@vendor/sdk']);
+    }
+  });
+
+  it('reports declared packages as uncertain, not unused, after a non-literal require', async () => {
+    const report = await analyze(fixture({
+      'package.json': {name: 'app', dependencies: {lodash: '^4.0.0'}},
+      'index.js': 'const name = "lodash";\nmodule.exports = require(name);\n',
+    }));
+
+    expect(names(report, HYGIENE_RULES.unused)).toEqual([]);
+    expect(uncertainNames(report, 'package.json')).toEqual(['index.js', 'lodash']);
+  });
 });
 
 describe('Python dependency hygiene', () => {
@@ -175,6 +198,18 @@ describe('Python dependency hygiene', () => {
     expect(names(report, HYGIENE_RULES.unused)).toEqual([]);
   });
 
+  it('checks an included requirements file against the project that includes it', async () => {
+    const report = await analyze(fixture({
+      'requirements.txt': '-r config/requirements.txt\n',
+      'config/requirements.txt': 'PyYAML==6.0.1\nleftpad==1.0\n',
+      'app.py': 'import yaml\n',
+    }));
+
+    expect(names(report, HYGIENE_RULES.unused)).toEqual(['leftpad']);
+    expect(report.findings.find(finding => finding.ruleId === HYGIENE_RULES.unused)?.file).toBe('config/requirements.txt');
+    expect(report.coverage.manifestsAnalyzed.pip).toBe(1);
+  });
+
   it('skips comments and strings in the tokenizer', () => {
     expect(scanPythonSource('x = 1  # import a\ny = \'\'\'\nimport b\n\'\'\'\nimport c.d as e, f\nfrom g.h import (i)\n').imports)
       .toEqual(['c.d', 'f', 'g.h']);
@@ -214,6 +249,29 @@ describe('Go dependency hygiene', () => {
     expect(names(report, HYGIENE_RULES.unused)).toEqual(['github.com/unused/mod']);
     expect(names(report, HYGIENE_RULES.missing)).toEqual(['github.com/missing/thing/pkg']);
     expect(report.coverage.manifestsAnalyzed.go).toBe(1);
+  });
+
+  it('ignores Go files whose names start with a dot or an underscore', async () => {
+    const report = await analyze(fixture({
+      'go.mod': 'module example.com/app\n\ngo 1.22\n',
+      'main.go': 'package main\n\nfunc main() {}\n',
+      '_scratch.go': 'package main\n\nimport "github.com/undeclared/mod"\n',
+      '.scratch.go': 'package main\n\nimport "github.com/hidden/mod"\n',
+    }));
+
+    expect(names(report, HYGIENE_RULES.missing)).toEqual([]);
+    expect(report.coverage.sourceFilesAnalyzed).toBe(1);
+  });
+
+  it('reports requires as uncertain when a Go source is too large to read', async () => {
+    const report = await analyze(fixture({
+      'go.mod': 'module example.com/app\n\ngo 1.22\n\nrequire github.com/needed/mod v1.0.0\n',
+      'main.go': `package main\n\nimport "github.com/needed/mod"\n\n// ${'x'.repeat(2 * 1024 * 1024)}\n`,
+    }));
+
+    expect(names(report, HYGIENE_RULES.unused)).toEqual([]);
+    expect(uncertainNames(report, 'go.mod')).toEqual(['github.com/needed/mod']);
+    expect(report.coverage.sourceFilesTooLarge).toBe(1);
   });
 
   it('reads single and grouped imports from the file header only', () => {
