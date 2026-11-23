@@ -151,7 +151,8 @@ function runTextRules(rules: readonly TextRule[], file: string, text: string, st
 // Malware and obfuscation markers (code and config files)
 // ---------------------------------------------------------------------------
 
-const SHELL_PIPE = /\|\s{0,4}(?:sudo\s{1,3})?(?:ba|z|da)?sh\b/;
+// A single `|` pipe into a shell; `||` is a conditional fallback, not a pipe.
+const SHELL_PIPE = /(?<!\|)\|(?!\|)\s{0,4}(?:sudo\s{1,3})?(?:ba|z|da)?sh\b/;
 
 const MALWARE_RULES: readonly TextRule[] = [
   {
@@ -491,18 +492,23 @@ function agentConfigFindings(file: string, text: string): Finding[] {
   const seen = new Set<string>();
   const starts = lineStarts(text);
   const attempts = new Map<string, number>();
+  // Servers are visited in document order; searching from the current server locates a key shared by several servers in the right one.
+  let cursor = 0;
   const add = (meta: Meta, needle: string): void => {
     // Cap lookups (not just findings) per rule: each one searches the file, and a minified config puts every hit on one line.
     const attempt = attempts.get(meta.ruleId) ?? 0;
     if (attempt >= MAX_HITS_PER_RULE) {return;}
     attempts.set(meta.ruleId, attempt + 1);
-    const index = text.indexOf(needle);
+    const near = text.indexOf(needle, cursor);
+    const index = near < 0 ? text.indexOf(needle) : near;
     const line = index < 0 ? 1 : lineAt(starts, index);
     const key = `${meta.ruleId}:${line}`;
     if (!seen.has(key)) {seen.add(key); findings.push(emit(meta, file, line));}
   };
   const checkServer = (name: string, server: Record<string, unknown>): void => {
     const marker = JSON.stringify(name);
+    const at = text.indexOf(marker, cursor);
+    cursor = at < 0 ? 0 : at;
     for (const bag of ['env', 'headers']) {
       for (const [key, value] of Object.entries(asRecord(server[bag]) ?? {})) {
         if (isLiteralSecret(key, value)) {add(AGENT_SECRET, JSON.stringify(key));}
@@ -560,7 +566,7 @@ function agentConfigFindings(file: string, text: string): Finding[] {
 // ---------------------------------------------------------------------------
 
 const HIDDEN_CHARACTER = /[\u200B-\u200F\u202A-\u202E\u2060-\u2064\u2066-\u2069]|[\u{E0000}-\u{E007F}]|\uFEFF/u;
-const DATA_WORDS = /\b(?:secrets?|credentials?|tokens?|api[ _-]?keys?|\.env|ssh keys?|source code|file contents?|conversation|chat history|private)\b/i;
+const DATA_WORDS = /\b(?:secrets?|credentials?|tokens?|api[ _-]?keys?|ssh keys?|source code|file contents?|conversation|chat history|private)\b|(?<![\w.])\.env\b/i;
 
 const INSTRUCTION_RULES: readonly TextRule[] = [
   {
@@ -625,7 +631,8 @@ const INSTRUCTION_RULES: readonly TextRule[] = [
   },
 ];
 
-const DESTRUCTIVE = /\brm\s{1,3}-[a-z]*r[a-z]*f|\bgit\s{1,3}push\s{1,3}(?:-f\b|--force)|\bgit\s{1,3}reset\s{1,3}--hard|\bdrop\s{1,3}(?:table|database)\b|--no-verify/i;
+// Flag runs are bounded so a long `rm -rrrr…` line cannot backtrack quadratically; both `-rf` and `-fr` match.
+const DESTRUCTIVE = /\brm\s{1,3}-[a-z]{0,8}(?:r[a-z]{0,8}f|f[a-z]{0,8}r)|\bgit\s{1,3}push\s{1,3}(?:-f\b|--force)|\bgit\s{1,3}reset\s{1,3}--hard|\bdrop\s{1,3}(?:table|database)\b|--no-verify/i;
 const UNATTENDED = /\b(?:automatically|always|unattended|never ask)\b|\bwithout\s{1,3}(?:asking|confirm\w{0,8}|approval)\b|\bno confirmation\b/i;
 const DESTRUCTIVE_META: Meta = {
   ruleId: 'guardscan.agent-instructions.unattended-destructive',
