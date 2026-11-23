@@ -17,6 +17,8 @@ export interface LexedSource {
   comments: string;
   /** Comments blanked, strings kept as written. */
   noComments: string;
+  /** Offsets of newlines inside string literals: the line after each one starts inside the string. */
+  stringNewlines: number[];
 }
 
 type Interpolation = 'python-f' | 'ruby' | 'csharp' | 'php';
@@ -96,6 +98,7 @@ export function lexSource(content: string, language: LexLanguage): LexedSource {
   const code: string[] = [];
   const comments: string[] = [];
   const noComments: string[] = [];
+  const stringNewlines: number[] = [];
 
   let plainStart = 0;
   const flushPlain = (end: number) => {
@@ -115,6 +118,9 @@ export function lexSource(content: string, language: LexLanguage): LexedSource {
   const addString = (start: number, end: number, bodyStart: number, bodyEnd: number, interpolation?: Interpolation) => {
     const text = content.slice(start, end);
     const body = content.slice(bodyStart, bodyEnd);
+    for (let nl = text.indexOf('\n'); nl !== -1; nl = text.indexOf('\n', nl + 1)) {
+      stringNewlines.push(start + nl);
+    }
     const kept = interpolation ? keepInterpolation(body, interpolation) : blank(body);
     code.push(content.slice(start, bodyStart), kept, content.slice(bodyEnd, end));
     noComments.push(text);
@@ -214,7 +220,8 @@ export function lexSource(content: string, language: LexLanguage): LexedSource {
             j += 2;
             continue;
           }
-          if (c === ch || c === '\n') {
+          // PHP quoted strings may span lines; elsewhere a newline ends an unterminated literal.
+          if (c === ch || (c === '\n' && language !== 'php')) {
             break;
           }
           j++;
@@ -232,7 +239,7 @@ export function lexSource(content: string, language: LexLanguage): LexedSource {
   }
   flushPlain(n);
 
-  return { code: code.join(''), comments: comments.join(''), noComments: noComments.join('') };
+  return { code: code.join(''), comments: comments.join(''), noComments: noComments.join(''), stringNewlines };
 }
 
 function isCppDigitSeparator(content: string, i: number, language: LexLanguage): boolean {

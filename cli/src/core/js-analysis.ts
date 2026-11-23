@@ -196,9 +196,12 @@ export function analyzeJs(content: string, filePath: string, language: 'javascri
     for (let i = 0; i < statements.length - 1; i++) {
       const k = statements[i].kind;
       if (k === K.ReturnStatement || k === K.ThrowStatement || k === K.BreakStatement || k === K.ContinueStatement) {
+        // Classes and ordinary enums run code when evaluated; only ambient or const enums and `declare` classes do not.
+        const ambient = (s: TS.Statement): boolean =>
+          !!ts.getModifiers(s as TS.HasModifiers)?.some(mod => mod.kind === K.DeclareKeyword || (ts.isEnumDeclaration(s) && mod.kind === K.ConstKeyword));
         const next = statements.slice(i + 1).find(s =>
           !ts.isFunctionDeclaration(s) && !ts.isInterfaceDeclaration(s) && !ts.isTypeAliasDeclaration(s) &&
-          !ts.isEmptyStatement(s) && !ts.isEnumDeclaration(s) && !ts.isClassDeclaration(s)
+          !ts.isEmptyStatement(s) && !((ts.isEnumDeclaration(s) || ts.isClassDeclaration(s)) && ambient(s))
         );
         if (next) {
           result.unreachableLines.push(lineOf(next.getStart(sf)));
@@ -267,9 +270,24 @@ export function analyzeJs(content: string, filePath: string, language: 'javascri
         info: { name: node.name?.text ?? 'anonymous', line: lineOf(node.getStart(sf)), methodCount: 0, fieldCount: 0 },
         fields: new Set(),
       });
+      // Overload signatures belong to one method: count a name once, and only when it has no implementation.
+      const methodKey = (m: TS.MethodDeclaration): string => `${m.modifiers?.some(mod => mod.kind === K.StaticKeyword) ? 's:' : ''}${m.name.getText(sf)}`;
+      const implemented = new Set<string>();
+      for (const m of node.members) {
+        if (ts.isMethodDeclaration(m) && m.body) {
+          implemented.add(methodKey(m));
+        }
+      }
+      const bodyless = new Set<string>();
       for (const m of node.members) {
         const cls = classStack[classStack.length - 1];
-        if (ts.isMethodDeclaration(m) || ts.isConstructorDeclaration(m) || ts.isGetAccessorDeclaration(m) || ts.isSetAccessorDeclaration(m)) {
+        if (ts.isMethodDeclaration(m) && !m.body) {
+          const key = methodKey(m);
+          if (!implemented.has(key) && !bodyless.has(key)) {
+            bodyless.add(key);
+            cls.info.methodCount++;
+          }
+        } else if (ts.isMethodDeclaration(m) || ts.isConstructorDeclaration(m) || ts.isGetAccessorDeclaration(m) || ts.isSetAccessorDeclaration(m)) {
           cls.info.methodCount++;
         } else if (ts.isPropertyDeclaration(m) && !m.modifiers?.some(mod => mod.kind === K.StaticKeyword)) {
           cls.fields.add(m.name.getText(sf));
@@ -355,7 +373,7 @@ export function analyzeJs(content: string, filePath: string, language: 'javascri
       if (node.moduleSpecifier && ts.isStringLiteral(node.moduleSpecifier) && !isTypeOnlyDeclaration(node)) {
         result.imports.push(node.moduleSpecifier.text);
       }
-    } else if (ts.isImportEqualsDeclaration(node) && ts.isExternalModuleReference(node.moduleReference) &&
+    } else if (ts.isImportEqualsDeclaration(node) && !node.isTypeOnly && ts.isExternalModuleReference(node.moduleReference) &&
                ts.isStringLiteral(node.moduleReference.expression)) {
       result.imports.push(node.moduleReference.expression.text);
     } else if (ts.isCallExpression(node) && node.arguments.length > 0 && ts.isStringLiteralLike(node.arguments[0]) &&

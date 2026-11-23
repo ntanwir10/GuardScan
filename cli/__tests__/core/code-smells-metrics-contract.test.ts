@@ -146,7 +146,10 @@ describe('CodeSmell / CodeMetrics output contract', () => {
       expect(d.recommendation).toBe('Extract common logic into a shared function');
       expect(Object.keys(d.details ?? {}).sort()).toEqual(['duplicateCount', 'otherLocations']);
       expect(d.details.duplicateCount).toBeGreaterThanOrEqual(4);
-      expect(Array.isArray(d.details.otherLocations)).toBe(true);
+      const own = `${d.file}:${d.line}`;
+      expect(d.details.otherLocations).toHaveLength(d.details.duplicateCount - 1);
+      expect(d.details.otherLocations).not.toContain(own);
+      expect(d.details.otherLocations.every((l: string) => /dup\d\.js:\d+$/.test(l))).toBe(true);
     }
   });
 

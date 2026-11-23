@@ -152,6 +152,9 @@ interface Ctx {
   /** Remaining character budget for rescans of overlapping ranges (nested bodies), so nesting cannot go quadratic. */
   budget: number;
   rubyEnds?: Map<number, number>;
+  pythonEnds?: Map<number, number>;
+  /** 1 for lines that start inside a multiline string literal. */
+  stringCont: Uint8Array;
   /** Anonymous function bodies (PHP closures, Go func literals): they own their `return`s but are never reported. */
   anon: Span[];
   /** Leading-whitespace width per line, or -1 for blank lines (computed once: deep indentation makes rescans costly). */
@@ -211,6 +214,16 @@ function buildCtx(content: string, language: LexLanguage): Ctx {
     const w = indentOf(l);
     indents[i] = l.slice(w).trim() === '' ? -1 : w;
   });
+  const stringCont = new Uint8Array(lines.length);
+  let nextLine = 0;
+  for (const nl of lexed.stringNewlines) {
+    while (nextLine < lines.length && lineStarts[nextLine] <= nl) {
+      nextLine++;
+    }
+    if (nextLine < lines.length) {
+      stringCont[nextLine] = 1;
+    }
+  }
   const lineOf = (offset: number): number => {
     let lo = 0;
     let hi = lineStarts.length - 1;
@@ -224,15 +237,23 @@ function buildCtx(content: string, language: LexLanguage): Ctx {
     }
     return lo + 1;
   };
-  return { language, code, comments: lexed.comments, noComments: lexed.noComments, lines, lineStarts, match, lineOf, indents, anon: [], budget: 8 * code.length + 100000 };
+  return { language, code, comments: lexed.comments, noComments: lexed.noComments, lines, lineStarts, match, lineOf, indents, stringCont, anon: [], budget: 8 * code.length + 100000 };
 }
 
 /** Split a parameter list on top-level commas, so "a, Map<K, V> b" is two parameters. */
 function countParams(list: string, language: LexLanguage): number {
   let depth = 0;
   let count = 0;
-  let sawToken = false;
+  let fragStart = 0;
   const angle = language === 'java' || language === 'csharp' || language === 'cpp';
+  const flush = (end: number): void => {
+    const frag = list.slice(fragStart, end).trim();
+    // Python's `/` and bare `*` only separate parameter kinds.
+    if (frag !== '' && !(language === 'python' && (frag === '/' || frag === '*'))) {
+      count++;
+    }
+    fragStart = end + 1;
+  };
   for (let i = 0; i < list.length; i++) {
     const ch = list[i];
     if (ch === '(' || ch === '[' || ch === '{' || (angle && ch === '<')) {
@@ -240,17 +261,11 @@ function countParams(list: string, language: LexLanguage): number {
     } else if (ch === ')' || ch === ']' || ch === '}' || (angle && ch === '>' && list[i - 1] !== '-' && list[i - 1] !== '=')) {
       depth = Math.max(0, depth - 1);
     } else if (ch === ',' && depth === 0) {
-      if (sawToken) {
-        count++;
-      }
-      sawToken = false;
-      continue;
-    }
-    if (!/\s/.test(ch)) {
-      sawToken = true;
+      flush(i);
     }
   }
-  return count + (sawToken ? 1 : 0);
+  flush(list.length);
+  return count;
 }
 
 function paramCountOf(list: string, language: LexLanguage): number {
@@ -314,6 +329,16 @@ function braceFunctions(ctx: Ctx): Span[] {
       return;
     }
     let j = close + 1;
+    if (language === 'go') {
+      // `func(f func() error) {` : an unmatched `)` before the body means this `func` is a parameter type.
+      for (let k = j, depth = 0; k < code.length && k < j + 160 && code[k] !== '{'; k++) {
+        if (code[k] === '(') {
+          depth++;
+        } else if (code[k] === ')' && depth-- === 0) {
+          return;
+        }
+      }
+    }
     if (language === 'php') {
       while (j < code.length && /\s/.test(code[j])) {
         j++;
@@ -450,19 +475,48 @@ function rubyEnd(ctx: Ctx, startLineIdx: number): number {
   return ctx.rubyEnds.get(startLineIdx) ?? ctx.lines.length - 1;
 }
 
-function pythonEnd(ctx: Ctx, headerLineIdx: number, indent: number): number {
-  let last = headerLineIdx;
-  for (let i = headerLineIdx + 1; i < ctx.lines.length; i++) {
+/**
+ * End line of every Python def and class in one pass: a stack of open headers, closed by the first real dedent. Lines that
+ * start inside a multiline string are body, never a dedent. Keyed by the header's last signature line.
+ */
+function pythonEnds(ctx: Ctx): Map<number, number> {
+  const heads: Array<{ sigEnd: number; indent: number }> = [];
+  const re = /^([ \t]*)(?:(?:async[ \t]+)?def[ \t]+\w+[ \t]*\(|class[ \t]+\w+)/gm;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(ctx.code)) !== null) {
+    if (m[0].endsWith('(')) {
+      const close = ctx.match[m.index + m[0].length - 1];
+      if (close !== -1) {
+        heads.push({ sigEnd: ctx.lineOf(close) - 1, indent: m[1].length });
+      }
+    } else {
+      heads.push({ sigEnd: ctx.lineOf(m.index) - 1, indent: m[1].length });
+    }
+  }
+  const ends = new Map<number, number>();
+  const open: Array<{ sigEnd: number; indent: number }> = [];
+  let last = 0;
+  let h = 0;
+  for (let i = 0; i < ctx.lines.length; i++) {
     const w = ctx.indents[i];
-    if (w === -1) {
+    if (w === -1 && !ctx.stringCont[i]) {
       continue;
     }
-    if (w <= indent) {
-      break;
+    if (!ctx.stringCont[i]) {
+      while (open.length > 0 && open[open.length - 1].indent >= w) {
+        const done = open.pop() as { sigEnd: number };
+        ends.set(done.sigEnd, Math.max(done.sigEnd, last));
+      }
+    }
+    while (h < heads.length && heads[h].sigEnd <= i) {
+      open.push(heads[h++]);
     }
     last = i;
   }
-  return last;
+  for (const done of open) {
+    ends.set(done.sigEnd, Math.max(done.sigEnd, last));
+  }
+  return ends;
 }
 
 function indentFunctions(ctx: Ctx): Span[] {
@@ -473,7 +527,6 @@ function indentFunctions(ctx: Ctx): Span[] {
     : /^([ \t]*)def[ \t]+(?:self\.)?([\w?!=]+)/gm;
   let m: RegExpExecArray | null;
   while ((m = re.exec(code)) !== null) {
-    const indent = m[1].length;
     const defLine = ctx.lineOf(m.index);
     const defIdx = defLine - 1;
     let paramText = '';
@@ -499,7 +552,7 @@ function indentFunctions(ctx: Ctx): Span[] {
     let endIdx: number;
     if (language === 'python') {
       const rest = ctx.lines[sigEndIdx].slice(ctx.lines[sigEndIdx].lastIndexOf(':') + 1).trim();
-      endIdx = rest !== '' ? sigEndIdx : pythonEnd(ctx, sigEndIdx, indent);
+      endIdx = rest !== '' ? sigEndIdx : (ctx.pythonEnds ??= pythonEnds(ctx)).get(sigEndIdx) ?? sigEndIdx;
     } else {
       endIdx = RUBY_ENDLESS.test(ctx.lines[defIdx].trim()) ? defIdx : rubyEnd(ctx, defIdx);
     }
@@ -559,7 +612,7 @@ function classes(ctx: Ctx, spans: Span[]): ClassInfo[] {
     let m: RegExpExecArray | null;
     while ((m = re.exec(code)) !== null) {
       const idx = ctx.lineOf(m.index) - 1;
-      const endIdx = language === 'python' ? pythonEnd(ctx, idx, m[1].length) : rubyEnd(ctx, idx);
+      const endIdx = language === 'python' ? ((ctx.pythonEnds ??= pythonEnds(ctx)).get(idx) ?? idx) : rubyEnd(ctx, idx);
       ranges.push({
         info: { name: m[2], line: idx + 1, methodCount: 0, fieldCount: 0 },
         start: ctx.lineStarts[idx],
@@ -818,7 +871,12 @@ function emptyCatches(ctx: Ctx): number[] {
           k++;
         }
         const bodyEnd = ctx.lineStarts[j] + lines[j].length;
-        if ((k >= lines.length || indentOf(lines[k]) <= m[1].length) && !hasComment(ctx.lineStarts[i], bodyEnd)) {
+        // Comments after `pass` count while they stay indented inside the handler suite.
+        let trailing = false;
+        for (let t = j + 1; t < k && !trailing; t++) {
+          trailing = hasComment(ctx.lineStarts[t], ctx.lineStarts[t] + lines[t].length) && indentOf(ctx.comments.slice(ctx.lineStarts[t], ctx.lineStarts[t] + lines[t].length)) > m[1].length;
+        }
+        if ((k >= lines.length || indentOf(lines[k]) <= m[1].length) && !trailing && !hasComment(ctx.lineStarts[i], bodyEnd)) {
           out.push(i + 1);
         }
       }
@@ -853,6 +911,19 @@ function emptyCatches(ctx: Ctx): number[] {
     }
     if (code[i] === '(') {
       if (ctx.match[i] === -1 || ctx.match[i] - i > 200) {
+        continue;
+      }
+      i = ctx.match[i] + 1;
+      while (i < code.length && /\s/.test(code[i])) {
+        i++;
+      }
+    }
+    if (language === 'csharp' && code.startsWith('when', i) && !isWordChar(code.charCodeAt(i + 4))) {
+      i += 4;
+      while (i < code.length && /\s/.test(code[i])) {
+        i++;
+      }
+      if (code[i] !== '(' || ctx.match[i] === -1) {
         continue;
       }
       i = ctx.match[i] + 1;
@@ -896,23 +967,31 @@ function magicNumbers(ctx: Ctx): Array<{ value: string; line: number }> {
 function importsOf(ctx: Ctx): string[] {
   const { noComments, code, language } = ctx;
   const out: string[] = [];
-  const add = (re: RegExp, map: (m: RegExpExecArray) => string | undefined) => {
+  const add = (re: RegExp, map: (m: RegExpExecArray) => string | string[] | undefined) => {
     let m: RegExpExecArray | null;
     while ((m = re.exec(noComments)) !== null) {
       // The keyword must be real code: strings are blanked in the code view, so a docstring that mentions an import is skipped.
       const kw = m.index + (m[0].length - m[0].trimStart().length);
       const v = code.charCodeAt(kw) === 32 ? undefined : map(m);
       if (v) {
-        out.push(v);
+        out.push(...(Array.isArray(v) ? v : [v]));
       }
     }
   };
   if (language === 'python') {
-    add(/^[ \t]*(?:from[ \t]+([\w.]+)[ \t]+import\b|import[ \t]+([\w.]+))/gm, m => {
-      const mod = m[1] ?? m[2];
+    add(/^[ \t]*(?:from[ \t]+([\w.]+)[ \t]+import\b([^\n]*)|import[ \t]+([\w.]+))/gm, m => {
+      const mod = m[1] ?? m[3];
       const dots = /^\.*/.exec(mod)?.[0].length ?? 0;
       const rest = mod.slice(dots).replace(/\./g, '/');
-      return dots === 0 ? rest : `${dots === 1 ? './' : '../'.repeat(dots - 1)}${rest}`;
+      const prefix = dots === 1 ? './' : '../'.repeat(dots - 1);
+      if (dots > 0 && rest === '' && m[2]) {
+        // `from . import b` imports the sibling module b, not the package itself.
+        const names = m[2].replace(/[()]/g, '').split(',').map(n => n.trim().split(/\s+/)[0]).filter(n => /^\w+$/.test(n));
+        if (names.length > 0) {
+          return names.map(n => prefix + n);
+        }
+      }
+      return dots === 0 ? rest : `${prefix}${rest}`;
     });
   } else if (language === 'ruby') {
     add(/^[ \t]*require_relative[ \t]*\(?[ \t]*['"]([^'"\n]+)['"]/gm, m => (m[1].startsWith('.') ? m[1] : `./${m[1]}`));

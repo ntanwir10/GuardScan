@@ -40,8 +40,10 @@ export class CodeSmellDetector {
   /**
    * Detect code smells in repository
    */
-  async detect(repoPath: string = process.cwd()): Promise<CodeSmell[]> {
+  async detect(scanRoot: string = process.cwd()): Promise<CodeSmell[]> {
     const smells: CodeSmell[] = [];
+    // Resolve once so file keys and import candidates share one absolute root.
+    const repoPath = path.resolve(scanRoot);
     const files = findSourceFiles(repoPath, ['node_modules', '.git', 'vendor', 'dist'], name => languageOf(name) !== undefined);
 
     // Analyze every file once; both duplicate and per-file rules read the same result.
@@ -348,6 +350,7 @@ export class CodeSmellDetector {
       for (const file of imports.keys()) {
         if (!visited.has(file)) {
           const cycle = findCycle(file, []);
+          recStack.clear(); // a returned cycle leaves its ancestors marked active
           if (cycle) {
             smells.push({
               type: 'Circular Dependency',
