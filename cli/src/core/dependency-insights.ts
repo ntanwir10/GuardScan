@@ -1012,8 +1012,15 @@ function readRequirementNames(run: Run, requested: string, declared: Map<string,
       continue;
     }
     // An editable install declares its dependencies in a project file this check does not read.
-    if (/^(?:-e|--editable)(?:=|\s|$)/.test(line) || /^(?:\.{1,2}(?:[\\/]|$)|file:)/i.test(line)) {complete = false;}
-    if (!line || line.startsWith('-') || /^[a-z+]+:\/\//i.test(line)) {continue;}
+    if (/^(?:-e|--editable)(?:=|\s|$)/.test(line) || /^(?:\.{1,2}(?:[\\/[]|$)|file:)/i.test(line)) {complete = false;}
+    if (!line || line.startsWith('-')) {continue;}
+    // A bare URL, archive or path installs a distribution whose name is not on the line; `name @ url` keeps its name.
+    const named = /^[A-Za-z0-9][A-Za-z0-9._-]*(?:\[[^\]]*\])?\s*@\s*\S/.test(line);
+    if (!named && (/^[a-z+]+:\/\//i.test(line) || /\.(?:whl|zip|tar\.gz|tgz|tar\.bz2|tar\.xz)(?=[\s;#]|$)/i.test(line) ||
+      /^[^@;\s]*[\\/]/.test(line))) {
+      complete = false;
+      continue;
+    }
     const name = line.match(/^([A-Za-z0-9][A-Za-z0-9._-]*)/)?.[1];
     if (name && !declared.has(normalizePythonName(name))) {declared.set(normalizePythonName(name), rel(run, file));}
   }

@@ -360,6 +360,25 @@ describe('Python dependency hygiene', () => {
     expect(JSON.stringify(report.findings)).not.toContain('helpers');
   });
 
+  it('treats bare URL, archive and path requirements as incomplete declarations', async () => {
+    for (const requirement of [
+      'https://files.example.test/PyYAML-6.0.1-py3-none-any.whl',
+      'PyYAML-6.0.1.tar.gz',
+      'vendor/PyYAML-6.0.1-py3-none-any.whl',
+      '.[cli]',
+    ]) {
+      const report = await analyze(fixture({'requirements.txt': `${requirement}\n`, 'app.py': 'import yaml\n'}));
+      expect(names(report, HYGIENE_RULES.missing)).toEqual([]);
+      expect(uncertainNames(report, 'requirements.txt')).toEqual(['yaml']);
+    }
+    // A named direct reference still declares its distribution.
+    const named = await analyze(fixture({
+      'requirements.txt': 'PyYAML @ https://files.example.test/PyYAML-6.0.1-py3-none-any.whl\n',
+      'app.py': 'import yaml\n',
+    }));
+    expect(named.findings).toEqual([]);
+  });
+
   it('checks an included requirements file against the project that includes it', async () => {
     const report = await analyze(fixture({
       'requirements.txt': '-r config/requirements.txt\n',
