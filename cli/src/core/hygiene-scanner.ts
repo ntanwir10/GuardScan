@@ -167,6 +167,7 @@ const MALWARE_RULES: readonly TextRule[] = [
         window: 200,
         all: [/['"](?:base64|hex)['"]/],
       },
+      {anchor: /\bbase64\s{1,3}(?:-d|--decode)\b/, window: 120, all: [SHELL_PIPE]},
     ],
   },
   {
@@ -244,6 +245,42 @@ const MALWARE_RULES: readonly TextRule[] = [
   },
 ];
 
+/** Code-only checks for gaps the neighbouring scanners leave (JSX files, JWT and cipher misuse). */
+const CODE_RULES: readonly TextRule[] = [
+  {
+    ruleId: 'guardscan.xss.dangerously-set-inner-html',
+    severity: 'medium',
+    category: 'XSS Hygiene: Raw HTML in JSX',
+    description: 'dangerouslySetInnerHTML renders a string as raw HTML.',
+    suggestion: 'Render text normally, or sanitize the HTML with a vetted library before use.',
+    matchers: [{anchor: /\bdangerouslySetInnerHTML\s{0,3}=\s{0,3}\{\s{0,3}\{\s{0,3}__html\s{0,3}:/}],
+  },
+  {
+    ruleId: 'guardscan.auth.jwt-none-algorithm',
+    severity: 'medium',
+    category: 'Auth Hygiene: JWT None Algorithm',
+    description: 'A JWT configuration accepts the "none" algorithm, which means no signature.',
+    suggestion: 'Allow only the specific signing algorithms you issue, for example HS256 or RS256.',
+    matchers: [{anchor: /\balgorithms?\s{0,3}[:=]\s{0,3}\[?\s{0,3}['"]none['"]/i}],
+  },
+  {
+    ruleId: 'guardscan.auth.jwt-hardcoded-secret',
+    severity: 'medium',
+    category: 'Auth Hygiene: JWT Hardcoded Secret',
+    description: 'A JWT is signed or verified with a short string literal as the secret.',
+    suggestion: 'Load a long random secret or a key pair from the environment or a secret store.',
+    matchers: [{anchor: /\bjwt\.(?:sign|verify)\s{0,3}\(/, window: 140, all: [/,\s{0,3}['"][^'"\n]{1,40}['"]\s{0,3}[,)]/]}],
+  },
+  {
+    ruleId: 'guardscan.crypto.hardcoded-key-or-iv',
+    severity: 'medium',
+    category: 'Crypto Hygiene: Hardcoded Key or IV',
+    description: 'A cipher is created with a key or IV written as a string literal.',
+    suggestion: 'Load keys from a secret store and generate a fresh random IV for every message.',
+    matchers: [{anchor: /\bcreate(?:Cipheriv|Decipheriv)\s{0,3}\(/, window: 160, all: [/,\s{0,3}['"][^'"\n]{8,64}['"]\s{0,3}[,)]/]}],
+  },
+];
+
 const BIDI_RULE: TextRule = {
   ruleId: 'guardscan.malware.bidi-control-in-source',
   severity: 'medium',
@@ -295,7 +332,16 @@ const PAYMENT_RULES: readonly TextRule[] = [
   },
 ];
 
-const WEBHOOK_BODY_PARSE = /\bJSON\.parse\s{0,3}\(\s{0,3}(?:req|request)\.(?:body|rawBody)|\b(?:req|request)\.body\.type\b|\bevent\s{0,3}=\s{0,3}(?:req|request)\.body\b|\brequest\.get_json\s{0,3}\(|\bjson\.loads\s{0,3}\(\s{0,3}request\.(?:data|body)|\bawait\s{1,3}(?:req|request)\.json\s{0,3}\(/g;
+const CLIENT_CARD_RULE: TextRule = {
+  ruleId: 'guardscan.payments.card-number-in-client-state',
+  severity: 'medium',
+  category: 'Payment Hygiene: Card Number in Client State',
+  description: 'A card number is held in component state, so it passes through your own code instead of the processor field.',
+  suggestion: 'Use the processor-hosted card field so the number never reaches your application code.',
+  matchers: [{anchor: /\[\s{0,3}(?:card[_-]?(?:number|num)|credit[_-]?card\w{0,12})\s{0,3},/i}],
+};
+
+const WEBHOOK_BODY_PARSE = /\bJSON\.parse\s{0,3}\(\s{0,3}(?:req|request)\.(?:body|rawBody)|\b(?:req|request)\.body\.type\b|[\w$]{1,30}\s{0,3}=\s{0,3}(?:req|request)\.body\b|\brequest\.get_json\s{0,3}\(|\bjson\.loads\s{0,3}\(\s{0,3}request\.(?:data|body)|\bawait\s{1,3}(?:req|request)\.json\s{0,3}\(/g;
 const WEBHOOK_VERIFY = /constructEvent|construct_event|verif\w{0,12}Signature|verify_header|stripe-signature|webhooks?\.verify|verify[_-]?webhook|createHmac|\bhmac\b/i;
 const WEBHOOK_META: Meta = {
   ruleId: 'guardscan.payments.webhook-without-signature-check',
@@ -546,7 +592,7 @@ const INSTRUCTION_RULES: readonly TextRule[] = [
     description: 'Wording that tells an agent to ignore earlier instructions or hide actions from the user.',
     suggestion: 'Review the passage; instruction files should not ask an agent to disregard other rules or hide its work.',
     matchers: [{
-      anchor: /(?:\b(?:ignore|disregard|forget)\s{1,3}(?:all\s{1,3})?(?:previous|prior|earlier)\s{1,3}(?:instructions|rules|prompts)\b|\b(?:do not|don't|never)\s{1,3}(?:tell|inform|mention|notify)\s{1,3}(?:the\s{1,3})?user\b)/i,
+      anchor: /(?:\b(?:ignore|disregard|forget)\s{1,3}(?:all\s{1,3})?(?:previous|prior|earlier)\s{1,3}(?:instructions|rules|prompts)\b|\b(?:do not|don't|never)\s{1,3}(?:tell|inform|mention|notify)\s{1,3}(?:the\s{1,3})?user\b|\byou are now in\s{1,3}(?:unrestricted|developer|jailbreak|god)\s{1,3}mode\b)/i,
     }],
   },
   {
@@ -565,7 +611,7 @@ const INSTRUCTION_RULES: readonly TextRule[] = [
     suggestion: 'Name a pinned package from a registry you trust instead of a direct link.',
     matchers: [
       {anchor: /\b(?:pip3?|npm|npx|pnpm|yarn|gem|cargo)\s{1,3}(?:i|install|add)\b/, window: 100, all: [/https?:\/\/|git\+/]},
-      {anchor: /\b(?:prerequisite|install first|required)\b/i, before: 80, window: 120, all: [/https?:\/\//, /\b(?:this link|click here|download from)\b/i]},
+      {anchor: /\b(?:install|download|prerequisite|setup)\b/i, before: 80, window: 120, all: [/https?:\/\//, /\b(?:this link|click here|download from|follow (?:this|the) link)\b/i]},
     ],
   },
 ];
@@ -651,12 +697,12 @@ export function scanHygieneText(file: string, relativePath: string, text: string
   if (kind === 'instructions') {return instructionFindings(file, text, starts);}
   const findings = runTextRules(MALWARE_RULES, file, text, starts);
   if (kind === 'code') {
-    findings.push(...runTextRules([BIDI_RULE], file, text, starts));
+    findings.push(...runTextRules([BIDI_RULE, ...CODE_RULES], file, text, starts));
     const credential = CREDENTIAL_FILE.exec(text);
     if (credential && NETWORK_CALL.test(text)) {findings.push(emit(CREDENTIAL_RULE, file, lineAt(starts, credential.index)));}
     if (context.paymentSdk && !isTestPath(relativePath)) {
       findings.push(
-        ...runTextRules(PAYMENT_RULES, file, text, starts),
+        ...runTextRules([...PAYMENT_RULES, CLIENT_CARD_RULE], file, text, starts),
         ...webhookFindings(file, text, starts),
         ...paymentLineFindings(file, text)
       );
