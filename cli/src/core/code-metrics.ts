@@ -1,5 +1,5 @@
 import * as fs from 'fs';
-import * as path from 'path';
+import { analyzeSource, findSourceFiles, languageOf, SourceAnalysis } from './source-analysis';
 
 export interface CodeMetrics {
   file: string;
@@ -57,14 +57,18 @@ export class CodeMetricsAnalyzer {
    */
   async analyze(repoPath: string = process.cwd()): Promise<CodeMetrics[]> {
     const results: CodeMetrics[] = [];
-    const files = this.findCodeFiles(repoPath);
+    const files = findSourceFiles(
+      repoPath,
+      ['node_modules', '.git', 'vendor', 'dist', 'build'],
+      name => languageOf(name) !== undefined && !name.endsWith('.test.js') && !name.endsWith('.spec.ts')
+    );
 
     for (const file of files) {
       try {
-        const content = fs.readFileSync(file, 'utf-8');
-        const language = this.detectLanguage(file);
-        const metrics = this.calculateMetrics(file, content, language);
-        results.push(metrics);
+        const analysis = analyzeSource(fs.readFileSync(file, 'utf-8'), file);
+        if (analysis) {
+          results.push(this.calculateMetrics(file, analysis));
+        }
       } catch {
         // Skip files that can't be read
       }
@@ -74,92 +78,30 @@ export class CodeMetricsAnalyzer {
   }
 
   /**
-   * Find code files to analyze
-   */
-  private findCodeFiles(dir: string): string[] {
-    const files: string[] = [];
-
-    const search = (currentDir: string, depth: number) => {
-      if (depth > 5) {return;}
-
-      try {
-        const items = fs.readdirSync(currentDir);
-        for (const item of items) {
-          if (item === 'node_modules' || item === '.git' || item === 'vendor' || item === 'dist' || item === 'build') {continue;}
-
-          const fullPath = path.join(currentDir, item);
-          const stat = fs.statSync(fullPath);
-
-          if (stat.isDirectory()) {
-            search(fullPath, depth + 1);
-          } else if (this.isCodeFile(item)) {
-            files.push(fullPath);
-          }
-        }
-      } catch {
-        // Skip
-      }
-    };
-
-    search(dir, 0);
-    return files;
-  }
-
-  /**
-   * Check if file is a code file
-   */
-  private isCodeFile(filename: string): boolean {
-    const extensions = ['.js', '.ts', '.py', '.go', '.java', '.rb', '.php', '.cpp', '.c', '.cs'];
-    return extensions.some(ext => filename.endsWith(ext)) && !filename.endsWith('.test.js') && !filename.endsWith('.spec.ts');
-  }
-
-  /**
-   * Detect programming language
-   */
-  private detectLanguage(file: string): string {
-    const ext = path.extname(file);
-    const langMap: Record<string, string> = {
-      '.js': 'javascript',
-      '.ts': 'typescript',
-      '.py': 'python',
-      '.go': 'go',
-      '.java': 'java',
-      '.rb': 'ruby',
-      '.php': 'php',
-      '.cpp': 'cpp',
-      '.c': 'c',
-      '.cs': 'csharp',
-    };
-    return langMap[ext] || 'unknown';
-  }
-
-  /**
    * Calculate all metrics for a file
    */
-  private calculateMetrics(file: string, content: string, language: string): CodeMetrics {
-    const lines = content.split('\n');
+  private calculateMetrics(file: string, analysis: SourceAnalysis): CodeMetrics {
+    const language = analysis.language;
     const issues: MetricIssue[] = [];
 
-    // Calculate cyclomatic complexity
-    const cyclomaticComplexity = this.calculateCyclomaticComplexity(content, language);
+    // File-level McCabe total (1 + every decision point) and cognitive total
+    const cyclomaticComplexity = analysis.cyclomatic;
+    const cognitiveComplexity = analysis.cognitive;
 
-    // Calculate cognitive complexity
-    const cognitiveComplexity = this.calculateCognitiveComplexity(content, language);
-
-    // Analyze functions
-    const functions = this.extractFunctions(content, language);
+    // Function lengths come from real function bodies, not a brace-count heuristic
+    const functions = analysis.functions;
     const functionLengths = functions.map(f => f.endLine - f.startLine);
     const avgFunctionLength = functionLengths.length > 0
       ? functionLengths.reduce((a, b) => a + b, 0) / functionLengths.length
       : 0;
-    const maxFunctionLength = functionLengths.length > 0 ? Math.max(...functionLengths) : 0;
+    const maxFunctionLength = functionLengths.reduce((a, b) => Math.max(a, b), 0);
 
-    // Calculate maintainability index
-    const linesOfCode = lines.filter(l => l.trim() && !this.isComment(l, language)).length;
+    // Lines of code exclude blank lines and comments (including multi-line comments)
+    const linesOfCode = analysis.noComments.split('\n').filter(l => l.trim() !== '').length;
     const maintainabilityIndex = this.calculateMaintainabilityIndex(
       linesOfCode,
       cyclomaticComplexity,
-      content.length
+      analysis.noComments.length
     );
 
     // Technical debt estimation
@@ -274,63 +216,6 @@ export class CodeMetricsAnalyzer {
   }
 
   /**
-   * Calculate cyclomatic complexity (McCabe's complexity)
-   * Counts decision points: if, for, while, case, &&, ||, etc.
-   */
-  private calculateCyclomaticComplexity(content: string, language: string): number {
-    let complexity = 1; // Base complexity
-
-    const patterns = [
-      /\bif\s*\(/g,
-      /\belse\s+if\b/g,
-      /\bfor\s*\(/g,
-      /\bwhile\s*\(/g,
-      /\bdo\s*{/g,
-      /\bcase\s+/g,
-      /\bcatch\s*\(/g,
-      /\b\?\s*.*\s*:/g, // Ternary operator
-      /&&/g,
-      /\|\|/g,
-    ];
-
-    for (const pattern of patterns) {
-      const matches = content.match(pattern);
-      if (matches) {
-        complexity += matches.length;
-      }
-    }
-
-    return complexity;
-  }
-
-  /**
-   * Calculate cognitive complexity
-   * Similar to cyclomatic but considers nesting depth
-   */
-  private calculateCognitiveComplexity(content: string, language: string): number {
-    let complexity = 0;
-    let nestingLevel = 0;
-    const lines = content.split('\n');
-
-    for (const line of lines) {
-      // Track nesting
-      if (/{/.test(line)) {nestingLevel++;}
-      if (/}/.test(line)) {nestingLevel = Math.max(0, nestingLevel - 1);}
-
-      // Add complexity for control structures
-      if (/\b(if|for|while|switch|catch)\b/.test(line)) {
-        complexity += 1 + nestingLevel; // More complex when nested
-      }
-
-      // Logical operators add less complexity
-      const logicalOps = (line.match(/&&|\|\|/g) || []).length;
-      complexity += logicalOps * 0.5;
-    }
-
-    return Math.round(complexity);
-  }
-
-  /**
    * Calculate maintainability index
    * Based on Halstead Volume, Cyclomatic Complexity, and Lines of Code
    * Scale: 0-100 (higher is better)
@@ -388,88 +273,6 @@ export class CodeMetricsAnalyzer {
     } else {
       return `${(minutes / 480).toFixed(1)} days`;
     }
-  }
-
-  /**
-   * Extract function information from code
-   */
-  private extractFunctions(content: string, language: string): Array<{
-    name: string;
-    startLine: number;
-    endLine: number;
-  }> {
-    const functions: Array<{ name: string; startLine: number; endLine: number }> = [];
-    const lines = content.split('\n');
-
-    // Language-specific function patterns
-    const patterns: Record<string, RegExp> = {
-      javascript: /function\s+(\w+)\s*\(|const\s+(\w+)\s*=\s*\([^)]*\)\s*=>|(\w+)\s*:\s*function/,
-      typescript: /function\s+(\w+)\s*\(|const\s+(\w+)\s*=\s*\([^)]*\)\s*=>|(\w+)\s*:\s*function|private\s+(\w+)\s*\(/,
-      python: /def\s+(\w+)\s*\(/,
-      go: /func\s+(\w+)\s*\(/,
-      java: /(public|private|protected)?\s*(static)?\s*\w+\s+(\w+)\s*\(/,
-      ruby: /def\s+(\w+)/,
-      php: /function\s+(\w+)\s*\(/,
-    };
-
-    const pattern = patterns[language];
-    if (!pattern) {return functions;}
-
-    let currentFunction: { name: string; startLine: number; braceCount: number } | null = null;
-
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
-
-      // Look for function start
-      const match = line.match(pattern);
-      if (match && !currentFunction) {
-        const name = match.filter(Boolean).find((g, idx) => idx > 0) || 'anonymous';
-        currentFunction = {
-          name,
-          startLine: i + 1,
-          braceCount: 0,
-        };
-      }
-
-      // Track braces to find function end
-      if (currentFunction) {
-        const openBraces = (line.match(/{/g) || []).length;
-        const closeBraces = (line.match(/}/g) || []).length;
-        currentFunction.braceCount += openBraces - closeBraces;
-
-        // Function ended
-        if (currentFunction.braceCount === 0 && openBraces > 0) {
-          functions.push({
-            name: currentFunction.name,
-            startLine: currentFunction.startLine,
-            endLine: i + 1,
-          });
-          currentFunction = null;
-        }
-      }
-    }
-
-    return functions;
-  }
-
-  /**
-   * Check if line is a comment
-   */
-  private isComment(line: string, language: string): boolean {
-    const trimmed = line.trim();
-
-    const commentPatterns: Record<string, RegExp[]> = {
-      javascript: [/^\/\//, /^\/\*/, /^\*/],
-      typescript: [/^\/\//, /^\/\*/, /^\*/],
-      python: [/^#/, /^'''/, /^"""/],
-      go: [/^\/\//, /^\/\*/],
-      java: [/^\/\//, /^\/\*/, /^\*/],
-      ruby: [/^#/, /^=begin/],
-      php: [/^\/\//, /^#/, /^\/\*/],
-    };
-
-    const patterns = commentPatterns[language] || [];
-    return patterns.some(p => p.test(trimmed));
   }
 }
 
