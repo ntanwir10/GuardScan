@@ -153,6 +153,8 @@ function runTextRules(rules: readonly TextRule[], file: string, text: string, st
 
 // A single `|` pipe into a shell; `||` is a conditional fallback, not a pipe.
 const SHELL_PIPE = /(?<!\|)\|(?!\|)\s{0,4}(?:sudo\s{1,3})?(?:ba|z|da)?sh\b/;
+// The download's own output feeds the shell: the pipe is in the same command segment as curl/wget (bounded, linear).
+const DOWNLOAD_PIPE = /\b(?:curl|wget)\b[^|;&\n]{0,400}\|(?!\|)\s{0,4}(?:sudo\s{1,3})?(?:ba|z|da)?sh\b/;
 
 const MALWARE_RULES: readonly TextRule[] = [
   {
@@ -164,11 +166,8 @@ const MALWARE_RULES: readonly TextRule[] = [
     matchers: [
       // `exec` counts as a standalone call or on child_process, never as a method such as RegExp.prototype.exec.
       {anchor: /(?:\b(?:eval|Function|execSync)|(?<![.\w])exec|\b(?:child_process|childProcess|cp)\.exec)\s{0,3}\(\s{0,3}(?:(?:window\.|global\.|globalThis\.)?atob|String\.fromCharCode|base64\.b64decode|bytes\.fromhex|codecs\.decode)\b/},
-      {
-        anchor: /(?:\b(?:eval|Function|execSync)|(?<![.\w])exec|\b(?:child_process|childProcess|cp)\.exec)\s{0,3}\(\s{0,3}Buffer\.from\b/,
-        window: 200,
-        all: [/['"](?:base64|hex)['"]/],
-      },
+      // The encoding must be the Buffer.from call's own argument (one nesting level, bounded), not any nearby string.
+      {anchor: /(?:\b(?:eval|Function|execSync)|(?<![.\w])exec|\b(?:child_process|childProcess|cp)\.exec)\s{0,3}\(\s{0,3}Buffer\.from\s{0,3}\((?:[^()]|\([^()]{0,100}\)){0,200}?,\s{0,3}['"](?:base64|hex)['"]/},
       {anchor: /\bbase64\s{1,3}(?:-d|--decode)\b/, window: 120, all: [SHELL_PIPE]},
     ],
   },
@@ -539,12 +538,11 @@ function agentConfigFindings(file: string, text: string): Finding[] {
     }
     if (typeof server.command === 'string') {
       const base = path.posix.basename(server.command.replace(/\\/g, '/')).toLowerCase();
-      // Quoted text inside the shell script is data (printf '…curl | sh…'), not a pipeline.
-      const joined = [server.command, ...args].join(' ').replace(/'[^']*'|"[^"]*"/g, ' ');
+      // Single-quoted text, and double-quoted text without `$`/backtick substitution, is data, not a pipeline.
+      const joined = [server.command, ...args].join(' ').replace(/'[^']*'|"(?:[^"$`\\]|\\.)*"/g, ' ');
+      // Clients spawn `command` directly (a path may contain spaces), so arguments are literal unless a shell runs them.
       const shellFlag = SHELLS.has(base) && args.some(arg => /^(?:-[a-z]*c|\/c|-command)$/i.test(arg));
-      // Arguments are literal strings unless a shell runs them (or the command itself is a whole command line).
-      const viaShell = shellFlag || /\s/.test(server.command.trim());
-      if (viaShell && /\b(?:curl|wget)\b/.test(joined) && SHELL_PIPE.test(joined)) {add(AGENT_PIPE, marker);}
+      if (shellFlag && DOWNLOAD_PIPE.test(joined)) {add(AGENT_PIPE, marker);}
       else if (shellFlag) {add(AGENT_SHELL, marker);}
     }
   };
