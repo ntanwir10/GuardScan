@@ -468,7 +468,8 @@ function braceFunctions(ctx: Ctx): Span[] {
   return out;
 }
 
-const RUBY_ENDLESS = /^def\s+[\w.?!]+(?:\([^)]*\))?\s*=(?![=~>])/;
+// The endless `=` follows a parameter list or whitespace; a setter name such as `value=(v)` is not an endless definition.
+const RUBY_ENDLESS = /^def\s+[\w.?!]+(?:\([^)]*\)\s*|\s+)=(?![=~>])/;
 
 /** Match every Ruby block opener to its `end` in one pass; an opener with no `end` runs to the last line. */
 function rubyEnd(ctx: Ctx, startLineIdx: number): number {

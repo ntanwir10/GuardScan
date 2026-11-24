@@ -291,7 +291,8 @@ export class CodeSmellDetector {
     if (spec.startsWith('.')) {
       bases.push(path.resolve(path.dirname(from), spec));
     } else if (language === 'python') {
-      bases.push(path.resolve(path.dirname(from), spec), path.resolve(repoPath, spec));
+      // Absolute imports resolve from the import root first (as running from the repository root does), then beside the importer.
+      bases.push(path.resolve(repoPath, spec), path.resolve(path.dirname(from), spec));
     } else {
       return undefined;
     }

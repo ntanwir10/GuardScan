@@ -167,3 +167,25 @@ describe('review round 3 regressions', () => {
     expect(analysis?.functions[0].returnCount).toBe(13);
   });
 });
+
+describe('review round 4 regressions', () => {
+  it('resolves a Python absolute import from the import root first', async () => {
+    const dir = makeDir({
+      'b.py': 'VALUE = 1\n',
+      'pkg/__init__.py': '',
+      'pkg/a.py': 'import b\n',
+      'pkg/b.py': 'import pkg.a\n',
+    });
+    const smells = await codeSmellDetector.detect(dir);
+    expect(ofType(smells, 'Circular Dependency')).toEqual([]);
+  });
+
+  it('does not mistake a Ruby setter for an endless method definition', async () => {
+    const { analyzeSource } = await import('../../src/core/source-analysis');
+    const methods = Array.from({ length: 4 }, (_, i) => `  def m${i}\n    ${i}\n  end`).join('\n');
+    const analysis = analyzeSource(`class A\n  def value=(v)\n    @v = v\n  end\n${methods}\nend\n`, 'a.rb');
+    expect(analysis?.functions.map(fn => fn.name)).toEqual(['value=', 'm0', 'm1', 'm2', 'm3']);
+    const endless = analyzeSource('class B\n  def two = 2\n  def three() = 3\nend\n', 'b.rb');
+    expect(endless?.functions.map(fn => fn.name)).toEqual(['two', 'three']);
+  });
+});
