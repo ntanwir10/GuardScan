@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { Finding } from '../utils/reporter';
-import { collectPackageInventory, PackageInventory } from './package-inventory';
+import { collectPackageInventory, PackageInventory, readInventoryText } from './package-inventory';
 import { MAX_SECRET_FILE_BYTES, secretsDetector } from './secrets-detector';
 
 /**
@@ -179,7 +179,8 @@ const MALWARE_RULES: readonly TextRule[] = [
     description: 'Code or script that connects a shell to a remote host (a reverse shell pattern).',
     suggestion: 'Remove it. If this is a legitimate security tool, keep it out of application code and document it.',
     matchers: [
-      {anchor: /\/dev\/tcp\//, before: 80, window: 120, all: [/[<>]&/]},
+      // A socket redirect alone is a TCP client; a reverse shell also feeds the socket to a shell's stdin or runs what it reads.
+      {anchor: /\/dev\/tcp\//, before: 80, window: 120, all: [/[<>]&/, /\b0\s?[<>]&\s?\d|\b(?:ba|z|da)?sh\s{1,3}-i\b|\b(?:ba|z|da)?sh\s{1,3}<&\s?\d|\bwhile\s{1,3}read\b/]},
       {anchor: /\b(?:nc|ncat|netcat)\s{1,3}-/, window: 100, all: [/\s-[a-z]*[ec]\s{1,3}(?:\/\S{0,30}\/)?(?:(?:ba|z|da)?sh|cmd)\b/]},
       {anchor: /\bbash\s{1,3}-i\s{1,3}>&/},
       {anchor: /\bpty\.spawn\s{0,3}\(/, before: 400, window: 100, all: [/\.connect\s{0,3}\(/]},
@@ -538,8 +539,11 @@ function agentConfigFindings(file: string, text: string): Finding[] {
     if (typeof server.command === 'string') {
       const base = path.posix.basename(server.command.replace(/\\/g, '/')).toLowerCase();
       const joined = [server.command, ...args].join(' ');
-      if (/\b(?:curl|wget)\b/.test(joined) && SHELL_PIPE.test(joined)) {add(AGENT_PIPE, marker);}
-      else if (SHELLS.has(base) && args.some(arg => /^(?:-[a-z]*c|\/c|-command)$/i.test(arg))) {add(AGENT_SHELL, marker);}
+      const shellFlag = SHELLS.has(base) && args.some(arg => /^(?:-[a-z]*c|\/c|-command)$/i.test(arg));
+      // Arguments are literal strings unless a shell runs them (or the command itself is a whole command line).
+      const viaShell = shellFlag || /\s/.test(server.command.trim());
+      if (viaShell && /\b(?:curl|wget)\b/.test(joined) && SHELL_PIPE.test(joined)) {add(AGENT_PIPE, marker);}
+      else if (shellFlag) {add(AGENT_SHELL, marker);}
     }
   };
   const visit = (node: unknown, depth: number): void => {
@@ -734,8 +738,22 @@ export function scanHygieneText(file: string, relativePath: string, text: string
   return findings;
 }
 
+const DECLARATION_FILE = /(?:^|\/)(?:requirements[^/]*\.txt|pyproject\.toml|go\.mod|Gemfile|composer\.json)$/;
+
 export function hasPaymentSdk(inventory: PackageInventory): boolean {
-  return inventory.coordinates.some(coordinate => PAYMENT_PACKAGE.test(coordinate.name));
+  if (inventory.coordinates.some(coordinate => PAYMENT_PACKAGE.test(coordinate.name))) {return true;}
+  // A declared range with no lockfile never becomes a coordinate, so the declaring manifests are read too.
+  return inventory.manifests.some(manifest => {
+    const isPackageJson = path.posix.basename(manifest) === 'package.json';
+    if (!isPackageJson && !DECLARATION_FILE.test(manifest)) {return false;}
+    let text: string;
+    try {text = readInventoryText(path.join(inventory.repository, manifest));} catch {return false;}
+    if (!isPackageJson) {return PAYMENT_PACKAGE.test(text);}
+    let data: Record<string, unknown> | undefined;
+    try {data = asRecord(JSON.parse(text));} catch {return false;}
+    return ['dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies']
+      .some(group => Object.keys(asRecord(data?.[group]) ?? {}).some(name => PAYMENT_PACKAGE.test(name)));
+  });
 }
 
 export class HygieneScanner {

