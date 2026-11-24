@@ -5,6 +5,19 @@ All notable changes to GuardScan will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0](https://github.com/ntanwir10/GuardScan/compare/v1.1.2...v1.2.0) (2026-11-24)
+
+
+### Features
+
+* **cli:** accurate code-smell and complexity checks ([#75](https://github.com/ntanwir10/GuardScan/issues/75)) ([e2ea77b](https://github.com/ntanwir10/GuardScan/commit/e2ea77b77cfe27ae1f068f1409feecda94677df9))
+* **cli:** add dependency insights to scan ([#74](https://github.com/ntanwir10/GuardScan/issues/74)) ([cdc39e9](https://github.com/ntanwir10/GuardScan/commit/cdc39e964b2fa1b96ca654549631038d54515325))
+* **cli:** built-in payment, agent-config and malware pattern checks ([#76](https://github.com/ntanwir10/GuardScan/issues/76)) ([96c84c3](https://github.com/ntanwir10/GuardScan/commit/96c84c3a6d099c6c2ad7d7445ac7a0a21729f5b9))
+* **cli:** lint and code-pattern checks on staged added lines ([#73](https://github.com/ntanwir10/GuardScan/issues/73)) ([3e4badc](https://github.com/ntanwir10/GuardScan/commit/3e4badca97c5e4dd96ca083b6b6f684335228514))
+* **cli:** scan staged changes for secrets and manage a pre-commit hook ([#72](https://github.com/ntanwir10/GuardScan/issues/72)) ([2475945](https://github.com/ntanwir10/GuardScan/commit/2475945298c801dbe96dbd53772d8935665a8b8f))
+* **cli:** update and uninstall through the owning package manager ([#69](https://github.com/ntanwir10/GuardScan/issues/69)) ([2f8f36b](https://github.com/ntanwir10/GuardScan/commit/2f8f36b441c46b188e4d4f95a4a66d066b8346d7))
+* **cli:** warn when GuardScan is installed more than once ([#71](https://github.com/ntanwir10/GuardScan/issues/71)) ([88dbaba](https://github.com/ntanwir10/GuardScan/commit/88dbaba24bb7b66279f0ad922cbefa34bedc1953))
+
 ## [1.1.2](https://github.com/ntanwir10/GuardScan/compare/v1.1.1...v1.1.2) (2026-11-16)
 
 
