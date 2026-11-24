@@ -182,7 +182,8 @@ const MALWARE_RULES: readonly TextRule[] = [
       // A socket redirect alone is a TCP client; a reverse shell also feeds the socket to a shell's stdin or runs what it reads.
       {anchor: /\/dev\/tcp\//, before: 80, window: 120, all: [/[<>]&/, /\b0\s?[<>]&\s?\d|\b(?:ba|z|da)?sh\s{1,3}-i\b|\b(?:ba|z|da)?sh\s{1,3}<&\s?\d|\bwhile\s{1,3}read\b/]},
       {anchor: /\b(?:nc|ncat|netcat)\s{1,3}-/, window: 100, all: [/\s-[a-z]*[ec]\s{1,3}(?:\/\S{0,30}\/)?(?:(?:ba|z|da)?sh|cmd)\b/]},
-      {anchor: /\bbash\s{1,3}-i\s{1,3}>&/},
+      // An interactive shell redirected to a local file is not a reverse shell; require a socket nearby.
+      {anchor: /\bbash\s{1,3}-i\s{1,3}>&/, window: 120, all: [/\/dev\/(?:tcp|udp)\/|\b(?:nc|ncat|socat)\b/]},
       {anchor: /\bpty\.spawn\s{0,3}\(/, before: 400, window: 100, all: [/\.connect\s{0,3}\(/]},
     ],
   },
@@ -538,7 +539,8 @@ function agentConfigFindings(file: string, text: string): Finding[] {
     }
     if (typeof server.command === 'string') {
       const base = path.posix.basename(server.command.replace(/\\/g, '/')).toLowerCase();
-      const joined = [server.command, ...args].join(' ');
+      // Quoted text inside the shell script is data (printf '…curl | sh…'), not a pipeline.
+      const joined = [server.command, ...args].join(' ').replace(/'[^']*'|"[^"]*"/g, ' ');
       const shellFlag = SHELLS.has(base) && args.some(arg => /^(?:-[a-z]*c|\/c|-command)$/i.test(arg));
       // Arguments are literal strings unless a shell runs them (or the command itself is a whole command line).
       const viaShell = shellFlag || /\s/.test(server.command.trim());
