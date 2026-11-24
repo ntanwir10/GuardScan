@@ -2,11 +2,17 @@ import chalk from 'chalk';
 import { ConfigManager } from '../core/config';
 import { codeMetricsAnalyzer } from '../core/code-metrics';
 import { codeSmellDetector } from '../core/code-smells';
+import {
+  analyzeDependencyInsights,
+  DependencyInsightsCoverage,
+  DependencyInsightsReport,
+} from '../core/dependency-insights';
 import { licenseScanner, LicenseReport } from '../core/license-scanner';
 import { linterIntegration } from '../core/linter-integration';
 import { locCounter } from '../core/loc-counter';
 import { collectPackageInventory, PackageInventory, PackageInventoryError } from '../core/package-inventory';
 import { repositoryManager } from '../core/repository';
+import { detectServices, ServiceDetection } from '../core/service-catalog';
 import {
   evaluateScanPolicy,
   ScanEngineResult,
@@ -46,6 +52,7 @@ interface ScanOptions {
   output?: string;
   failOn?: 'critical' | 'high' | 'medium' | 'low' | 'info';
   maxFindings?: string;
+  dependencyInsights?: boolean;
 }
 
 type CheckStatus = 'succeeded' | 'failed' | 'skipped';
@@ -76,6 +83,10 @@ export interface SbomSection {
   document?: unknown;
   error?: { code: string; message: string; retryable: boolean };
   metadata?: { coverageWarnings: PackageInventoryError[] };
+  /** Services and SDKs detected from direct inventory coordinates. */
+  services?: ServiceDetection[];
+  /** Coverage of the optional dependency-insights scanner, when it ran. */
+  dependencyInsights?: { status: 'succeeded' | 'partial' | 'failed'; coverage?: DependencyInsightsCoverage };
 }
 
 export async function scanCommand(options: ScanOptions): Promise<void> {
@@ -133,6 +144,8 @@ export async function scanCommand(options: ScanOptions): Promise<void> {
       networkIsolation: executionPolicy.isolateProjectNetwork,
       inventory,
     });
+    const includeDependencyInsights = options.dependencyInsights !== false;
+    const insightsPromise = includeDependencyInsights ? analyzeDependencyInsights(inventory) : undefined;
 
     const securityPromise = scanEngine.runSecurityScan({
       repoPath: repoInfo.path,
@@ -153,9 +166,11 @@ export async function scanCommand(options: ScanOptions): Promise<void> {
         config.vulnerabilities?.enrichKnownExploited !== false,
       packageInventory: inventory,
       licenseReport: licenseReportPromise,
+      includeDependencyInsights,
+      dependencyInsights: insightsPromise,
     });
     const qualityPromise = runQualityAnalysis(repoInfo.path, options, executionPolicy);
-    const sbomPromise = createSbomSection(licenseReportPromise, inventory, repoInfo.name);
+    const sbomPromise = createSbomSection(licenseReportPromise, inventory, repoInfo.name, insightsPromise);
 
     const [securityResult, quality, sbom] = await Promise.all([
       securityPromise,
@@ -354,6 +369,28 @@ async function runCheck(name: string, operation: () => Promise<unknown>): Promis
 export async function createSbomSection(
   report: Promise<LicenseReport>,
   inventory: PackageInventory,
+  projectName: string,
+  insights?: Promise<DependencyInsightsReport>
+): Promise<SbomSection> {
+  // Attach the handler now; the scan engine awaits the same promise later.
+  const insightsSection = insights?.then(
+    result => ({
+      status: result.coverage.sourceFilesSkipped > 0 ? 'partial' as const : 'succeeded' as const,
+      coverage: result.coverage,
+    }),
+    () => ({ status: 'failed' as const })
+  );
+  const section = await createSbomDocumentSection(report, inventory, projectName);
+  return {
+    ...section,
+    services: detectServices(inventory.coordinates),
+    ...(insightsSection ? { dependencyInsights: await insightsSection } : {}),
+  };
+}
+
+async function createSbomDocumentSection(
+  report: Promise<LicenseReport>,
+  inventory: PackageInventory,
   projectName: string
 ): Promise<SbomSection> {
   try {
@@ -491,7 +528,7 @@ function comprehensiveReview(
     `Failing tests: ${failedTests}`,
     `SBOM: ${sbom.status}`,
     `Policy: ${policy.outcome}`,
-  ].join('\n');
+  ].join('\n') + dependencyInsightsMarkdown(sbom);
   return {
     summary,
     findings: security.findings,
@@ -508,6 +545,36 @@ function comprehensiveReview(
       executionMode: ranProjectCode ? 'project-code-executed' : 'static-analysis',
     },
   };
+}
+
+function dependencyInsightsMarkdown(sbom: SbomSection): string {
+  const lines: string[] = [];
+  if (sbom.services && sbom.services.length > 0) {
+    lines.push('', '### Services and SDKs', '');
+    for (const service of sbom.services) {
+      lines.push(`- **${service.service}** (${service.category}): \`${service.package}@${service.version}\` ` +
+        `in \`${service.manifestPath}\` (${service.scope})`);
+    }
+  }
+  const insights = sbom.dependencyInsights;
+  if (insights) {
+    lines.push('', '### Dependency insights', '', `- Status: ${insights.status}`);
+    const coverage = insights.coverage;
+    if (coverage) {
+      const analyzed = coverage.manifestsAnalyzed;
+      lines.push(`- Manifests analyzed: npm ${analyzed.npm}, pip ${analyzed.pip}, go ${analyzed.go}`);
+      lines.push(`- Source files analyzed: ${coverage.sourceFilesAnalyzed} ` +
+        `(unreadable: ${coverage.sourceFilesSkipped}, over size limit: ${coverage.sourceFilesTooLarge})`);
+      lines.push(`- Uncertain results: ${coverage.uncertain}`);
+      if (coverage.installScripts.notDeterminable.length > 0) {
+        lines.push(`- Install scripts not determinable: ${coverage.installScripts.notDeterminable.join(', ')}`);
+      }
+      if (coverage.manifestsNotAnalyzed.length > 0) {
+        lines.push(`- Manifests not analyzed: ${coverage.manifestsNotAnalyzed.join(', ')}`);
+      }
+    }
+  }
+  return lines.join('\n');
 }
 
 function displaySummary(
