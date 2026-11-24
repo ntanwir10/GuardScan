@@ -314,6 +314,15 @@ Options:
   -h, --help  display help for command
 ```
 
+`--smells` and `--metrics` (also run by `scan` and `run`) analyze `.js`, `.ts`, `.py`, `.go`, `.java`, `.rb`, `.php`, `.c`, `.cpp` and `.cs` files up to 5 MiB, skipping symlinks.
+
+`--metrics` also skips test files named `*.test.js` and `*.spec.ts`; `--smells` still analyzes them, so a repository holding only such files can report smells but no metrics.
+
+- JavaScript and TypeScript are parsed with the TypeScript compiler (syntax only, no type checking). Unused locals, empty catch blocks, unreachable code, parameter and return counts, and cyclomatic and cognitive complexity come from the syntax tree.
+- Other languages are first passed through a small linear-time lexer that blanks comments and string literals, so code-like text inside either no longer produces findings. Commented-out code is detected from comment text only.
+- A catch block that contains only a comment is treated as intentional and is not reported.
+- Cyclomatic complexity is a per-file total: 1 plus every decision point. Thresholds, severities, and output field names are unchanged.
+
 ### `guardscan sbom`
 
 ```text
