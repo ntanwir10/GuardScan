@@ -628,6 +628,33 @@ describe('collectPackageInventory', () => {
     ]);
   });
 
+  it('keeps every directly declaring manifest when workspace and transitive records merge', () => {
+    fs.writeFileSync(path.join(repository, 'package.json'), JSON.stringify({
+      name: 'root', workspaces: ['packages/*'], dependencies: {rootdep: '1.0.0'},
+    }));
+    for (const member of ['api', 'web']) {
+      fs.mkdirSync(path.join(repository, `packages/${member}`), {recursive: true});
+      fs.writeFileSync(path.join(repository, `packages/${member}/package.json`), JSON.stringify({
+        name: `@fixture/${member}`, version: '1.0.0', dependencies: {stripe: '14.0.0'},
+      }));
+    }
+    fs.writeFileSync(path.join(repository, 'package-lock.json'), JSON.stringify({lockfileVersion: 3, packages: {
+      '': {name: 'root', workspaces: ['packages/*'], dependencies: {rootdep: '1.0.0'}},
+      'packages/api': {name: '@fixture/api', version: '1.0.0', dependencies: {stripe: '14.0.0'}},
+      'packages/web': {name: '@fixture/web', version: '1.0.0', dependencies: {stripe: '14.0.0'}},
+      'node_modules/@fixture/api': {resolved: 'packages/api', link: true},
+      'node_modules/@fixture/web': {resolved: 'packages/web', link: true},
+      'node_modules/rootdep': {version: '1.0.0', dependencies: {stripe: '14.0.0'}},
+      'node_modules/stripe': {version: '14.0.0'},
+    }}));
+
+    const stripe = collectPackageInventory(repository).coordinates.filter(coordinate => coordinate.name === 'stripe');
+
+    expect(stripe).toHaveLength(1);
+    expect(stripe[0].directDeclarations?.map(declaration => declaration.manifestPath))
+      .toEqual(['packages/api/package.json', 'packages/web/package.json']);
+  });
+
   it.each(['packages/{api,web}', 'packages/**/{api,web}'])('covers npm workspace dependencies with %s', pattern => {
     const workspaces = [pattern];
     fs.writeFileSync(path.join(repository, 'package.json'), JSON.stringify({

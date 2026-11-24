@@ -175,6 +175,7 @@ async function main(): Promise<void> {
     .option("-o, --output <path>", "Output file path")
     .option("--fail-on <severity>", "Fail when findings meet severity (critical, high, medium, low, info)")
     .option("--max-findings <number>", "Fail when finding count exceeds this number")
+    .option("--no-dependency-insights", "Skip dependency hygiene and install-script checks")
     .action(scanCommand);
 
   program
@@ -217,6 +218,7 @@ async function main(): Promise<void> {
     .option("-o, --output <path>", "Output file path")
     .option("-f, --format <format>", "SBOM format (spdx or cyclonedx)", "spdx")
     .option("--offline", "Skip network-backed checks for this command")
+    .option("--services", "List detected services and SDKs instead of writing an SBOM")
     .action(sbomCommand);
 
   program

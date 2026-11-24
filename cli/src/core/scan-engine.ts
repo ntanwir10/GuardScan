@@ -7,13 +7,14 @@ import { Finding } from '../utils/reporter';
 import { atomicReplaceText, prepareAtomicOutputTarget } from '../utils/private-state';
 import { apiScanner } from './api-scanner';
 import { complianceChecker } from './compliance-checker';
+import { analyzeDependencyInsights, DependencyInsightsReport } from './dependency-insights';
 import { dependencyScanner } from './dependency-scanner';
 import { dockerfileScanner } from './dockerfile-scanner';
 import { hygieneScanner } from './hygiene-scanner';
 import { iacScanner } from './iac-scanner';
 import { licenseScanner, LicenseReport } from './license-scanner';
 import { owaspScanner } from './owasp-scanner';
-import { PackageInventory } from './package-inventory';
+import { collectPackageInventory, PackageInventory } from './package-inventory';
 import { normalizeRelativePathForPlatform } from './loc-counter';
 import { isGuardScanReport } from './scan-ignored-directories';
 import { SecretFinding, secretsDetector } from './secrets-detector';
@@ -105,6 +106,13 @@ export interface ScanEngineOptions {
   packageInventory?: PackageInventory;
   /** Caller-owned report (or in-flight report) shared with SBOM generation. */
   licenseReport?: LicenseReport | Promise<LicenseReport>;
+  /**
+   * Adds the optional `dependency-insights` scanner (hygiene and install scripts).
+   * Undefined leaves the scanner out, so only callers that opt in change their scanner list.
+   */
+  includeDependencyInsights?: boolean;
+  /** Caller-owned (or in-flight) insights report shared with the SBOM section. */
+  dependencyInsights?: DependencyInsightsReport | Promise<DependencyInsightsReport>;
   concurrency?: number;
   /** This run's `--output`; a copy left by an earlier run is GuardScan output, not source. */
   reportOutputPath?: string;
@@ -506,6 +514,31 @@ export class ScanEngine {
         },
       },
     ];
+
+    if (options.includeDependencyInsights === false) {
+      tasks.push({scanner: 'dependency-insights', required: false, skipReason: 'disabled', run: () => Promise.resolve([])});
+    } else if (options.includeDependencyInsights) {
+      tasks.push({
+        scanner: 'dependency-insights',
+        // Advisory checks: their failures are reported but never fail the scan's coverage.
+        required: false,
+        run: async () => {
+          const report = options.dependencyInsights
+            ? await options.dependencyInsights
+            : await analyzeDependencyInsights(options.packageInventory || collectPackageInventory(repoPath));
+          const skipped = report.coverage.sourceFilesSkipped;
+          if (skipped === 0) {return report.findings;}
+          return {
+            findings: report.findings,
+            error: {
+              code: 'DEPENDENCY_INSIGHTS_PARTIAL',
+              message: `Dependency insights skipped ${skipped} unreadable or malformed input(s).`,
+              retryable: true,
+            },
+          };
+        },
+      });
+    }
 
     if (options.includeLicenses) {
       tasks.push({

@@ -20,6 +20,13 @@ export interface DependencyCoordinate {
   dependencyPaths: string[];
   /** Complete immediate-parent identities for graph-capable lockfiles. */
   dependencyParents?: string[];
+  /** npm lockfile v2/v3 `hasInstallScript` or pnpm `requiresBuild`; set only when true. */
+  installScript?: true;
+  /**
+   * Every manifest that directly declares this package, set only when the merged `manifestPath`/`scope`
+   * alone would hide one (a workspace declaration merged with a transitive or another workspace's record).
+   */
+  directDeclarations?: Array<{manifestPath: string; scope: DependencyScope}>;
 }
 
 export interface PackageInventoryError {
@@ -52,7 +59,7 @@ interface PackageInventoryCache {
 const MAX_INVENTORY_FILE_BYTES = 32 * 1024 * 1024;
 const INVENTORY_READ_CHUNK_BYTES = 64 * 1024;
 
-function readInventoryText(file: string): string {
+export function readInventoryText(file: string): string {
   const descriptor = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK || 0));
   try {
     const metadata = fs.fstatSync(descriptor);
@@ -138,7 +145,7 @@ const IGNORED_DIRS = new Set([
 
 const MAX_DEPENDENCY_PATHS_PER_COORDINATE = 64;
 
-function isRequirementsInventoryFile(file: string): boolean {
+export function isRequirementsInventoryFile(file: string): boolean {
   const basename = path.basename(file).toLowerCase();
   if (/^constraints?(?:[-_.][a-z0-9_.-]+)?\.txt$/.test(basename)) {return false;}
   return /^requirements(?:[-_.][a-z0-9_.-]+)?\.txt$/.test(basename) ||
@@ -185,7 +192,7 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
     : undefined;
 }
 
-function isWithinRoot(root: string, candidate: string): boolean {
+export function isWithinRoot(root: string, candidate: string): boolean {
   const rel = path.relative(root, candidate);
   return rel === '' || (!rel.startsWith(`..${path.sep}`) && rel !== '..' && !path.isAbsolute(rel));
 }
@@ -745,6 +752,7 @@ function parseNpmLock(
               ? [...pathsByNode.get(node.packagePath)!].sort()
               : [node.packagePath],
             dependencyParents: [...(parentsByNode.get(node.packagePath) || [])].sort(),
+            ...(node.value.hasInstallScript === true ? {installScript: true as const} : {}),
           });
         }
       }
@@ -1337,6 +1345,8 @@ function parsePnpmLock(
       const nodeKey = nodeIdentity(parsed.name, parsed.version, rawKey);
       const directValues = directDependencies.get(nodeKey) || [];
       const dependencyPaths = pathsByNode.get(nodeKey);
+      const requiresBuild = asRecord(records[rawKey])?.requiresBuild === true ||
+        asRecord(asRecord(data?.packages)?.[rawKey])?.requiresBuild === true;
       const outputs: Array<PnpmDirectDependency | undefined> = directValues.length > 0 ? directValues : [undefined];
       for (const direct of outputs) {
         addCoordinate(coordinates, {
@@ -1348,6 +1358,7 @@ function parsePnpmLock(
             ? [...dependencyPaths].sort()
             : [versionedIdentity(parsed.name, parsed.version)],
           dependencyParents: [...(parentsByNode.get(nodeKey) || [])].sort(),
+          ...(requiresBuild ? {installScript: true as const} : {}),
         });
       }
     }
@@ -2494,6 +2505,7 @@ function parsePom(root: string, file: string, coordinates: DependencyCoordinate[
 
 function mergeCoordinates(coordinates: DependencyCoordinate[]): DependencyCoordinate[] {
   const merged = new Map<string, DependencyCoordinate>();
+  const declarations = new Map<string, Map<string, DependencyScope>>();
   const scopeRank: Record<DependencyScope, number> = { unknown: 0, development: 1, optional: 2, runtime: 3 };
   for (const coordinate of coordinates) {
     const key = [
@@ -2502,6 +2514,11 @@ function mergeCoordinates(coordinates: DependencyCoordinate[]): DependencyCoordi
       coordinate.exactVersion,
       coordinate.lockfilePath,
     ].join('\0');
+    if (coordinate.direct) {
+      const pairs = declarations.get(key) || new Map<string, DependencyScope>();
+      pairs.set(coordinate.manifestPath, coordinate.scope);
+      declarations.set(key, pairs);
+    }
     const existing = merged.get(key);
     if (!existing) {
       merged.set(key, { ...coordinate });
@@ -2517,9 +2534,17 @@ function mergeCoordinates(coordinates: DependencyCoordinate[]): DependencyCoordi
           ...(coordinate.dependencyParents || []),
         ])].sort();
       }
+      if (coordinate.installScript) {existing.installScript = true;}
       if (coordinate.manifestPath < existing.manifestPath) {existing.manifestPath = coordinate.manifestPath;}
       if (coordinate.lockfilePath < existing.lockfilePath) {existing.lockfilePath = coordinate.lockfilePath;}
     }
+  }
+  for (const [key, pairs] of declarations) {
+    const coordinate = merged.get(key);
+    if (!coordinate || (pairs.size === 1 && pairs.get(coordinate.manifestPath) === coordinate.scope)) {continue;}
+    coordinate.directDeclarations = [...pairs]
+      .map(([manifestPath, scope]) => ({manifestPath, scope}))
+      .sort((left, right) => left.manifestPath.localeCompare(right.manifestPath));
   }
   return [...merged.values()].sort((a, b) =>
     `${a.osvEcosystem}\0${a.name}\0${a.exactVersion}\0${a.lockfilePath}\0${a.scope}`.localeCompare(

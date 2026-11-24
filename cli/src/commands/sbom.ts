@@ -10,7 +10,9 @@ import { createPerformanceTracker } from '../utils/performance-tracker';
 import { handleCommandError } from '../utils/error-handler';
 import { resolveExecutionPolicy } from '../utils/execution-policy';
 import { atomicReplaceText, prepareAtomicOutputTarget } from '../utils/private-state';
+import {collectPackageInventory} from '../core/package-inventory';
 import type {PackageInventoryError} from '../core/package-inventory';
+import {detectServices, ServiceDetection} from '../core/service-catalog';
 
 const logger = createDebugLogger('sbom');
 const perfTracker = createPerformanceTracker('guardscan sbom');
@@ -20,6 +22,7 @@ interface SBOMOptions {
   format?: 'spdx' | 'cyclonedx';
   offline?: boolean;
   cloud?: boolean;
+  services?: boolean;
 }
 
 export async function sbomCommand(options: SBOMOptions): Promise<void> {
@@ -40,6 +43,24 @@ export async function sbomCommand(options: SBOMOptions): Promise<void> {
     });
     perfTracker.end('detect-repository');
     logger.debug('Repository detected', { name: repoInfo.name });
+
+    if (options.services) {
+      // Detections come from the offline inventory only; no license scan or SBOM document is needed.
+      const inventory = collectPackageInventory(repoPath);
+      const services = detectServices(inventory.coordinates);
+      process.stdout.write(formatServices(services));
+      if (inventory.errors.length > 0) {
+        console.warn(chalk.yellow(
+          `Warning: dependency inventory has ${inventory.errors.length} coverage warning(s); detections may be incomplete.`
+        ));
+      }
+      if (options.output) {
+        const target = prepareAtomicOutputTarget(options.output, repoPath);
+        atomicReplaceText(target, JSON.stringify({services}, null, 2), {privateParent: false});
+        process.stdout.write(chalk.green(`\n✓ Services saved: ${options.output}\n`));
+      }
+      return;
+    }
 
     console.log(chalk.gray(`Repository: ${repoInfo.name}`));
     console.log(chalk.gray(`Format: ${options.format || 'spdx'}\n`));
@@ -144,6 +165,25 @@ export async function sbomCommand(options: SBOMOptions): Promise<void> {
   } catch (error) {
     handleCommandError(error, 'SBOM generation');
   }
+}
+
+/** Repository-supplied text must not carry terminal escape sequences into the console. */
+const printable = (value: string): string =>
+  // eslint-disable-next-line no-control-regex
+  value.replace(/[\u0000-\u001f\u007f-\u009f]/g, character => `\\x${character.charCodeAt(0).toString(16).padStart(2, '0')}`);
+
+export function formatServices(services: ServiceDetection[]): string {
+  if (services.length === 0) {
+    return `${chalk.gray('No known services or SDKs found in direct dependencies.')}\n`;
+  }
+  return [
+    chalk.white.bold('Services and SDKs:'),
+    ...services.map(service =>
+      printable(`  ${service.service} (${service.category}): ${service.package}@${service.version} ` +
+      `in ${service.manifestPath} [${service.scope}]`)
+    ),
+    '',
+  ].join('\n');
 }
 
 export function classifySbomInventoryErrors(errors: PackageInventoryError[]): {
