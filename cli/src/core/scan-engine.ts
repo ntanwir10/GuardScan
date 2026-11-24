@@ -10,6 +10,7 @@ import { complianceChecker } from './compliance-checker';
 import { analyzeDependencyInsights, DependencyInsightsReport } from './dependency-insights';
 import { dependencyScanner } from './dependency-scanner';
 import { dockerfileScanner } from './dockerfile-scanner';
+import { hygieneScanner } from './hygiene-scanner';
 import { iacScanner } from './iac-scanner';
 import { licenseScanner, LicenseReport } from './license-scanner';
 import { owaspScanner } from './owasp-scanner';
@@ -494,6 +495,22 @@ export class ScanEngine {
             'COMPLIANCE_SCAN_PARTIAL',
             'Compliance'
           );
+        },
+      },
+      {
+        // Payment, agent-config, instruction-file, and malware hygiene checks; one walk, own rule IDs.
+        scanner: 'hygiene',
+        required: true,
+        run: async () => {
+          let skippedInputs = options.skippedFiles?.length || 0;
+          const findings = await hygieneScanner.scan(repoPath, () => {skippedInputs += 1;}, {
+            files: options.fileSelection === 'explicit'
+              ? files.map(file => path.isAbsolute(file.path) ? file.path : path.resolve(repoPath, file.path))
+              : undefined,
+            reportOutputPath,
+            inventory: options.packageInventory,
+          });
+          return coverageAwareOutput(findings, skippedInputs, 'HYGIENE_SCAN_PARTIAL', 'Hygiene');
         },
       },
     ];
